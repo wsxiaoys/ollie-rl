@@ -1,0 +1,23 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ty-check
+        name: ty check
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: poe-format
+        name: poe format
+        entry: uv run poe format
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
