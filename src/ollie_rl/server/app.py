@@ -117,11 +117,3 @@ async def create_chat_completion(
             f"Failed to generate chat completion for model '{request.model}'"
         )
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/v1/chats/{chat_id}/completions")
-async def get_chat_completions(chat_id: str):
-    """Retrieve all recorded completion IDs for a given chat ID."""
-    completions = await chat_storage.get_completions(chat_id)
-    return {"chat_id": chat_id, "completion_ids": completions}
-
