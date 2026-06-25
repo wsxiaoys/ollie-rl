@@ -9,7 +9,6 @@ from ollie_rl.cookbook import Cookbook
 from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest
 from openai.types.chat import ChatCompletion
 from .tuner_storage import TunerStorage
-from .completion_storage import CompletionStorage
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -17,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 # Initialize tuner storage (handles both in-memory active tuners and persistence)
 storage = TunerStorage()
-completion_storage = CompletionStorage()
 
 
 @asynccontextmanager
@@ -44,12 +42,6 @@ async def lifespan(app: FastAPI):
         await storage.close()
     except Exception as e:
         logger.exception("Failed to close tuner storage during shutdown")
-
-    try:
-        logger.info("Closing completion storage...")
-        await completion_storage.close()
-    except Exception as e:
-        logger.exception("Failed to close completion storage during shutdown")
 
 
 app = FastAPI(
@@ -108,14 +100,7 @@ async def create_chat_completion(
             logger.info(
                 f"Generating chat completion for model '{request.model}' with chat ID: {chat_id}"
             )
-        completion = await tuner.sample(request)
-        if completion and getattr(completion, "id", None):
-            await completion_storage.record_completion(
-                completion_id=completion.id,
-                chat_id=chat_id,
-                tuner_id=request.model,
-            )
-        return completion
+        return await tuner.sample(request)
     except Exception as e:
         logger.exception(
             f"Failed to generate chat completion for model '{request.model}'"
