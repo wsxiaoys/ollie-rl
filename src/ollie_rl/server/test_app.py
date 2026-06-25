@@ -89,5 +89,7 @@ class TestApp(unittest.TestCase):
         self.assertEqual(data["tuner_id"], "test-tuner")
         self.assertEqual(data["recipe"], "gemini_msrl")
 
-        mock_cookbook_create.assert_called_once_with("gemini_msrl", tuner_id="test-tuner")
+        mock_cookbook_create.assert_called_once_with(
+            "gemini_msrl", tuner_id="test-tuner"
+        )
         mock_register_tuner.assert_called_once_with("test-tuner", mock_tuner)

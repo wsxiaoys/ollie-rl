@@ -9,7 +9,7 @@ from ollie_rl.cookbook import Cookbook
 from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest
 from openai.types.chat import ChatCompletion
 from .tuner_storage import TunerStorage
-from .chat_storage import ChatStorage
+from .completion_storage import CompletionStorage
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize tuner storage (handles both in-memory active tuners and persistence)
 storage = TunerStorage()
-chat_storage = ChatStorage()
+completion_storage = CompletionStorage()
 
 
 @asynccontextmanager
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: persist all active tuners to storage and close chat storage
+    # Shutdown: persist all active tuners to storage and close completion storage
     try:
         logger.info("Persisting active tuners on shutdown...")
         await storage.save_all_tuners()
@@ -46,10 +46,10 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to close tuner storage during shutdown")
 
     try:
-        logger.info("Closing chat storage...")
-        await chat_storage.close()
+        logger.info("Closing completion storage...")
+        await completion_storage.close()
     except Exception as e:
-        logger.exception("Failed to close chat storage during shutdown")
+        logger.exception("Failed to close completion storage during shutdown")
 
 
 app = FastAPI(
@@ -109,8 +109,12 @@ async def create_chat_completion(
                 f"Generating chat completion for model '{request.model}' with chat ID: {chat_id}"
             )
         completion = await tuner.sample(request)
-        if chat_id and completion and getattr(completion, "id", None):
-            await chat_storage.record_completion(chat_id, completion.id)
+        if completion and getattr(completion, "id", None):
+            await completion_storage.record_completion(
+                completion_id=completion.id,
+                chat_id=chat_id,
+                tuner_id=request.model,
+            )
         return completion
     except Exception as e:
         logger.exception(
