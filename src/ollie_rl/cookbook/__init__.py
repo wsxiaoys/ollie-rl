@@ -15,13 +15,13 @@ class Cookbook:
     """
 
     @classmethod
-    async def create(cls, kind: str, model_id: str) -> Tuner:
+    async def create(cls, kind: str, tuner_id: str) -> Tuner:
         recipe = RECIPES.get(kind)
         if not recipe:
             raise ValueError(
                 f"Recipe template '{kind}' not found. Available templates: {list(RECIPES.keys())}"
             )
-        return await recipe.create(model_id)
+        return await recipe.create(tuner_id)
 
     @classmethod
     async def restore(cls, kind: str, state: str) -> Tuner:

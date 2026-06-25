@@ -68,3 +68,26 @@ class TestApp(unittest.TestCase):
 
             # Verify storage.get was called with correct model
             mock_get.assert_called_once_with("test-model")
+
+    @patch("ollie_rl.server.app.Cookbook.create", new_callable=AsyncMock)
+    @patch("ollie_rl.server.app.storage.register_tuner", new_callable=AsyncMock)
+    def test_create_tuner(self, mock_register_tuner, mock_cookbook_create):
+        mock_tuner = MagicMock()
+        mock_cookbook_create.return_value = mock_tuner
+
+        response = self.client.post(
+            "/v1/tuners",
+            json={
+                "tuner_id": "test-tuner",
+                "recipe": "gemini_msrl",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["tuner_id"], "test-tuner")
+        self.assertEqual(data["recipe"], "gemini_msrl")
+
+        mock_cookbook_create.assert_called_once_with("gemini_msrl", tuner_id="test-tuner")
+        mock_register_tuner.assert_called_once_with("test-tuner", mock_tuner)

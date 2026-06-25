@@ -62,7 +62,7 @@ class GeminiMsrlRecipeConfig(BaseModel):
 
 
 class GeminiMsrlRecipeState(BaseModel):
-    model_id: str
+    tuner_id: str
     tuning_job_name: str
 
 
@@ -71,22 +71,25 @@ class GeminiMsrlTuner(Tuner):
     Tuner wrapping the Gemini MSRL tuning client.
     """
 
-    model_id: str
     config: GeminiMsrlRecipeConfig
     client: GeminiMsrlClient
     tuning_job_name: str
 
     def __init__(
         self,
-        model_id: str,
+        tuner_id: str,
         config: GeminiMsrlRecipeConfig,
         client: GeminiMsrlClient,
         tuning_job_name: str = "",
     ):
-        self.model_id = model_id
+        self._tuner_id = tuner_id
         self.config = config
         self.client = client
         self.tuning_job_name = tuning_job_name
+
+    @property
+    def tuner_id(self) -> str:
+        return self._tuner_id
 
     @property
     def kind(self) -> str:
@@ -279,7 +282,7 @@ class GeminiMsrlTuner(Tuner):
         if not self.tuning_job_name:
             raise RuntimeError("Tuning job not initialized, cannot save state")
         return GeminiMsrlRecipeState(
-            model_id=self.model_id,
+            tuner_id=self.tuner_id,
             tuning_job_name=self.tuning_job_name,
         ).model_dump_json()
 
@@ -289,7 +292,7 @@ class GeminiMsrlRecipe(Recipe):
     Recipe factory for Gemini MSRL tuners.
     """
 
-    async def create(self, model_id: str) -> GeminiMsrlTuner:
+    async def create(self, tuner_id: str) -> GeminiMsrlTuner:
         config = GeminiMsrlRecipeConfig(
             auth_token=os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token"),
             project_id=os.environ.get("GEMINI_MSRL_PROJECT_ID", "dummy-project-id"),
@@ -302,7 +305,7 @@ class GeminiMsrlRecipe(Recipe):
 
         # 1. Create the Tuning Job
         req = CreateTuningJobRequest(
-            tuned_model_display_name=model_id,
+            tuned_model_display_name=tuner_id,
             base_model=config.base_model,
             multi_step_reinforcement_tuning_spec=MultiStepReinforcementTuningSpec(
                 hyper_parameters=MultiStepReinforcementTuningHyperParameters(
@@ -313,13 +316,13 @@ class GeminiMsrlRecipe(Recipe):
         )
 
         logger.info(
-            f"Creating Gemini MSRL tuning job for model display name: {model_id}"
+            f"Creating Gemini MSRL tuning job for model display name: {tuner_id}"
         )
         job = await client.create_tuning_job(req)
         tuning_job_name = job.name
 
         instance = GeminiMsrlTuner(
-            model_id=model_id,
+            tuner_id=tuner_id,
             config=config,
             client=client,
             tuning_job_name=tuning_job_name,
@@ -340,7 +343,7 @@ class GeminiMsrlRecipe(Recipe):
 
     async def restore(self, state: str) -> GeminiMsrlTuner:
         state_data = GeminiMsrlRecipeState.model_validate_json(state)
-        model_id = state_data.model_id
+        tuner_id = state_data.tuner_id
         tuning_job_name = state_data.tuning_job_name
 
         config = GeminiMsrlRecipeConfig(
@@ -354,7 +357,7 @@ class GeminiMsrlRecipe(Recipe):
         )
 
         instance = GeminiMsrlTuner(
-            model_id=model_id,
+            tuner_id=tuner_id,
             config=config,
             client=client,
             tuning_job_name=tuning_job_name,

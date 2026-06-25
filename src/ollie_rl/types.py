@@ -14,5 +14,5 @@ class ChatCompletionRequest(BaseModel):
 
 
 class CreateTunerRequest(BaseModel):
-    model_id: str
+    tuner_id: str
     recipe: str

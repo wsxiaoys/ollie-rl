@@ -16,7 +16,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         )
         self.mock_client = AsyncMock()
         self.job = GeminiMsrlTuner(
-            model_id="test-model",
+            tuner_id="test-model",
             config=self.config,
             client=self.mock_client,
             tuning_job_name="projects/test-project/locations/us-central1/tuningJobs/test-job-id",

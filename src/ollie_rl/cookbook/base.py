@@ -17,6 +17,12 @@ class Tuner(ABC):
 
     @property
     @abstractmethod
+    def tuner_id(self) -> str:
+        """Return the identifier string of the recipe template."""
+        pass
+
+    @property
+    @abstractmethod
     def kind(self) -> str:
         """Return the identifier string of the recipe template."""
         pass
@@ -47,7 +53,7 @@ class Recipe(ABC):
     """
 
     @abstractmethod
-    async def create(self, model_id: str) -> Tuner:
+    async def create(self, tuner_id: str) -> Tuner:
         """
         Create and asynchronously initialize a new Tuner instance for a model.
         """

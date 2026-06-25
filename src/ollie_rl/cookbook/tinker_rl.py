@@ -33,7 +33,7 @@ class TinkerRlRecipeConfig(BaseModel):
 
 
 class TinkerRlRecipeState(BaseModel):
-    model_id: str
+    tuner_id: str
     config: TinkerRlRecipeConfig
     state_path: str
     sampler_path: str
@@ -44,7 +44,7 @@ class TinkerRlTuner(Tuner):
     Stateful tuner wrapping Tinker's TrainingClient and SamplingClient.
     """
 
-    model_id: str
+    _tuner_id: str
     config: TinkerRlRecipeConfig
     training_client: tinker.TrainingClient
     sampling_client: tinker.SamplingClient
@@ -55,7 +55,7 @@ class TinkerRlTuner(Tuner):
 
     def __init__(
         self,
-        model_id: str,
+        tuner_id: str,
         config: TinkerRlRecipeConfig,
         training_client: tinker.TrainingClient,
         sampling_client: tinker.SamplingClient,
@@ -63,7 +63,7 @@ class TinkerRlTuner(Tuner):
         state_path: str,
         sampler_path: str,
     ):
-        self.model_id = model_id
+        self._tuner_id = tuner_id
         self.config = config
         self.training_client = training_client
         self.sampling_client = sampling_client
@@ -71,6 +71,10 @@ class TinkerRlTuner(Tuner):
         self.state_path = state_path
         self.sampler_path = sampler_path
         self._rollout_cache = {}
+
+    @property
+    def tuner_id(self) -> str:
+        return self._tuner_id
 
     @property
     def kind(self) -> str:
@@ -247,7 +251,7 @@ class TinkerRlTuner(Tuner):
         self.sampler_path = sampler_res.path
 
         return TinkerRlRecipeState(
-            model_id=self.model_id,
+            tuner_id=self.tuner_id,
             config=self.config,
             state_path=self.state_path,
             sampler_path=self.sampler_path,
@@ -259,7 +263,7 @@ class TinkerRlRecipe(Recipe):
     Recipe factory for Tinker RL tuners.
     """
 
-    async def create(self, model_id: str) -> TinkerRlTuner:
+    async def create(self, tuner_id: str) -> TinkerRlTuner:
         config = TinkerRlRecipeConfig()
 
         # Initialize service client
@@ -299,7 +303,7 @@ class TinkerRlRecipe(Recipe):
         sampler_res = await sampler_future.result_async()
 
         return TinkerRlTuner(
-            model_id=model_id,
+            tuner_id=tuner_id,
             config=config,
             training_client=training_client,
             sampling_client=sampling_client,
@@ -344,7 +348,7 @@ class TinkerRlRecipe(Recipe):
         renderer = get_renderer(renderer_name, tokenizer)
 
         return TinkerRlTuner(
-            model_id=state_data.model_id,
+            tuner_id=state_data.tuner_id,
             config=state_data.config,
             training_client=training_client,
             sampling_client=sampling_client,

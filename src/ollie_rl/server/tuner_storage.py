@@ -27,11 +27,11 @@ class TunerStorage:
         self.client = get_redis_client(redis_url)
         self.active_tuners: Dict[str, Tuner] = {}
 
-    def get(self, model_id: str) -> Optional[Tuner]:
+    def get(self, tuner_id: str) -> Optional[Tuner]:
         """
         Retrieve an active tuner instance by model ID.
         """
-        return self.active_tuners.get(model_id)
+        return self.active_tuners.get(tuner_id)
 
     def list_keys(self) -> List[str]:
         """
@@ -46,12 +46,12 @@ class TunerStorage:
         try:
             records_raw = await self.client.hgetall("tuner:records")
             records: Dict[str, TunerRecord] = {}
-            for model_id, val in records_raw.items():
+            for tuner_id, val in records_raw.items():
                 if isinstance(val, str):
                     m_id = (
-                        model_id.decode()
-                        if isinstance(model_id, bytes)
-                        else str(model_id)
+                        tuner_id.decode()
+                        if isinstance(tuner_id, bytes)
+                        else str(tuner_id)
                     )
                     records[m_id] = TunerRecord.model_validate_json(val)
             return records
@@ -64,48 +64,48 @@ class TunerStorage:
         Load the persisted state and restore active Tuner instances into memory using Cookbook.
         """
         records = await self.load_state()
-        for model_id, record in records.items():
+        for tuner_id, record in records.items():
             try:
                 logger.info(
-                    f"Restoring tuner for model: {model_id} (kind: {record.kind})"
+                    f"Restoring tuner for model: {tuner_id} (kind: {record.kind})"
                 )
                 tuner = await Cookbook.restore(record.kind, record.state)
-                self.active_tuners[model_id] = tuner
+                self.active_tuners[tuner_id] = tuner
             except Exception as e:
-                logger.exception(f"Failed to restore tuner for model: {model_id}")
+                logger.exception(f"Failed to restore tuner for model: {tuner_id}")
         logger.info(f"Successfully restored {len(self.active_tuners)} tuners.")
 
-    async def register_tuner(self, model_id: str, tuner: Tuner) -> None:
+    async def register_tuner(self, tuner_id: str, tuner: Tuner) -> None:
         """
         Register a new tuner instance, keeping it in memory and persisting it to storage.
         """
-        self.active_tuners[model_id] = tuner
-        await self.save_tuner(model_id, tuner)
+        self.active_tuners[tuner_id] = tuner
+        await self.save_tuner(tuner_id, tuner)
 
-    async def save_tuner(self, model_id: str, tuner: Tuner) -> None:
+    async def save_tuner(self, tuner_id: str, tuner: Tuner) -> None:
         """
         Save or update a single tuner in the persistent storage.
         """
         try:
             state_str = await tuner.save_state()
             record = TunerRecord(kind=tuner.kind, state=state_str)
-            await self.client.hset("tuner:records", model_id, record.model_dump_json())
-            logger.info(f"Successfully persisted tuner {model_id} to Redis")
+            await self.client.hset("tuner:records", tuner_id, record.model_dump_json())
+            logger.info(f"Successfully persisted tuner {tuner_id} to Redis")
         except Exception as e:
-            logger.exception(f"Failed to save tuner for model: {model_id}")
+            logger.exception(f"Failed to save tuner for model: {tuner_id}")
 
     async def save_all_tuners(self) -> None:
         """
         Save/overwrite all active tuners in the persistent storage.
         """
         records: Dict[str, str] = {}
-        for model_id, tuner in self.active_tuners.items():
+        for tuner_id, tuner in self.active_tuners.items():
             try:
                 state_str = await tuner.save_state()
                 record = TunerRecord(kind=tuner.kind, state=state_str)
-                records[model_id] = record.model_dump_json()
+                records[tuner_id] = record.model_dump_json()
             except Exception as e:
-                logger.exception(f"Failed to save state for model: {model_id}")
+                logger.exception(f"Failed to save state for model: {tuner_id}")
 
         try:
             async with self.client.pipeline() as pipe:
@@ -117,18 +117,18 @@ class TunerStorage:
         except Exception as e:
             logger.exception("Failed to write persisted tuners to Redis")
 
-    async def delete_tuner(self, model_id: str) -> None:
+    async def delete_tuner(self, tuner_id: str) -> None:
         """
         Remove a tuner from both memory and persistent storage.
         """
-        if model_id in self.active_tuners:
-            del self.active_tuners[model_id]
+        if tuner_id in self.active_tuners:
+            del self.active_tuners[tuner_id]
         try:
-            await self.client.hdel("tuner:records", model_id)
-            logger.info(f"Successfully deleted tuner {model_id} from Redis")
+            await self.client.hdel("tuner:records", tuner_id)
+            logger.info(f"Successfully deleted tuner {tuner_id} from Redis")
         except Exception as e:
             logger.exception(
-                f"Failed to delete tuner for model: {model_id} from storage"
+                f"Failed to delete tuner for model: {tuner_id} from storage"
             )
 
     async def close(self) -> None:

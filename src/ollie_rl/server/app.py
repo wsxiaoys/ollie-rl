@@ -72,21 +72,21 @@ async def create_tuner(request: CreateTunerRequest):
     """
     try:
         # Create and initialize the tuner using the Cookbook
-        tuner = await Cookbook.create(request.recipe, model_id=request.model_id)
+        tuner = await Cookbook.create(request.recipe, tuner_id=request.tuner_id)
 
         # Register the tuner dynamically (keeps in memory and persists to disk)
-        await storage.register_tuner(request.model_id, tuner)
+        await storage.register_tuner(request.tuner_id, tuner)
 
         logger.info(
-            f"Dynamically created and initialized model: {request.model_id} using recipe template: {request.recipe}"
+            f"Dynamically created and initialized tuner: {request.tuner_id} using recipe template: {request.recipe}"
         )
         return {
             "status": "success",
-            "model": request.model_id,
+            "tuner_id": request.tuner_id,
             "recipe": request.recipe,
         }
     except Exception as e:
-        logger.exception(f"Failed to create model: {request.model_id}")
+        logger.exception(f"Failed to create tuner: {request.tuner_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -124,3 +124,4 @@ async def get_chat_completions(chat_id: str):
     """Retrieve all recorded completion IDs for a given chat ID."""
     completions = await chat_storage.get_completions(chat_id)
     return {"chat_id": chat_id, "completion_ids": completions}
+

@@ -6,10 +6,14 @@ from ollie_rl.cookbook import Recipe, Tuner
 
 
 class DummyTuner(Tuner):
-    def __init__(self, model_id: str, kind: str, state: str):
-        self._model_id = model_id
+    def __init__(self, tuner_id: str, kind: str, state: str):
+        self._tuner_id = tuner_id
         self._kind = kind
         self._state = state
+
+    @property
+    def tuner_id(self) -> str:
+        return self._tuner_id
 
     @property
     def kind(self) -> str:
@@ -26,8 +30,8 @@ class DummyTuner(Tuner):
 
 
 class DummyRecipe(Recipe):
-    async def create(self, model_id: str) -> DummyTuner:
-        return DummyTuner(model_id, "dummy", "state")
+    async def create(self, tuner_id: str) -> DummyTuner:
+        return DummyTuner(tuner_id, "dummy", "state")
 
     async def restore(self, state: str) -> DummyTuner:
         return DummyTuner("dummy_model", "dummy", state)
