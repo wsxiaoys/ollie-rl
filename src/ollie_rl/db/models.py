@@ -1,0 +1,85 @@
+from datetime import datetime
+from typing import Optional
+from sqlalchemy import Integer, String, Text, ForeignKey, Float, DateTime, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class BaseModel(DeclarativeBase):
+    """SQLAlchemy Declarative Base"""
+
+    pass
+
+
+class TunerModel(BaseModel):
+    """
+    SQLAlchemy model representing a single persisted tuner's metadata and state.
+    """
+
+    __tablename__ = "tuners"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ChatCompletionModel(BaseModel):
+    """
+    SQLAlchemy model representing a recorded chat completion.
+
+    Within the same tuner:
+      1. id: Represents a single LLM request and response interaction.
+      2. trajectory_id: Represents a continuous series of chat completions (currently not
+         recorded because we do not differentiate them at this stage).
+      3. run_id: Represents a specific run for a data row; it can contain multiple trajectories
+         (e.g., in multi-agent or sub-agent architectures).
+      4. step_id: Represents the version of the tuner when serving this chat completion.
+      5. datum_id: Represents the reference ID in the dataset; a dataset item can have multiple task runs.
+
+    For a typical GRPO-style training step:
+      1. Each group is defined by the same `data_id` and multiple `run_id`s within a tuner version
+         range (e.g., steps 3-5), and usually requires a minimum number of runs.
+      2. A training step is triggered once a sufficient number of groups satisfy condition #1,
+         at which point these completions are consumed.
+    """
+
+    __tablename__ = "chat_completions"
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    tuner_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tuners.id"), nullable=False
+    )
+    # step_id: Mapped[str] = mapped_column(
+    #     String(255), nullable=False, index=True
+    # )
+    # trajectory_id: Mapped[Optional[str]] = mapped_column(
+    #     String(255), nullable=False, index=True
+    # )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=False, index=True
+    )
+    datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=func.now(), onupdate=func.now()
+    )
+
+
+class RunModel(BaseModel):
+    __tablename__ = "runs"
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    tuner_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tuners.id"), nullable=False
+    )
+    datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    reward: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    train_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=func.now(), onupdate=func.now()
+    )

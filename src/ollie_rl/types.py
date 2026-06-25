@@ -14,5 +14,21 @@ class ChatCompletionRequest(BaseModel):
 
 
 class CreateTunerRequest(BaseModel):
-    tuner_id: str
+    name: str
     recipe: str
+
+
+class SetValueRequest(BaseModel):
+    value: float
+
+
+class RolloutRun(BaseModel):
+    id: str
+    datum_id: str
+    reward: float
+    advantage: float
+
+
+class Rollout(BaseModel):
+    datum_id: str
+    runs: List[RolloutRun]

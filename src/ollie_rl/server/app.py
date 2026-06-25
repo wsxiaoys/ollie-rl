@@ -1,47 +1,42 @@
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from ollie_rl.cookbook import Cookbook
-from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest
+from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest, SetValueRequest
 from openai.types.chat import ChatCompletion
-from .tuner_storage import TunerStorage
+from ollie_rl.db import init_db, shutdown_db
+from ollie_rl.service import TunerService
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize tuner storage (handles both in-memory active tuners and persistence)
-storage = TunerStorage()
+
+class Services:
+    tuner = TunerService()
+
+
+services = Services()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: load and restore tuners from storage
+    # Startup: initialize database
     try:
-        logger.info("Restoring persisted tuners...")
-        await storage.restore_tuners()
-        logger.info(f"Successfully restored active tuners: {storage.list_keys()}")
+        logger.info("Initializing database tables...")
+        await init_db()
     except Exception as e:
-        logger.exception("Failed to restore persisted tuners during startup")
+        logger.exception("Failed to initialize database during startup")
 
     yield
 
-    # Shutdown: persist all active tuners to storage and close completion storage
     try:
-        logger.info("Persisting active tuners on shutdown...")
-        await storage.save_all_tuners()
+        logger.info("Shutting down database tables...")
+        await shutdown_db()
     except Exception as e:
-        logger.exception("Failed to persist tuners during shutdown")
-
-    try:
-        logger.info("Closing tuner storage...")
-        await storage.close()
-    except Exception as e:
-        logger.exception("Failed to close tuner storage during shutdown")
+        logger.exception("Failed to shutdown database during shutdown")
 
 
 app = FastAPI(
@@ -57,52 +52,99 @@ async def custom_404_handler(request: Request, exc: Exception) -> RedirectRespon
     return RedirectResponse("/docs")
 
 
-@app.post("/v1/tuners")
+@app.post("/tuners")
 async def create_tuner(request: CreateTunerRequest):
     """
     Creates a new LoRA training client / model dynamically from a recipe template.
     """
     try:
-        # Create and initialize the tuner using the Cookbook
-        tuner = await Cookbook.create(request.recipe, tuner_id=request.tuner_id)
-
-        # Register the tuner dynamically (keeps in memory and persists to disk)
-        await storage.register_tuner(request.tuner_id, tuner)
+        # Create, initialize, and register the tuner dynamically
+        tuner_id = await services.tuner.create_tuner(request.recipe, request.name)
 
         logger.info(
-            f"Dynamically created and initialized tuner: {request.tuner_id} using recipe template: {request.recipe}"
+            f"Dynamically created and initialized tuner: {tuner_id} (name: {request.name}) using recipe template: {request.recipe}"
         )
         return {
-            "status": "success",
-            "tuner_id": request.tuner_id,
+            "tuner_id": tuner_id,
+            "name": request.name,
             "recipe": request.recipe,
         }
     except Exception as e:
-        logger.exception(f"Failed to create tuner: {request.tuner_id}")
+        logger.exception(f"Failed to create tuner for name: {request.name}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/v1/chat/completions")
-async def create_chat_completion(
+@app.put("/tuners/{tuner_id}/data/{datum_id}/runs/{run_id}/reward")
+async def set_run_reward(
+    tuner_id: str,
+    datum_id: str,
+    run_id: str,
+    request: SetValueRequest,
+):
+    """
+    Sets the reward for a specific run under a tuner and datum.
+    """
+    try:
+        await services.tuner.set_run_reward(
+            tuner_id=tuner_id,
+            datum_id=datum_id,
+            run_id=run_id,
+            reward=request.value,
+        )
+        return {"status": "success"}
+    except Exception as e:
+        logger.exception(f"Failed to set reward for run '{run_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _generate_chat_completion(
+    tuner_id: str,
     request: ChatCompletionRequest,
-    chat_id: Optional[str] = Header(None, alias="x-chat-id"),
 ) -> ChatCompletion:
-    """Generate a chat completion from the active policy of the requested model."""
-    tuner = storage.get(request.model)
+    tuner = await services.tuner.get(tuner_id)
     if not tuner:
         raise HTTPException(
             status_code=404,
-            detail=f"Model '{request.model}' not found or not initialized. Available models: {storage.list_keys()}",
+            detail=f"Tuner '{tuner_id}' not found or not initialized.",
         )
 
     try:
-        if chat_id:
-            logger.info(
-                f"Generating chat completion for model '{request.model}' with chat ID: {chat_id}"
-            )
-        return await tuner.sample(request)
+        sample_op = await tuner.sample(request)
+        sample = await sample_op.wait()
     except Exception as e:
         logger.exception(
             f"Failed to generate chat completion for model '{request.model}'"
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+    return sample.completion
+
+
+@app.post("/tuners/{tuner_id}/data/{datum_id}/runs/{run_id}/openai/v1/chat/completions")
+async def create_chat_completion(
+    request: ChatCompletionRequest,
+    tuner_id: str,
+    datum_id: str,
+    run_id: str,
+) -> ChatCompletion:
+    """Generate a chat completion from the active policy of the requested model."""
+    completion = await _generate_chat_completion(tuner_id, request)
+
+    # Record completion metadata via TunerService
+    await services.tuner.record_chat_completion(
+        completion_id=completion.id,
+        tuner_id=tuner_id,
+        run_id=run_id,
+        datum_id=datum_id,
+    )
+
+    return completion
+
+
+@app.post("/tuners/{tuner_id}/openai/v1/chat/completions")
+async def create_chat_completion_no_record(
+    request: ChatCompletionRequest,
+    tuner_id: str,
+) -> ChatCompletion:
+    """Generate a chat completion from the active policy of the requested model without recording."""
+    return await _generate_chat_completion(tuner_id, request)

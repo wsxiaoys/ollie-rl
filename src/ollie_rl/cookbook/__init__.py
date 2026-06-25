@@ -1,11 +1,9 @@
 from typing import Dict
 from .types import Recipe, Tuner
 from .gemini_msrl import GeminiMsrlRecipe
-from .tinker_rl import TinkerRlRecipe
 
 RECIPES: Dict[str, Recipe] = {
     "gemini_msrl": GeminiMsrlRecipe(),
-    "tinker_rl": TinkerRlRecipe(),
 }
 
 
@@ -15,13 +13,13 @@ class Cookbook:
     """
 
     @classmethod
-    async def create(cls, kind: str, tuner_id: str) -> Tuner:
+    async def create(cls, kind: str, name: str) -> Tuner:
         recipe = RECIPES.get(kind)
         if not recipe:
             raise ValueError(
                 f"Recipe template '{kind}' not found. Available templates: {list(RECIPES.keys())}"
             )
-        return await recipe.create(tuner_id)
+        return await recipe.create(name)
 
     @classmethod
     async def restore(cls, kind: str, state: str) -> Tuner:

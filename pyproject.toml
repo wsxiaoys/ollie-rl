@@ -5,13 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "fakeredis>=2.36.2",
+    "aiosqlite>=0.22.1",
+    "asyncpg>=0.31.0",
     "fastapi>=0.138.0",
     "google-genai>=2.10.0",
+    "greenlet>=3.5.2",
     "httpx>=0.28.1",
     "openai>=2.43.0",
     "pydantic>=2.13.4",
-    "redis>=8.0.1",
+    "sqlalchemy>=2.0.51",
     "tinker>=0.22.3",
     "tinker-cookbook>=0.1.0",
     "torchvision>=0.27.1",

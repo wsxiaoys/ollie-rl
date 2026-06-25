@@ -10,16 +10,37 @@ class Example(BaseModel):
     advantage: float
 
 
+class Sample(BaseModel):
+    completion: ChatCompletion
+    step_id: str
+
+
+class TrainOp(ABC):
+    """
+    Represents an active, asynchronous training step operation.
+    """
+
+    @abstractmethod
+    async def wait(self) -> None:
+        """Block and wait for the training step operation to complete."""
+        pass
+
+
+class SampleOp(ABC):
+    """
+    Represents an active, asynchronous sampling operation.
+    """
+
+    @abstractmethod
+    async def wait(self) -> Sample:
+        """Block and wait for the sampling operation to complete and return the Sample."""
+        pass
+
+
 class Tuner(ABC):
     """
     Abstract base class representing an active RL tuner/training job.
     """
-
-    @property
-    @abstractmethod
-    def tuner_id(self) -> str:
-        """Return the identifier string of the tuner."""
-        pass
 
     @property
     @abstractmethod
@@ -28,16 +49,19 @@ class Tuner(ABC):
         pass
 
     @abstractmethod
-    async def sample(self, request: ChatCompletionRequest) -> ChatCompletion:
+    async def sample(self, request: ChatCompletionRequest) -> SampleOp:
         """
-        Handle a chat completion request.
-        Can perform standard inference or a multi-step rollout with environment feedback.
+        Initiate a chat completion request.
+        Returns a SamplingOp immediately after the request is received by the backend.
         """
         pass
 
     @abstractmethod
-    async def train_step(self, examples: List[Example]) -> None:
-        """Run a single RL training step (e.g., PPO/GRPO) using Tinker's TrainingClient."""
+    async def train_step(self, examples: List[Example]) -> TrainOp:
+        """
+        Initiate a single RL training step.
+        Returns a TrainingOp immediately after the request is received by the backend.
+        """
         pass
 
     @abstractmethod
@@ -53,7 +77,7 @@ class Recipe(ABC):
     """
 
     @abstractmethod
-    async def create(self, tuner_id: str) -> Tuner:
+    async def create(self, name: str) -> Tuner:
         """
         Create and asynchronously initialize a new Tuner instance for a model.
         """

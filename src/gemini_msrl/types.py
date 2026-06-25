@@ -122,7 +122,7 @@ class GenerateContentTuningScopeResponse(BaseModelConfig):
     candidates: Dict[str, Candidate] = Field(default_factory=dict)
     tuning_candidates: List[TuningCandidate] = Field(default_factory=list)
     usage_metadata: Optional[UsageMetadata] = None
-    train_step_id: Optional[str] = None
+    train_step_id: str
 
 
 # --- TrainStep Models ---

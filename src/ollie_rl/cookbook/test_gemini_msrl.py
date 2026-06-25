@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from typing import cast
 from ollie_rl.cookbook.gemini_msrl import GeminiMsrlTuner, GeminiMsrlRecipeConfig
 from ollie_rl.types import ChatCompletionRequest
@@ -16,7 +16,6 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         )
         self.mock_client = AsyncMock()
         self.job = GeminiMsrlTuner(
-            tuner_id="test-model",
             config=self.config,
             client=self.mock_client,
             tuning_job_name="projects/test-project/locations/us-central1/tuningJobs/test-job-id",
@@ -31,7 +30,9 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
             finish_reason=FinishReason.STOP,
         )
         response_payload = GenerateContentTuningScopeResponse(
-            candidates={"candidate_1": candidate}, usage_metadata=None
+            candidates={"candidate_1": candidate},
+            usage_metadata=None,
+            train_step_id="step-123",
         )
 
         mock_op = MagicMock()
@@ -50,7 +51,10 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         )
 
         # Call sample
-        completion = await self.job.sample(request)
+        sample_op = await self.job.sample(request)
+        sample_res = await sample_op.wait()
+        self.assertEqual(sample_res.step_id, "step-123")
+        completion = sample_res.completion
 
         # Assertions
         self.assertEqual(completion.id, "candidate_1")
@@ -79,7 +83,9 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
             finish_reason=FinishReason.STOP,
         )
         response_payload = GenerateContentTuningScopeResponse(
-            candidates={"candidate_2": candidate}, usage_metadata=None
+            candidates={"candidate_2": candidate},
+            usage_metadata=None,
+            train_step_id="456",
         )
 
         mock_op = MagicMock()
@@ -102,7 +108,10 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         )
 
         # Call sample
-        completion = await self.job.sample(request)
+        sample_op = await self.job.sample(request)
+        sample_res = await sample_op.wait()
+        self.assertEqual(sample_res.step_id, "456")
+        completion = sample_res.completion
 
         # Assertions
         self.assertEqual(completion.id, "candidate_2")
@@ -140,7 +149,9 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
             finish_reason=FinishReason.STOP,
         )
         response_payload = GenerateContentTuningScopeResponse(
-            candidates={"candidate_3": candidate}, usage_metadata=None
+            candidates={"candidate_3": candidate},
+            usage_metadata=None,
+            train_step_id="step-789",
         )
 
         mock_op = MagicMock()
@@ -163,7 +174,10 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         )
 
         # Call sample
-        completion = await self.job.sample(request)
+        sample_op = await self.job.sample(request)
+        sample_res = await sample_op.wait()
+        self.assertEqual(sample_res.step_id, "step-789")
+        completion = sample_res.completion
 
         # Assertions
         self.assertEqual(completion.id, "candidate_3")
@@ -181,3 +195,53 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tc.type, "function")
         self.assertEqual(tc.function.name, "get_weather")
         self.assertEqual(tc.function.arguments, '{"location": "Seattle, WA"}')
+
+    async def test_train_step_successful(self):
+        from gemini_msrl.types import TrainStepResponse
+        from ollie_rl.cookbook.types import Example
+
+        # Mock TrainStepResponse with completed_train_step_id
+        response_payload = TrainStepResponse(completed_train_step_id="step-12345")
+
+        mock_op = MagicMock()
+        mock_op.name = "operation-train-step"
+        self.mock_client.train_step.return_value = mock_op
+
+        mock_completed_op = MagicMock()
+        mock_completed_op.get_response_as.return_value = response_payload
+        self.mock_client.wait_for_operation.return_value = mock_completed_op
+
+        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+
+        # Call train_step
+        train_op = await self.job.train_step(examples)
+        await train_op.wait()
+
+        # Assert state persistence works
+        state = await self.job.save_state()
+        self.assertIn('"tuning_job_name"', state)
+
+    async def test_restore_tuner(self):
+        from ollie_rl.cookbook.gemini_msrl import GeminiMsrlRecipe
+        import json
+
+        # Create a state string
+        state_dict = {
+            "tuning_job_name": "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
+        }
+        state_str = json.dumps(state_dict)
+
+        recipe = GeminiMsrlRecipe()
+        # We need to mock wait_for_tuning_job_running since restore calls it
+        self.mock_client.wait_for_tuning_job_running = AsyncMock()
+
+        # Let's patch GeminiMsrlClient to return our mock_client
+        with patch(
+            "ollie_rl.cookbook.gemini_msrl.GeminiMsrlClient"
+        ) as mock_client_class:
+            mock_client_class.return_value = self.mock_client
+            tuner = await recipe.restore(state_str)
+            self.assertEqual(
+                tuner.tuning_job_name,
+                "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
+            )
