@@ -69,7 +69,6 @@ class TunerService:
                         name=name,
                         kind=tuner.kind,
                         state=state_str,
-                        train_step_id=0,
                     )
                     session.add(record)
         logger.info(f"Successfully persisted tuner {tuner_id} to database")
@@ -158,7 +157,8 @@ class TunerService:
 
                 # Calculate mean and std of rewards for this group
                 rewards = [
-                    reward_model.reward if reward_model.reward is not None else 0.0 for reward_model in group
+                    reward_model.reward if reward_model.reward is not None else 0.0
+                    for reward_model in group
                 ]
                 mean = sum(rewards) / len(rewards)
                 variance = sum((r - mean) ** 2 for r in rewards) / len(rewards)

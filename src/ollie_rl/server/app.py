@@ -5,7 +5,11 @@ from typing import Annotated
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest, CreateRewardRequest
+from ollie_rl.types import (
+    ChatCompletionRequest,
+    CreateTunerRequest,
+    CreateRewardRequest,
+)
 from openai.types.chat import ChatCompletion
 from ollie_rl.db import init_db, shutdown_db
 from ollie_rl.service import TunerService

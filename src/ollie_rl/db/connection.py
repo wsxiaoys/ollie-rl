@@ -1,5 +1,6 @@
 import os
 import logging
+from typing import Optional
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from .models import BaseModel
 
@@ -12,7 +13,7 @@ _engine = None
 _sessionmaker = None
 
 
-def get_engine(database_url=None):
+def get_engine(database_url: Optional[str] = None):
     """Create and return an async SQLAlchemy engine singleton."""
     global _engine
     if _engine is None:
@@ -34,9 +35,9 @@ def get_sessionmaker():
     return _sessionmaker
 
 
-async def init_db() -> None:
+async def init_db(database_url: Optional[str] = None) -> None:
     """Create database tables if they do not exist."""
-    engine = get_engine()
+    engine = get_engine(database_url)
     async with engine.begin() as conn:
         await conn.run_sync(BaseModel.metadata.create_all)
 

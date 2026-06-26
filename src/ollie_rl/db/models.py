@@ -1,7 +1,16 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Integer, String, Text, ForeignKey, Float, DateTime, UniqueConstraint, func
+from sqlalchemy import (
+    Integer,
+    String,
+    Text,
+    ForeignKey,
+    Float,
+    DateTime,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -70,9 +79,13 @@ class ChatCompletionModel(BaseModel):
 
 class RewardModel(BaseModel):
     __tablename__ = "rewards"
-    __table_args__ = (UniqueConstraint("tuner_id", "run_id", name="uq_rewards_tuner_run"),)
+    __table_args__ = (
+        UniqueConstraint("tuner_id", "run_id", name="uq_rewards_tuner_run"),
+    )
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     tuner_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("tuners.id"), nullable=False
     )
