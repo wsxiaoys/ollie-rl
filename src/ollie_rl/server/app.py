@@ -1,7 +1,8 @@
 import logging
 from contextlib import asynccontextmanager
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest, SetValueRequest
@@ -120,22 +121,23 @@ async def _generate_chat_completion(
     return sample.completion
 
 
-@app.post("/tuners/{tuner_id}/data/{datum_id}/runs/{run_id}/openai/v1/chat/completions")
+@app.post("/openai/v1/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
-    tuner_id: str,
-    datum_id: str,
-    run_id: str,
+    x_tuner_id: Annotated[str, Header()],
+    x_datum_id: Annotated[str | None, Header()] = None,
+    x_run_id: Annotated[str | None, Header()] = None,
 ) -> ChatCompletion:
     """Generate a chat completion from the active policy of the requested model."""
-    completion = await _generate_chat_completion(tuner_id, request)
+    completion = await _generate_chat_completion(x_tuner_id, request)
 
     # Record completion metadata via TunerService
-    await services.tuner.record_chat_completion(
-        completion_id=completion.id,
-        tuner_id=tuner_id,
-        run_id=run_id,
-        datum_id=datum_id,
-    )
+    if x_run_id is not None and x_datum_id is not None:
+        await services.tuner.record_chat_completion(
+            completion_id=completion.id,
+            tuner_id=x_tuner_id,
+            run_id=x_run_id,
+            datum_id=x_datum_id,
+        )
 
     return completion
