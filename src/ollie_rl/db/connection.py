@@ -12,11 +12,11 @@ _engine = None
 _sessionmaker = None
 
 
-def get_engine():
+def get_engine(database_url=None):
     """Create and return an async SQLAlchemy engine singleton."""
     global _engine
     if _engine is None:
-        url = os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+        url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
         if url == DEFAULT_DATABASE_URL:
             logger.warning(
                 "SQLite in-memory backend is being used. "
