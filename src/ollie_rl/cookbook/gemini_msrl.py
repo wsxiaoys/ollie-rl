@@ -65,7 +65,24 @@ class GeminiMsrlRecipeState(BaseModel):
     tuning_job_name: str
 
 
-class GeminiMsrlSamplingOp(SampleOp):
+class GeminiMsrlOp:
+    def __init__(
+        self,
+        client: GeminiMsrlClient,
+        op_name: str,
+        config: GeminiMsrlRecipeConfig,
+    ):
+        self.client = client
+        self.op_name = op_name
+        self.config = config
+
+    async def peek(self) -> bool:
+        """Return True iff the op has reached a terminal state."""
+        operation = await self.client.get_operation(self.op_name)
+        return bool(operation.done)
+
+
+class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
     def __init__(
         self,
         client: GeminiMsrlClient,
@@ -73,9 +90,7 @@ class GeminiMsrlSamplingOp(SampleOp):
         config: GeminiMsrlRecipeConfig,
         model_name: str,
     ):
-        self.client = client
-        self.op_name = op_name
-        self.config = config
+        super().__init__(client, op_name, config)
         self.model_name = model_name
 
     async def wait(self) -> Sample:
@@ -175,17 +190,7 @@ class GeminiMsrlSamplingOp(SampleOp):
         return Sample(completion=completion, step_id=response.train_step_id)
 
 
-class GeminiMsrlTrainingOp(TrainOp):
-    def __init__(
-        self,
-        client: GeminiMsrlClient,
-        op_name: str,
-        config: GeminiMsrlRecipeConfig,
-    ):
-        self.client = client
-        self.op_name = op_name
-        self.config = config
-
+class GeminiMsrlTrainingOp(GeminiMsrlOp, TrainOp):
     async def wait(self) -> None:
         completed_op = await self.client.wait_for_operation(
             self.op_name,

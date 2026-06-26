@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Generic, TypeVar
 from openai.types.chat import ChatCompletion
 from pydantic import BaseModel
 from ollie_rl.types import ChatCompletionRequest
+
+
+T = TypeVar("T")
 
 
 class Example(BaseModel):
@@ -15,26 +18,37 @@ class Sample(BaseModel):
     step_id: str
 
 
-class TrainOp(ABC):
+class Op(ABC, Generic[T]):
+    """
+    Represents an active, asynchronous operation.
+    """
+
+    @abstractmethod
+    async def wait(self) -> T:
+        """Block and wait for the operation to complete."""
+        pass
+
+    @abstractmethod
+    async def peek(self) -> bool:
+        """Return True iff the op has reached a terminal state. Cheap;
+        OK to call on every request."""
+        pass
+
+
+class TrainOp(Op[None]):
     """
     Represents an active, asynchronous training step operation.
     """
 
-    @abstractmethod
-    async def wait(self) -> None:
-        """Block and wait for the training step operation to complete."""
-        pass
+    pass
 
 
-class SampleOp(ABC):
+class SampleOp(Op[Sample]):
     """
     Represents an active, asynchronous sampling operation.
     """
 
-    @abstractmethod
-    async def wait(self) -> Sample:
-        """Block and wait for the sampling operation to complete and return the Sample."""
-        pass
+    pass
 
 
 class Tuner(ABC):

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 from typing import cast
 from ollie_rl.cookbook.gemini_msrl import GeminiMsrlTuner, GeminiMsrlRecipeConfig
 from ollie_rl.types import ChatCompletionRequest
@@ -245,3 +245,77 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
                 tuner.tuning_job_name,
                 "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
             )
+
+    async def test_sample_op_peek(self):
+        from gemini_msrl.types import Operation
+
+        # Create a mock operation that is not done
+        mock_op_pending = Operation(name="operation-123", done=False)
+        # Create a mock operation that is done
+        mock_op_done = Operation(name="operation-123", done=True)
+
+        self.mock_client.get_operation.side_effect = [mock_op_pending, mock_op_done]
+
+        # Create request
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[ChatCompletionMessage(role="assistant", content="Hi")],
+            max_tokens=100,
+        )
+
+        mock_op = MagicMock()
+        mock_op.name = "operation-123"
+        self.mock_client.generate_content_tuning_scope.return_value = mock_op
+
+        # Call sample
+        sample_op = await self.job.sample(request)
+
+        # First peek should be False
+        is_done_1 = await sample_op.peek()
+        self.assertFalse(is_done_1)
+
+        # Second peek should be True
+        is_done_2 = await sample_op.peek()
+        self.assertTrue(is_done_2)
+
+        # Verify get_operation was called with correct name
+        self.mock_client.get_operation.assert_has_calls(
+            [
+                call("operation-123"),
+                call("operation-123"),
+            ]
+        )
+
+    async def test_train_op_peek(self):
+        from gemini_msrl.types import Operation
+        from ollie_rl.cookbook.types import Example
+
+        mock_op_pending = Operation(name="operation-train-step", done=False)
+        mock_op_done = Operation(name="operation-train-step", done=True)
+
+        self.mock_client.get_operation.side_effect = [mock_op_pending, mock_op_done]
+
+        mock_op = MagicMock()
+        mock_op.name = "operation-train-step"
+        self.mock_client.train_step.return_value = mock_op
+
+        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+
+        # Call train_step
+        train_op = await self.job.train_step(examples)
+
+        # First peek should be False
+        is_done_1 = await train_op.peek()
+        self.assertFalse(is_done_1)
+
+        # Second peek should be True
+        is_done_2 = await train_op.peek()
+        self.assertTrue(is_done_2)
+
+        # Verify get_operation was called with correct name
+        self.mock_client.get_operation.assert_has_calls(
+            [
+                call("operation-train-step"),
+                call("operation-train-step"),
+            ]
+        )
