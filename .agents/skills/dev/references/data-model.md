@@ -21,7 +21,7 @@ the group. The K elements inside it are `RolloutRun`s.
 
 ```mermaid
 flowchart TD
-    B[Batch<br/>32 Rollouts] --> G1[Rollout<br/>datum_id = A]
+    B[Batch<br/>32 Rollouts / 512 Runs] --> G1[Rollout<br/>datum_id = A]
     B --> G2[Rollout<br/>datum_id = B]
     B --> Gn[Rollout<br/>datum_id = ...]
 
@@ -29,9 +29,12 @@ flowchart TD
     G1 --> R2[RolloutRun run_id=r2<br/>reward, advantage]
     G1 --> Rk[RolloutRun run_id=...<br/>16 runs total]
 
-    R1 --> C1[ChatCompletion id=c1]
-    R1 --> C2[ChatCompletion id=c2]
-    R2 --> C3[ChatCompletion id=c3]
+    R1 -->|1-to-many| C1[ChatCompletion id=c1]
+    R1 -->|1-to-many| C2[ChatCompletion id=c2]
+    R2 -->|1-to-many| C3[ChatCompletion id=c3]
+    R2 -->|1-to-many| C4[ChatCompletion id=c4]
+    Rk -->|1-to-many| C5[ChatCompletion id=c5]
+    Rk -->|1-to-many| C6[ChatCompletion id=c6]
 ```
 
 ## Core Entities
@@ -141,7 +144,10 @@ once so that gradients are well averaged. In this codebase:
 
 - A batch is exactly `TARGET_GROUP_COUNT` (32) ready `Rollout`s.
 - Inside the trainer (`Tuner.train_step`), the flattened `Example`s of
-  that batch correspond to ~32 × 16 = 512 chat completions.
+  that batch correspond to 32 × 16 = 512 runs. Since a single run can
+  contain multiple chat completions, the total number of chat completion
+  examples passed to the trainer will be at least 512 (and potentially
+  more if runs have multi-turn interactions).
 - "Ready" means every run in the group has a non-null reward and
   `train_count == 0`. Partial groups are silently skipped until they
   fill up.
