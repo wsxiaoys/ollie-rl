@@ -53,7 +53,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         # Call sample
         sample_op = await self.job.sample(request)
         sample_res = await sample_op.wait()
-        self.assertEqual(sample_res.step_id, "step-123")
+        self.assertEqual(sample_res.policy_generation, "step-123")
         completion = sample_res.completion
 
         # Assertions
@@ -110,7 +110,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         # Call sample
         sample_op = await self.job.sample(request)
         sample_res = await sample_op.wait()
-        self.assertEqual(sample_res.step_id, "456")
+        self.assertEqual(sample_res.policy_generation, "456")
         completion = sample_res.completion
 
         # Assertions
@@ -176,7 +176,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         # Call sample
         sample_op = await self.job.sample(request)
         sample_res = await sample_op.wait()
-        self.assertEqual(sample_res.step_id, "step-789")
+        self.assertEqual(sample_res.policy_generation, "step-789")
         completion = sample_res.completion
 
         # Assertions

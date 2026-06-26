@@ -6,11 +6,24 @@ from typing import Dict, List, Optional
 from sqlalchemy import select, update
 from ollie_rl.cookbook import Tuner, Cookbook
 from ollie_rl.cookbook.types import Example
-from ollie_rl.db import TunerModel, ChatCompletionModel, RewardModel
+from ollie_rl.db import TunerModel, ChatCompletionModel, DatumRowModel
 from ollie_rl.db.connection import get_sessionmaker
+from ollie_rl.db.models import RunModel
 from ollie_rl.types import Rollout, RolloutRun
 
 logger = logging.getLogger(__name__)
+
+
+class RunNotFoundError(Exception):
+    pass
+
+
+class RunExpiredError(Exception):
+    pass
+
+
+class RewardAlreadySetError(Exception):
+    pass
 
 
 class TunerService:
@@ -46,7 +59,7 @@ class TunerService:
 
         return None
 
-    async def create_tuner(self, recipe: str, name: str) -> str:
+    async def create_tuner(self, recipe: str, name: str, datum_ids: List[str]) -> str:
         """
         Create and initialize a tuner using the Cookbook and register it.
         """
@@ -71,11 +84,20 @@ class TunerService:
                         state=state_str,
                     )
                     session.add(record)
+                
+                # Add datum rows
+                for datum_id in datum_ids:
+                    session.add(
+                        DatumRowModel(
+                            tuner_id=tuner_id,
+                            datum_id=datum_id,
+                        )
+                    )
         logger.info(f"Successfully persisted tuner {tuner_id} to database")
         return tuner_id
 
     async def record_chat_completion(
-        self, completion_id: str, tuner_id: str, run_id: str, datum_id: str
+        self, completion_id: str, tuner_id: str, run_id: str, datum_id: str, policy_generation: str,
     ) -> None:
         """
         Record a chat completion event in the database.
@@ -87,41 +109,44 @@ class TunerService:
                     tuner_id=tuner_id,
                     run_id=run_id,
                     datum_id=datum_id,
+                    policy_generation=policy_generation,
                 )
                 session.add(db_completion)
         logger.info(f"Recorded chat completion {completion_id} in database")
 
-    async def create_reward(
-        self, tuner_id: str, datum_id: str, run_id: str, reward: float
+    async def update_reward(
+        self, tuner_id: str, run_id: str, reward: float
     ) -> None:
         """
-        Set or update the reward for a specific run.
+        Record or update the reward for a specific run.
         """
+        from datetime import datetime
         async with self.async_session() as session:
             async with session.begin():
                 result = await session.execute(
-                    select(RewardModel).where(
-                        RewardModel.tuner_id == tuner_id,
-                        RewardModel.run_id == run_id,
+                    select(RunModel).where(
+                        RunModel.id == run_id,
+                        RunModel.tuner_id == tuner_id,
                     )
                 )
                 record = result.scalar_one_or_none()
-                if record:
-                    if record.datum_id != datum_id:
-                        raise ValueError(
-                            f"datum_id mismatch for run_id {run_id}: existing {record.datum_id} vs input {datum_id}"
-                        )
-                    record.reward = reward
-                else:
-                    session.add(
-                        RewardModel(
-                            tuner_id=tuner_id,
-                            run_id=run_id,
-                            datum_id=datum_id,
-                            reward=reward,
-                        )
-                    )
-        logger.info(f"Successfully set reward for run {run_id} to {reward}")
+                if not record:
+                    raise RunNotFoundError(f"Run '{run_id}' not found under tuner '{tuner_id}'")
+
+                if record.reward is not None:
+                    raise RewardAlreadySetError(f"Reward already set for run '{run_id}'")
+
+                now = datetime.now()
+                if record.expires_at.tzinfo is not None:
+                    from datetime import timezone
+                    now = datetime.now(timezone.utc)
+
+                if record.expires_at <= now:
+                    raise RunExpiredError(f"Run '{run_id}' has expired")
+
+                record.reward = reward
+                record.updated_at = now
+        logger.info(f"Successfully recorded reward {reward} for run {run_id}")
 
     async def collect_rollout_ready_for_training(self, tuner_id: str) -> List[Rollout]:
         """
@@ -134,24 +159,25 @@ class TunerService:
 
         async with self.async_session() as session:
             result = await session.execute(
-                select(RewardModel).where(
-                    RewardModel.tuner_id == tuner_id,
-                    RewardModel.train_count <= TARGET_MAX_TRAIN_COUNT,
+                select(RunModel).where(
+                    RunModel.tuner_id == tuner_id,
+                    RunModel.train_count <= TARGET_MAX_TRAIN_COUNT,
+                    RunModel.reward != None,
                 )
             )
-            reward_records = result.scalars().all()
+            run_records = result.scalars().all()
 
             # Group rewards by datum_id
-            grouped_rewards: Dict[str, List[RewardModel]] = {}
-            for reward in reward_records:
-                if reward.datum_id not in grouped_rewards:
-                    grouped_rewards[reward.datum_id] = []
-                if len(grouped_rewards[reward.datum_id]) < GROUP_SIZE:
-                    grouped_rewards[reward.datum_id].append(reward)
+            grouped_runs: Dict[str, List[RunModel]] = {}
+            for reward in run_records:
+                if reward.datum_id not in grouped_runs:
+                    grouped_runs[reward.datum_id] = []
+                if len(grouped_runs[reward.datum_id]) < GROUP_SIZE:
+                    grouped_runs[reward.datum_id].append(reward)
 
             # Process only completed groups (size == GROUP_SIZE)
             rollouts: List[Rollout] = []
-            for datum_id, group in grouped_rewards.items():
+            for group in grouped_runs.values():
                 if len(group) != GROUP_SIZE:
                     continue
 
@@ -169,12 +195,12 @@ class TunerService:
                     advantage = (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
                     rollout_runs.append(
                         RolloutRun(
-                            id=record.run_id,
+                            id=record.id,
                             reward=reward,
                             advantage=advantage,
                         )
                     )
-                rollouts.append(Rollout(datum_id=datum_id, runs=rollout_runs))
+                rollouts.append(Rollout(runs=rollout_runs))
 
             return rollouts
 
@@ -245,10 +271,9 @@ class TunerService:
         async with self.async_session() as session:
             async with session.begin():
                 await session.execute(
-                    update(RewardModel)
-                    .where(RewardModel.run_id.in_(run_ids))
-                    .where(RewardModel.tuner_id == tuner_id)
-                    .values(train_count=RewardModel.train_count + 1)
+                    update(RunModel)
+                    .where(RunModel.id.in_(run_ids))
+                    .values(train_count=RunModel.train_count + 1)
                 )
 
         # 7. Wait for the training step operation to complete

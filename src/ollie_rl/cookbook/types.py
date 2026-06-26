@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import List, Generic, TypeVar
+from typing import List, Generic, TypeVar, Optional
+from dataclasses import dataclass
 from openai.types.chat import ChatCompletion
 from pydantic import BaseModel
 from ollie_rl.types import ChatCompletionRequest
@@ -15,7 +16,19 @@ class Example(BaseModel):
 
 class Sample(BaseModel):
     completion: ChatCompletion
-    step_id: str
+    policy_generation: str
+
+
+@dataclass
+class DispenseContext:
+    is_training: bool
+    datum_pool: List[str]
+
+
+@dataclass
+class RunAssignment:
+    run_id: str
+    datum_id: str
 
 
 class Op(ABC, Generic[T]):

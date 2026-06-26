@@ -2,13 +2,13 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
 from ollie_rl.types import (
     ChatCompletionRequest,
     CreateTunerRequest,
-    CreateRewardRequest,
+    PutRewardRequest,
 )
 from openai.types.chat import ChatCompletion
 from ollie_rl.db import init_db, shutdown_db
@@ -63,8 +63,15 @@ async def create_tuner(request: CreateTunerRequest):
     Creates a new LoRA training client / model dynamically from a recipe template.
     """
     try:
+        if not request.datum_ids:
+            raise HTTPException(status_code=400, detail="datum_ids must be non-empty")
+
         # Create, initialize, and register the tuner dynamically
-        tuner_id = await services.tuner.create_tuner(request.recipe, request.name)
+        tuner_id = await services.tuner.create_tuner(
+            recipe=request.recipe,
+            name=request.name,
+            datum_ids=request.datum_ids,
+        )
 
         logger.info(
             f"Dynamically created and initialized tuner: {tuner_id} (name: {request.name}) using recipe template: {request.recipe}"
@@ -74,72 +81,98 @@ async def create_tuner(request: CreateTunerRequest):
             "name": request.name,
             "recipe": request.recipe,
         }
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.exception(f"Failed to create tuner for name: {request.name}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/tuners/{tuner_id}/rewards")
-async def create_reward(
-    tuner_id: str,
-    request: CreateRewardRequest,
-):
-    """
-    Sets the reward for a specific run under a tuner.
-    """
-    try:
-        await services.tuner.create_reward(
-            tuner_id=tuner_id,
-            datum_id=request.datum_id,
-            run_id=request.run_id,
-            reward=request.reward,
-        )
-        return {"status": "success"}
-    except Exception as e:
-        logger.exception(f"Failed to set reward for run '{request.run_id}'")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def _generate_chat_completion(
-    tuner_id: str,
-    request: ChatCompletionRequest,
-) -> ChatCompletion:
-    tuner = await services.tuner.get(tuner_id)
-    if not tuner:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Tuner '{tuner_id}' not found or not initialized.",
-        )
-
-    try:
-        sample_op = await tuner.sample(request)
-        sample = await sample_op.wait()
-    except Exception as e:
-        logger.exception(
-            f"Failed to generate chat completion for model '{request.model}'"
-        )
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return sample.completion
 
 
 @app.post("/openai/v1/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
     x_tuner_id: Annotated[str, Header()],
-    x_datum_id: Annotated[str | None, Header()] = None,
     x_run_id: Annotated[str | None, Header()] = None,
 ) -> ChatCompletion:
     """Generate a chat completion from the active policy of the requested model."""
-    completion = await _generate_chat_completion(x_tuner_id, request)
+    # Check if run_id is present and valid
+    if x_run_id is not None:
+        # Verify run_id exists in runs for this tuner
+        async with services.tuner.async_session() as session:
+            from sqlalchemy import select
+            from ollie_rl.db.models import RunModel
+            result = await session.execute(
+                select(RunModel).where(
+                    RunModel.tuner_id == x_tuner_id,
+                    RunModel.id == x_run_id,
+                )
+            )
+            run_record = result.scalar_one_or_none()
+            if not run_record:
+                raise HTTPException(status_code=409, detail=f"Unknown run_id {x_run_id}")
+            # Override x_datum_id from database record to prevent client lying
+            x_datum_id = run_record.datum_id
+
+    # Generate completion
+    tuner = await services.tuner.get(x_tuner_id)
+    if not tuner:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tuner '{x_tuner_id}' not found or not initialized.",
+        )
+
+    try:
+        sample_op = await tuner.sample(request)
+        sample = await sample_op.wait()
+        policy_generation = sample.policy_generation
+    except Exception as e:
+        logger.exception(
+            f"Failed to generate chat completion for model '{request.model}'"
+        )
+        raise HTTPException(status_code=500, detail=str(e))
 
     # Record completion metadata via TunerService
     if x_run_id is not None and x_datum_id is not None:
         await services.tuner.record_chat_completion(
-            completion_id=completion.id,
+            completion_id=sample.completion.id,
             tuner_id=x_tuner_id,
             run_id=x_run_id,
             datum_id=x_datum_id,
+            policy_generation=policy_generation,
         )
 
-    return completion
+    return sample.completion
+
+
+@app.put("/tuners/{tuner_id}/runs/{run_id}/reward")
+async def put_reward(
+    tuner_id: str,
+    run_id: str,
+    request: PutRewardRequest,
+):
+    """
+    Sets the reward for a specific run under a tuner.
+    """
+    from ollie_rl.service.tuner_service import (
+        RunNotFoundError,
+        RunExpiredError,
+        RewardAlreadySetError,
+    )
+    import asyncio
+    try:
+        await services.tuner.update_reward(
+            tuner_id=tuner_id,
+            run_id=run_id,
+            reward=request.reward,
+        )
+        # Auto-train trigger (fire-and-forget)
+        asyncio.create_task(services.tuner.train(tuner_id))
+
+        return {"run_id": run_id, "reward": request.reward}
+    except RunNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (RunExpiredError, RewardAlreadySetError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to record reward for run '{run_id}'")
+        raise HTTPException(status_code=500, detail=str(e))

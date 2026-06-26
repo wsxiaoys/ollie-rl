@@ -43,7 +43,7 @@ class ChatCompletionModel(BaseModel):
          recorded because we do not differentiate them at this stage).
       3. run_id: Represents a specific run for a data row; it can contain multiple trajectories
          (e.g., in multi-agent or sub-agent architectures).
-      4. step_id: Represents the version of the tuner when serving this chat completion.
+      4. policy_generation: Represents the version of the tuner when serving this chat completion.
       5. datum_id: Represents the reference ID in the dataset; a dataset item can have multiple task runs.
 
     For a typical GRPO-style training step:
@@ -59,9 +59,9 @@ class ChatCompletionModel(BaseModel):
     tuner_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("tuners.id"), nullable=False
     )
-    # step_id: Mapped[str] = mapped_column(
-    #     String(255), nullable=False, index=True
-    # )
+    policy_generation: Mapped[str] = mapped_column(
+        String(255), nullable=False, index=True
+    )
     # trajectory_id: Mapped[Optional[str]] = mapped_column(
     #     String(255), nullable=False, index=True
     # )
@@ -77,25 +77,29 @@ class ChatCompletionModel(BaseModel):
     )
 
 
-class RewardModel(BaseModel):
-    __tablename__ = "rewards"
-    __table_args__ = (
-        UniqueConstraint("tuner_id", "run_id", name="uq_rewards_tuner_run"),
-    )
+class RunModel(BaseModel):
+    __tablename__ = "runs"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
     tuner_id: Mapped[str] = mapped_column(
-        String(255), ForeignKey("tuners.id"), nullable=False
+        String(255), ForeignKey("tuners.id"), index=True
     )
-    run_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     reward: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     train_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=func.now(), onupdate=func.now()
     )
+
+
+class DatumRowModel(BaseModel):
+    __tablename__ = "datum_rows"
+
+    tuner_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tuners.id"), primary_key=True
+    )
+    datum_id: Mapped[str] = mapped_column(String(255), primary_key=True)

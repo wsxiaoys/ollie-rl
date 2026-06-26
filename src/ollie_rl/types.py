@@ -16,11 +16,11 @@ class ChatCompletionRequest(BaseModel):
 class CreateTunerRequest(BaseModel):
     name: str
     recipe: str
+    datum_ids: List[str]
+    hparams: Optional[dict] = None
 
 
-class CreateRewardRequest(BaseModel):
-    run_id: str
-    datum_id: str
+class PutRewardRequest(BaseModel):
     reward: float
 
 
@@ -31,5 +31,4 @@ class RolloutRun(BaseModel):
 
 
 class Rollout(BaseModel):
-    datum_id: str
     runs: List[RolloutRun]

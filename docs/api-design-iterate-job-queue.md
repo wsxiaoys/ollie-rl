@@ -11,7 +11,12 @@ dispenses run assignments via a queue endpoint and the client just
 executes them. The synchronous barrier falls out of "the queue is empty
 right now."
 
-Status: **draft, awaiting sign-off before implementation**.
+Status: **in progress** — schema + rename + datum-pool registration +
+`policy_generation` capture have landed in staging (see §7.1 for the
+per-step checklist). Remaining work is the queue endpoint, the reward
+endpoint, the recipe-side hooks (`dispense_run`, `in_flight_train_op`,
+`Op.peek`), the DB-driven `maybe_train` barrier, and the
+`gemini_msrl` state migration.
 
 ---
 
@@ -458,7 +463,7 @@ the row-level `FOR UPDATE` is the serialization point.
 ```python
 @router.put("/tuners/{tuner_id}/runs/{run_id}/reward")
 async def put_reward(...):
-    await tuner_service.record_reward(tuner_id, run_id, reward)
+    await tuner_service.update_reward(tuner_id, run_id, reward)
     await tuner_service.maybe_train(tuner_id)   # fire-and-forget
 ```
 
@@ -642,52 +647,86 @@ What we don't take on:
 
 ### 7.1 Ship together
 
+Legend: `[x]` landed in staging, `[ ]` still to do.
+
 1. **Rename**
-   - `Sample.step_id` → `Sample.policy_generation` (stays `str`).
-   - Update `gemini_msrl.sample()` and `test_gemini_msrl.py`.
+   - `[x]` `Sample.step_id` → `Sample.policy_generation` (stays `str`).
+   - `[x]` Update `gemini_msrl.sample()` and `test_gemini_msrl.py`.
 2. **DB schema**
-   - `ChatCompletionModel.policy_generation` (uncomment + rename).
-   - `RunModel` (new, absorbs `RewardModel`).
-   - `DatumRowModel` (new, table `datum_rows`).
-   - Drop `RewardModel`.
+   - `[x]` `ChatCompletionModel.policy_generation` (uncomment + rename).
+   - `[x]` `RunModel` (new, absorbs `RewardModel`).
+   - `[x]` `DatumRowModel` (new, table `datum_rows`).
+   - `[x]` Drop `RewardModel`.
 3. **`Tuner` hooks**
-   - `dispense_run(ctx) -> Optional[RunAssignment]` with a sane default
-     implementation in the base class.
-   - `in_flight_train_op() -> Optional[TrainOp]` with a default of
-     `None` (recipes opt in for restart-safe training).
+   - `[x]` Wire-types only: `DispenseContext` and `RunAssignment`
+     dataclasses live in `cookbook/types.py`; the abstract `Op[T]`
+     base with `wait()` exists. `TrainOp` / `SampleOp` already
+     subclass `Op`.
+   - `[ ]` Add `Op.peek()` (cheap non-blocking terminal-state check)
+     and implement it on `GeminiMsrlTrainingOp` /
+     `GeminiMsrlSamplingOp` (LRO `GetOperation`, terminal-cached).
+   - `[ ]` `dispense_run(ctx) -> Optional[RunAssignment]` with a sane
+     default implementation in the base class (returns `None` while
+     `ctx.is_training`, otherwise mints `run_id` and picks a
+     `datum_id` from `ctx.datum_pool`).
+   - `[ ]` `in_flight_train_op() -> Optional[TrainOp]` with a default
+     of `None` (recipes opt in for restart-safe training).
 4. **`TunerService`**
-   - `register_datums`, `dispense_run`, `record_chat_completion`,
-     `record_reward`, `maybe_train`.
-   - `is_training(tuner_id)` is computed by
+   - `[x]` `create_tuner(recipe, name, datum_ids)` persists the datum
+     pool into `datum_rows`.
+   - `[x]` `record_chat_completion(..., policy_generation)` stamps the
+     new column.
+   - `[x]` `collect_rollout_ready_for_training` now reads from `runs`
+     with `train_count <= TARGET_MAX_TRAIN_COUNT AND reward IS NOT
+     NULL`; the in-memory `Rollout` / `RolloutRun` shape is preserved.
+   - `[x]` `train` bumps `RunModel.train_count` after `train_step`.
+   - `[ ]` Rename `collect_rollout_ready_for_training` →
+     `_collect_consumable_batch` (private; called only from
+     `maybe_train`) and return `run_ids` alongside the batch so the
+     `train_count` UPDATE can run inside the FOR-UPDATE transaction.
+   - `[ ]` `dispense_run(tuner_id)`: load datum pool from
+     `datum_rows`, call `tuner.dispense_run(DispenseContext(...))`,
+     `INSERT` into `runs` with `expires_at = NOW() + run_ttl`.
+   - `[x]` `update_reward(tuner_id, run_id, reward)`: conditional
+     `UPDATE runs SET reward=… WHERE reward IS NULL AND expires_at >
+     NOW()`; raise on the `0-rows-updated` case so the HTTP layer can
+     map to `409 Conflict`.
+   - `[ ]` `is_training(tuner_id)` computed by
      `(await tuner.in_flight_train_op()).peek()` — no in-memory
-     latch.
-   - `maybe_train` wraps `train_step` + `train_count += 1` + state
-     checkpoint in a `SELECT … FOR UPDATE` transaction on `tuners`
-     (§4.8 / §4.11). `op.wait()` is **not** called under the lock.
-   - `collect_rollout_ready_for_training` becomes
-     `_collect_consumable_batch`, reading from `runs` with
-     `reward IS NOT NULL AND train_count == 0` (the existing
-     `train_count` semantics, just on the new table — see §4.3).
+     latch; delete the existing `_train_tasks` map.
+   - `[ ]` `maybe_train` wraps `train_step` + `train_count += 1` +
+     state checkpoint in a `SELECT … FOR UPDATE` transaction on
+     `tuners` (§4.8 / §4.11). `op.wait()` is **not** called under the
+     lock. Replaces today's fire-and-forget `train` task.
 5. **`gemini_msrl` state migration**
-   - Add `active_train_op: Optional[str]` to `GeminiMsrlRecipeState`.
-   - `GeminiMsrlTuner.train_step`: stamp `self._active_train_op =
-     op.name` before returning.
-   - `GeminiMsrlRecipe.restore`: when `active_train_op` is set,
+   - `[ ]` Add `active_train_op: Optional[str]` to
+     `GeminiMsrlRecipeState`.
+   - `[ ]` `GeminiMsrlTuner.train_step`: stamp
+     `self._active_train_op = op.name` before returning.
+   - `[ ]` `GeminiMsrlRecipe.restore`: when `active_train_op` is set,
      rehydrate a `GeminiMsrlTrainingOp(client, active_train_op,
      config)` and expose it via `Tuner.in_flight_train_op`.
 6. **HTTP**
-   - Extend `POST /tuners` to require `datum_ids`.
-   - `POST /tuners/{id}/runs`.
-   - `POST /openai/v1/chat/completions`: `run_id` optional; when
-     present, validate against an existing run and stamp the chat
-     completion row.
-   - `PUT /tuners/{id}/runs/{run_id}/reward` (replaces `POST /rewards`).
-   - Optionally extend `GET /tuners/{id}` for observability.
+   - `[x]` Extend `POST /tuners` to require `datum_ids` (rejects
+     empty arrays with `400`).
+   - `[x]` `POST /openai/v1/chat/completions`: `x_run_id` optional
+     header; when present, validate against an existing `runs` row
+     (`409` on unknown), derive `datum_id` from the row (server
+     doesn't trust the client), stamp the chat completion row with
+     `policy_generation` from `Sample`.
+   - `[x]` Remove legacy `POST /tuners/{id}/rewards`.
+   - `[ ]` `POST /tuners/{id}/runs` (dispense endpoint; `204 +
+     Retry-After` when `dispense_run` returns `None`).
+   - `[x]` `PUT /tuners/{id}/runs/{run_id}/reward` — replaces the
+     dropped `POST /rewards`.
+   - `[ ]` Optionally extend `GET /tuners/{id}` for observability
+     (`training`, `pending_run_count`, `last_recorded_policy_generation`).
 7. **Docs**
-   - `.agents/skills/dev/references/sync-rl.md`: rewrite the barrier
-     section around the queue.
-   - `.agents/skills/dev/references/data-model.md`: add `RunModel`,
-     `DatumRowModel`, `policy_generation`; remove `RewardModel`.
+   - `[ ]` `.agents/skills/dev/references/sync-rl.md`: rewrite the
+     barrier section around the queue.
+   - `[ ]` `.agents/skills/dev/references/data-model.md`: add
+     `RunModel`, `DatumRowModel`, `policy_generation`; remove
+     `RewardModel`.
 8. **Tests** (after sign-off, per AGENTS.md)
    - Run lifecycle: dispense → completion → reward → `train_count`
      bumped after training.
