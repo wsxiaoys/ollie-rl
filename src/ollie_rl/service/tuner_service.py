@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select, update
 from ollie_rl.cookbook import Tuner, Cookbook
 from ollie_rl.cookbook.types import Example
-from ollie_rl.db import TunerModel, ChatCompletionModel, RunModel
+from ollie_rl.db import TunerModel, ChatCompletionModel, RewardModel
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.types import Rollout, RolloutRun
 
@@ -92,7 +92,7 @@ class TunerService:
                 session.add(db_completion)
         logger.info(f"Recorded chat completion {completion_id} in database")
 
-    async def set_run_reward(
+    async def create_reward(
         self, tuner_id: str, datum_id: str, run_id: str, reward: float
     ) -> None:
         """
@@ -100,13 +100,25 @@ class TunerService:
         """
         async with self.async_session() as session:
             async with session.begin():
-                run = RunModel(
-                    id=run_id,
-                    tuner_id=tuner_id,
-                    datum_id=datum_id,
-                    reward=reward,
+                result = await session.execute(
+                    select(RewardModel).where(
+                        RewardModel.tuner_id == tuner_id,
+                        RewardModel.run_id == run_id,
+                    )
                 )
-                await session.merge(run)
+                record = result.scalar_one_or_none()
+                if record:
+                    record.reward = reward
+                    record.datum_id = datum_id
+                else:
+                    session.add(
+                        RewardModel(
+                            tuner_id=tuner_id,
+                            run_id=run_id,
+                            datum_id=datum_id,
+                            reward=reward,
+                        )
+                    )
         logger.info(f"Successfully set reward for run {run_id} to {reward}")
 
     async def collect_rollout_ready_for_training(self, tuner_id: str) -> List[Rollout]:
@@ -120,15 +132,15 @@ class TunerService:
 
         async with self.async_session() as session:
             result = await session.execute(
-                select(RunModel).where(
-                    RunModel.tuner_id == tuner_id,
-                    RunModel.train_count <= TARGET_MAX_TRAIN_COUNT,
+                select(RewardModel).where(
+                    RewardModel.tuner_id == tuner_id,
+                    RewardModel.train_count <= TARGET_MAX_TRAIN_COUNT,
                 )
             )
             runs = result.scalars().all()
 
             # Group runs by datum_id
-            grouped_runs: Dict[str, List[RunModel]] = {}
+            grouped_runs: Dict[str, List[RewardModel]] = {}
             for run_model in runs:
                 if run_model.datum_id not in grouped_runs:
                     grouped_runs[run_model.datum_id] = []
@@ -154,7 +166,7 @@ class TunerService:
                     advantage = (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
                     rollout_runs.append(
                         RolloutRun(
-                            id=run_model.id,
+                            id=run_model.run_id,
                             datum_id=run_model.datum_id,
                             reward=reward,
                             advantage=advantage,
@@ -170,7 +182,7 @@ class TunerService:
         1. Retrieve the active tuner instance.
         2. Collect rollouts ready for training. Only train if we have at least 32 groups (rollouts).
            If there are more than 32, only pick the first 32.
-        3. Convert rollouts into Examples (by mapping RunModel IDs to ChatCompletionModel IDs).
+        3. Convert rollouts into Examples (by mapping RewardModel IDs to ChatCompletionModel IDs).
         4. Update the train_count of the trained runs in the database using an update query.
         5. Call tuner.train_step(examples).
         """
@@ -231,9 +243,9 @@ class TunerService:
         async with self.async_session() as session:
             async with session.begin():
                 await session.execute(
-                    update(RunModel)
-                    .where(RunModel.id.in_(run_ids))
-                    .values(train_count=RunModel.train_count + 1)
+                    update(RewardModel)
+                    .where(RewardModel.run_id.in_(run_ids))
+                    .values(train_count=RewardModel.train_count + 1)
                 )
 
         # 7. Wait for the training step operation to complete

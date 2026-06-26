@@ -18,8 +18,10 @@ class CreateTunerRequest(BaseModel):
     recipe: str
 
 
-class SetValueRequest(BaseModel):
-    value: float
+class CreateRewardRequest(BaseModel):
+    run_id: str
+    datum_id: str
+    reward: float
 
 
 class RolloutRun(BaseModel):

@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest, SetValueRequest
+from ollie_rl.types import ChatCompletionRequest, CreateTunerRequest, CreateRewardRequest
 from openai.types.chat import ChatCompletion
 from ollie_rl.db import init_db, shutdown_db
 from ollie_rl.service import TunerService
@@ -75,26 +75,24 @@ async def create_tuner(request: CreateTunerRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/tuners/{tuner_id}/data/{datum_id}/runs/{run_id}/reward")
-async def set_run_reward(
+@app.post("/tuners/{tuner_id}/rewards")
+async def create_reward(
     tuner_id: str,
-    datum_id: str,
-    run_id: str,
-    request: SetValueRequest,
+    request: CreateRewardRequest,
 ):
     """
-    Sets the reward for a specific run under a tuner and datum.
+    Sets the reward for a specific run under a tuner.
     """
     try:
-        await services.tuner.set_run_reward(
+        await services.tuner.create_reward(
             tuner_id=tuner_id,
-            datum_id=datum_id,
-            run_id=run_id,
-            reward=request.value,
+            datum_id=request.datum_id,
+            run_id=request.run_id,
+            reward=request.reward,
         )
         return {"status": "success"}
     except Exception as e:
-        logger.exception(f"Failed to set reward for run '{run_id}'")
+        logger.exception(f"Failed to set reward for run '{request.run_id}'")
         raise HTTPException(status_code=500, detail=str(e))
 
 
