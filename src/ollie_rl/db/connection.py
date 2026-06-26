@@ -6,7 +6,7 @@ from .models import BaseModel
 logger = logging.getLogger(__name__)
 
 # Default to in-memory SQLite for local development
-DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///data/db.sqlite"
 
 _engine = None
 _sessionmaker = None

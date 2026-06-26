@@ -139,12 +139,3 @@ async def create_chat_completion(
     )
 
     return completion
-
-
-@app.post("/tuners/{tuner_id}/openai/v1/chat/completions")
-async def create_chat_completion_no_record(
-    request: ChatCompletionRequest,
-    tuner_id: str,
-) -> ChatCompletion:
-    """Generate a chat completion from the active policy of the requested model without recording."""
-    return await _generate_chat_completion(tuner_id, request)
