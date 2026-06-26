@@ -170,7 +170,6 @@ class TunerService:
                     rollout_runs.append(
                         RolloutRun(
                             id=record.run_id,
-                            datum_id=record.datum_id,
                             reward=reward,
                             advantage=advantage,
                         )

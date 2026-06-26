@@ -26,7 +26,6 @@ class CreateRewardRequest(BaseModel):
 
 class RolloutRun(BaseModel):
     id: str
-    datum_id: str
     reward: float
     advantage: float
 
