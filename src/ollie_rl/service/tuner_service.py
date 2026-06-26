@@ -108,8 +108,11 @@ class TunerService:
                 )
                 record = result.scalar_one_or_none()
                 if record:
+                    if record.datum_id != datum_id:
+                        raise ValueError(
+                            f"datum_id mismatch for run_id {run_id}: existing {record.datum_id} vs input {datum_id}"
+                        )
                     record.reward = reward
-                    record.datum_id = datum_id
                 else:
                     session.add(
                         RewardModel(
@@ -124,8 +127,8 @@ class TunerService:
     async def collect_rollout_ready_for_training(self, tuner_id: str) -> List[Rollout]:
         """
         Collect all rollouts ready for training under a specific tuner_id.
-        1. Collect all runs that have train_count equal to 0.
-        2. Group runs by datum_id, and whenever a group size is >= 8, then this group is considered ready.
+        1. Collect all rewards that have train_count equal to 0.
+        2. Group rewards by datum_id, and whenever a group size is >= 16, then this group is considered ready.
         """
         TARGET_MAX_TRAIN_COUNT = 0
         GROUP_SIZE = 16
@@ -137,37 +140,37 @@ class TunerService:
                     RewardModel.train_count <= TARGET_MAX_TRAIN_COUNT,
                 )
             )
-            runs = result.scalars().all()
+            reward_records = result.scalars().all()
 
-            # Group runs by datum_id
-            grouped_runs: Dict[str, List[RewardModel]] = {}
-            for run_model in runs:
-                if run_model.datum_id not in grouped_runs:
-                    grouped_runs[run_model.datum_id] = []
-                if len(grouped_runs[run_model.datum_id]) < GROUP_SIZE:
-                    grouped_runs[run_model.datum_id].append(run_model)
+            # Group rewards by datum_id
+            grouped_rewards: Dict[str, List[RewardModel]] = {}
+            for reward in reward_records:
+                if reward.datum_id not in grouped_rewards:
+                    grouped_rewards[reward.datum_id] = []
+                if len(grouped_rewards[reward.datum_id]) < GROUP_SIZE:
+                    grouped_rewards[reward.datum_id].append(reward)
 
             # Process only completed groups (size == GROUP_SIZE)
             rollouts: List[Rollout] = []
-            for datum_id, group in grouped_runs.items():
+            for datum_id, group in grouped_rewards.items():
                 if len(group) != GROUP_SIZE:
                     continue
 
                 # Calculate mean and std of rewards for this group
                 rewards = [
-                    run.reward if run.reward is not None else 0.0 for run in group
+                    reward_model.reward if reward_model.reward is not None else 0.0 for reward_model in group
                 ]
                 mean = sum(rewards) / len(rewards)
                 variance = sum((r - mean) ** 2 for r in rewards) / len(rewards)
                 std = math.sqrt(variance)
 
                 rollout_runs = []
-                for run_model, reward in zip(group, rewards):
+                for record, reward in zip(group, rewards):
                     advantage = (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
                     rollout_runs.append(
                         RolloutRun(
-                            id=run_model.run_id,
-                            datum_id=run_model.datum_id,
+                            id=record.run_id,
+                            datum_id=record.datum_id,
                             reward=reward,
                             advantage=advantage,
                         )
@@ -183,7 +186,7 @@ class TunerService:
         2. Collect rollouts ready for training. Only train if we have at least 32 groups (rollouts).
            If there are more than 32, only pick the first 32.
         3. Convert rollouts into Examples (by mapping RewardModel IDs to ChatCompletionModel IDs).
-        4. Update the train_count of the trained runs in the database using an update query.
+        4. Update the train_count of the trained rewards in the database using an update query.
         5. Call tuner.train_step(examples).
         """
         TARGET_GROUP_COUNT = 32
@@ -239,12 +242,13 @@ class TunerService:
         # 5. Call tuner.train_step(examples) to trigger the training step operation
         train_op = await tuner.train_step(examples)
 
-        # 6. Update train_count for the runs using an update query (safe now that backend accepted the request)
+        # 6. Update train_count for the rewards using an update query (safe now that backend accepted the request)
         async with self.async_session() as session:
             async with session.begin():
                 await session.execute(
                     update(RewardModel)
                     .where(RewardModel.run_id.in_(run_ids))
+                    .where(RewardModel.tuner_id == tuner_id)
                     .values(train_count=RewardModel.train_count + 1)
                 )
 
