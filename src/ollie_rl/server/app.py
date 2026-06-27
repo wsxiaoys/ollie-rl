@@ -135,7 +135,7 @@ async def create_chat_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
     # Record completion metadata via TunerService
-    if x_run_id is not None and x_datum_id is not None:
+    if x_run_id is not None:
         await services.tuner.record_chat_completion(
             completion_id=sample.completion.id,
             tuner_id=x_tuner_id,
@@ -145,6 +145,41 @@ async def create_chat_completion(
         )
 
     return sample.completion
+
+
+@app.post("/tuners/{tuner_id}/runs")
+async def dispense_run(tuner_id: str):
+    """
+    Dispense a run assignment for the tuner.
+    Returns 200 OK with run_id, datum_id, expires_at.
+    Or 204 No Content with Retry-After header if no run can be dispensed.
+    """
+    try:
+        run_record = await services.tuner.dispense_run(tuner_id)
+        if run_record is None:
+            from fastapi import Response
+
+            return Response(status_code=204, headers={"Retry-After": "1"})
+
+        return {
+            "run_id": run_record.id,
+            "datum_id": run_record.datum_id,
+            "expires_at": run_record.expires_at.isoformat() + "Z",
+        }
+    except Exception as e:
+        logger.exception(f"Failed to dispense run for tuner '{tuner_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tuners/{tuner_id}")
+async def get_tuner(tuner_id: str):
+    """
+    Get the status of a tuner for observability.
+    """
+    status = await services.tuner.get_tuner_status(tuner_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Tuner '{tuner_id}' not found")
+    return status
 
 
 @app.put("/tuners/{tuner_id}/runs/{run_id}/reward")
@@ -170,7 +205,7 @@ async def put_reward(
             reward=request.reward,
         )
         # Auto-train trigger (fire-and-forget)
-        asyncio.create_task(services.tuner.train(tuner_id))
+        asyncio.create_task(services.tuner.maybe_train(tuner_id))
 
         return {"run_id": run_id, "reward": request.reward}
     except RunNotFoundError as e:

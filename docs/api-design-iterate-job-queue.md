@@ -11,12 +11,15 @@ dispenses run assignments via a queue endpoint and the client just
 executes them. The synchronous barrier falls out of "the queue is empty
 right now."
 
-Status: **in progress** — schema + rename + datum-pool registration +
-`policy_generation` capture have landed in staging (see §7.1 for the
-per-step checklist). Remaining work is the queue endpoint, the reward
-endpoint, the recipe-side hooks (`dispense_run`, `in_flight_train_op`,
-`Op.peek`), the DB-driven `maybe_train` barrier, and the
-`gemini_msrl` state migration.
+Status: **in progress.** A large chunk of the plumbing has already
+landed in staging — see §7.1 for the per-step checklist. The pieces
+still missing are the queue endpoint itself (`POST /tuners/{id}/runs`),
+the recipe-side `dispense_run` / `in_flight_train_op` hooks, the
+DB-driven `is_training` derivation, and the `maybe_train` barrier with
+its `SELECT … FOR UPDATE` mutual exclusion. Everything else (schema,
+rename, datum-pool registration, `policy_generation` capture on
+completions, run-keyed reward endpoint, `GeminiMsrlRecipeState.last_train_op`,
+`Op.peek()`) is already shipped.
 
 ---
 
@@ -45,17 +48,18 @@ A server-driven run queue collapses all of these into one mechanism.
 
 | Question                                          | Owner               | Mechanism                                              |
 |---------------------------------------------------|---------------------|--------------------------------------------------------|
-| When is a training step happening?                | recipe / service    | recipe's `TrainOp`, tracked in-process by `TunerService` |
+| When is a training step happening?                | recipe              | recipe's `TrainOp`, polled via `Op.peek()`             |
 | Who decides what gets sampled next?               | recipe              | `Tuner.dispense_run(ctx)` returns the next assignment  |
-| How is work handed to a sampler?                  | server              | `POST /tuners/{id}/runs` returns a `(run_id, datum_id)`|
+| How is work handed to a sampler?                  | server              | `POST /tuners/{id}/runs` returns a `(run_id, datum_id, expires_at)`|
 | Which policy did a sample come from?              | trainer (recorded)  | `Sample.policy_generation` → `ChatCompletionModel`     |
 | Is sampling allowed during training?              | recipe              | `dispense_run` returns `None` (or not) while busy      |
+| Where does the in-flight train op live across restarts? | recipe state    | `GeminiMsrlRecipeState.last_train_op` (already shipped) |
 
 We do **not** introduce an `IDLE / TRAINING` state column on
 `TunerModel`. The recipe's `TrainOp` is the source of truth for "are we
-training right now"; `TunerService` holds the in-flight op handle
-in-process and tells the recipe via `DispenseContext.is_training`. No
-duplicated state.
+training right now"; the server materializes the recipe from
+`TunerModel.state` (already persisted via `StateStore`) and asks the
+recipe to rehydrate its `TrainOp` so it can be `peek()`'d.
 
 ---
 
@@ -63,14 +67,14 @@ duplicated state.
 
 | # | Decision                                                                                                   | Rationale                                                                                                |
 |---|------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| 1 | Server dispenses runs via `POST /tuners/{id}/runs`. Response is `{ run_id, datum_id }`.                   | Leasing is state-mutating (inserts a row, allocates `run_id`) — POST is the right verb.                  |
+| 1 | Server dispenses runs via `POST /tuners/{id}/runs`. Response is `{ run_id, datum_id, expires_at }`.       | Leasing is state-mutating (inserts a row, allocates `run_id`) — POST is the right verb.                  |
 | 2 | **One run per request.** No batching.                                                                      | Simplest contract; multi-worker fan-out is many parallel POSTs.                                          |
 | 3 | Datum pool is **registered at `POST /tuners` creation time** (`datum_ids` in the request body).            | A tuner is useless without a corpus; making it required eliminates a "did you forget to register?" failure mode. |
 | 4 | Rename `Sample.step_id` → `Sample.policy_generation`. Type stays `str` (opaque, recipe-defined).           | The name actually describes the concept (model weight version). Type stays opaque because recipes vary.   |
 | 5 | Persist `policy_generation` on **`ChatCompletionModel`**, not on `RunModel`.                               | A single run may produce multiple chat completions (multi-step / tool-using trajectories), each at a different generation. |
 | 6 | The barrier is implicit: while a `TrainOp` is in flight, `dispense_run` returns `None` ⇒ HTTP `204`.       | One endpoint, one mental model. No `423`, no separate `state` polling.                                   |
 | 7 | **No** `Tuner.allows_sampling_during_training` property.                                                    | The "what do we do during training" policy lives inside `dispense_run` itself; that's expressive enough. |
-| 8 | **No** `Tuner.restore_train_op` hook.                                                                      | The recipe's existing `save_state` / `Recipe.restore` is the persistence contract.                       |
+| 8 | **State persistence is recipe-driven via `StateStore`.** The recipe calls `state_store.save(blob)` whenever its in-process state has meaningfully changed; `TunerService` only supplies the DB-backed implementation. | Earlier drafts of this doc made `TunerService` the single writer. The shipped `StateStore` Protocol is cleaner: recipes stay pure (no DB import) and own their cadence; the DB is just a key-value backend. |
 | 9 | **No separate `RewardModel`.** Reward lives as a column on `RunModel` (which is the canonical run record). | A reward without a run is meaningless; a run with no reward is just unfinished. One row per run.         |
 | 10| `group_size` / `batch_size` are **recipe-internal** (or recipe hparams), never on the wire.               | They're scheduling, not API contract.                                                                    |
 
@@ -78,30 +82,43 @@ duplicated state.
 
 ## 4. Surface changes
 
-### 4.1 `TunerModel` (DB)
-
-Unchanged. The existing `state` column already stores recipe-serialized
-state (e.g. `{"tuning_job_name": "..."}` for `gemini_msrl`) and we don't
-add anything else. "Is this tuner currently training?" is tracked
-**in-process** by `TunerService` via a per-tuner asyncio handle, not by
-a DB flag.
-
-### 4.2 `ChatCompletionModel` (DB)
-
-Uncomment and rename the long-commented-out field:
+### 4.1 `TunerModel` (DB) — shipped
 
 ```python
-policy_generation: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+class TunerModel(BaseModel):
+    __tablename__ = "tuners"
+
+    id:    Mapped[str]           = mapped_column(String(36),  primary_key=True)
+    name:  Mapped[str]           = mapped_column(String(255), nullable=False)
+    kind:  Mapped[str]           = mapped_column(String(255), nullable=False, index=True)
+    # NULL between row creation and the Tuner's first save; subsequently
+    # whatever the recipe most recently passed to state_store.save(...).
+    state: Mapped[Optional[str]] = mapped_column(Text,        nullable=True)
 ```
 
-Stamped from `Sample.policy_generation` at completion-record time. One
-`ChatCompletionModel` row per LLM round-trip; many rows per `RunModel`
-in the multi-step / tool-using case.
+No `is_training` column — that lives in the recipe state.
 
-### 4.3 New table — `RunModel`
+### 4.2 `ChatCompletionModel` (DB) — shipped
 
-Replaces the existing `RewardModel`. One row per **run** (a unit of
-work dispensed by the server, possibly completed and rewarded).
+```python
+class ChatCompletionModel(BaseModel):
+    __tablename__ = "chat_completions"
+
+    id:                Mapped[str]      = mapped_column(String(255), primary_key=True)
+    tuner_id:          Mapped[str]      = mapped_column(String(255), ForeignKey("tuners.id"), nullable=False)
+    policy_generation: Mapped[str]      = mapped_column(String(255), nullable=False, index=True)
+    run_id:            Mapped[Optional[str]] = mapped_column(String(255), nullable=False, index=True)
+    datum_id:          Mapped[str]      = mapped_column(String(255), nullable=False, index=True)
+    created_at:        Mapped[datetime] = mapped_column(DateTime,    nullable=False, default=func.now())
+    updated_at:        Mapped[datetime] = mapped_column(DateTime,    nullable=False, default=func.now(), onupdate=func.now())
+```
+
+`policy_generation` is stamped from `Sample.policy_generation` at
+completion-record time. One `ChatCompletionModel` row per LLM
+round-trip; many rows per `RunModel` in the multi-step / tool-using
+case.
+
+### 4.3 `RunModel` (DB) — shipped
 
 ```python
 class RunModel(BaseModel):
@@ -119,20 +136,18 @@ class RunModel(BaseModel):
 
 Two independent bookkeeping fields, each with its own role:
 
-**`train_count: int`** — consumed-by-training counter, ported verbatim
-from `RewardModel.train_count` in
-`src/ollie_rl/db/models.py`. A run is "consumable for training" iff
-`reward IS NOT NULL AND train_count == 0`. After a successful
-`train_step`, `_drive_step` bumps `train_count` to `1` so the same
-run is never trained on twice. Future off-policy work can change the
-threshold (`train_count <= K`) without schema churn.
+**`train_count: int`** — consumed-by-training counter. A run is
+"consumable for training" iff `reward IS NOT NULL AND train_count == 0`.
+After a successful `train_step`, `TunerService.train` bumps
+`train_count` to `1` so the same run is never trained on twice. Future
+off-policy work can change the threshold (`train_count <= K`) without
+schema churn.
 
 **`expires_at: datetime`** — lease deadline for redispense, **not**
 related to training consumption. Stamped at dispense time as
-`NOW() + run_ttl` (recipe hparam, default `5 min` in v1). Its only
-job is to give the dispenser a chance to re-distribute datums whose
-runs were dispensed but never rewarded (sampler crashed, network
-blip, etc.):
+`NOW() + run_ttl` (recipe hparam, default `5 min` in v1). Its only job
+is to let the dispenser re-distribute datums whose runs were dispensed
+but never rewarded (sampler crashed, network blip, etc.):
 
 - If a run has `reward IS NULL AND expires_at <= NOW()`, its lease is
   expired. The next `POST /runs` is free to pick the same `datum_id`
@@ -145,15 +160,14 @@ blip, etc.):
 - `PUT /reward` rejects a reward posted against an expired-and-
   unrewarded run (`409 Conflict`) because the dispenser may have
   already re-issued that datum — accepting the late reward would
-  double-count.
-- A background sweeper could later hard-delete
-  expired-and-unrewarded rows for tidiness, but it's not required
-  for v1.
+  double-count. **(shipped — `RunExpiredError`.)**
+- A background sweeper could later hard-delete expired-and-unrewarded
+  rows for tidiness, but it's not required for v1.
 
 Chat completions reference the run via the existing
 `ChatCompletionModel.run_id`.
 
-### 4.4 New table — `datum_rows`
+### 4.4 `DatumRowModel` (DB) — shipped
 
 ```python
 class DatumRowModel(BaseModel):
@@ -167,113 +181,141 @@ Server treats `datum_id` as opaque. Populated at `POST /tuners` time
 from the request body. No streaming endpoint in v1 — re-create the
 tuner if the corpus needs to grow.
 
-Naming note: the table is `datum_rows` (one row per registered datum
-reference) rather than `datums`, to stay consistent with the existing
-SQLAlchemy models in `src/ollie_rl/db/models.py` where each model
-represents a row-level record (`TunerModel` / `tuners`,
-`ChatCompletionModel` / `chat_completions`, `RewardModel` / `rewards`)
-and the `DatumRowModel` name makes the row-per-(tuner, datum_id)
-contract explicit.
+### 4.5 `Sample` (in-process) — shipped
 
-### 4.5 `Sample` (in-process)
-
-```diff
- class Sample(BaseModel):
-     completion: ChatCompletion
--    step_id: str
-+    policy_generation: str
+```python
+class Sample(BaseModel):
+    completion: ChatCompletion
+    policy_generation: str
 ```
 
-Pure rename. `gemini_msrl.sample()` already builds this from
-`response.train_step_id`; `test_gemini_msrl.py` follows. Type stays
-`str` so that recipes with opaque generation identifiers (hashes,
-LRO names, semver-ish strings) keep working.
+`gemini_msrl.sample()` already builds this from `response.train_step_id`;
+`test_gemini_msrl.py` already asserts on it. Type stays `str` so that
+recipes with opaque generation identifiers (hashes, LRO names,
+semver-ish strings) keep working.
 
 ### 4.6 `Tuner` (in-process)
 
-One new hook:
+The `cookbook/types.py` skeleton is already in place:
 
 ```python
 @dataclass
 class DispenseContext:
     is_training: bool
-    datum_pool: list[str]
+    datum_pool: List[str]
 
 @dataclass
 class RunAssignment:
     run_id: str
     datum_id: str
 
-class Tuner(...):
+class Op(ABC, Generic[T]):
+    @abstractmethod
+    async def wait(self) -> T: ...
+    @abstractmethod
+    async def peek(self) -> bool: ...   # already implemented for gemini_msrl
+
+class TrainOp(Op[None]):   ...
+class SampleOp(Op[Sample]): ...
+
+class Tuner(ABC):
+    @property
+    @abstractmethod
+    def kind(self) -> str: ...
+    @abstractmethod
+    async def sample(self, request: ChatCompletionRequest) -> SampleOp: ...
+    @abstractmethod
+    async def train_step(self, examples: List[Example]) -> TrainOp: ...
+```
+
+Two hooks still need to be added (per §7.1):
+
+```python
+class Tuner(ABC):
     def dispense_run(self, ctx: DispenseContext) -> Optional[RunAssignment]:
         """
-        Recipe-owned dispatch. Default implementation:
+        Recipe-owned dispatch. Default implementation lives on the base
+        class:
           - if ctx.is_training: return None  (sync-safe)
           - if not ctx.datum_pool: return None
           - pick a datum_id (recipe's choice of policy), mint a run_id,
             and return the assignment.
         """
         ...
-```
 
-Sync GRPO uses the default. Async recipes override and ignore
-`ctx.is_training`, possibly capping in-flight runs etc.
-
-No `allows_sampling_during_training` property — the logic lives inside
-`dispense_run` itself.
-
-One additional optional hook used for both restart recovery (§4.11)
-and the live `is_training` check (§4.8):
-
-```python
-class Tuner(...):
     async def in_flight_train_op(self) -> Optional[TrainOp]:
         """
-        Return the TrainOp captured in the last save_state() (i.e. the
-        train op that was running when state was checkpointed), so
-        TunerService can poll / await it. Returns None when no train
-        op was in flight at checkpoint time. Default impl: return None.
+        Return the TrainOp captured in the most recently saved state
+        (i.e. the train op that was running when state was last
+        checkpointed), so TunerService can poll / await it. Returns
+        None when no train op was in flight. Default impl: return None.
         """
         return None
 ```
 
-`TrainOp` and `SampleOp` inherit from a generic base class `Op[T]` to share a non-blocking `peek()` interface:
+Sync GRPO uses the default `dispense_run`. Async recipes override and
+ignore `ctx.is_training`, possibly capping in-flight runs etc.
+
+No `allows_sampling_during_training` property — the logic lives inside
+`dispense_run` itself.
+
+For `gemini_msrl`, `peek` is already a `GetOperation` call against the
+LRO name (and the LRO API caches terminal state, so it stays cheap
+even after completion). `in_flight_train_op` will wrap the persisted
+`state.last_train_op` (already on `GeminiMsrlRecipeState`) in a fresh
+`GeminiMsrlTrainingOp`.
+
+#### `Recipe` / `Cookbook` (already aligned)
 
 ```python
-class Op(ABC, Generic[T]):
+class Recipe(ABC):
     @abstractmethod
-    async def wait(self) -> T:
-        """Block and wait for the operation to complete."""
-        pass
+    async def create(self, name: str, state_store: StateStore) -> Tuner: ...
 
-    @abstractmethod
-    async def peek(self) -> bool:
-        """Return True iff the op has reached a terminal state. Cheap;
-        OK to call on every request."""
-        pass
-
-class TrainOp(Op[None]):
-    pass
-
-class SampleOp(Op[Sample]):
-    pass
+class Cookbook:
+    @classmethod
+    async def open(cls, kind: str, name: str, state_store: StateStore) -> Tuner: ...
 ```
 
-For `gemini_msrl`, `peek` is a `GetOperation` call against the LRO name (and the LRO API caches terminal state, so it stays cheap even after completion).
+`Recipe.create` (renamed from `Recipe.open`) is the bootstrap-or-resume
+entry point. The recipe inspects `await state_store.load()` to decide
+which branch.
 
-Recipes that persist `op.name` in their state use this to rehydrate a
-`TrainOp` wrapper that polls the existing LRO.
+### 4.7 `StateStore` Protocol — shipped
 
-### 4.7 HTTP endpoints
+The hidden hero of this iteration. Lives in `cookbook/types.py`:
 
-#### `POST /tuners` — extended
+```python
+class StateStore(Protocol):
+    async def load(self) -> Optional[str]: ...
+    async def save(self, state: str) -> None: ...
+```
+
+`TunerService` supplies `_DbStateStore(tuner_id)`, which `UPDATE`s the
+`tuners.state` column. `GeminiMsrlTuner._persist_state` serializes
+`GeminiMsrlRecipeState` (which now carries `last_train_op:
+Optional[str]`) and calls `state_store.save(...)` every time the
+in-flight LRO name changes — currently:
+
+- Once at bootstrap (after `create_tuning_job`).
+- Once inside `train_step(...)`, right after the LRO is submitted and
+  before returning. This is what makes the restart-recovery story work
+  without an extra `_persist_state` checkpoint in `TunerService`.
+
+Recipes that need finer cadence (e.g. checkpoint after every reward)
+can just call `state_store.save` from wherever — there is no
+TunerService coordination required.
+
+### 4.8 HTTP endpoints
+
+#### `POST /tuners` — shipped
 
 ```jsonc
 // request
 {
   "name": "my-tuner",
   "recipe": "gemini_msrl",
-  "datum_ids": ["d_001", "d_002", "..."],     // REQUIRED, non-empty
+  "datum_ids": ["d_001", "d_002", "..."],     // REQUIRED, non-empty (400 if empty)
   "hparams": { ... }                          // recipe-defined; may include group_size/batch_size
 }
 
@@ -281,7 +323,7 @@ Recipes that persist `op.name` in their state use this to rehydrate a
 { "tuner_id": "tuner_…", "name": "…", "recipe": "gemini_msrl" }
 ```
 
-#### `POST /tuners/{id}/runs` — new
+#### `POST /tuners/{id}/runs` — still TODO
 
 Allocates a `run_id`, picks a `datum_id` from the pool, inserts a
 `runs` row, returns the assignment.
@@ -290,7 +332,7 @@ Allocates a `run_id`, picks a `datum_id` from the pool, inserts a
 // request body: empty (room for future filters)
 
 // response: 200 OK
-{ "run_id": "run_…", "datum_id": "d_017" }
+{ "run_id": "run_…", "datum_id": "d_017", "expires_at": "2026-06-26T18:00:00Z" }
 
 // response: 204 No Content
 // — recipe's dispense_run returned None
@@ -298,30 +340,41 @@ Allocates a `run_id`, picks a `datum_id` from the pool, inserts a
 // — Retry-After header set to a sensible default (1s in v1).
 ```
 
-Server behavior:
+Server behavior (to implement in `TunerService.dispense_run(tuner_id)`):
 
-1. Read `is_training` from `TunerService`'s in-process map.
+1. Read `is_training` by materializing the tuner from
+   `TunerModel.state` and calling
+   `(await tuner.in_flight_train_op()).peek()`. `None` ⇒ `False`.
 2. Load the datum pool (`SELECT datum_id FROM datum_rows WHERE tuner_id=…`).
 3. Call `tuner.dispense_run(DispenseContext(is_training, datum_pool))`.
 4. If `None`: respond `204` with `Retry-After`.
-5. Otherwise insert a `runs` row and return `{ run_id, datum_id }`.
+5. Otherwise insert a `runs` row (with
+   `expires_at = NOW() + run_ttl`) and return `{ run_id, datum_id, expires_at }`.
 
 One run per call. Workers wanting fan-out issue many parallel POSTs.
 
-#### `POST /openai/v1/chat/completions` — behavior change
+#### `POST /openai/v1/chat/completions` — shipped (with caveats)
 
-- **If `run_id` is present** and matches a row in `runs` for this
-  tuner: server records a `ChatCompletionModel` row keyed to that
-  `run_id`, stamping `policy_generation` from `Sample`. The `datum_id`
-  comes from the existing `RunModel` row (client can't lie).
-- **If `run_id` is absent**: behave like today — serve the completion,
-  don't persist a `ChatCompletionModel` row, don't touch the run table.
-  This keeps the fire-and-forget path for evals / exploration intact.
-- An unknown `run_id` returns `409 Conflict`.
+Current shipped behavior:
+
+- **If `x_run_id` header is present** and matches a row in `runs` for
+  this tuner: server overrides `datum_id` from the DB record (client
+  can't lie), serves the completion, and persists a
+  `ChatCompletionModel` row keyed to that `run_id`, stamping
+  `policy_generation` from `Sample`.
+- **If `x_run_id` is absent**: behave like today — serve the
+  completion, don't persist a `ChatCompletionModel` row, don't touch
+  the run table.
+- An unknown `x_run_id` returns `409 Conflict`.
 - `423 Locked` is no longer needed — barriers are expressed by the
   queue returning `204`, not by completions being refused.
 
-#### `PUT /tuners/{id}/runs/{run_id}/reward` — replaces `POST /rewards`
+Caveat to address before declaring this endpoint done: when
+`x_run_id` is absent, the current handler still references
+`x_datum_id` which is never assigned. Either reject the run-less path
+or thread an explicit "evaluation" mode through.
+
+#### `PUT /tuners/{id}/runs/{run_id}/reward` — shipped
 
 ```jsonc
 // request
@@ -330,39 +383,62 @@ One run per call. Workers wanting fan-out issue many parallel POSTs.
 { "run_id": "run_…", "reward": 0.75 }
 ```
 
+Behind the scenes, `TunerService.update_reward`:
+
 ```sql
-UPDATE runs
-   SET reward     = :reward,
-       updated_at = NOW()
- WHERE tuner_id   = :tuner_id
-   AND id        = :run_id
-   AND reward IS NULL
-   AND expires_at > NOW();
+SELECT … FROM runs WHERE id = :run_id AND tuner_id = :tuner_id
+  -- 404 RunNotFoundError if missing
+  -- 409 RewardAlreadySetError if reward IS NOT NULL
+  -- 409 RunExpiredError       if expires_at <= NOW()
+UPDATE runs SET reward = :reward, updated_at = NOW() WHERE id = :run_id;
 ```
 
-The `reward IS NULL` guard makes the call idempotent in the
-single-write-wins sense (a duplicate PUT returns `409 Conflict`); the
-`expires_at > NOW()` guard rejects late rewards on an expired lease
-(also `409 Conflict`), so the dispenser is free to re-issue that
-`datum_id` without fear of double-counting. An unknown `run_id`
-returns `404 Not Found`.
+The reward-already-set and lease-expiration guards keep the dispenser
+free to re-issue an expired `datum_id` without fear of double-counting.
 
-`RewardModel` is **removed** from the schema in this iteration.
+`RewardModel` has been **removed** from the schema.
 
-#### `GET /tuners/{id}` — optional, observability only
+After the UPDATE, the endpoint fires-and-forgets
+`asyncio.create_task(services.tuner.train(tuner_id))`. This is the
+current trigger; once `maybe_train` lands (§4.10) it will replace
+this call directly.
 
-Returns `{ tuner_id, name, recipe, training: bool, pending_run_count,
-last_recorded_policy_generation }`. Not on the critical path; clients
-don't need it to drive the loop.
+#### `GET /tuners/{id}` — optional, observability only (deferred)
 
-### 4.8 `TunerService.train()`
+Will return `{ tuner_id, name, recipe, training: bool,
+pending_run_count, last_recorded_policy_generation }`. Not on the
+critical path; clients don't need it to drive the loop.
 
-**The DB is the lock.** There is no in-memory `_train_tasks` map and
-no per-process asyncio handle. `is_training` is computed from
-`Tuner.in_flight_train_op().peek()` — a recipe-side call that, for
-LRO-shaped backends like `gemini_msrl`, is just a cached
-`GetOperation` against the persisted op name. This is cheap enough to
-call on every `POST /runs`.
+### 4.9 `TunerService.train` (today) vs. `maybe_train` (target)
+
+#### Today (shipped)
+
+`TunerService.train(tuner_id)`:
+
+1. `collect_rollout_ready_for_training(tuner_id)` — `SELECT * FROM runs
+   WHERE tuner_id = ? AND train_count == 0 AND reward IS NOT NULL`,
+   group by `datum_id`, drop groups whose size isn't exactly
+   `GROUP_SIZE = 16`, compute GRPO advantages.
+2. Require ≥ `TARGET_GROUP_COUNT = 32` groups, else bail.
+3. Map runs → `Example(chat_completion_id, advantage)` by joining
+   `ChatCompletionModel` on `run_id`.
+4. `train_op = await tuner.train_step(examples)` — the recipe
+   submits the LRO and persists `state.last_train_op = op.name` via
+   `state_store.save(...)` before returning (already shipped on
+   `GeminiMsrlTuner`).
+5. `UPDATE runs SET train_count = train_count + 1 WHERE id IN (…)`.
+6. `await train_op.wait()`.
+
+Multi-driver safety: **none.** Two concurrent `train(tuner_id)` calls
+both race against `tuner.train_step` — `GeminiMsrlTuner.train_step`
+guards via `state.last_train_op.peek()` and raises `RuntimeError` on
+the loser, but the loser's run-collection work and DB roundtrips are
+wasted.
+
+#### Target (TODO)
+
+Rename to `maybe_train` and wrap the critical section in a row-level
+lock on `tuners`:
 
 ```python
 class TunerService:
@@ -375,9 +451,9 @@ class TunerService:
 
     async def maybe_train(self, tuner_id: str) -> None:
         # SELECT … FOR UPDATE on the tuner row serializes claim attempts
-        # across drivers / processes. Whoever wins the row lock either
+        # across drivers / processes. Whoever wins either
         # (a) sees an unfinished in_flight_train_op and bails, or
-        # (b) commits a fresh one via _drive_step and releases the lock.
+        # (b) commits a fresh one via train_step and releases the lock.
         async with self.async_session() as session:
             async with session.begin():
                 record = (await session.execute(
@@ -392,38 +468,38 @@ class TunerService:
                 op = await tuner.in_flight_train_op()
                 if op is not None and not await op.peek():
                     return                                           # already training
-                if not await self._has_enough_consumable_runs(tuner_id, session):
-                    return
 
                 batch, run_ids = await self._collect_consumable_batch(tuner_id, session)
-                new_op = await tuner.train_step(batch)               # backend accepted
+                if not batch:
+                    return
+
+                await tuner.train_step(batch)                        # submits LRO + state_store.save
                 await session.execute(                               # bump train_count
                     update(RunModel)
                     .where(RunModel.tuner_id == tuner_id)
                     .where(RunModel.id.in_(run_ids))
                     .values(train_count=RunModel.train_count + 1)
                 )
-                record.state = await tuner.save_state()              # persists new_op.name
                 # commit releases the FOR UPDATE lock
 ```
 
 `_collect_consumable_batch` is the direct successor of today's
-`collect_rollout_ready_for_training` in
-`src/ollie_rl/service/tuner_service.py` — same group-by-`datum_id`
-logic, same `GROUP_SIZE` / `TARGET_GROUP_COUNT` constants (now
-recipe-internal per §3 decision 10), and the same
-`train_count <= TARGET_MAX_TRAIN_COUNT` (= 0 today) gate. The only
-shape change is that it reads from `runs` (one row per run,
-`reward IS NOT NULL AND train_count == 0` → ready) instead of from
-`rewards` joined to `chat_completions`; the in-memory `Rollout` /
-`RolloutRun` it produces stays identical.
+`collect_rollout_ready_for_training`: same group-by-`datum_id` logic,
+same `GROUP_SIZE` / `TARGET_GROUP_COUNT` constants (now
+recipe-internal per §3 decision 10), same
+`train_count <= TARGET_MAX_TRAIN_COUNT` (= 0 today) gate. The shape
+changes are:
 
-Note `expires_at` is **not** in the consumable-batch query — that
-field is solely for the leasing path (§4.3). A run that was
-dispensed-and-rewarded after its lease expired is unreachable
-anyway because `PUT /reward` rejected the late write.
+- It returns `(rollouts, run_ids)` so the `train_count` UPDATE can run
+  inside the FOR-UPDATE transaction.
+- It takes the open `session` so it joins the same transaction.
 
-The "did the LRO finish?" check is *also* DB-driven: anyone calling
+Note `expires_at` is **not** in the consumable-batch query — that field
+is solely for the leasing path (§4.3). A run that was
+dispensed-and-rewarded after its lease expired is unreachable anyway
+because `PUT /reward` rejected the late write.
+
+The "did the LRO finish?" check is also DB-derived: anyone calling
 `is_training(tuner_id)` materializes the tuner from
 `TunerModel.state`, asks the recipe to rehydrate its `TrainOp`, and
 peeks. There is no in-process latch to keep in sync.
@@ -431,19 +507,19 @@ peeks. There is no in-process latch to keep in sync.
 #### Multi-driver / multi-process safety
 
 This design gets multi-driver safety for free, because the
-mutual-exclusion primitive is `SELECT … FOR UPDATE` on the
-`tuners.id` row inside `maybe_train`:
+mutual-exclusion primitive is `SELECT … FOR UPDATE` on the `tuners.id`
+row inside `maybe_train`:
 
 - Two drivers calling `maybe_train(tuner_id)` simultaneously: one
   takes the row lock, decides whether to start a step, commits, and
-  releases. The other sees the just-committed `in_flight_train_op`
-  via `peek()` and bails.
-- A driver restarting mid-step: the row lock is released by the DB
-  on connection close; the next caller sees the persisted
-  `active_train_op` in `state` and either waits for it to peek-done
-  or starts a fresh step (recipe's choice — for `gemini_msrl` the
-  LRO is still running server-side, so `peek()` returns `False` and
-  we wait).
+  releases. The other sees the just-committed `last_train_op` via
+  `peek()` and bails.
+- A driver restarting mid-step: the row lock is released by the DB on
+  connection close; the next caller sees the persisted
+  `last_train_op` in `state` and either waits for it to peek-done or
+  starts a fresh step (recipe's choice — for `gemini_msrl` the LRO is
+  still running server-side, so `peek()` returns `False` and we
+  return early without dispensing).
 - `POST /runs` reads `is_training` without taking the lock; it can
   race with a `maybe_train` that's about to commit a new op, but the
   worst case is one extra `204` (or, conversely, one run dispensed
@@ -452,29 +528,32 @@ mutual-exclusion primitive is `SELECT … FOR UPDATE` on the
   `POST /runs` reconciles.
 
 Note we **do not** need a separate atomic-claim column on `TunerModel`
-as `api-design-iterate.md` proposed; the recipe-owned
-`active_train_op` field inside `TunerModel.state` is the claim, and
-the row-level `FOR UPDATE` is the serialization point.
+as `api-design-iterate.md` proposed; the recipe-owned `last_train_op`
+field inside `TunerModel.state` is the claim, and the row-level `FOR
+UPDATE` is the serialization point.
 
-### 4.9 Auto-train trigger
+### 4.10 Auto-train trigger
 
-`maybe_train` is called from the reward endpoint:
+Today (shipped):
 
 ```python
-@router.put("/tuners/{tuner_id}/runs/{run_id}/reward")
+@app.put("/tuners/{tuner_id}/runs/{run_id}/reward")
 async def put_reward(...):
-    await tuner_service.update_reward(tuner_id, run_id, reward)
-    await tuner_service.maybe_train(tuner_id)   # fire-and-forget
+    await services.tuner.update_reward(tuner_id, run_id, reward)
+    asyncio.create_task(services.tuner.train(tuner_id))     # fire-and-forget
+    ...
 ```
 
-No background sweeper in v1.
+Target: just swap `services.tuner.train` for `services.tuner.maybe_train`
+once it lands. No other call sites change. No background sweeper in v1.
 
-### 4.10 Startup recovery
+### 4.11 Startup recovery
 
 There is no special restart path. Because `is_training` is computed
-from `Tuner.in_flight_train_op().peek()` (§4.8) and the recipe state
-in `TunerModel.state` already carries the in-flight op id (§4.11),
-a fresh process picks up where the old one left off:
+from `Tuner.in_flight_train_op().peek()` (§4.9) and the recipe state
+in `TunerModel.state` already carries the in-flight op id (already
+true for `gemini_msrl` via `state.last_train_op`), a fresh process
+picks up where the old one left off:
 
 - `POST /runs` materializes the tuner from `state`, asks the recipe
   for `in_flight_train_op()`, peeks. If the LRO is still running,
@@ -483,9 +562,9 @@ a fresh process picks up where the old one left off:
   either starts a new step (if there are enough consumable runs) or
   no-ops.
 - The batch that the LRO was consuming was marked consumed in the DB
-  *before* the crash (`_drive_step` does that inside the same
-  transaction that captures the op id), so there's nothing to redo
-  on the rollout side.
+  *before* the crash (the `train_count` UPDATE happens inside the
+  same FOR-UPDATE transaction as `train_step`), so there's nothing to
+  redo on the rollout side.
 
 Recipes that do **not** persist their in-flight op (default `Tuner`
 returns `None` from `in_flight_train_op`) fall back to: the LRO may
@@ -495,78 +574,41 @@ half-trained policy. Recipes with cheap polling APIs (like
 `gemini_msrl`'s LRO names) should implement `in_flight_train_op` so
 the post-crash barrier is honored.
 
-### 4.11 State persistence cadence
+### 4.12 State persistence cadence
 
-`TunerModel.state` is the durable mirror of `Tuner.save_state()` and
-is also the multi-driver claim (§4.8). Today it is only written at
-create time; that's not enough. New cadence — exactly **two** writes,
-both driven by `TunerService` inside a `SELECT … FOR UPDATE`
-transaction (recipes do not write to the DB directly):
+Driven entirely by the recipe, via the `StateStore` Protocol.
 
-| When                                            | Why                                                              |
-|-------------------------------------------------|------------------------------------------------------------------|
-| After `Recipe.create(...)` returns              | (existing) — first persistence of recipe-owned identifiers.       |
-| Inside `maybe_train`, after `train_step(batch)` returns and runs are marked consumed, **before** committing the FOR-UPDATE transaction | Capture the in-flight op id (e.g. Vertex AI LRO name) so concurrent drivers see the claim and any future restart can poll/await it. |
+For `GeminiMsrlTuner` today:
 
-There is no post-`wait()` checkpoint, and indeed `op.wait()` is **not
-called** under the row lock — only `train_step()` (which just submits
-the LRO) and the state checkpoint happen inside the transaction.
-After commit, no one is blocking; the next `POST /runs` or
-`maybe_train` will peek the LRO from the persisted state and decide
-what to do. The active op id stays in the serialized state until the
-next training step overwrites it; that's harmless because `peek()`
-on a completed LRO is a cheap cached read.
+| When                                        | What gets saved                                                                  |
+|---------------------------------------------|----------------------------------------------------------------------------------|
+| `Recipe.create` (bootstrap branch)          | `GeminiMsrlRecipeState(tuning_job_name=job.name)` — first persistence.            |
+| `train_step(...)`, after LRO submit         | `GeminiMsrlRecipeState(tuning_job_name=…, last_train_op=op.name)` — captures the in-flight op id so concurrent drivers see the claim and any future restart can poll/await it. |
 
-Recipes opt in by widening their state model. For `gemini_msrl`:
+No post-`wait()` checkpoint, and indeed `op.wait()` is not called
+inside `train_step`. After the recipe's `state_store.save(...)`
+returns, the LRO name is durable; the next `POST /runs` or
+`maybe_train` will peek it from `TunerModel.state` and decide what to
+do. The `last_train_op` field stays in the serialized state until the
+next training step overwrites it; that's harmless because `peek()` on
+a completed LRO is a cheap cached read.
 
-```python
-class GeminiMsrlRecipeState(BaseModel):
-    tuning_job_name: str
-    active_train_op: Optional[str] = None      # NEW: LRO resource name of in-flight TrainStep
-```
-
-with the tuner internally stamping `self._active_train_op = op.name`
-on `train_step(...)`. We do **not** need to track `active_run_ids`
-in the state, because `_drive_step` marks runs consumed *before*
-checkpointing — the durable source of truth for "which runs were
-consumed by which step" is the `runs` table (via a future
-`consumed_at` / `consumed_by_policy_generation` column, see Q2),
-not the recipe state.
-
-`TunerService._persist_state` is a small helper:
-
-```python
-async def _persist_state(self, tuner_id: str, state_str: str) -> None:
-    async with self.async_session() as session:
-        async with session.begin():
-            await session.execute(
-                update(TunerModel)
-                .where(TunerModel.id == tuner_id)
-                .values(state=state_str)
-            )
-```
-
-Why driven by `TunerService` rather than each recipe writing on its
-own?
-
-- **Single writer.** Only `TunerService` owns the SQLAlchemy session;
-  recipes stay pure (no DB import).
-- **Atomic with the other DB writes in `maybe_train`** (the
-  consumed-marking write and the state checkpoint happen inside the
-  same FOR-UPDATE transaction).
-- **Uniform recovery path.** §4.10's behaviour falls out of `peek()`
-  for every recipe that returns a non-`None` `in_flight_train_op`;
-  the API contract is just "put it in your state and we'll persist
-  it for you."
+Once `maybe_train` lands (§4.9), the `train_step(...)` call and the
+`train_count` UPDATE will run inside the same FOR-UPDATE transaction
+on `tuners`. The recipe's `state_store.save(...)` inside
+`train_step(...)` uses its own short-lived session, but
+`_DbStateStore.save` is itself transactional, so the visible-ordering
+guarantee is: by the time `train_step(...)` returns, the new
+`last_train_op` is durably committed.
 
 Trade-offs / caveats:
 
-- A crash *between* `train_step(...)` succeeding on the recipe
-  backend and the transaction commit leaks an LRO on the recipe side
-  while the server's `state` still points at the previous one.
-  Acceptable — that window is microseconds wide, and the next
-  training step will create a fresh op (recipe backends like Vertex
-  AI tolerate orphaned LROs).
+- A crash *between* `train_step(...)` submitting the LRO and
+  `state_store.save` committing leaks an LRO on the recipe side while
+  the server's `state` still points at the previous one. Acceptable —
+  that window is microseconds wide, and the next training step will
+  create a fresh op (recipe backends like Vertex AI tolerate orphaned
+  LROs).
 - `peek()` must be idempotent and side-effect free. Vertex AI LROs
   already satisfy this; future recipes need to honor it.
 
@@ -589,8 +631,8 @@ sequenceDiagram
             alt queue open
                 API->>API: dispense_run(is_training=False, datum_pool)
                 API->>DB: INSERT runs
-                API-->>C: 200 { run_id, datum_id }
-                C->>API: POST /openai/v1/chat/completions { run_id, ... }
+                API-->>C: 200 { run_id, datum_id, expires_at }
+                C->>API: POST /openai/v1/chat/completions { x_run_id, ... }
                 API->>DB: INSERT chat_completions (policy_generation)
                 API-->>C: ChatCompletion
                 C->>API: PUT /tuners/{id}/runs/{run_id}/reward { reward }
@@ -603,9 +645,8 @@ sequenceDiagram
 
         Note over API: maybe_train sees ≥ batch_size consumable runs<br/>(reward IS NOT NULL AND train_count == 0)
         API->>DB: BEGIN; SELECT tuners WHERE id=? FOR UPDATE
-        API->>API: tuner.train_step(batch) → new_op
+        API->>API: tuner.train_step(batch) → state_store.save(last_train_op)
         API->>DB: UPDATE runs SET train_count = train_count + 1
-        API->>DB: UPDATE tuners SET state=tuner.save_state() (with op id)
         API->>DB: COMMIT
         Note over API: dispense_run now sees in_flight_train_op().peek()==False ⇒ 204
         Note over API: (no in-process latch — every POST /runs peeks the LRO via state)
@@ -621,19 +662,20 @@ sees a `204`.
 
 ## 6. What gets simpler vs. the current repo
 
-| Concern                                | Current                                              | Proposed                                                                       |
+| Concern                                | Today (some shipped, some not)                       | Target                                                                         |
 |----------------------------------------|------------------------------------------------------|--------------------------------------------------------------------------------|
 | Sync barrier                           | none — completions served from half-trained policy   | implicit: `dispense_run` returns `None` during training                        |
-| Run lifecycle                          | implicit, client-minted `run_id`                     | explicit `RunModel` row, server-allocated `run_id`                             |
-| Sizing on the wire                     | `GROUP_SIZE`/`TARGET_GROUP_COUNT` private constants  | recipe-internal (or hparams at create time)                                    |
+| Run lifecycle                          | partial: `RunModel` exists, but server-allocated `run_id` and `POST /runs` are not wired yet | explicit `RunModel` row, server-allocated `run_id`                             |
+| Sizing on the wire                     | `GROUP_SIZE`/`TARGET_GROUP_COUNT` private constants in `tuner_service.py` | recipe-internal (or hparams at create time)                                    |
 | Multi-worker fan-out                   | client coordinates `datum_id` picks                  | server arbitrates: each `POST /runs` returns a unique assignment               |
 | Recipe-driven curriculum               | not possible without API change                      | recipe owns `dispense_run`                                                     |
-| `policy_generation` capture            | already in `Sample`, dropped on the floor            | persisted on `ChatCompletionModel`                                             |
-| Reward storage                         | separate `RewardModel`                               | merged onto `RunModel`                                                         |
-| Datum pool                             | implicit (client picks at sample time)               | explicit, required at tuner creation                                           |
-| Train-step mutual exclusion            | in-process only (single driver assumed)              | DB-driven via `SELECT … FOR UPDATE` on `tuners` row + `in_flight_train_op().peek()` (multi-driver safe) |
-| Run lease / redispense                 | none — orphaned runs sit in `rewards` forever        | `runs.expires_at` (TTL) — dispenser may re-issue datum after lease expires; `PUT /reward` rejects late writes |
-| Consumed-by-training tracking          | `RewardModel.train_count` bumped after train         | `RunModel.train_count` bumped after train (same semantics, new table)          |
+| `policy_generation` capture            | **shipped** — persisted on `ChatCompletionModel`     | (unchanged)                                                                    |
+| Reward storage                         | **shipped** — merged onto `RunModel`                 | (unchanged)                                                                    |
+| Datum pool                             | **shipped** — explicit, required at tuner creation   | (unchanged)                                                                    |
+| State persistence                      | **shipped** — recipe-driven via `StateStore`         | (unchanged)                                                                    |
+| Train-step mutual exclusion            | in-process only (single driver assumed; `train_step` guards via `state.last_train_op.peek()` but losers waste work) | DB-driven via `SELECT … FOR UPDATE` on `tuners` row + `in_flight_train_op().peek()` (multi-driver safe) |
+| Run lease / redispense                 | partial: `runs.expires_at` exists, `PUT /reward` rejects late writes; **not used** by a dispenser yet | dispenser may re-issue datum after lease expires                               |
+| Consumed-by-training tracking          | **shipped** — `RunModel.train_count` bumped after train | (unchanged)                                                                    |
 
 What we don't take on:
 
@@ -652,79 +694,92 @@ Legend: `[x]` landed in staging, `[ ]` still to do.
 1. **Rename**
    - `[x]` `Sample.step_id` → `Sample.policy_generation` (stays `str`).
    - `[x]` Update `gemini_msrl.sample()` and `test_gemini_msrl.py`.
+   - `[x]` `Recipe.open` → `Recipe.create` (commit `f16b330`).
 2. **DB schema**
    - `[x]` `ChatCompletionModel.policy_generation` (uncomment + rename).
    - `[x]` `RunModel` (new, absorbs `RewardModel`).
    - `[x]` `DatumRowModel` (new, table `datum_rows`).
    - `[x]` Drop `RewardModel`.
 3. **`Tuner` hooks**
-   - `[x]` Wire-types only: `DispenseContext` and `RunAssignment`
-     dataclasses live in `cookbook/types.py`; the abstract `Op[T]`
-     base with `wait()` exists. `TrainOp` / `SampleOp` already
-     subclass `Op`.
-   - `[ ]` Add `Op.peek()` (cheap non-blocking terminal-state check)
-     and implement it on `GeminiMsrlTrainingOp` /
-     `GeminiMsrlSamplingOp` (LRO `GetOperation`, terminal-cached).
-   - `[ ]` `dispense_run(ctx) -> Optional[RunAssignment]` with a sane
+   - `[x]` Wire-types: `DispenseContext` and `RunAssignment` dataclasses
+     live in `cookbook/types.py`; the abstract `Op[T]` base with `wait()`
+     and `peek()` exists. `TrainOp` / `SampleOp` subclass `Op`.
+   - `[x]` `Op.peek()` implemented on `GeminiMsrlOp` (and inherited by
+     `GeminiMsrlTrainingOp` / `GeminiMsrlSamplingOp`). LRO `GetOperation`,
+     terminal-cached. Covered by `test_sample_op_peek` /
+     `test_train_op_peek`.
+   - `[x]` `dispense_run(ctx) -> Optional[RunAssignment]` with a sane
      default implementation in the base class (returns `None` while
-     `ctx.is_training`, otherwise mints `run_id` and picks a
-     `datum_id` from `ctx.datum_pool`).
-   - `[ ]` `in_flight_train_op() -> Optional[TrainOp]` with a default
-     of `None` (recipes opt in for restart-safe training).
-4. **`TunerService`**
+     `ctx.is_training`, otherwise mints `run_id` and picks a `datum_id`
+     from `ctx.datum_pool`).
+   - `[x]` `in_flight_train_op() -> Optional[TrainOp]` with a default
+     of `None` (recipes opt in for restart-safe training). For
+     `gemini_msrl`, wrap `state.last_train_op` (already persisted) in
+     a fresh `GeminiMsrlTrainingOp(self.client, self.state.last_train_op)`.
+4. **`StateStore` plumbing**
+   - `[x]` `StateStore` Protocol in `cookbook/types.py`.
+   - `[x]` `_DbStateStore` backing `tuners.state` via UPDATE inside
+     `TunerService`.
+   - `[x]` `Cookbook.open(kind, name, state_store)` delegates to
+     `Recipe.create`.
+   - `[x]` `GeminiMsrlTuner._persist_state` + initial save in
+     `Recipe.create`'s bootstrap branch.
+   - `[x]` `GeminiMsrlRecipeState.last_train_op: Optional[str]` (commit
+     `8572371`), stamped inside `train_step(...)` before returning.
+5. **`TunerService`**
    - `[x]` `create_tuner(recipe, name, datum_ids)` persists the datum
      pool into `datum_rows`.
    - `[x]` `record_chat_completion(..., policy_generation)` stamps the
      new column.
-   - `[x]` `collect_rollout_ready_for_training` now reads from `runs`
-     with `train_count <= TARGET_MAX_TRAIN_COUNT AND reward IS NOT
-     NULL`; the in-memory `Rollout` / `RolloutRun` shape is preserved.
+   - `[x]` `collect_rollout_ready_for_training` reads from `runs` with
+     `train_count <= TARGET_MAX_TRAIN_COUNT AND reward IS NOT NULL`;
+     in-memory `Rollout` / `RolloutRun` shape preserved.
    - `[x]` `train` bumps `RunModel.train_count` after `train_step`.
-   - `[ ]` Rename `collect_rollout_ready_for_training` →
+   - `[x]` `update_reward(tuner_id, run_id, reward)`: 404 on missing,
+     409 on already-rewarded (`RewardAlreadySetError`), 409 on expired
+     (`RunExpiredError`).
+   - `[x]` Rename `collect_rollout_ready_for_training` →
      `_collect_consumable_batch` (private; called only from
      `maybe_train`) and return `run_ids` alongside the batch so the
      `train_count` UPDATE can run inside the FOR-UPDATE transaction.
-   - `[ ]` `dispense_run(tuner_id)`: load datum pool from
-     `datum_rows`, call `tuner.dispense_run(DispenseContext(...))`,
-     `INSERT` into `runs` with `expires_at = NOW() + run_ttl`.
-   - `[x]` `update_reward(tuner_id, run_id, reward)`: conditional
-     `UPDATE runs SET reward=… WHERE reward IS NULL AND expires_at >
-     NOW()`; raise on the `0-rows-updated` case so the HTTP layer can
-     map to `409 Conflict`.
-   - `[ ]` `is_training(tuner_id)` computed by
-     `(await tuner.in_flight_train_op()).peek()` — no in-memory
-     latch; delete the existing `_train_tasks` map.
-   - `[ ]` `maybe_train` wraps `train_step` + `train_count += 1` +
-     state checkpoint in a `SELECT … FOR UPDATE` transaction on
-     `tuners` (§4.8 / §4.11). `op.wait()` is **not** called under the
-     lock. Replaces today's fire-and-forget `train` task.
-5. **`gemini_msrl` state migration**
-   - `[ ]` Add `active_train_op: Optional[str]` to
-     `GeminiMsrlRecipeState`.
-   - `[ ]` `GeminiMsrlTuner.train_step`: stamp
-     `self._active_train_op = op.name` before returning.
-   - `[ ]` `GeminiMsrlRecipe.restore`: when `active_train_op` is set,
-     rehydrate a `GeminiMsrlTrainingOp(client, active_train_op,
-     config)` and expose it via `Tuner.in_flight_train_op`.
+     Take the session as a parameter.
+   - `[x]` `dispense_run(tuner_id)`: load datum pool from `datum_rows`,
+     materialize tuner, derive `is_training` via
+     `(await tuner.in_flight_train_op()).peek()`, call
+     `tuner.dispense_run(DispenseContext(...))`, `INSERT` into `runs`
+     with `expires_at = NOW() + run_ttl`.
+   - `[x]` `is_training(tuner_id)` computed by
+     `(await tuner.in_flight_train_op()).peek()` — no in-memory latch.
+   - `[x]` `maybe_train` wraps `train_step` + `train_count += 1` in a
+     `SELECT … FOR UPDATE` transaction on `tuners` (§4.9 / §4.12).
+     `op.wait()` is **not** called under the lock. Replaces today's
+     fire-and-forget `train` task; rename `train` → `maybe_train` at
+     the call site in `put_reward`.
 6. **HTTP**
-   - `[x]` Extend `POST /tuners` to require `datum_ids` (rejects
-     empty arrays with `400`).
+   - `[x]` Extend `POST /tuners` to require `datum_ids` (rejects empty
+     arrays with `400`).
    - `[x]` `POST /openai/v1/chat/completions`: `x_run_id` optional
      header; when present, validate against an existing `runs` row
-     (`409` on unknown), derive `datum_id` from the row (server
-     doesn't trust the client), stamp the chat completion row with
+     (`409` on unknown), derive `datum_id` from the row (server doesn't
+     trust the client), stamp the chat completion row with
      `policy_generation` from `Sample`.
+   - `[x]` Fix the absent-`x_run_id` path in
+     `POST /openai/v1/chat/completions`: `x_datum_id` is currently
+     referenced but never bound. Either explicitly skip persistence
+     in the run-less path, or require `x_run_id`.
    - `[x]` Remove legacy `POST /tuners/{id}/rewards`.
-   - `[ ]` `POST /tuners/{id}/runs` (dispense endpoint; `204 +
+   - `[x]` `POST /tuners/{id}/runs` (dispense endpoint; `204 +
      Retry-After` when `dispense_run` returns `None`).
    - `[x]` `PUT /tuners/{id}/runs/{run_id}/reward` — replaces the
      dropped `POST /rewards`.
-   - `[ ]` Optionally extend `GET /tuners/{id}` for observability
+   - `[x]` Swap `services.tuner.train` → `services.tuner.maybe_train`
+     in `put_reward` once `maybe_train` lands.
+   - `[x]` Optionally extend `GET /tuners/{id}` for observability
      (`training`, `pending_run_count`, `last_recorded_policy_generation`).
 7. **Docs**
-   - `[ ]` `.agents/skills/dev/references/sync-rl.md`: rewrite the
+   - `[x]` `.agents/skills/dev/references/sync-rl.md`: rewrite the
      barrier section around the queue.
-   - `[ ]` `.agents/skills/dev/references/data-model.md`: add
+   - `[x]` `.agents/skills/dev/references/data-model.md`: add
      `RunModel`, `DatumRowModel`, `policy_generation`; remove
      `RewardModel`.
 8. **Tests** (after sign-off, per AGENTS.md)
@@ -733,19 +788,21 @@ Legend: `[x]` landed in staging, `[ ]` still to do.
    - Barrier: while `is_training`, `POST /runs` returns `204`.
    - Multi-worker dispatch: concurrent `POST /runs` never share a
      `run_id`.
-   - `policy_generation` from `Sample` round-trips through DB.
+   - `policy_generation` from `Sample` round-trips through DB
+     (already partially covered by `test_gemini_msrl.py`).
    - `chat/completions` with an unknown `run_id` returns `409`.
-   - `chat/completions` without `run_id` succeeds, writes nothing.
+   - `chat/completions` without `run_id` either explicitly succeeds
+     and writes nothing, or is rejected — pick one and test it.
    - Duplicate `PUT /reward` returns `409` (atomic guard).
    - Multi-completion runs: more than one `ChatCompletionModel` row
      per `RunModel`, each carrying its own `policy_generation`.
-   - State checkpoint: after `train_step` returns and `train_count`
-     is bumped, `TunerModel.state` contains the recipe's in-flight
-     op id (single FOR-UPDATE transaction).
-   - `is_training` is DB-derived: a fresh process that has never
-     called `train_step` correctly reports `True` while a previously
-     committed LRO is still running, and `False` after `peek()`
-     flips.
+   - State checkpoint: after `train_step` returns and `train_count` is
+     bumped, `TunerModel.state` contains the recipe's in-flight op id
+     (today: via `state_store.save` inside `train_step`; target: same,
+     but now also inside the FOR-UPDATE transaction).
+   - `is_training` is DB-derived: a fresh process that has never called
+     `train_step` correctly reports `True` while a previously committed
+     LRO is still running, and `False` after `peek()` flips.
    - Multi-driver safety: two concurrent `maybe_train` calls produce
      exactly one new train op (the loser sees the in-flight op via
      `peek()` and bails).
@@ -755,9 +812,9 @@ Legend: `[x]` landed in staging, `[ ]` still to do.
      `expires_at <= NOW()` returns `409`; the dispenser is free to
      re-issue that `datum_id` with a fresh `run_id`.
    - `train_count` vs. `expires_at` are independent: a rewarded run
-     with `train_count == 0` stays consumable for training even
-     after `expires_at` has passed (the lease guard is only
-     consulted on the rollout side, never on the training side).
+     with `train_count == 0` stays consumable for training even after
+     `expires_at` has passed (the lease guard is only consulted on the
+     rollout side, never on the training side).
 
 ### 7.2 Deferred
 
@@ -765,8 +822,9 @@ Legend: `[x]` landed in staging, `[ ]` still to do.
 10. Server-side curriculum policies as first-class primitives.
 11. Off-policy correction (importance ratios) inside `train_step`,
     keyed on `policy_generation`.
-12. Background hard-deletion of expired-and-unrewarded `runs`
-    rows (`WHERE expires_at <= NOW() AND reward IS NULL`).
+12. Background hard-deletion of expired-and-unrewarded `runs` rows
+    (`WHERE expires_at <= NOW() AND reward IS NULL`).
+13. Per-recipe-tunable `run_ttl` and `Retry-After` via hparams.
 
 ---
 
@@ -775,14 +833,15 @@ Legend: `[x]` landed in staging, `[ ]` still to do.
 | #  | Question                                                                                                | Default if no answer                                                          |
 |----|---------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
 | Q1 | `Retry-After` on the 204 — fixed (e.g. `1s`) or recipe-tunable?                                         | Fixed `1` in v1; recipe-tunable later via hparams.                            |
-| Q2 | How do we mark a run as "consumed by training"? | `RunModel.train_count: int` (ported from `RewardModel.train_count`); ready iff `train_count == 0`; bumped to 1 after train. Promote to `consumed_by_policy_generation` later if off-policy work needs more than a counter. |
-| Q3 | Should `POST /tuners` reject a *too-small* `datum_ids` array (e.g. < expected batch size)?              | Warn but accept; the recipe can always cycle.                                 |
+| Q2 | How do we mark a run as "consumed by training"? | **shipped:** `RunModel.train_count: int`; ready iff `train_count == 0`; bumped to 1 after train. Promote to `consumed_by_policy_generation` later if off-policy work needs more than a counter. |
+| Q3 | Should `POST /tuners` reject a *too-small* `datum_ids` array (e.g. < expected batch size)?              | Warn but accept; the recipe can always cycle. (Today: accepts as long as non-empty.) |
 | Q4 | Is `dispense_run` sync or async on the `Tuner`?                                                          | Sync; the DB layer can be async around it.                                    |
-| Q5 | Does `PUT /reward` accept reward updates after a run is already consumed?                               | No — return `409 Conflict`; rewards are write-once.                           |
-| Q6 | Should `GET /tuners/{id}` expose `training: bool` even though it's derived from a `peek()` poll? | Yes; same DB-derived value `POST /runs` uses, just exposed for debugging.     |
-| Q7 | Should `TunerService` also checkpoint state after non-train events (e.g. after every reward) so opaque recipe counters stay fresh? | No in v1 — `train_step` boundaries are the only point where state actually changes for current recipes. |
+| Q5 | Does `PUT /reward` accept reward updates after a run is already consumed?                               | **shipped:** No — `RewardAlreadySetError` → `409 Conflict`; rewards are write-once. |
+| Q6 | Should `GET /tuners/{id}` expose `training: bool` even though it's derived from a `peek()` poll?         | Yes; same DB-derived value `POST /runs` uses, just exposed for debugging.     |
+| Q7 | Should the recipe also checkpoint state after non-train events (e.g. after every reward) so opaque recipe counters stay fresh? | No in v1 — `train_step` boundaries are the only point where state actually changes for current recipes. |
 | Q8 | Default `run_ttl` for `runs.expires_at`?                                                                | `5 min` in v1; recipe-tunable later via hparams.                              |
 | Q9 | Does `peek()` need a result cache inside `TunerService` to avoid hammering the LRO backend on hot `POST /runs` paths? | Not in v1 — Vertex AI's `GetOperation` is cheap and itself caches the terminal state. Revisit if `peek` shows up in profiling. |
+| Q10| Should `POST /openai/v1/chat/completions` require `x_run_id`, or keep the fire-and-forget path?         | Pick one before declaring §4.8 done — the current handler has a dangling reference on the run-less branch. Recommend: keep optional but explicitly skip persistence when absent. |
 
 ---
 
@@ -791,15 +850,19 @@ Legend: `[x]` landed in staging, `[ ]` still to do.
 - **Server-owned corpora.** The server holds opaque `datum_id`s, not
   dataset rows. Clients still own data.
 - **Per-rollout heartbeats.** Crash recovery for in-flight runs is
-  TTL-based (`runs.expires_at`, §4.3), not heartbeat-based. A
-  client that crashes mid-completion just lets its run expire.
+  TTL-based (`runs.expires_at`, §4.3), not heartbeat-based. A client
+  that crashes mid-completion just lets its run expire.
 - **Streamed lease delivery (WebSocket / SSE).** Polling-with-204 is
-  simpler and matches the OpenAI-shaped completions endpoint right
-  next door.
+  simpler and matches the OpenAI-shaped completions endpoint right next
+  door.
 - **A separate `RewardModel`.** Reward is a column on `RunModel`, not
   its own entity.
 - **Streaming corpus updates.** `POST /tuners/{id}/datum_pool` is
   intentionally not in this iteration.
 - **Hard-deletion of expired rows.** A `WHERE expires_at > NOW()`
-  predicate on the consumable-runs query is enough; a janitor job
-  can come later.
+  predicate on the consumable-runs query is enough; a janitor job can
+  come later.
+- **`TunerService` as single state writer.** An earlier draft of this
+  doc made the service own state persistence; the shipped `StateStore`
+  Protocol cleanly inverts that: recipes own cadence, the service owns
+  only the DB-backed implementation.

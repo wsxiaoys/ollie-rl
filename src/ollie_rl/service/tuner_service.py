@@ -1,9 +1,10 @@
+import asyncio
 import logging
 import math
 import uuid
 from typing import Dict, List, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from ollie_rl.cookbook import Tuner, Cookbook
 from ollie_rl.cookbook.types import Example, StateStore
 from ollie_rl.db import TunerModel, ChatCompletionModel, DatumRowModel
@@ -66,6 +67,10 @@ class TunerService:
     def __init__(self):
         self.active_tuners: Dict[str, Tuner] = {}
         self.async_session = get_sessionmaker()
+        # Global lock ensuring `maybe_train` runs serially across all tuners in this process.
+        # This simplifies synchronization and avoids the complexity of per-tuner lock management
+        # or database-level row locking.
+        self._train_lock = asyncio.Lock()
 
     async def get(self, tuner_id: str) -> Optional[Tuner]:
         """
@@ -88,6 +93,11 @@ class TunerService:
             # initial state (e.g. crashed mid-bootstrap). Treat as not found.
             return None
 
+        return await self._materialize(tuner_id, record)
+
+    async def _materialize(self, tuner_id: str, record: TunerModel) -> Tuner:
+        if tuner_id in self.active_tuners:
+            return self.active_tuners[tuner_id]
         logger.info(
             f"Lazily restoring tuner for model: {tuner_id} (kind: {record.kind})"
         )
@@ -194,92 +204,150 @@ class TunerService:
                 record.updated_at = now
         logger.info(f"Successfully recorded reward {reward} for run {run_id}")
 
-    async def collect_rollout_ready_for_training(self, tuner_id: str) -> List[Rollout]:
+    async def get_tuner_status(self, tuner_id: str) -> Optional[dict]:
         """
-        Collect all rollouts ready for training under a specific tuner_id.
-        1. Collect all rewards that have train_count equal to 0.
-        2. Group rewards by datum_id, and whenever a group size is >= 16, then this group is considered ready.
+        Retrieve the current status of a tuner for observability.
         """
-        TARGET_MAX_TRAIN_COUNT = 0
-        GROUP_SIZE = 16
+        tuner = await self.get(tuner_id)
+        if tuner is None:
+            return None
+
+        op = await tuner.in_flight_train_op()
+        is_training = op is not None and not await op.peek()
 
         async with self.async_session() as session:
-            result = await session.execute(
-                select(RunModel).where(
+            from datetime import datetime
+
+            now = datetime.now()
+            pending_result = await session.execute(
+                select(func.count(RunModel.id)).where(
                     RunModel.tuner_id == tuner_id,
-                    RunModel.train_count <= TARGET_MAX_TRAIN_COUNT,
-                    RunModel.reward != None,
+                    RunModel.reward == None,
+                    RunModel.expires_at > now,
                 )
             )
-            run_records = result.scalars().all()
+            pending_run_count = pending_result.scalar_one_or_none() or 0
 
-            # Group rewards by datum_id
-            grouped_runs: Dict[str, List[RunModel]] = {}
-            for reward in run_records:
-                if reward.datum_id not in grouped_runs:
-                    grouped_runs[reward.datum_id] = []
-                if len(grouped_runs[reward.datum_id]) < GROUP_SIZE:
-                    grouped_runs[reward.datum_id].append(reward)
+            gen_result = await session.execute(
+                select(ChatCompletionModel.policy_generation)
+                .where(ChatCompletionModel.tuner_id == tuner_id)
+                .order_by(ChatCompletionModel.created_at.desc())
+                .limit(1)
+            )
+            last_recorded_policy_generation = gen_result.scalar_one_or_none()
 
-            # Process only completed groups (size == GROUP_SIZE)
-            rollouts: List[Rollout] = []
-            for group in grouped_runs.values():
-                if len(group) != GROUP_SIZE:
-                    continue
+        return {
+            "tuner_id": tuner_id,
+            "recipe": tuner.kind,
+            "training": is_training,
+            "pending_run_count": pending_run_count,
+            "last_recorded_policy_generation": last_recorded_policy_generation,
+        }
 
-                # Calculate mean and std of rewards for this group
-                rewards = [
-                    reward_model.reward if reward_model.reward is not None else 0.0
-                    for reward_model in group
-                ]
-                mean = sum(rewards) / len(rewards)
-                variance = sum((r - mean) ** 2 for r in rewards) / len(rewards)
-                std = math.sqrt(variance)
+    async def maybe_train(self, tuner_id: str) -> None:
+        """
+        Attempt to start (and wait for) a train step for `tuner_id`.
 
-                rollout_runs = []
-                for record, reward in zip(group, rewards):
-                    advantage = (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
-                    rollout_runs.append(
-                        RolloutRun(
-                            id=record.id,
-                            reward=reward,
-                            advantage=advantage,
-                        )
+        Serialized globally via `self._train_lock` to ensure only one train step
+        runs at a time in this process. This simplifies concurrency management,
+        avoids per-tuner lock tracking, and replaces the database-level row locks.
+        """
+        async with self._train_lock:
+            tuner = await self.get(tuner_id)
+            if tuner is None:
+                return
+
+            op = await tuner.in_flight_train_op()
+            if op is not None and not await op.peek():
+                return  # already training
+
+            train_op = None
+            async with self.async_session() as session:
+                async with session.begin():
+                    batch, run_ids = await self._collect_consumable_batch(
+                        tuner_id, session
                     )
-                rollouts.append(Rollout(runs=rollout_runs))
+                    if not batch:
+                        return
 
-            return rollouts
+                    train_op = await tuner.train_step(
+                        batch
+                    )  # submits LRO + state_store.save
+                    await session.execute(  # bump trained_count
+                        update(RunModel)
+                        .where(RunModel.tuner_id == tuner_id)
+                        .where(RunModel.id.in_(run_ids))
+                        .values(trained_count=RunModel.trained_count + 1)
+                    )
 
-    async def train(self, tuner_id: str) -> None:
-        """
-        Run a single RL training step (e.g., PPO/GRPO) for a tuner.
-        1. Retrieve the active tuner instance.
-        2. Collect rollouts ready for training. Only train if we have at least 32 groups (rollouts).
-           If there are more than 32, only pick the first 32.
-        3. Convert rollouts into Examples (by mapping RewardModel IDs to ChatCompletionModel IDs).
-        4. Update the train_count of the trained rewards in the database using an update query.
-        5. Call tuner.train_step(examples).
-        """
+            if train_op is not None:
+                await train_op.wait()
+                logger.info(
+                    f"Successfully completed train step for tuner {tuner_id}"
+                )
+
+    async def _collect_consumable_batch(
+        self, tuner_id: str, session
+    ) -> tuple[List[Example], List[str]]:
+        TARGET_MAX_TRAIN_COUNT = 0
+        GROUP_SIZE = 16
         TARGET_GROUP_COUNT = 32
 
-        tuner = await self.get(tuner_id)
-        if not tuner:
-            logger.error(f"Tuner {tuner_id} not found.")
-            return
+        result = await session.execute(
+            select(RunModel).where(
+                RunModel.tuner_id == tuner_id,
+                RunModel.trained_count <= TARGET_MAX_TRAIN_COUNT,
+                RunModel.reward != None,
+            )
+        )
+        run_records = result.scalars().all()
 
-        # 1. Collect rollouts ready for training
-        rollouts = await self.collect_rollout_ready_for_training(tuner_id)
+        # Group rewards by datum_id
+        grouped_runs: Dict[str, List[RunModel]] = {}
+        for reward in run_records:
+            if reward.datum_id not in grouped_runs:
+                grouped_runs[reward.datum_id] = []
+            if len(grouped_runs[reward.datum_id]) < GROUP_SIZE:
+                grouped_runs[reward.datum_id].append(reward)
+
+        # Process only completed groups (size == GROUP_SIZE)
+        rollouts: List[Rollout] = []
+        for group in grouped_runs.values():
+            if len(group) != GROUP_SIZE:
+                continue
+
+            # Calculate mean and std of rewards for this group
+            rewards = [
+                reward_model.reward if reward_model.reward is not None else 0.0
+                for reward_model in group
+            ]
+            mean = sum(rewards) / len(rewards)
+            variance = sum((r - mean) ** 2 for r in rewards) / len(rewards)
+            std = math.sqrt(variance)
+
+            rollout_runs = []
+            for record, reward in zip(group, rewards):
+                advantage = (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
+                rollout_runs.append(
+                    RolloutRun(
+                        id=record.id,
+                        reward=reward,
+                        advantage=advantage,
+                    )
+                )
+            rollouts.append(Rollout(runs=rollout_runs))
+
         if len(rollouts) < TARGET_GROUP_COUNT:
             logger.info(
                 f"Not enough groups ready for training under tuner {tuner_id} "
                 f"(got {len(rollouts)}, need at least {TARGET_GROUP_COUNT})"
             )
-            return
+            return [], []
 
         # If there are more than 32 groups, only pick the first 32
         rollouts = rollouts[:TARGET_GROUP_COUNT]
 
-        # 2. Map run advantages
+        # Map run advantages
         run_advantages: Dict[str, float] = {}
         for rollout in rollouts:
             for run in rollout.runs:
@@ -287,44 +355,104 @@ class TunerService:
 
         run_ids = list(run_advantages.keys())
 
-        # 3. Retrieve ChatCompletionModel records for these run_ids
-        async with self.async_session() as session:
-            result = await session.execute(
-                select(ChatCompletionModel).where(
-                    ChatCompletionModel.tuner_id == tuner_id,
-                    ChatCompletionModel.run_id.in_(run_ids),
-                )
+        # Retrieve ChatCompletionModel records for these run_ids
+        result = await session.execute(
+            select(ChatCompletionModel).where(
+                ChatCompletionModel.tuner_id == tuner_id,
+                ChatCompletionModel.run_id.in_(run_ids),
             )
-            completions = result.scalars().all()
+        )
+        completions = result.scalars().all()
 
         if not completions:
             logger.warning(
                 f"No chat completions found for the ready runs under tuner {tuner_id}"
             )
-            return
+            return [], []
 
-        # 4. Create Examples for Tuner.train_step
+        # Create Examples for Tuner.train_step
         examples = [
             Example(chat_completion_id=c.id, advantage=run_advantages[c.run_id])
             for c in completions
             if c.run_id in run_advantages
         ]
 
-        # 5. Call tuner.train_step(examples) to trigger the training step operation
-        train_op = await tuner.train_step(examples)
+        return examples, run_ids
 
-        # 6. Update train_count for the rewards using an update query (safe now that backend accepted the request)
+    async def dispense_run(self, tuner_id: str) -> Optional[RunModel]:
+        """
+        Dispense a run for a tuner.
+        1. Read is_training.
+        2. Load the datum pool.
+        3. Call tuner.dispense_run(DispenseContext(datum_pool, metrics)).
+        4. If None: return None.
+        5. Otherwise insert a runs row and return the RunModel.
+        """
+        from datetime import datetime, timedelta
+
+        tuner = await self.get(tuner_id)
+        if tuner is None:
+            return None
+
+        op = await tuner.in_flight_train_op()
+        is_training = op is not None and not await op.peek()
+        if is_training:
+            return None
+
+        from ollie_rl.cookbook.types import DispenseContext, DatumMetric
+
+        now = datetime.now()
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(DatumRowModel.datum_id).where(DatumRowModel.tuner_id == tuner_id)
+            )
+            datum_pool = list(result.scalars().all())
+
+            runs_result = await session.execute(
+                select(RunModel).where(RunModel.tuner_id == tuner_id)
+            )
+            runs = list(runs_result.scalars().all())
+
+        metrics: Dict[str, DatumMetric] = {}
+        for datum_id in datum_pool:
+            metrics[datum_id] = DatumMetric(
+                completed_count=0,
+                in_flight_count=0,
+                trained_count=0,
+                expired_count=0,
+            )
+
+        for run in runs:
+            metric = metrics.get(run.datum_id)
+            if not metric:
+                continue
+            if run.reward is not None:
+                metric.completed_count += 1
+            elif run.expires_at > now:
+                metric.in_flight_count += 1
+            else:
+                metric.expired_count += 1
+            if run.trained_count > 0:
+                metric.trained_count += run.trained_count
+
+        assignment = tuner.dispense_run(
+            DispenseContext(datum_metrics=metrics)
+        )
+        if assignment is None:
+            return None
+
+        expires_at = datetime.now() + timedelta(minutes=5)
+        run_record = RunModel(
+            id=assignment.run_id,
+            tuner_id=tuner_id,
+            datum_id=assignment.datum_id,
+            reward=None,
+            trained_count=0,
+            expires_at=expires_at,
+        )
+
         async with self.async_session() as session:
             async with session.begin():
-                await session.execute(
-                    update(RunModel)
-                    .where(RunModel.id.in_(run_ids))
-                    .values(train_count=RunModel.train_count + 1)
-                )
+                session.add(run_record)
 
-        # 7. Wait for the training step operation to complete
-        await train_op.wait()
-
-        logger.info(
-            f"Successfully completed train step for tuner {tuner_id} using {len(examples)} examples"
-        )
+        return run_record

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Generic, Optional, Protocol, TypeVar
+from typing import List, Generic, Optional, Protocol, TypeVar, Dict
 from dataclasses import dataclass
 from openai.types.chat import ChatCompletion
 from pydantic import BaseModel
@@ -20,9 +20,23 @@ class Sample(BaseModel):
 
 
 @dataclass
+class DatumMetric:
+    """
+    Tracking metrics for a single datum_id across its run lifecycle.
+    """
+    completed_count: int  # Number of runs of this datum that have been completed and rewarded.
+    in_flight_count: int  # Number of runs of this datum that are currently in flight (leased and not expired).
+    trained_count: int    # Number of runs of this datum that have been consumed by training.
+    expired_count: int    # Number of runs of this datum that have expired (reward is None and expires_at <= now).
+
+
+@dataclass
 class DispenseContext:
-    is_training: bool
-    datum_pool: List[str]
+    """
+    Context provided to the Tuner when dispensing a run assignment.
+    """
+    datum_metrics: Dict[str, DatumMetric]
+    """A mapping from each registered datum_id to its current run metrics."""
 
 
 @dataclass
@@ -119,6 +133,24 @@ class Tuner(ABC):
         Returns a TrainingOp immediately after the request is received by the backend.
         """
         pass
+
+    @abstractmethod
+    def dispense_run(self, ctx: DispenseContext) -> Optional[RunAssignment]:
+        """
+        Recipe-owned dispatch.
+          - pick a datum_id (recipe's choice of policy), mint a run_id,
+            and return the assignment.
+        """
+        pass
+
+    async def in_flight_train_op(self) -> Optional[TrainOp]:
+        """
+        Return the TrainOp captured in the most recently saved state
+        (i.e. the train op that was running when state was last
+        checkpointed), so TunerService can poll / await it. Returns
+        None when no train op was in flight. Default impl: return None.
+        """
+        return None
 
 
 class Recipe(ABC):

@@ -32,7 +32,7 @@ from google.genai.types import (
     Tool,
 )
 
-from .types import Recipe, Example, Tuner, Sample, TrainOp, SampleOp, StateStore
+from .types import Recipe, Example, Tuner, Sample, TrainOp, SampleOp, StateStore, DispenseContext, RunAssignment
 
 import json
 from openai.types.chat import (
@@ -331,6 +331,38 @@ class GeminiMsrlTuner(Tuner):
             self.client,
             op.name,
         )
+
+    async def in_flight_train_op(self) -> Optional[TrainOp]:
+        if not self.state.last_train_op:
+            return None
+        return GeminiMsrlTrainingOp(
+            self.client,
+            self.state.last_train_op,
+        )
+
+    def dispense_run(self, ctx: DispenseContext) -> Optional[RunAssignment]:
+        if not ctx.datum_metrics:
+            return None
+        import uuid
+
+        # FIFO Epoch style: find the datum with the minimum (completed + in_flight) runs
+        # that has not yet reached the target of, say, 16 runs (or just generally the minimum)
+        best_datum = None
+        min_total = float("inf")
+
+        for datum_id, metric in ctx.datum_metrics.items():
+            total_runs = metric.completed_count + metric.in_flight_count
+
+            if total_runs < min_total:
+                min_total = total_runs
+                best_datum = datum_id
+
+        if best_datum is None:
+            import random
+            best_datum = random.choice(list(ctx.datum_metrics.keys()))
+
+        run_id = f"run_{uuid.uuid4()}"
+        return RunAssignment(run_id=run_id, datum_id=best_datum)
 
 
 class GeminiMsrlRecipe(Recipe):
