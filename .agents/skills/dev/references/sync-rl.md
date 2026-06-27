@@ -63,8 +63,8 @@ the background); the client does not need to trigger it explicitly.
 |--------------|----------|----------------|-------------------------------------------|
 | `name`       | yes      | —              | Display name for the tuned model.         |
 | `datum_ids`  | yes      | —              | Non-empty list of opaque dataset item ids.|
-| `recipe`     | no       | `grpo_16x32`   | Named recipe in the `Cookbook` registry.  |
-| `trainer`    | no       | `gemini_msrl`  | Named factory in the trainer registry.    |
+| `recipe`     | yes      | —              | Named recipe in the `Cookbook` registry (e.g. `grpo_16x32`). |
+| `trainer`    | yes      | —              | Named factory in the trainer registry (e.g. `gemini_msrl`, `fake`). |
 
 ### Required headers on `/openai/v1/chat/completions`
 
@@ -81,7 +81,7 @@ A single sync-RL step has three phases visible to the client.
 
 ### Phase 0 — bootstrap (once per training job)
 
-`POST /tuners` with `name`, `datum_ids` (non-empty), and optionally `recipe` and `trainer` to create a tuner.
+`POST /tuners` with `name`, `recipe`, `trainer`, and `datum_ids` (non-empty) to create a tuner.
 The server returns `{ tuner_id, name, recipe }`. Persist `tuner_id` somewhere durable — it is the only handle to the policy on the server.
 
 ### Phase 1 — request run assignments

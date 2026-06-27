@@ -42,7 +42,7 @@ flowchart TD
 ## Core Entities
 
 ### Datum Pool (`DatumRowModel`)
-A registered list of datum_ids representing the corpus/dataset for a tuner. Treat `datum_id` as opaque. Populated at `POST /tuners` creation time from the request body (`datum_ids`). A tuner is useless without a corpus, so registering it upfront is required.
+A registered list of datum_ids representing the corpus/dataset for a tuner. Treat `datum_id` as opaque. Populated at `POST /tuners` creation time from the request body (`datum_ids`). Note that `recipe` (the named recipe) and `trainer` (the named trainer factory) are also required fields in the request body. A tuner is useless without a corpus, so registering it upfront is required.
 
 ### Run (`RunModel`)
 A single attempt at a `datum_id` under a particular tuner. It is the canonical run record and contains the reward and training bookkeeping:
@@ -178,6 +178,7 @@ sequenceDiagram
 - `src/ollie_rl/trainer/types.py` — `Trainer`, `TrainerFactory`, `StateStore`, `Op` / `SampleOp` / `TrainOp`, `Sample`, and `Example(chat_completion_id, advantage)` — the contract handed to `Trainer.train_step`.
 - `src/ollie_rl/trainer/factory.py` — registry of named `TrainerFactory`s (`register`, `get`, `available`).
 - `src/ollie_rl/trainer/gemini_msrl.py` — reference implementation of `Trainer` + `TrainerFactory`.
+- `src/ollie_rl/trainer/fake.py` — fake implementation of `Trainer` + `TrainerFactory` for testing and local development.
 - `src/ollie_rl/server/app.py` — HTTP surface: tuner creation, run dispensing, chat completion ingestion, reward submission.
 
 ## Things That Are Easy to Get Wrong
