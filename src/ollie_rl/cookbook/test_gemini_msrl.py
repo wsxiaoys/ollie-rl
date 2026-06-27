@@ -245,9 +245,11 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
 
         # Tuner can persist its state on demand through the StateStore.
         await self.job._persist_state()
-        self.assertEqual(self.state_store.save_count, 1)
+        self.assertEqual(self.state_store.save_count, 2)
         assert self.state_store._state is not None
         self.assertIn('"tuning_job_name"', self.state_store._state)
+        self.assertIn('"last_train_op"', self.state_store._state)
+        self.assertIn('"operation-train-step"', self.state_store._state)
 
     async def test_open_restore_path(self):
         from ollie_rl.cookbook.gemini_msrl import GeminiMsrlRecipe
@@ -373,3 +375,48 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
                 call("operation-train-step"),
             ]
         )
+
+    async def test_train_step_fails_when_last_op_active(self):
+        from gemini_msrl.types import Operation
+        from ollie_rl.cookbook.types import Example
+
+        # Set a last_train_op in state
+        self.job.state.last_train_op = "previous-operation-train-step"
+
+        # Mock the previous operation as active (done=False)
+        mock_op_pending = Operation(name="previous-operation-train-step", done=False)
+        self.mock_client.get_operation.return_value = mock_op_pending
+
+        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+
+        # Call train_step and expect RuntimeError
+        with self.assertRaises(RuntimeError) as ctx:
+            await self.job.train_step(examples)
+
+        self.assertIn("is still active", str(ctx.exception))
+        self.mock_client.get_operation.assert_called_once_with(
+            "previous-operation-train-step"
+        )
+
+    async def test_train_step_succeeds_when_last_op_completed(self):
+        from gemini_msrl.types import Operation
+        from ollie_rl.cookbook.types import Example
+
+        # Set a last_train_op in state
+        self.job.state.last_train_op = "previous-operation-train-step"
+
+        # Mock the previous operation as completed (done=True)
+        mock_op_done = Operation(name="previous-operation-train-step", done=True)
+        self.mock_client.get_operation.return_value = mock_op_done
+
+        # Mock the new train_step operation
+        mock_new_op = MagicMock()
+        mock_new_op.name = "new-operation-train-step"
+        self.mock_client.train_step.return_value = mock_new_op
+
+        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+
+        # Call train_step and expect success
+        train_op = await self.job.train_step(examples)
+        self.assertEqual(train_op.op_name, "new-operation-train-step")
+        self.assertEqual(self.job.state.last_train_op, "new-operation-train-step")

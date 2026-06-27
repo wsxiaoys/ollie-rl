@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
@@ -8,7 +7,6 @@ from sqlalchemy import (
     ForeignKey,
     Float,
     DateTime,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column

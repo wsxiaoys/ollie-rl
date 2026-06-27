@@ -134,7 +134,12 @@ class TunerService:
         return tuner_id
 
     async def record_chat_completion(
-        self, completion_id: str, tuner_id: str, run_id: str, datum_id: str, policy_generation: str,
+        self,
+        completion_id: str,
+        tuner_id: str,
+        run_id: str,
+        datum_id: str,
+        policy_generation: str,
     ) -> None:
         """
         Record a chat completion event in the database.
@@ -151,13 +156,12 @@ class TunerService:
                 session.add(db_completion)
         logger.info(f"Recorded chat completion {completion_id} in database")
 
-    async def update_reward(
-        self, tuner_id: str, run_id: str, reward: float
-    ) -> None:
+    async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
         """
         Record or update the reward for a specific run.
         """
         from datetime import datetime
+
         async with self.async_session() as session:
             async with session.begin():
                 result = await session.execute(
@@ -168,14 +172,19 @@ class TunerService:
                 )
                 record = result.scalar_one_or_none()
                 if not record:
-                    raise RunNotFoundError(f"Run '{run_id}' not found under tuner '{tuner_id}'")
+                    raise RunNotFoundError(
+                        f"Run '{run_id}' not found under tuner '{tuner_id}'"
+                    )
 
                 if record.reward is not None:
-                    raise RewardAlreadySetError(f"Reward already set for run '{run_id}'")
+                    raise RewardAlreadySetError(
+                        f"Reward already set for run '{run_id}'"
+                    )
 
                 now = datetime.now()
                 if record.expires_at.tzinfo is not None:
                     from datetime import timezone
+
                     now = datetime.now(timezone.utc)
 
                 if record.expires_at <= now:

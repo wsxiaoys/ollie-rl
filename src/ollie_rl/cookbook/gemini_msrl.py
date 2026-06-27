@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import uuid
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -63,6 +63,7 @@ class GeminiMsrlRecipeConfig(BaseModel):
 
 class GeminiMsrlRecipeState(BaseModel):
     tuning_job_name: str
+    last_train_op: Optional[str] = None
 
 
 class GeminiMsrlOp:
@@ -70,11 +71,9 @@ class GeminiMsrlOp:
         self,
         client: GeminiMsrlClient,
         op_name: str,
-        config: GeminiMsrlRecipeConfig,
     ):
         self.client = client
         self.op_name = op_name
-        self.config = config
 
     async def peek(self) -> bool:
         """Return True iff the op has reached a terminal state."""
@@ -87,17 +86,14 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         self,
         client: GeminiMsrlClient,
         op_name: str,
-        config: GeminiMsrlRecipeConfig,
         model_name: str,
     ):
-        super().__init__(client, op_name, config)
+        super().__init__(client, op_name)
         self.model_name = model_name
 
     async def wait(self) -> Sample:
         completed_op = await self.client.wait_for_operation(
             self.op_name,
-            timeout_seconds=self.config.timeout_seconds,
-            poll_interval=self.config.poll_interval,
         )
 
         response = completed_op.get_response_as(GenerateContentTuningScopeResponse)
@@ -194,8 +190,6 @@ class GeminiMsrlTrainingOp(GeminiMsrlOp, TrainOp):
     async def wait(self) -> None:
         completed_op = await self.client.wait_for_operation(
             self.op_name,
-            timeout_seconds=self.config.timeout_seconds,
-            poll_interval=self.config.poll_interval,
         )
 
         response = completed_op.get_response_as(TrainStepResponse)
@@ -295,10 +289,20 @@ class GeminiMsrlTuner(Tuner):
         # 2. Trigger Generation LRO
         op = await self.client.generate_content_tuning_scope(tuning_job_id, scope_req)
 
-        return GeminiMsrlSamplingOp(self.client, op.name, self.config, request.model)
+        return GeminiMsrlSamplingOp(self.client, op.name, request.model)
 
     async def train_step(self, examples: List[Example]) -> GeminiMsrlTrainingOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
+
+        if self.state.last_train_op:
+            last_op = GeminiMsrlTrainingOp(
+                self.client,
+                self.state.last_train_op,
+            )
+            if not await last_op.peek():
+                raise RuntimeError(
+                    f"Last training step {self.state.last_train_op} is still active"
+                )
 
         # 1. Translate examples to TrainStepRequest
         rt_examples = []
@@ -320,7 +324,13 @@ class GeminiMsrlTuner(Tuner):
         # 2. Trigger TrainStep LRO
         op = await self.client.train_step(tuning_job_id, train_req)
 
-        return GeminiMsrlTrainingOp(self.client, op.name, self.config)
+        self.state.last_train_op = op.name
+        await self._persist_state()
+
+        return GeminiMsrlTrainingOp(
+            self.client,
+            op.name,
+        )
 
 
 class GeminiMsrlRecipe(Recipe):

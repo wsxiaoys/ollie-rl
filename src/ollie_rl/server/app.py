@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from ollie_rl.types import (
@@ -101,6 +101,7 @@ async def create_chat_completion(
         async with services.tuner.async_session() as session:
             from sqlalchemy import select
             from ollie_rl.db.models import RunModel
+
             result = await session.execute(
                 select(RunModel).where(
                     RunModel.tuner_id == x_tuner_id,
@@ -109,7 +110,9 @@ async def create_chat_completion(
             )
             run_record = result.scalar_one_or_none()
             if not run_record:
-                raise HTTPException(status_code=409, detail=f"Unknown run_id {x_run_id}")
+                raise HTTPException(
+                    status_code=409, detail=f"Unknown run_id {x_run_id}"
+                )
             # Override x_datum_id from database record to prevent client lying
             x_datum_id = run_record.datum_id
 
@@ -159,6 +162,7 @@ async def put_reward(
         RewardAlreadySetError,
     )
     import asyncio
+
     try:
         await services.tuner.update_reward(
             tuner_id=tuner_id,
