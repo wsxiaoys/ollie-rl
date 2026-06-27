@@ -170,7 +170,7 @@ class TunerService:
         """
         Record or update the reward for a specific run.
         """
-        from datetime import datetime
+        from ollie_rl.db.types import utcnow
 
         async with self.async_session() as session:
             async with session.begin():
@@ -191,12 +191,7 @@ class TunerService:
                         f"Reward already set for run '{run_id}'"
                     )
 
-                now = datetime.now()
-                if record.expires_at.tzinfo is not None:
-                    from datetime import timezone
-
-                    now = datetime.now(timezone.utc)
-
+                now = utcnow()
                 if record.expires_at <= now:
                     raise RunExpiredError(f"Run '{run_id}' has expired")
 
@@ -346,7 +341,9 @@ class TunerService:
         4. If None: return None.
         5. Otherwise insert a runs row and return the RunModel.
         """
-        from datetime import datetime, timedelta
+        from datetime import timedelta
+
+        from ollie_rl.db.types import utcnow
 
         tuner = await self.get(tuner_id)
         if tuner is None:
@@ -359,7 +356,7 @@ class TunerService:
 
         from ollie_rl.cookbook.types import DispenseContext, DatumMetric
 
-        now = datetime.now()
+        now = utcnow()
         async with self.async_session() as session:
             result = await session.execute(
                 select(DatumRowModel.datum_id).where(DatumRowModel.tuner_id == tuner_id)
@@ -397,7 +394,7 @@ class TunerService:
         if assignment is None:
             return None
 
-        expires_at = datetime.now() + timedelta(minutes=120)
+        expires_at = now + timedelta(minutes=120)
         run_record = RunModel(
             id=assignment.run_id,
             tuner_id=tuner_id,

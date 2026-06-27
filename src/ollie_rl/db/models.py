@@ -6,10 +6,10 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     Float,
-    DateTime,
-    func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from ollie_rl.db.types import UtcDateTime, utcnow
 
 
 class BaseModel(DeclarativeBase):
@@ -70,10 +70,10 @@ class ChatCompletionModel(BaseModel):
     )
     datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=func.now()
+        UtcDateTime, nullable=False, default=utcnow
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=func.now(), onupdate=func.now()
+        UtcDateTime, nullable=False, default=utcnow, onupdate=utcnow
     )
 
 
@@ -87,12 +87,14 @@ class RunModel(BaseModel):
     datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     reward: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     trained_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=func.now()
+        UtcDateTime, nullable=False, default=utcnow
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=func.now(), onupdate=func.now()
+        UtcDateTime, nullable=False, default=utcnow, onupdate=utcnow
     )
 
 
