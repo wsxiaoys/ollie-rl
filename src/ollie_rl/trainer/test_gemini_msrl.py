@@ -6,12 +6,13 @@ from gemini_msrl.types import GenerateContentTuningScopeResponse
 from google.genai.types import Candidate, Content, FinishReason, FunctionCall, Part
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
 
-from ollie_rl.cookbook.gemini_msrl import (
-    GeminiMsrlRecipeConfig,
-    GeminiMsrlRecipeState,
-    GeminiMsrlTuner,
+from ollie_rl.trainer.gemini_msrl import (
+    GeminiMsrlTrainerConfig,
+    GeminiMsrlTrainerState,
+    GeminiMsrlTrainer,
+    GeminiMsrlTrainerFactory,
 )
-from ollie_rl.cookbook.types import StateStore
+from ollie_rl.trainer.types import StateStore
 from ollie_rl.types import ChatCompletionRequest
 
 
@@ -30,18 +31,18 @@ class InMemoryStateStore(StateStore):
         self.save_count += 1
 
 
-class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
+class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.config = GeminiMsrlRecipeConfig(
+        self.config = GeminiMsrlTrainerConfig(
             auth_token="test-token",
             project_id="test-project",
         )
         self.mock_client = AsyncMock()
         self.state_store = InMemoryStateStore()
-        self.job = GeminiMsrlTuner(
+        self.job = GeminiMsrlTrainer(
             config=self.config,
             client=self.mock_client,
-            state=GeminiMsrlRecipeState(
+            state=GeminiMsrlTrainerState(
                 tuning_job_name="projects/test-project/locations/us-central1/tuningJobs/test-job-id",
             ),
             state_store=self.state_store,
@@ -224,7 +225,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
 
     async def test_train_step_successful(self):
         from gemini_msrl.types import TrainStepResponse
-        from ollie_rl.cookbook.types import Example
+        from ollie_rl.trainer.types import Example
 
         # Mock TrainStepResponse with completed_train_step_id
         response_payload = TrainStepResponse(completed_train_step_id="step-12345")
@@ -243,7 +244,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         train_op = await self.job.train_step(examples)
         await train_op.wait()
 
-        # Tuner can persist its state on demand through the StateStore.
+        # Trainer can persist its state on demand through the StateStore.
         await self.job._persist_state()
         self.assertEqual(self.state_store.save_count, 2)
         assert self.state_store._state is not None
@@ -252,7 +253,6 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"operation-train-step"', self.state_store._state)
 
     async def test_open_restore_path(self):
-        from ollie_rl.cookbook.gemini_msrl import GeminiMsrlRecipe
         import json
 
         # Pre-seed a state store as if a previous run had persisted state.
@@ -261,24 +261,22 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         }
         seeded_store = InMemoryStateStore(initial=json.dumps(state_dict))
 
-        recipe = GeminiMsrlRecipe()
+        factory = GeminiMsrlTrainerFactory()
         self.mock_client.wait_for_tuning_job_running = AsyncMock()
 
         with patch(
-            "ollie_rl.cookbook.gemini_msrl.GeminiMsrlClient"
+            "ollie_rl.trainer.gemini_msrl.GeminiMsrlClient"
         ) as mock_client_class:
             mock_client_class.return_value = self.mock_client
-            tuner = await recipe.create("test-display-name", seeded_store)
+            trainer = await factory.open("test-display-name", seeded_store)
             self.assertEqual(
-                tuner.tuning_job_name,
+                trainer.tuning_job_name,
                 "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
             )
             # Restore path must not overwrite the existing blob.
             self.assertEqual(seeded_store.save_count, 0)
 
     async def test_open_bootstrap_path(self):
-        from ollie_rl.cookbook.gemini_msrl import GeminiMsrlRecipe
-
         fresh_store = InMemoryStateStore()
 
         # Mock the underlying tuning job creation.
@@ -289,15 +287,15 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         self.mock_client.create_tuning_job = AsyncMock(return_value=mock_job)
         self.mock_client.wait_for_tuning_job_running = AsyncMock()
 
-        recipe = GeminiMsrlRecipe()
+        factory = GeminiMsrlTrainerFactory()
         with patch(
-            "ollie_rl.cookbook.gemini_msrl.GeminiMsrlClient"
+            "ollie_rl.trainer.gemini_msrl.GeminiMsrlClient"
         ) as mock_client_class:
             mock_client_class.return_value = self.mock_client
-            tuner = await recipe.create("test-display-name", fresh_store)
+            trainer = await factory.open("test-display-name", fresh_store)
 
-        # Tuner created the job and persisted its initial state via the store.
-        self.assertEqual(tuner.tuning_job_name, mock_job.name)
+        # Trainer created the job and persisted its initial state via the store.
+        self.assertEqual(trainer.tuning_job_name, mock_job.name)
         self.assertEqual(fresh_store.save_count, 1)
         assert fresh_store._state is not None
         self.assertIn(mock_job.name, fresh_store._state)
@@ -344,7 +342,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
 
     async def test_train_op_peek(self):
         from gemini_msrl.types import Operation
-        from ollie_rl.cookbook.types import Example
+        from ollie_rl.trainer.types import Example
 
         mock_op_pending = Operation(name="operation-train-step", done=False)
         mock_op_done = Operation(name="operation-train-step", done=True)
@@ -378,7 +376,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
 
     async def test_train_step_fails_when_last_op_active(self):
         from gemini_msrl.types import Operation
-        from ollie_rl.cookbook.types import Example
+        from ollie_rl.trainer.types import Example
 
         # Set a last_train_op in state
         self.job.state.last_train_op = "previous-operation-train-step"
@@ -400,7 +398,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
 
     async def test_train_step_succeeds_when_last_op_completed(self):
         from gemini_msrl.types import Operation
-        from ollie_rl.cookbook.types import Example
+        from ollie_rl.trainer.types import Example
 
         # Set a last_train_op in state
         self.job.state.last_train_op = "previous-operation-train-step"

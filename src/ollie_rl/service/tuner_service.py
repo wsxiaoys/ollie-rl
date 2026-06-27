@@ -1,16 +1,19 @@
 import asyncio
 import logging
 import math
-import uuid
-from typing import Dict, List, Optional
+from datetime import timedelta
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import select, update
-from ollie_rl.cookbook import Tuner, Cookbook
-from ollie_rl.cookbook.types import Example, StateStore
+
+from ollie_rl.cookbook import Cookbook, Recipe
+from ollie_rl.trainer import Trainer, StateStore, Example
+from ollie_rl.trainer import factory as trainer_factory
 from ollie_rl.db import TunerModel, ChatCompletionModel, DatumRowModel
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
-from ollie_rl.types import Rollout, RolloutRun
+from ollie_rl.db.types import utcnow
+from ollie_rl.types import Rollout, RolloutRun, DispenseRun
 
 logger = logging.getLogger(__name__)
 
@@ -60,27 +63,24 @@ class _DbStateStore(StateStore):
 
 class TunerService:
     """
-    Handles both active in-memory tuners and their persistence to a database.
+    Handles both active in-memory trainers and their persistence to a database.
     Uses SQLAlchemy async engine and sessionmaker from the ollie_rl.db subpackage.
     """
 
     def __init__(self):
-        self.active_tuners: Dict[str, Tuner] = {}
+        self.active_trainers: Dict[str, Trainer] = {}
         self.async_session = get_sessionmaker()
         # Global lock ensuring `maybe_train` runs serially across all tuners in this process.
-        # This simplifies synchronization and avoids the complexity of per-tuner lock management
-        # or database-level row locking.
         self._train_lock = asyncio.Lock()
 
-    async def get(self, tuner_id: str) -> Optional[Tuner]:
+    async def get_trainer(self, tuner_id: str) -> Optional[Trainer]:
         """
-        Retrieve an active tuner instance by tuner_id.
-        If the tuner is not in memory but exists in the database, restore it lazily
-        by opening it against its DB-backed StateStore (which will hand the persisted
-        blob back to the recipe on load).
+        Retrieve an active trainer instance by tuner_id.
+        If the trainer is not in memory but exists in the database, restore it lazily
+        by opening it against its DB-backed StateStore.
         """
-        if tuner_id in self.active_tuners:
-            return self.active_tuners[tuner_id]
+        if tuner_id in self.active_trainers:
+            return self.active_trainers[tuner_id]
 
         async with self.async_session() as session:
             result = await session.execute(
@@ -89,56 +89,58 @@ class TunerService:
             record = result.scalar_one_or_none()
 
         if record is None or record.state is None:
-            # Either no such row, or row exists but the Tuner never persisted
-            # initial state (e.g. crashed mid-bootstrap). Treat as not found.
             return None
 
         return await self._materialize(tuner_id, record)
 
-    async def _materialize(self, tuner_id: str, record: TunerModel) -> Tuner:
-        if tuner_id in self.active_tuners:
-            return self.active_tuners[tuner_id]
-        logger.info(
-            f"Lazily restoring tuner for model: {tuner_id} (kind: {record.kind})"
-        )
-        state_store = _DbStateStore(tuner_id)
-        tuner = await Cookbook.open(record.kind, record.name, state_store)
-        self.active_tuners[tuner_id] = tuner
-        return tuner
+    async def _materialize(self, tuner_id: str, record: TunerModel) -> Trainer:
+        if tuner_id in self.active_trainers:
+            return self.active_trainers[tuner_id]
 
-    async def create_tuner(self, recipe: str, name: str, datum_ids: List[str]) -> str:
+        trainer = record.trainer
+
+        logger.info(f"Lazily restoring trainer for tuner: {tuner_id} (kind: {trainer})")
+        state_store = _DbStateStore(tuner_id)
+        factory = trainer_factory.get(trainer)
+        trainer_instance = await factory.open(record.name, state_store)
+        self.active_trainers[tuner_id] = trainer_instance
+        return trainer_instance
+
+    async def create_tuner(
+        self,
+        recipe: str,
+        name: str,
+        datum_ids: List[str],
+        trainer: str,
+    ) -> str:
         """
         Create and initialize a tuner using the Cookbook and register it.
-
-        The service inserts a row with `state=NULL`; the Tuner is then
-        responsible for filling it in via its StateStore.
         """
-        tuner_id = f"tuner_{uuid.uuid4()}"
+        assert Cookbook.has(recipe)
+        factory = trainer_factory.get(trainer)  # validate now, fail fast
 
-        # 1. Reserve the row so the StateStore has something to UPDATE against.
         async with self.async_session() as session:
             async with session.begin():
-                session.add(
-                    TunerModel(
-                        id=tuner_id,
-                        name=name,
-                        kind=recipe,
-                        state=None,
-                    )
+                tuner_record = TunerModel(
+                    name=name,
+                    recipe=recipe,
+                    trainer=trainer,
+                    state=None,
                 )
+                session.add(tuner_record)
+                await session.flush()
                 for datum_id in datum_ids:
                     session.add(
                         DatumRowModel(
-                            tuner_id=tuner_id,
+                            tuner_id=tuner_record.id,
                             datum_id=datum_id,
                         )
                     )
 
-        # 2. Open the tuner against its DB-backed store. The recipe will
-        # call `state_store.save(...)` once it has a persistable snapshot.
+        tuner_id = tuner_record.id
         state_store = _DbStateStore(tuner_id)
-        tuner = await Cookbook.open(recipe, name, state_store)
-        self.active_tuners[tuner_id] = tuner
+        trainer_instance = await factory.open(name, state_store)
+        self.active_trainers[tuner_id] = trainer_instance
 
         logger.info(f"Successfully created tuner {tuner_id}")
         return tuner_id
@@ -164,14 +166,11 @@ class TunerService:
                     policy_generation=policy_generation,
                 )
                 session.add(db_completion)
-        logger.info(f"Recorded chat completion {completion_id} in database")
 
     async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
         """
         Record or update the reward for a specific run.
         """
-        from ollie_rl.db.types import utcnow
-
         async with self.async_session() as session:
             async with session.begin():
                 result = await session.execute(
@@ -204,17 +203,15 @@ class TunerService:
         Attempt to start (and wait for) a train step for `tuner_id`.
 
         Serialized globally via `self._train_lock` to ensure only one train step
-        runs at a time in this process. This simplifies concurrency management,
-        avoids per-tuner lock tracking, and replaces the database-level row locks.
+        runs at a time in this process.
         """
         async with self._train_lock:
-            tuner = await self.get(tuner_id)
-            if tuner is None:
+            trainer = await self.get_trainer(tuner_id)
+            if trainer is None:
                 return
 
-            op = await tuner.in_flight_train_op()
-            if op is not None and not await op.peek():
-                return  # already training
+            if await trainer.is_training():
+                return
 
             train_op = None
             async with self.async_session() as session:
@@ -225,7 +222,7 @@ class TunerService:
                     if not batch:
                         return
 
-                    train_op = await tuner.train_step(
+                    train_op = await trainer.train_step(
                         batch
                     )  # submits LRO + state_store.save
                     await session.execute(  # bump trained_count
@@ -241,15 +238,15 @@ class TunerService:
 
     async def _collect_consumable_batch(
         self, tuner_id: str, session
-    ) -> tuple[List[Example], List[str]]:
-        TARGET_MAX_TRAIN_COUNT = 0
-        GROUP_SIZE = 16
-        TARGET_GROUP_COUNT = 32
+    ) -> Tuple[List[Example], List[str]]:
+        recipe = await self._recipe_for(tuner_id)
+        if recipe is None:
+            return [], []
 
         result = await session.execute(
             select(RunModel).where(
                 RunModel.tuner_id == tuner_id,
-                RunModel.trained_count <= TARGET_MAX_TRAIN_COUNT,
+                RunModel.trained_count <= 0,
                 RunModel.reward != None,
             )
         )
@@ -260,13 +257,13 @@ class TunerService:
         for reward in run_records:
             if reward.datum_id not in grouped_runs:
                 grouped_runs[reward.datum_id] = []
-            if len(grouped_runs[reward.datum_id]) < GROUP_SIZE:
+            if len(grouped_runs[reward.datum_id]) < recipe.group_size:
                 grouped_runs[reward.datum_id].append(reward)
 
-        # Process only completed groups (size == GROUP_SIZE)
+        # Process only completed groups (size == group_size)
         rollouts: List[Rollout] = []
         for group in grouped_runs.values():
-            if len(group) != GROUP_SIZE:
+            if len(group) != recipe.group_size:
                 continue
 
             # Calculate mean and std of rewards for this group
@@ -279,26 +276,26 @@ class TunerService:
             std = math.sqrt(variance)
 
             rollout_runs = []
-            for record, reward in zip(group, rewards):
+            for record_item, reward in zip(group, rewards):
                 advantage = (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
                 rollout_runs.append(
                     RolloutRun(
-                        id=record.id,
+                        id=record_item.id,
                         reward=reward,
                         advantage=advantage,
                     )
                 )
             rollouts.append(Rollout(runs=rollout_runs))
 
-        if len(rollouts) < TARGET_GROUP_COUNT:
+        if len(rollouts) < recipe.target_group_count:
             logger.info(
                 f"Not enough groups ready for training under tuner {tuner_id} "
-                f"(got {len(rollouts)}, need at least {TARGET_GROUP_COUNT})"
+                f"(got {len(rollouts)}, need at least {recipe.target_group_count})"
             )
             return [], []
 
-        # If there are more than 32 groups, only pick the first 32
-        rollouts = rollouts[:TARGET_GROUP_COUNT]
+        # If there are more than target_group_count groups, only pick the first target_group_count
+        rollouts = rollouts[: recipe.target_group_count]
 
         # Map run advantages
         run_advantages: Dict[str, float] = {}
@@ -323,7 +320,7 @@ class TunerService:
             )
             return [], []
 
-        # Create Examples for Tuner.train_step
+        # Create Examples for Trainer.train_step
         examples = [
             Example(chat_completion_id=c.id, advantage=run_advantages[c.run_id])
             for c in completions
@@ -332,80 +329,73 @@ class TunerService:
 
         return examples, run_ids
 
-    async def dispense_run(self, tuner_id: str) -> Optional[RunModel]:
+    async def dispense_run(self, tuner_id: str) -> Optional[DispenseRun]:
         """
         Dispense a run for a tuner.
-        1. Read is_training.
-        2. Load the datum pool.
-        3. Call tuner.dispense_run(DispenseContext(datum_pool, metrics)).
-        4. If None: return None.
-        5. Otherwise insert a runs row and return the RunModel.
         """
-        from datetime import timedelta
-
-        from ollie_rl.db.types import utcnow
-
-        tuner = await self.get(tuner_id)
-        if tuner is None:
+        trainer = await self.get_trainer(tuner_id)
+        if not trainer:
+            return None
+        if await trainer.is_training():
             return None
 
-        op = await tuner.in_flight_train_op()
-        is_training = op is not None and not await op.peek()
-        if is_training:
-            return None
-
-        from ollie_rl.cookbook.types import DispenseContext, DatumMetric
-
-        now = utcnow()
         async with self.async_session() as session:
-            result = await session.execute(
-                select(DatumRowModel.datum_id).where(DatumRowModel.tuner_id == tuner_id)
-            )
-            datum_pool = list(result.scalars().all())
+            datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
+            datum_id = self._pick_datum(datum_pool, runs)
+            if datum_id is None:
+                return None
 
-            runs_result = await session.execute(
-                select(RunModel).where(RunModel.tuner_id == tuner_id)
-            )
-            runs = list(runs_result.scalars().all())
-
-        metrics: Dict[str, DatumMetric] = {}
-        for datum_id in datum_pool:
-            metrics[datum_id] = DatumMetric(
-                completed_count=0,
-                in_flight_count=0,
+            run_record = RunModel(
+                tuner_id=tuner_id,
+                datum_id=datum_id,
+                reward=None,
                 trained_count=0,
-                expired_count=0,
+                expires_at=utcnow() + timedelta(seconds=7200),
             )
-
-        for run in runs:
-            metric = metrics.get(run.datum_id)
-            if not metric:
-                continue
-            if run.reward is not None:
-                metric.completed_count += 1
-            elif run.expires_at > now:
-                metric.in_flight_count += 1
-            else:
-                metric.expired_count += 1
-            if run.trained_count > 0:
-                metric.trained_count += run.trained_count
-
-        assignment = tuner.dispense_run(DispenseContext(datum_metrics=metrics))
-        if assignment is None:
-            return None
-
-        expires_at = now + timedelta(minutes=120)
-        run_record = RunModel(
-            id=assignment.run_id,
-            tuner_id=tuner_id,
-            datum_id=assignment.datum_id,
-            reward=None,
-            trained_count=0,
-            expires_at=expires_at,
-        )
-
-        async with self.async_session() as session:
             async with session.begin():
                 session.add(run_record)
 
-        return run_record
+        return DispenseRun(
+            run_id=run_record.id,
+            datum_id=run_record.datum_id,
+            expires_at=run_record.expires_at,
+        )
+
+    async def _recipe_for(self, tuner_id: str) -> Optional[Recipe]:
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(TunerModel).where(TunerModel.id == tuner_id)
+            )
+            record = result.scalar_one_or_none()
+            if record:
+                return Cookbook.get(record.recipe)
+
+    async def _load_pool_and_runs(
+        self, tuner_id: str, session
+    ) -> Tuple[List[str], List[RunModel]]:
+        result = await session.execute(
+            select(DatumRowModel.datum_id).where(DatumRowModel.tuner_id == tuner_id)
+        )
+        datum_pool = list(result.scalars().all())
+
+        runs_result = await session.execute(
+            select(RunModel).where(RunModel.tuner_id == tuner_id)
+        )
+        runs = list(runs_result.scalars().all())
+        return datum_pool, runs
+
+    def _pick_datum(
+        self,
+        datum_pool: List[str],
+        runs: List[RunModel],
+    ) -> Optional[str]:
+        now = utcnow()
+        score = {d: 0 for d in datum_pool}
+        for r in runs:
+            if r.datum_id not in score:
+                continue
+            has_reward = r.reward is not None
+            is_pending = r.reward is None and r.expires_at > now
+            if has_reward or is_pending:
+                score[r.datum_id] += 1
+        return min(score, key=lambda d: score[d])

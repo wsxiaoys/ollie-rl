@@ -9,7 +9,7 @@ from ollie_rl.types import (
     ChatCompletionRequest,
     CreateTunerRequest,
     CreateTunerResponse,
-    DispenseRunResponse,
+    DispenseRun,
     PutRewardRequest,
     PutRewardResponse,
 )
@@ -74,6 +74,7 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
             recipe=request.recipe,
             name=request.name,
             datum_ids=request.datum_ids,
+            trainer=request.trainer,
         )
 
         logger.info(
@@ -120,15 +121,15 @@ async def create_chat_completion(
             x_datum_id = run_record.datum_id
 
     # Generate completion
-    tuner = await services.tuner.get(x_tuner_id)
-    if not tuner:
+    trainer = await services.tuner.get_trainer(x_tuner_id)
+    if not trainer:
         raise HTTPException(
             status_code=404,
             detail=f"Tuner '{x_tuner_id}' not found or not initialized.",
         )
 
     try:
-        sample_op = await tuner.sample(request)
+        sample_op = await trainer.sample(request)
         sample = await sample_op.wait()
         policy_generation = sample.policy_generation
     except Exception as e:
@@ -151,22 +152,18 @@ async def create_chat_completion(
 
 
 @app.post("/tuners/{tuner_id}/runs")
-async def dispense_run(tuner_id: str) -> DispenseRunResponse:
+async def dispense_run(tuner_id: str) -> DispenseRun:
     """
     Dispense a run assignment for the tuner.
     Returns 200 OK with run_id, datum_id, expires_at.
     Or 204 No Content with Retry-After header if no run can be dispensed.
     """
     try:
-        run_record = await services.tuner.dispense_run(tuner_id)
-        if run_record is None:
+        run_response = await services.tuner.dispense_run(tuner_id)
+        if run_response is None:
             raise HTTPException(204, headers={"Retry-After": "1"})
 
-        return DispenseRunResponse(
-            run_id=run_record.id,
-            datum_id=run_record.datum_id,
-            expires_at=run_record.expires_at,
-        )
+        return run_response
     except Exception as e:
         logger.exception(f"Failed to dispense run for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))

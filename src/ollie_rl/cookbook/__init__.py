@@ -1,25 +1,27 @@
 from typing import Dict
-from .types import Recipe, StateStore, Tuner
-from .gemini_msrl import GeminiMsrlRecipe
+
+from .recipes import Recipe, GRPO_16x32
 
 RECIPES: Dict[str, Recipe] = {
-    "gemini_msrl": GeminiMsrlRecipe(),
+    "grpo_16x32": GRPO_16x32,
 }
 
 
 class Cookbook:
-    """
-    Factory class to dynamically open tuner instances.
-    """
+    """Lookup of named recipes."""
 
     @classmethod
-    async def open(cls, kind: str, name: str, state_store: StateStore) -> Tuner:
-        recipe = RECIPES.get(kind)
-        if not recipe:
+    def get(cls, recipe_kind: str) -> Recipe:
+        recipe = RECIPES.get(recipe_kind)
+        if recipe is None:
             raise ValueError(
-                f"Recipe template '{kind}' not found. Available templates: {list(RECIPES.keys())}"
+                f"Recipe '{recipe_kind}' not found. Available: {list(RECIPES.keys())}"
             )
-        return await recipe.create(name, state_store)
+        return recipe
+
+    @classmethod
+    def has(cls, recipe_kind: str) -> bool:
+        return RECIPES.get(recipe_kind) is not None
 
 
-__all__ = ["Tuner", "Cookbook", "StateStore"]
+__all__ = ["Cookbook", "Recipe"]

@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from pydantic import BaseModel
 
@@ -32,17 +32,16 @@ from google.genai.types import (
     Tool,
 )
 
-from .types import (
-    Recipe,
+from ollie_rl.trainer.types import (
+    Trainer,
+    TrainerFactory,
     Example,
-    Tuner,
     Sample,
     TrainOp,
     SampleOp,
     StateStore,
-    DispenseContext,
-    RunAssignment,
 )
+from ollie_rl.trainer import factory
 
 import json
 from openai.types.chat import (
@@ -60,7 +59,7 @@ from ollie_rl.types import ChatCompletionRequest
 logger = logging.getLogger(__name__)
 
 
-class GeminiMsrlRecipeConfig(BaseModel):
+class GeminiMsrlTrainerConfig(BaseModel):
     auth_token: str
     project_id: str
     location: str = "us-central1"
@@ -71,7 +70,7 @@ class GeminiMsrlRecipeConfig(BaseModel):
     timeout_seconds: float = 300.0
 
 
-class GeminiMsrlRecipeState(BaseModel):
+class GeminiMsrlTrainerState(BaseModel):
     tuning_job_name: str
     last_train_op: Optional[str] = None
 
@@ -207,25 +206,25 @@ class GeminiMsrlTrainingOp(GeminiMsrlOp, TrainOp):
             raise RuntimeError("Failed to retrieve train step response")
 
 
-class GeminiMsrlTuner(Tuner):
+class GeminiMsrlTrainer(Trainer):
     """
-    Tuner wrapping the Gemini MSRL tuning client.
+    Trainer wrapping the Gemini MSRL tuning client.
 
-    The Tuner's persistable state lives directly on `self.state`
-    (a `GeminiMsrlRecipeState`). Mutate that object in place and then
+    The Trainer's persistable state lives directly on `self.state`
+    (a `GeminiMsrlTrainerState`). Mutate that object in place and then
     call `_persist_state()` to push it to the backing store.
     """
 
-    config: GeminiMsrlRecipeConfig
+    config: GeminiMsrlTrainerConfig
     client: GeminiMsrlClient
-    state: GeminiMsrlRecipeState
+    state: GeminiMsrlTrainerState
     state_store: StateStore
 
     def __init__(
         self,
-        config: GeminiMsrlRecipeConfig,
+        config: GeminiMsrlTrainerConfig,
         client: GeminiMsrlClient,
-        state: GeminiMsrlRecipeState,
+        state: GeminiMsrlTrainerState,
         state_store: StateStore,
     ):
         self.config = config
@@ -350,52 +349,51 @@ class GeminiMsrlTuner(Tuner):
             self.state.last_train_op,
         )
 
-    def dispense_run(self, ctx: DispenseContext) -> Optional[RunAssignment]:
-        if not ctx.datum_metrics:
-            return None
-        import uuid
 
-        # FIFO Epoch style: find the datum with the minimum (completed + in_flight) runs
-        # that has not yet reached the target of, say, 16 runs (or just generally the minimum)
-        best_datum = None
-        min_total = float("inf")
-
-        for datum_id, metric in ctx.datum_metrics.items():
-            total_runs = metric.completed_count + metric.in_flight_count
-
-            if total_runs < min_total:
-                min_total = total_runs
-                best_datum = datum_id
-
-        if best_datum is None:
-            import random
-
-            best_datum = random.choice(list(ctx.datum_metrics.keys()))
-
-        run_id = f"run_{uuid.uuid4()}"
-        return RunAssignment(run_id=run_id, datum_id=best_datum)
-
-
-class GeminiMsrlRecipe(Recipe):
+class GeminiMsrlTrainerFactory(TrainerFactory):
     """
-    Recipe factory for Gemini MSRL tuners.
+    Trainer factory for Gemini MSRL trainers.
     """
 
-    @staticmethod
-    def _build_client() -> tuple[GeminiMsrlRecipeConfig, GeminiMsrlClient]:
-        config = GeminiMsrlRecipeConfig(
-            auth_token=os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token"),
-            project_id=os.environ.get("GEMINI_MSRL_PROJECT_ID", "dummy-project-id"),
+    @property
+    def kind(self) -> str:
+        return "gemini_msrl"
+
+    async def open(
+        self,
+        name: str,
+        state_store: StateStore,
+        **bootstrap,
+    ) -> GeminiMsrlTrainer:
+        # build config from environment and override with bootstrap kwargs
+        auth_token = bootstrap.get("auth_token") or os.environ.get(
+            "GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token"
         )
+        project_id = bootstrap.get("project_id") or os.environ.get(
+            "GEMINI_MSRL_PROJECT_ID", "dummy-project-id"
+        )
+
+        config_kwargs: dict[str, Any] = {
+            "auth_token": auth_token,
+            "project_id": project_id,
+        }
+        for field in [
+            "location",
+            "base_model",
+            "adapter_size",
+            "checkpoint_interval",
+            "poll_interval",
+            "timeout_seconds",
+        ]:
+            if field in bootstrap:
+                config_kwargs[field] = bootstrap[field]
+
+        config = GeminiMsrlTrainerConfig(**config_kwargs)
         client = GeminiMsrlClient(
             auth_token=config.auth_token,
             project_id=config.project_id,
             location=config.location,
         )
-        return config, client
-
-    async def create(self, name: str, state_store: StateStore) -> GeminiMsrlTuner:
-        config, client = self._build_client()
 
         raw_state = await state_store.load()
         if raw_state is None:
@@ -416,10 +414,10 @@ class GeminiMsrlRecipe(Recipe):
             )
             job = await client.create_tuning_job(req)
 
-            instance = GeminiMsrlTuner(
+            instance = GeminiMsrlTrainer(
                 config=config,
                 client=client,
-                state=GeminiMsrlRecipeState(tuning_job_name=job.name),
+                state=GeminiMsrlTrainerState(tuning_job_name=job.name),
                 state_store=state_store,
             )
 
@@ -428,10 +426,10 @@ class GeminiMsrlRecipe(Recipe):
             await instance._persist_state()
         else:
             # Restore path: rehydrate from the persisted blob.
-            instance = GeminiMsrlTuner(
+            instance = GeminiMsrlTrainer(
                 config=config,
                 client=client,
-                state=GeminiMsrlRecipeState.model_validate_json(raw_state),
+                state=GeminiMsrlTrainerState.model_validate_json(raw_state),
                 state_store=state_store,
             )
             logger.info(
@@ -450,3 +448,7 @@ class GeminiMsrlRecipe(Recipe):
 
         logger.info("Gemini MSRL Tuning Job is successfully running.")
         return instance
+
+
+# Register the factory
+factory.register(GeminiMsrlTrainerFactory())

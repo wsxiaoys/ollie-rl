@@ -17,7 +17,8 @@ class ChatCompletionRequest(BaseModel):
 
 class CreateTunerRequest(BaseModel):
     name: str
-    recipe: str
+    recipe: str = "grpo_16x32"
+    trainer: str = "gemini_msrl"
     datum_ids: List[str]
 
 
@@ -36,7 +37,7 @@ class PutRewardResponse(BaseModel):
     reward: float
 
 
-class DispenseRunResponse(BaseModel):
+class DispenseRun(BaseModel):
     run_id: str
     datum_id: str
     expires_at: datetime

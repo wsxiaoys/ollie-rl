@@ -31,7 +31,9 @@ def get_sessionmaker():
     """Create and return an async session maker singleton."""
     global _sessionmaker
     if _sessionmaker is None:
-        _sessionmaker = async_sessionmaker(bind=get_engine(), class_=AsyncSession)
+        _sessionmaker = async_sessionmaker(
+            bind=get_engine(), class_=AsyncSession, expire_on_commit=False
+        )
     return _sessionmaker
 
 

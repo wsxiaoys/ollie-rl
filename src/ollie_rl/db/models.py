@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+import uuid
 from sqlalchemy import (
     Integer,
     String,
@@ -10,6 +11,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from ollie_rl.db.types import UtcDateTime, utcnow
+
+
+def generate_tuner_id() -> str:
+    return f"tuner_{uuid.uuid4()}"
+
+
+def generate_run_id() -> str:
+    return f"run_{uuid.uuid4()}"
 
 
 class BaseModel(DeclarativeBase):
@@ -25,9 +34,14 @@ class TunerModel(BaseModel):
 
     __tablename__ = "tuners"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_tuner_id
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
+    recipe: Mapped[str] = mapped_column(String(255), nullable=False)
+    trainer: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+
     # `state` is populated by the Tuner itself via its StateStore. It is
     # NULL between row creation and the Tuner's first save.
     state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -80,7 +94,9 @@ class ChatCompletionModel(BaseModel):
 class RunModel(BaseModel):
     __tablename__ = "runs"
 
-    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    id: Mapped[str] = mapped_column(
+        String(255), primary_key=True, default=generate_run_id
+    )
     tuner_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("tuners.id"), index=True
     )
