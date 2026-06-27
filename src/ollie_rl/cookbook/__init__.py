@@ -1,5 +1,5 @@
 from typing import Dict
-from .types import Recipe, Tuner
+from .types import Recipe, StateStore, Tuner
 from .gemini_msrl import GeminiMsrlRecipe
 
 RECIPES: Dict[str, Recipe] = {
@@ -9,26 +9,17 @@ RECIPES: Dict[str, Recipe] = {
 
 class Cookbook:
     """
-    Factory class to dynamically create or restore tuner instances.
+    Factory class to dynamically open tuner instances.
     """
 
     @classmethod
-    async def create(cls, kind: str, name: str) -> Tuner:
+    async def open(cls, kind: str, name: str, state_store: StateStore) -> Tuner:
         recipe = RECIPES.get(kind)
         if not recipe:
             raise ValueError(
                 f"Recipe template '{kind}' not found. Available templates: {list(RECIPES.keys())}"
             )
-        return await recipe.create(name)
-
-    @classmethod
-    async def restore(cls, kind: str, state: str) -> Tuner:
-        recipe = RECIPES.get(kind)
-        if not recipe:
-            raise ValueError(
-                f"Recipe template '{kind}' not found. Available templates: {list(RECIPES.keys())}"
-            )
-        return await recipe.restore(state)
+        return await recipe.open(name, state_store)
 
 
-__all__ = ["Tuner", "Cookbook"]
+__all__ = ["Tuner", "Cookbook", "StateStore"]

@@ -32,7 +32,7 @@ from google.genai.types import (
     Tool,
 )
 
-from .types import Recipe, Example, Tuner, Sample, TrainOp, SampleOp
+from .types import Recipe, Example, Tuner, Sample, TrainOp, SampleOp, StateStore
 
 import json
 from openai.types.chat import (
@@ -206,21 +206,35 @@ class GeminiMsrlTrainingOp(GeminiMsrlOp, TrainOp):
 class GeminiMsrlTuner(Tuner):
     """
     Tuner wrapping the Gemini MSRL tuning client.
+
+    The Tuner's persistable state lives directly on `self.state`
+    (a `GeminiMsrlRecipeState`). Mutate that object in place and then
+    call `_persist_state()` to push it to the backing store.
     """
 
     config: GeminiMsrlRecipeConfig
     client: GeminiMsrlClient
-    tuning_job_name: str
+    state: GeminiMsrlRecipeState
+    state_store: StateStore
 
     def __init__(
         self,
         config: GeminiMsrlRecipeConfig,
         client: GeminiMsrlClient,
-        tuning_job_name: str,
+        state: GeminiMsrlRecipeState,
+        state_store: StateStore,
     ):
         self.config = config
         self.client = client
-        self.tuning_job_name = tuning_job_name
+        self.state = state
+        self.state_store = state_store
+
+    @property
+    def tuning_job_name(self) -> str:
+        return self.state.tuning_job_name
+
+    async def _persist_state(self) -> None:
+        await self.state_store.save(self.state.model_dump_json())
 
     @property
     def kind(self) -> str:
@@ -308,20 +322,14 @@ class GeminiMsrlTuner(Tuner):
 
         return GeminiMsrlTrainingOp(self.client, op.name, self.config)
 
-    async def save_state(self) -> str:
-        if not self.tuning_job_name:
-            raise RuntimeError("Tuning job not initialized, cannot save state")
-        return GeminiMsrlRecipeState(
-            tuning_job_name=self.tuning_job_name,
-        ).model_dump_json()
-
 
 class GeminiMsrlRecipe(Recipe):
     """
     Recipe factory for Gemini MSRL tuners.
     """
 
-    async def create(self, name: str) -> GeminiMsrlTuner:
+    @staticmethod
+    def _build_client() -> tuple[GeminiMsrlRecipeConfig, GeminiMsrlClient]:
         config = GeminiMsrlRecipeConfig(
             auth_token=os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token"),
             project_id=os.environ.get("GEMINI_MSRL_PROJECT_ID", "dummy-project-id"),
@@ -331,30 +339,53 @@ class GeminiMsrlRecipe(Recipe):
             project_id=config.project_id,
             location=config.location,
         )
+        return config, client
 
-        # 1. Create the Tuning Job
-        req = CreateTuningJobRequest(
-            tuned_model_display_name=name,
-            base_model=config.base_model,
-            multi_step_reinforcement_tuning_spec=MultiStepReinforcementTuningSpec(
-                hyper_parameters=MultiStepReinforcementTuningHyperParameters(
-                    adapter_size=config.adapter_size,
-                    checkpoint_interval=config.checkpoint_interval,
-                )
-            ),
-        )
+    async def open(self, name: str, state_store: StateStore) -> GeminiMsrlTuner:
+        config, client = self._build_client()
 
-        logger.info(f"Creating Gemini MSRL tuning job for model display name: {name}")
-        job = await client.create_tuning_job(req)
-        tuning_job_name = job.name
+        raw_state = await state_store.load()
+        if raw_state is None:
+            # Bootstrap path: create a fresh tuning job and persist its name.
+            req = CreateTuningJobRequest(
+                tuned_model_display_name=name,
+                base_model=config.base_model,
+                multi_step_reinforcement_tuning_spec=MultiStepReinforcementTuningSpec(
+                    hyper_parameters=MultiStepReinforcementTuningHyperParameters(
+                        adapter_size=config.adapter_size,
+                        checkpoint_interval=config.checkpoint_interval,
+                    )
+                ),
+            )
 
-        instance = GeminiMsrlTuner(
-            config=config,
-            client=client,
-            tuning_job_name=tuning_job_name,
-        )
+            logger.info(
+                f"Creating Gemini MSRL tuning job for model display name: {name}"
+            )
+            job = await client.create_tuning_job(req)
 
-        # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING)
+            instance = GeminiMsrlTuner(
+                config=config,
+                client=client,
+                state=GeminiMsrlRecipeState(tuning_job_name=job.name),
+                state_store=state_store,
+            )
+
+            # Persist initial state as soon as we have a tuning_job_name, so
+            # we can recover even if TPU warm-up is interrupted below.
+            await instance._persist_state()
+        else:
+            # Restore path: rehydrate from the persisted blob.
+            instance = GeminiMsrlTuner(
+                config=config,
+                client=client,
+                state=GeminiMsrlRecipeState.model_validate_json(raw_state),
+                state_store=state_store,
+            )
+            logger.info(
+                f"Restoring Gemini MSRL tuning job from state: {instance.tuning_job_name}"
+            )
+
+        # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING).
         logger.info(
             f"Waiting for tuning job '{instance.tuning_job_name}' to enter RUNNING state..."
         )
@@ -364,37 +395,5 @@ class GeminiMsrlRecipe(Recipe):
             poll_interval=instance.config.poll_interval * 2,
         )
 
-        logger.info("Gemini MSRL Tuning Job is successfully initialized and RUNNING.")
-        return instance
-
-    async def restore(self, state: str) -> GeminiMsrlTuner:
-        state_data = GeminiMsrlRecipeState.model_validate_json(state)
-        tuning_job_name = state_data.tuning_job_name
-
-        config = GeminiMsrlRecipeConfig(
-            auth_token=os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token"),
-            project_id=os.environ.get("GEMINI_MSRL_PROJECT_ID", "dummy-project-id"),
-        )
-        client = GeminiMsrlClient(
-            auth_token=config.auth_token,
-            project_id=config.project_id,
-            location=config.location,
-        )
-
-        instance = GeminiMsrlTuner(
-            config=config,
-            client=client,
-            tuning_job_name=tuning_job_name,
-        )
-
-        logger.info(
-            f"Restoring Gemini MSRL tuning job from state: {instance.tuning_job_name}"
-        )
-        await instance.client.wait_for_tuning_job_running(
-            instance.tuning_job_name,
-            timeout_seconds=instance.config.timeout_seconds * 2,
-            poll_interval=instance.config.poll_interval * 2,
-        )
-
-        logger.info("Gemini MSRL Tuning Job is successfully restored and RUNNING.")
+        logger.info("Gemini MSRL Tuning Job is successfully running.")
         return instance

@@ -1,11 +1,33 @@
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from typing import cast
-from ollie_rl.cookbook.gemini_msrl import GeminiMsrlTuner, GeminiMsrlRecipeConfig
-from ollie_rl.types import ChatCompletionRequest
-from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
-from google.genai.types import Candidate, Content, Part, FunctionCall, FinishReason
+from typing import Optional, cast
+from unittest.mock import AsyncMock, MagicMock, call, patch
+
 from gemini_msrl.types import GenerateContentTuningScopeResponse
+from google.genai.types import Candidate, Content, FinishReason, FunctionCall, Part
+from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
+
+from ollie_rl.cookbook.gemini_msrl import (
+    GeminiMsrlRecipeConfig,
+    GeminiMsrlRecipeState,
+    GeminiMsrlTuner,
+)
+from ollie_rl.cookbook.types import StateStore
+from ollie_rl.types import ChatCompletionRequest
+
+
+class InMemoryStateStore(StateStore):
+    """Trivial in-memory StateStore for tests."""
+
+    def __init__(self, initial: Optional[str] = None):
+        self._state = initial
+        self.save_count = 0
+
+    async def load(self) -> Optional[str]:
+        return self._state
+
+    async def save(self, state: str) -> None:
+        self._state = state
+        self.save_count += 1
 
 
 class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
@@ -15,10 +37,14 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
             project_id="test-project",
         )
         self.mock_client = AsyncMock()
+        self.state_store = InMemoryStateStore()
         self.job = GeminiMsrlTuner(
             config=self.config,
             client=self.mock_client,
-            tuning_job_name="projects/test-project/locations/us-central1/tuningJobs/test-job-id",
+            state=GeminiMsrlRecipeState(
+                tuning_job_name="projects/test-project/locations/us-central1/tuningJobs/test-job-id",
+            ),
+            state_store=self.state_store,
         )
 
     async def test_sample_text_response(self):
@@ -217,34 +243,62 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
         train_op = await self.job.train_step(examples)
         await train_op.wait()
 
-        # Assert state persistence works
-        state = await self.job.save_state()
-        self.assertIn('"tuning_job_name"', state)
+        # Tuner can persist its state on demand through the StateStore.
+        await self.job._persist_state()
+        self.assertEqual(self.state_store.save_count, 1)
+        assert self.state_store._state is not None
+        self.assertIn('"tuning_job_name"', self.state_store._state)
 
-    async def test_restore_tuner(self):
+    async def test_open_restore_path(self):
         from ollie_rl.cookbook.gemini_msrl import GeminiMsrlRecipe
         import json
 
-        # Create a state string
+        # Pre-seed a state store as if a previous run had persisted state.
         state_dict = {
             "tuning_job_name": "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
         }
-        state_str = json.dumps(state_dict)
+        seeded_store = InMemoryStateStore(initial=json.dumps(state_dict))
 
         recipe = GeminiMsrlRecipe()
-        # We need to mock wait_for_tuning_job_running since restore calls it
         self.mock_client.wait_for_tuning_job_running = AsyncMock()
 
-        # Let's patch GeminiMsrlClient to return our mock_client
         with patch(
             "ollie_rl.cookbook.gemini_msrl.GeminiMsrlClient"
         ) as mock_client_class:
             mock_client_class.return_value = self.mock_client
-            tuner = await recipe.restore(state_str)
+            tuner = await recipe.open("test-display-name", seeded_store)
             self.assertEqual(
                 tuner.tuning_job_name,
                 "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
             )
+            # Restore path must not overwrite the existing blob.
+            self.assertEqual(seeded_store.save_count, 0)
+
+    async def test_open_bootstrap_path(self):
+        from ollie_rl.cookbook.gemini_msrl import GeminiMsrlRecipe
+
+        fresh_store = InMemoryStateStore()
+
+        # Mock the underlying tuning job creation.
+        mock_job = MagicMock()
+        mock_job.name = (
+            "projects/test-project/locations/us-central1/tuningJobs/new-job-id"
+        )
+        self.mock_client.create_tuning_job = AsyncMock(return_value=mock_job)
+        self.mock_client.wait_for_tuning_job_running = AsyncMock()
+
+        recipe = GeminiMsrlRecipe()
+        with patch(
+            "ollie_rl.cookbook.gemini_msrl.GeminiMsrlClient"
+        ) as mock_client_class:
+            mock_client_class.return_value = self.mock_client
+            tuner = await recipe.open("test-display-name", fresh_store)
+
+        # Tuner created the job and persisted its initial state via the store.
+        self.assertEqual(tuner.tuning_job_name, mock_job.name)
+        self.assertEqual(fresh_store.save_count, 1)
+        assert fresh_store._state is not None
+        self.assertIn(mock_job.name, fresh_store._state)
 
     async def test_sample_op_peek(self):
         from gemini_msrl.types import Operation

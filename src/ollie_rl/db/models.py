@@ -30,7 +30,9 @@ class TunerModel(BaseModel):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    state: Mapped[str] = mapped_column(Text, nullable=False)
+    # `state` is populated by the Tuner itself via its StateStore. It is
+    # NULL between row creation and the Tuner's first save.
+    state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class ChatCompletionModel(BaseModel):

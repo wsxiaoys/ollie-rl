@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from sqlalchemy import select, update
 from ollie_rl.cookbook import Tuner, Cookbook
-from ollie_rl.cookbook.types import Example
+from ollie_rl.cookbook.types import Example, StateStore
 from ollie_rl.db import TunerModel, ChatCompletionModel, DatumRowModel
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
@@ -26,6 +26,37 @@ class RewardAlreadySetError(Exception):
     pass
 
 
+class _DbStateStore(StateStore):
+    """
+    StateStore implementation backed by the `tuners` table.
+
+    Read-your-writes is provided by the underlying transactional UPDATE +
+    SELECT against a single row keyed by `tuner_id`.
+    """
+
+    def __init__(self, tuner_id: str):
+        self._tuner_id = tuner_id
+
+    async def load(self) -> Optional[str]:
+        async_session = get_sessionmaker()
+        async with async_session() as session:
+            result = await session.execute(
+                select(TunerModel.state).where(TunerModel.id == self._tuner_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def save(self, state: str) -> None:
+        async_session = get_sessionmaker()
+        async with async_session() as session:
+            async with session.begin():
+                await session.execute(
+                    update(TunerModel)
+                    .where(TunerModel.id == self._tuner_id)
+                    .values(state=state)
+                )
+        logger.debug(f"Persisted state for tuner {self._tuner_id}")
+
+
 class TunerService:
     """
     Handles both active in-memory tuners and their persistence to a database.
@@ -38,8 +69,10 @@ class TunerService:
 
     async def get(self, tuner_id: str) -> Optional[Tuner]:
         """
-        Retrieve an active tuner instance by tuner_id (UUID).
-        If the tuner is not in memory but exists in the database, restore it lazily.
+        Retrieve an active tuner instance by tuner_id.
+        If the tuner is not in memory but exists in the database, restore it lazily
+        by opening it against its DB-backed StateStore (which will hand the persisted
+        blob back to the recipe on load).
         """
         if tuner_id in self.active_tuners:
             return self.active_tuners[tuner_id]
@@ -49,43 +82,40 @@ class TunerService:
                 select(TunerModel).where(TunerModel.id == tuner_id)
             )
             record = result.scalar_one_or_none()
-            if record and record.state is not None:
-                logger.info(
-                    f"Lazily restoring tuner for model: {tuner_id} (kind: {record.kind})"
-                )
-                tuner = await Cookbook.restore(record.kind, record.state)
-                self.active_tuners[tuner_id] = tuner
-                return tuner
 
-        return None
+        if record is None or record.state is None:
+            # Either no such row, or row exists but the Tuner never persisted
+            # initial state (e.g. crashed mid-bootstrap). Treat as not found.
+            return None
+
+        logger.info(
+            f"Lazily restoring tuner for model: {tuner_id} (kind: {record.kind})"
+        )
+        state_store = _DbStateStore(tuner_id)
+        tuner = await Cookbook.open(record.kind, record.name, state_store)
+        self.active_tuners[tuner_id] = tuner
+        return tuner
 
     async def create_tuner(self, recipe: str, name: str, datum_ids: List[str]) -> str:
         """
         Create and initialize a tuner using the Cookbook and register it.
-        """
-        tuner = await Cookbook.create(recipe, name)
 
+        The service inserts a row with `state=NULL`; the Tuner is then
+        responsible for filling it in via its StateStore.
+        """
         tuner_id = f"tuner_{uuid.uuid4()}"
-        self.active_tuners[tuner_id] = tuner
-        state_str = await tuner.save_state()
+
+        # 1. Reserve the row so the StateStore has something to UPDATE against.
         async with self.async_session() as session:
             async with session.begin():
-                result = await session.execute(
-                    select(TunerModel).where(TunerModel.id == tuner_id)
-                )
-                record = result.scalar_one_or_none()
-                if record:
-                    record.state = state_str
-                else:
-                    record = TunerModel(
+                session.add(
+                    TunerModel(
                         id=tuner_id,
                         name=name,
-                        kind=tuner.kind,
-                        state=state_str,
+                        kind=recipe,
+                        state=None,
                     )
-                    session.add(record)
-                
-                # Add datum rows
+                )
                 for datum_id in datum_ids:
                     session.add(
                         DatumRowModel(
@@ -93,7 +123,14 @@ class TunerService:
                             datum_id=datum_id,
                         )
                     )
-        logger.info(f"Successfully persisted tuner {tuner_id} to database")
+
+        # 2. Open the tuner against its DB-backed store. The recipe will
+        # call `state_store.save(...)` once it has a persistable snapshot.
+        state_store = _DbStateStore(tuner_id)
+        tuner = await Cookbook.open(recipe, name, state_store)
+        self.active_tuners[tuner_id] = tuner
+
+        logger.info(f"Successfully created tuner {tuner_id}")
         return tuner_id
 
     async def record_chat_completion(
