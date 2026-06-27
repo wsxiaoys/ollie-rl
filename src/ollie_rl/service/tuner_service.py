@@ -311,7 +311,7 @@ class TunerService:
             select(RunModel).where(
                 RunModel.tuner_id == tuner_id,
                 RunModel.trained_count <= 0,
-                RunModel.reward != None,
+                RunModel.reward != None,  # noqa: E711
             )
         )
         run_records = result.scalars().all()

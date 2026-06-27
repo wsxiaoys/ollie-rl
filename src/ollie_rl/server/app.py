@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Initializing database tables...")
         await init_db()
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to initialize database during startup")
 
     yield
@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Shutting down database tables...")
         await shutdown_db()
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to shutdown database during shutdown")
 
 
