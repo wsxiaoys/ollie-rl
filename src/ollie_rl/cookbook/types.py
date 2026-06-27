@@ -133,9 +133,9 @@ class Recipe(ABC):
     """
 
     @abstractmethod
-    async def open(self, name: str, state_store: StateStore) -> Tuner:
+    async def create(self, name: str, state_store: StateStore) -> Tuner:
         """
-        Open a Tuner instance backed by the given state store.
+        Create a Tuner instance backed by the given state store.
 
         If `await state_store.load()` returns None, the recipe should
         bootstrap a fresh tuner and persist its initial state via

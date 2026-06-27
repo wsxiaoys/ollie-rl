@@ -341,7 +341,7 @@ class GeminiMsrlRecipe(Recipe):
         )
         return config, client
 
-    async def open(self, name: str, state_store: StateStore) -> GeminiMsrlTuner:
+    async def create(self, name: str, state_store: StateStore) -> GeminiMsrlTuner:
         config, client = self._build_client()
 
         raw_state = await state_store.load()

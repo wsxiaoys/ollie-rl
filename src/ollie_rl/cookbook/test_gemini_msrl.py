@@ -266,7 +266,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
             "ollie_rl.cookbook.gemini_msrl.GeminiMsrlClient"
         ) as mock_client_class:
             mock_client_class.return_value = self.mock_client
-            tuner = await recipe.open("test-display-name", seeded_store)
+            tuner = await recipe.create("test-display-name", seeded_store)
             self.assertEqual(
                 tuner.tuning_job_name,
                 "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
@@ -292,7 +292,7 @@ class TestGeminiMsrlTuner(unittest.IsolatedAsyncioTestCase):
             "ollie_rl.cookbook.gemini_msrl.GeminiMsrlClient"
         ) as mock_client_class:
             mock_client_class.return_value = self.mock_client
-            tuner = await recipe.open("test-display-name", fresh_store)
+            tuner = await recipe.create("test-display-name", fresh_store)
 
         # Tuner created the job and persisted its initial state via the store.
         self.assertEqual(tuner.tuning_job_name, mock_job.name)

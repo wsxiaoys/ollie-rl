@@ -19,7 +19,7 @@ class Cookbook:
             raise ValueError(
                 f"Recipe template '{kind}' not found. Available templates: {list(RECIPES.keys())}"
             )
-        return await recipe.open(name, state_store)
+        return await recipe.create(name, state_store)
 
 
 __all__ = ["Tuner", "Cookbook", "StateStore"]
