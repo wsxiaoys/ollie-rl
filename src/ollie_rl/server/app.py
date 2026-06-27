@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from ollie_rl.types import (
