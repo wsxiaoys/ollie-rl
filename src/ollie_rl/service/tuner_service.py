@@ -13,9 +13,14 @@ from ollie_rl.db import TunerModel, ChatCompletionModel, DatumRowModel
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
-from ollie_rl.types import Rollout, RolloutRun, DispenseRun
+from openai.types.chat import ChatCompletion
+from ollie_rl.types import Rollout, RolloutRun, DispenseRun, ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
+
+
+class TunerNotFoundError(Exception):
+    pass
 
 
 class RunNotFoundError(Exception):
@@ -144,6 +149,65 @@ class TunerService:
 
         logger.info(f"Successfully created tuner {tuner_id}")
         return tuner_id
+
+    async def sample(
+        self,
+        tuner_id: str,
+        request: ChatCompletionRequest,
+        run_id: Optional[str] = None,
+    ) -> ChatCompletion:
+        """
+        Generate a chat completion from the active policy of the requested model,
+        and optionally record metadata if run_id is provided.
+        """
+        trainer = await self.get_trainer(tuner_id)
+        if not trainer:
+            raise TunerNotFoundError(
+                f"Tuner '{tuner_id}' not found or not initialized."
+            )
+
+        datum_id = None
+        if run_id is not None:
+            async with self.async_session() as session:
+                result = await session.execute(
+                    select(RunModel).where(
+                        RunModel.tuner_id == tuner_id,
+                        RunModel.id == run_id,
+                    )
+                )
+                run_record = result.scalar_one_or_none()
+                if not run_record:
+                    raise RunNotFoundError(f"Unknown run_id {run_id}")
+
+                if run_record.reward is not None:
+                    raise RewardAlreadySetError(
+                        f"Reward already set for run '{run_id}'"
+                    )
+
+                now = utcnow()
+                if run_record.expires_at <= now:
+                    raise RunExpiredError(f"Run '{run_id}' has expired")
+
+                # Override datum_id from database record to prevent client lying
+                datum_id = run_record.datum_id
+
+        # Generate completion
+        sample_op = await trainer.sample(request)
+        sample = await sample_op.wait()
+        policy_generation = sample.policy_generation
+
+        # Record completion metadata
+        if run_id is not None:
+            assert datum_id is not None
+            await self.record_chat_completion(
+                completion_id=sample.completion.id,
+                tuner_id=tuner_id,
+                run_id=run_id,
+                datum_id=datum_id,
+                policy_generation=policy_generation,
+            )
+
+        return sample.completion
 
     async def record_chat_completion(
         self,
@@ -335,23 +399,27 @@ class TunerService:
         """
         trainer = await self.get_trainer(tuner_id)
         if not trainer:
-            return None
+            raise TunerNotFoundError(
+                f"Tuner '{tuner_id}' not found or not initialized."
+            )
         if await trainer.is_training():
             return None
 
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
-            datum_id = self._pick_datum(datum_pool, runs)
-            if datum_id is None:
-                return None
 
-            run_record = RunModel(
-                tuner_id=tuner_id,
-                datum_id=datum_id,
-                reward=None,
-                trained_count=0,
-                expires_at=utcnow() + timedelta(seconds=7200),
-            )
+        datum_id = self._pick_datum(datum_pool, runs)
+        if datum_id is None:
+            return None
+
+        run_record = RunModel(
+            tuner_id=tuner_id,
+            datum_id=datum_id,
+            reward=None,
+            trained_count=0,
+            expires_at=utcnow() + timedelta(seconds=7200),
+        )
+        async with self.async_session() as session:
             async with session.begin():
                 session.add(run_record)
 

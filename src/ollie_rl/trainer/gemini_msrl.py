@@ -239,21 +239,17 @@ class GeminiMsrlTrainer(Trainer):
     async def _persist_state(self) -> None:
         await self.state_store.save(self.state.model_dump_json())
 
-    @property
-    def kind(self) -> str:
-        return "gemini_msrl"
-
     async def sample(self, request: ChatCompletionRequest) -> GeminiMsrlSamplingOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
 
         # 1. Translate ChatCompletionRequest to GenerateContentTuningScopeRequest
-        system_messages = [msg for msg in request.messages if msg.role == "system"]
-        other_messages = [msg for msg in request.messages if msg.role != "system"]
+        system_messages = [msg for msg in request.messages if msg["role"] == "system"]
+        other_messages = [msg for msg in request.messages if msg["role"] != "system"]
 
         system_instruction = None
         if system_messages:
             system_content = "\n".join(
-                [msg.content for msg in system_messages if msg.content]
+                [str(msg["content"]) for msg in system_messages if msg.get("content")]
             )
             if system_content:
                 system_instruction = Content(parts=[Part(text=system_content)])
@@ -262,8 +258,8 @@ class GeminiMsrlTrainer(Trainer):
         for msg in other_messages:
             contents.append(
                 Content(
-                    role="user" if msg.role == "user" else "model",
-                    parts=[Part(text=msg.content)],
+                    role="user" if msg["role"] == "user" else "model",
+                    parts=[Part(text=str(msg.get("content", "")))],
                 )
             )
 
@@ -354,10 +350,6 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
     """
     Trainer factory for Gemini MSRL trainers.
     """
-
-    @property
-    def kind(self) -> str:
-        return "gemini_msrl"
 
     async def open(
         self,
@@ -451,4 +443,4 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
 
 
 # Register the factory
-factory.register(GeminiMsrlTrainerFactory())
+factory.register("gemini_msrl", GeminiMsrlTrainerFactory())

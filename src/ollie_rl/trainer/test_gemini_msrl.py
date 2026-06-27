@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from gemini_msrl.types import GenerateContentTuningScopeResponse
 from google.genai.types import Candidate, Content, FinishReason, FunctionCall, Part
-from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
+from openai.types.chat import ChatCompletionMessageToolCall
 
 from ollie_rl.trainer.gemini_msrl import (
     GeminiMsrlTrainerConfig,
@@ -73,7 +73,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Create request
         request = ChatCompletionRequest(
             model="test-model",
-            messages=[ChatCompletionMessage(role="assistant", content="Hi")],
+            messages=[{"role": "user", "content": "Hi"}],
             max_tokens=100,
         )
 
@@ -126,11 +126,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Create request
         request = ChatCompletionRequest(
             model="test-model",
-            messages=[
-                ChatCompletionMessage(
-                    role="assistant", content="What is the weather in SF?"
-                )
-            ],
+            messages=[{"role": "user", "content": "What is the weather in SF?"}],
             max_tokens=100,
         )
 
@@ -192,11 +188,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Create request
         request = ChatCompletionRequest(
             model="test-model",
-            messages=[
-                ChatCompletionMessage(
-                    role="assistant", content="Check weather in Seattle"
-                )
-            ],
+            messages=[{"role": "user", "content": "Check weather in Seattle"}],
             max_tokens=100,
         )
 
@@ -313,7 +305,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Create request
         request = ChatCompletionRequest(
             model="test-model",
-            messages=[ChatCompletionMessage(role="assistant", content="Hi")],
+            messages=[{"role": "user", "content": "Hi"}],
             max_tokens=100,
         )
 

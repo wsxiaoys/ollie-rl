@@ -99,56 +99,34 @@ async def create_chat_completion(
     x_run_id: Annotated[str | None, Header()] = None,
 ) -> ChatCompletion:
     """Generate a chat completion from the active policy of the requested model."""
-    # Check if run_id is present and valid
-    if x_run_id is not None:
-        # Verify run_id exists in runs for this tuner
-        async with services.tuner.async_session() as session:
-            from sqlalchemy import select
-            from ollie_rl.db.models import RunModel
-
-            result = await session.execute(
-                select(RunModel).where(
-                    RunModel.tuner_id == x_tuner_id,
-                    RunModel.id == x_run_id,
-                )
-            )
-            run_record = result.scalar_one_or_none()
-            if not run_record:
-                raise HTTPException(
-                    status_code=409, detail=f"Unknown run_id {x_run_id}"
-                )
-            # Override x_datum_id from database record to prevent client lying
-            x_datum_id = run_record.datum_id
-
-    # Generate completion
-    trainer = await services.tuner.get_trainer(x_tuner_id)
-    if not trainer:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Tuner '{x_tuner_id}' not found or not initialized.",
-        )
+    from ollie_rl.service.tuner_service import (
+        TunerNotFoundError,
+        RunNotFoundError,
+        RunExpiredError,
+        RewardAlreadySetError,
+    )
 
     try:
-        sample_op = await trainer.sample(request)
-        sample = await sample_op.wait()
-        policy_generation = sample.policy_generation
+        return await services.tuner.sample(
+            tuner_id=x_tuner_id,
+            request=request,
+            run_id=x_run_id,
+        )
+    except (TunerNotFoundError, RunNotFoundError) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+    except (RunExpiredError, RewardAlreadySetError) as e:
+        raise HTTPException(
+            status_code=409,
+            detail=str(e),
+        )
     except Exception as e:
         logger.exception(
             f"Failed to generate chat completion for model '{request.model}'"
         )
         raise HTTPException(status_code=500, detail=str(e))
-
-    # Record completion metadata via TunerService
-    if x_run_id is not None:
-        await services.tuner.record_chat_completion(
-            completion_id=sample.completion.id,
-            tuner_id=x_tuner_id,
-            run_id=x_run_id,
-            datum_id=x_datum_id,
-            policy_generation=policy_generation,
-        )
-
-    return sample.completion
 
 
 @app.post("/tuners/{tuner_id}/runs")
@@ -158,12 +136,16 @@ async def dispense_run(tuner_id: str) -> DispenseRun:
     Returns 200 OK with run_id, datum_id, expires_at.
     Or 204 No Content with Retry-After header if no run can be dispensed.
     """
+    from ollie_rl.service.tuner_service import TunerNotFoundError
+
     try:
         run_response = await services.tuner.dispense_run(tuner_id)
         if run_response is None:
             raise HTTPException(204, headers={"Retry-After": "1"})
 
         return run_response
+    except TunerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to dispense run for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))

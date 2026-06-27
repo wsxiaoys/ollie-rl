@@ -4,8 +4,8 @@ from .types import TrainerFactory
 _REGISTRY: Dict[str, TrainerFactory] = {}
 
 
-def register(factory: TrainerFactory) -> None:
-    _REGISTRY[factory.kind] = factory
+def register(kind: str, factory: TrainerFactory) -> None:
+    _REGISTRY[kind] = factory
 
 
 def get(kind: str) -> TrainerFactory:

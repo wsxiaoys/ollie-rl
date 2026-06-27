@@ -4,13 +4,13 @@ from pydantic import BaseModel
 from typing import List, Optional
 from openai.types.chat import (
     ChatCompletionFunctionTool,
-    ChatCompletionMessage,
+    ChatCompletionMessageParam,
 )
 
 
 class ChatCompletionRequest(BaseModel):
     model: str
-    messages: List[ChatCompletionMessage]
+    messages: List[ChatCompletionMessageParam]
     max_tokens: Optional[int] = None
     tools: Optional[List[ChatCompletionFunctionTool]] = None
 

@@ -52,10 +52,6 @@ class Trainer(ABC):
     The Trainer owns its own persistence cadence via its StateStore.
     """
 
-    @property
-    @abstractmethod
-    def kind(self) -> str: ...
-
     @abstractmethod
     async def sample(self, request: ChatCompletionRequest) -> SampleOp: ...
 
@@ -79,11 +75,6 @@ class TrainerFactory(ABC):
     Has no knowledge of recipes or scheduling. May accept backend-specific
     bootstrap kwargs (base_model, adapter_size, …) via `open(...)`.
     """
-
-    @property
-    @abstractmethod
-    def kind(self) -> str:
-        """Stable identifier (e.g. 'gemini_msrl')."""
 
     @abstractmethod
     async def open(
