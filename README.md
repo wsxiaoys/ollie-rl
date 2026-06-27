@@ -1,8 +1,8 @@
 <h1 align="center">🛹 ollie-rl</h1>
 
 <p align="center">
-  <strong>An OpenAI-compatible chat-completions server with a built-in online GRPO training loop.</strong><br/>
-  Drop it in front of any agent, post rewards, get a fine-tuned policy.
+  <strong>Fine-tune the agent you already have — by pointing it at a new URL.</strong><br/>
+  An OpenAI-compatible chat-completions server with a built-in online GRPO loop.
 </p>
 
 <p align="center">
@@ -16,93 +16,36 @@
 
 ---
 
-## Why ollie-rl?
+## Train your agent. Not your training loop.
 
-Most RL libraries (`trl`, `verl`, `OpenRLHF`, `tinker-cookbook`) are **training
-scripts**: you batch up trajectories offline, run a script, and hope the loss
-curve goes down. But modern agents already speak one universal protocol —
-**`POST /v1/chat/completions`** — and they already have a notion of success
-(test passed, task completed, user thumbs-up).
+Your agent already speaks one universal protocol — `POST /v1/chat/completions` —
+and it already has a notion of success (test passed, task completed, user
+thumbs-up). `ollie-rl` is the **drop-in sidecar** that turns those two things
+into an online GRPO training signal. **Zero agent code changes.**
 
-`ollie-rl` closes that loop. It is an HTTP server that:
+**What you don't have to write:**
 
-1. Exposes an **OpenAI-compatible** `/v1/chat/completions` endpoint.
-2. Tags each completion with an `X-Run-Id` header that the agent passes through.
-3. Accepts a **scalar reward** per run via `PUT /tuners/{id}/runs/{run_id}/reward`.
-4. Implicitly forms **GRPO groups**, computes advantages, and triggers
-   `train_step`s on a pluggable trainer backend (currently `tinker` or custom backends).
+- ❌ A rollout collector
+- ❌ A dataset loader / replay buffer
+- ❌ An offline training script
+- ❌ A custom RL framework integration per agent
 
-The result: any agent framework — whether it's LangGraph, CrewAI, ACP, your
-homebrew loop, or `inspect-ai` — can become an RL training driver by swapping
-its OpenAI base URL.
+**What you write:**
 
-## How it works
+- ✅ A reward function (one `PUT` per task)
+- ✅ A list of `datum_id`s (your prompts / tasks)
 
-The server orchestrates the classic synchronous-RL lifecycle and hides
-GRPO group bookkeeping behind a tiny HTTP surface.
+That's it. Any agent that can change its OpenAI base URL — LangGraph, CrewAI,
+OpenCode, `inspect-ai`, ACP, your homebrew loop — becomes an RL training
+driver. The server forms GRPO groups, computes advantages, and fires
+`train_step`s on a pluggable backend (`tinker` and custom backends) on your
+behalf.
 
-```mermaid
-sequenceDiagram
-    participant C as Agent / Worker
-    participant API as ollie-rl
-    participant T as Trainer backend
+## 30-second demo: train OpenCode CLI
 
-    C->>API: POST /tuners { recipe, datum_ids }
-    API-->>C: { tuner_id }
-
-    loop training step
-        C->>API: POST /tuners/{id}/runs
-        API-->>C: 200 { run_id, datum_id } or 204 + Retry-After
-        loop one or more LLM turns
-            C->>API: POST /openai/v1/chat/completions<br/>X-Tuner-Id, X-Run-Id
-            API->>T: sample(...)
-            T-->>API: ChatCompletion
-            API-->>C: ChatCompletion
-        end
-        C->>API: PUT /tuners/{id}/runs/{run_id}/reward { reward }
-        Note over API,T: server collects runs and rewards<br/>fires train_step when batch is ready
-    end
-```
-
-For the full data model (Rollout / Run / ChatCompletion / Batch / Advantage),
-see [`docs/data-model.md`](./.agents/skills/dev/references/data-model.md).
-For the client lifecycle, see
-[`docs/sync-rl.md`](./.agents/skills/dev/references/sync-rl.md).
-
-## Quickstart
-
-### 1. Run the server
-
-```bash
-docker compose -f deploy/docker-compose.yaml up -d
-# server is now live at http://localhost:8000  (Swagger UI at /docs)
-```
-
-Or run from source:
-
-```bash
-uv sync
-uv run poe dev
-```
-
-### 2. Create a tuner
-
-```bash
-curl -X POST http://localhost:8000/tuners \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "name": "banana-policy",
-        "recipe": "grpo_16x32",
-        "datum_ids": ["prompt-1", "prompt-2", "prompt-3"]
-      }'
-# => { "tuner_id": "tnr_...", "name": "banana-policy", "recipe": "grpo_16x32" }
-```
-
-### 3. Run an agent loop
-
-You can drive your agent loop using the open-source terminal agent, **OpenCode CLI**. Configure it to route requests through the `ollie-rl` sidecar and map the required custom headers to environment variables.
-
-1. Add a custom model provider in your `opencode.json` (either in the project root or globally in `~/.config/opencode/opencode.json`):
+[OpenCode CLI](https://opencode.ai) is an open-source terminal agent. Without
+patching a single line of OpenCode, you can fine-tune the policy it drives by
+adding one provider block to `opencode.json`:
 
 ```json
 {
@@ -117,76 +60,126 @@ You can drive your agent loop using the open-source terminal agent, **OpenCode C
         "apiKey": "any-key",
         "headers": {
           "X-Tuner-Id": "{env:X_TUNER_ID}",
-          "X-Run-Id": "{env:X_RUN_ID}"
+          "X-Run-Id":   "{env:X_RUN_ID}"
         }
       },
-      "models": {
-        "tinker": {}
-      }
+      "models": { "tinker": {} }
     }
   }
 }
 ```
 
-2. Drive the loop in your terminal:
+Then drive the GRPO loop from your shell — create a tuner once, then request
+a run, let the agent solve the task, and score it:
 
 ```bash
-# 1. Request a run assignment from the tuner
-RUN_INFO=$(curl -s -X POST http://localhost:8000/tuners/tnr_.../runs)
-export X_TUNER_ID="tnr_..."
-export X_RUN_ID=$(echo $RUN_INFO | jq -r '.run_id')
-export DATUM_ID=$(echo $RUN_INFO | jq -r '.datum_id')
+# One-time: create a tuner over your task list
+TUNER_ID=$(curl -s -X POST http://localhost:8000/tuners \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-policy","datum_ids":["task-1","task-2","task-3"]}' \
+  | jq -r .tuner_id)
 
-# 2. Run OpenCode to execute a task using the live policy
+# Per run: request a run assignment
+RUN=$(curl -s -X POST http://localhost:8000/tuners/$TUNER_ID/runs)
+export X_TUNER_ID=$TUNER_ID
+export X_RUN_ID=$(jq -r .run_id  <<< "$RUN")
+DATUM_ID=$(jq   -r .datum_id <<< "$RUN")
+
+# Run the agent against the live (and learning) policy
 opencode run "Solve this task: $DATUM_ID"
 
-# 3. Score the run and submit the scalar reward
+# Score the run — the server learns from it implicitly
 curl -X PUT http://localhost:8000/tuners/$X_TUNER_ID/runs/$X_RUN_ID/reward \
   -H 'Content-Type: application/json' \
   -d '{"reward": 1.0}'
 ```
 
-The server batches **16 runs per `datum_id`** into a GRPO group, waits until
-**32 groups (512 runs)** are ready, and then automatically fires a
-`train_step` on the configured backend.
+Loop the per-run block. Every **16** scored runs of a given prompt form a GRPO group;
+every **32** groups (= 512 runs) trigger a `train_step` automatically. Your
+agent is being fine-tuned while it's being used.
 
-## How does this compare to `trl` / `verl` / `tinker`?
+## How it works
 
-| | `ollie-rl` | `trl` / `verl` / `OpenRLHF` | `tinker-cookbook` |
-|---|---|---|---|
-| **Interface** | HTTP, OpenAI-compatible | Python script | Python script |
-| **Drives your agent loop** | ✅ yes | ❌ you write a rollout collector | ❌ you write a rollout collector |
-| **Online (sample ↔ train)** | ✅ implicit GRPO | ✅ (with effort) | ✅ |
-| **Pluggable backend** | ✅ via `TrainerFactory` | varies | tinker only |
-| **Framework-agnostic clients** | ✅ any OpenAI client | ❌ Python only | ❌ Python only |
-| **Status** | experimental | mature | mature |
+```mermaid
+sequenceDiagram
+    participant C as Your agent
+    participant API as ollie-rl
+    participant T as Trainer backend
 
-`ollie-rl` is not a replacement for `trl` — it's the **sidecar layer above it**.
-You can imagine plugging `trl`, `verl`, or any custom trainer in behind the
-`Trainer` protocol.
+    C->>API: POST /tuners { name, datum_ids }
+    API-->>C: { tuner_id }
 
-## Architecture
-
-```
-src/
-├── ollie_rl/
-│   ├── server/         FastAPI HTTP surface
-│   ├── service/        TunerService — dispense_run, advantage math, maybe_train
-│   ├── trainer/        Pluggable Trainer / TrainerFactory protocol
-│   │   ├── types.py    The plugin contract
-│   │   └── factory.py  Registry of registered TrainerFactories
-│   ├── cookbook/       Declarative `Recipe`s (group_size, batch shape, …)
-│   ├── db/             SQLAlchemy async models (SQLite by default, Postgres-ready)
-│   └── types.py        HTTP DTOs
+    loop training step
+        C->>API: POST /tuners/{id}/runs
+        API-->>C: 200 { run_id, datum_id }  or  204 + Retry-After
+        loop one or more LLM turns
+            C->>API: POST /openai/v1/chat/completions<br/>X-Tuner-Id, X-Run-Id
+            API->>T: sample(...)
+            T-->>API: ChatCompletion
+            API-->>C: ChatCompletion
+        end
+        C->>API: PUT /tuners/{id}/runs/{run_id}/reward { reward }
+        Note over API,T: server collects runs and rewards<br/>fires train_step when batch is ready
+    end
 ```
 
-Key concepts:
+Concepts the server hides for you:
 
 - **Tuner** — one live training job; owns a policy and a `datum_pool`.
 - **Run** — one attempt at a `datum_id`; carries the scalar reward.
 - **Rollout** — a GRPO group of K runs sharing the same `datum_id`.
-- **Recipe** — declarative algorithm knobs (`group_size`, `num_groups_per_batch`).
-- **Trainer** — pluggable backend (`tinker` or custom backends).
+- **Recipe** — declarative knobs (`group_size`, `num_groups_per_batch`).
+- **Trainer** — the pluggable backend (`tinker`, or your own).
+
+For the full data model, see
+[`data-model.md`](./.agents/skills/dev/references/data-model.md).
+For the wire protocol, see
+[`sync-rl.md`](./.agents/skills/dev/references/sync-rl.md).
+
+## Run the server
+
+Boot ollie-rl on `http://localhost:8000` (Swagger UI at `/docs`) and the
+demo above is ready to go:
+
+```bash
+docker compose -f deploy/docker-compose.yaml up -d
+```
+
+Or from source, for local development:
+
+```bash
+uv sync
+uv run poe dev
+```
+
+## How does this compare to `trl` / `verl` / `OpenRLHF`?
+
+| | `ollie-rl` | `trl` / `verl` / `OpenRLHF` |
+|---|---|---|
+| **Interface** | HTTP, OpenAI-compatible | Python script |
+| **Drives your agent loop** | ✅ yes — bring your own | ❌ you write a rollout collector |
+| **Online (sample ↔ train)** | ✅ implicit GRPO | ✅ (with effort) |
+| **Pluggable backend** | ✅ via `TrainerFactory` | varies |
+| **Framework-agnostic clients** | ✅ any OpenAI client | ❌ Python only |
+| **Status** | experimental | mature |
+
+`ollie-rl` is not a replacement for `trl` — it's the **sidecar layer above
+it**. You can imagine plugging `trl`, `verl`, or any custom trainer in behind
+the `Trainer` protocol.
+
+## Architecture
+
+```
+src/ollie_rl/
+├── server/      FastAPI HTTP surface
+├── service/     TunerService — dispense_run, advantage math, maybe_train
+├── trainer/     Pluggable Trainer / TrainerFactory protocol
+│   ├── types.py    The plugin contract
+│   └── factory.py  Registry of registered TrainerFactories
+├── cookbook/    Declarative `Recipe`s (group_size, num_groups_per_batch, …)
+├── db/          SQLAlchemy async models (SQLite by default, Postgres-ready)
+└── types.py     HTTP DTOs
+```
 
 ## Configuration
 
@@ -201,9 +194,12 @@ small and is still evolving.
 
 Planned:
 
-- [ ] A `tinker` backend.
+- [ ] A `tinker` trainer backend.
+- [ ] An auto-research prompt-optimization backend — a `Trainer` that, instead
+      of updating weights, evolves the system prompt from rewarded rollouts
+      (think GEPA / OPRO / DSPy-style optimizers) behind the same HTTP surface.
 - [ ] A runnable end-to-end `examples/` directory with reward curves.
-- [ ] MkDocs Material documentation site.
+- [ ] Documentation website.
 - [ ] Lightweight `ollie-rl-client` Python SDK on PyPI.
 - [ ] vLLM / SGLang trainer adapters.
 - [ ] Multi-step scheduler + reward replay.
@@ -225,16 +221,3 @@ uv run poe dev           # uvicorn reload server
 ```
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full contributor guide.
-
-## License
-
-[MIT](./LICENSE) © Meng Zhang and contributors.
-
-## Acknowledgements
-
-- The GRPO algorithm originates from the
-  [DeepSeekMath](https://arxiv.org/abs/2402.03300) paper.
-- The pluggable `Trainer` shape is heavily inspired by
-  [`tinker-cookbook`](https://github.com/thinking-machines-lab/tinker-cookbook).
-- The OpenAI-compatible HTTP surface is what makes any agent framework a
-  potential RL driver — kudos to the OpenAI API team for the de-facto standard.
