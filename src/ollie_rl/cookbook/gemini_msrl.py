@@ -32,7 +32,17 @@ from google.genai.types import (
     Tool,
 )
 
-from .types import Recipe, Example, Tuner, Sample, TrainOp, SampleOp, StateStore, DispenseContext, RunAssignment
+from .types import (
+    Recipe,
+    Example,
+    Tuner,
+    Sample,
+    TrainOp,
+    SampleOp,
+    StateStore,
+    DispenseContext,
+    RunAssignment,
+)
 
 import json
 from openai.types.chat import (
@@ -359,6 +369,7 @@ class GeminiMsrlTuner(Tuner):
 
         if best_datum is None:
             import random
+
             best_datum = random.choice(list(ctx.datum_metrics.keys()))
 
         run_id = f"run_{uuid.uuid4()}"

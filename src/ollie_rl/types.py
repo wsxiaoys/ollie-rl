@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from datetime import datetime
+
+from pydantic import BaseModel, FutureDatetime
 from typing import List, Optional
 from openai.types.chat import (
     ChatCompletionFunctionTool,
@@ -17,11 +19,27 @@ class CreateTunerRequest(BaseModel):
     name: str
     recipe: str
     datum_ids: List[str]
-    hparams: Optional[dict] = None
+
+
+class CreateTunerResponse(BaseModel):
+    tuner_id: str
+    name: str
+    recipe: str
 
 
 class PutRewardRequest(BaseModel):
     reward: float
+
+
+class PutRewardResponse(BaseModel):
+    run_id: str
+    reward: float
+
+
+class DispenseRunResponse(BaseModel):
+    run_id: str
+    datum_id: str
+    expires_at: datetime
 
 
 class RolloutRun(BaseModel):

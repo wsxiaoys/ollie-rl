@@ -24,10 +24,15 @@ class DatumMetric:
     """
     Tracking metrics for a single datum_id across its run lifecycle.
     """
-    completed_count: int  # Number of runs of this datum that have been completed and rewarded.
+
+    completed_count: (
+        int  # Number of runs of this datum that have been completed and rewarded.
+    )
     in_flight_count: int  # Number of runs of this datum that are currently in flight (leased and not expired).
-    trained_count: int    # Number of runs of this datum that have been consumed by training.
-    expired_count: int    # Number of runs of this datum that have expired (reward is None and expires_at <= now).
+    trained_count: (
+        int  # Number of runs of this datum that have been consumed by training.
+    )
+    expired_count: int  # Number of runs of this datum that have expired (reward is None and expires_at <= now).
 
 
 @dataclass
@@ -35,6 +40,7 @@ class DispenseContext:
     """
     Context provided to the Tuner when dispensing a run assignment.
     """
+
     datum_metrics: Dict[str, DatumMetric]
     """A mapping from each registered datum_id to its current run metrics."""
 

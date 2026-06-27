@@ -2,13 +2,16 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
 from ollie_rl.types import (
     ChatCompletionRequest,
     CreateTunerRequest,
+    CreateTunerResponse,
+    DispenseRunResponse,
     PutRewardRequest,
+    PutRewardResponse,
 )
 from openai.types.chat import ChatCompletion
 from ollie_rl.db import init_db, shutdown_db
@@ -58,7 +61,7 @@ async def custom_404_handler(request: Request, exc: Exception) -> RedirectRespon
 
 
 @app.post("/tuners")
-async def create_tuner(request: CreateTunerRequest):
+async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
     """
     Creates a new LoRA training client / model dynamically from a recipe template.
     """
@@ -76,11 +79,11 @@ async def create_tuner(request: CreateTunerRequest):
         logger.info(
             f"Dynamically created and initialized tuner: {tuner_id} (name: {request.name}) using recipe template: {request.recipe}"
         )
-        return {
-            "tuner_id": tuner_id,
-            "name": request.name,
-            "recipe": request.recipe,
-        }
+        return CreateTunerResponse(
+            tuner_id=tuner_id,
+            name=request.name,
+            recipe=request.recipe,
+        )
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -148,7 +151,7 @@ async def create_chat_completion(
 
 
 @app.post("/tuners/{tuner_id}/runs")
-async def dispense_run(tuner_id: str):
+async def dispense_run(tuner_id: str) -> DispenseRunResponse:
     """
     Dispense a run assignment for the tuner.
     Returns 200 OK with run_id, datum_id, expires_at.
@@ -157,29 +160,16 @@ async def dispense_run(tuner_id: str):
     try:
         run_record = await services.tuner.dispense_run(tuner_id)
         if run_record is None:
-            from fastapi import Response
+            raise HTTPException(204, headers={"Retry-After": "1"})
 
-            return Response(status_code=204, headers={"Retry-After": "1"})
-
-        return {
-            "run_id": run_record.id,
-            "datum_id": run_record.datum_id,
-            "expires_at": run_record.expires_at.isoformat() + "Z",
-        }
+        return DispenseRunResponse(
+            run_id=run_record.id,
+            datum_id=run_record.datum_id,
+            expires_at=run_record.expires_at,
+        )
     except Exception as e:
         logger.exception(f"Failed to dispense run for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/tuners/{tuner_id}")
-async def get_tuner(tuner_id: str):
-    """
-    Get the status of a tuner for observability.
-    """
-    status = await services.tuner.get_tuner_status(tuner_id)
-    if status is None:
-        raise HTTPException(status_code=404, detail=f"Tuner '{tuner_id}' not found")
-    return status
 
 
 @app.put("/tuners/{tuner_id}/runs/{run_id}/reward")
@@ -187,7 +177,7 @@ async def put_reward(
     tuner_id: str,
     run_id: str,
     request: PutRewardRequest,
-):
+) -> PutRewardResponse:
     """
     Sets the reward for a specific run under a tuner.
     """
@@ -207,7 +197,7 @@ async def put_reward(
         # Auto-train trigger (fire-and-forget)
         asyncio.create_task(services.tuner.maybe_train(tuner_id))
 
-        return {"run_id": run_id, "reward": request.reward}
+        return PutRewardResponse(run_id=run_id, reward=request.reward)
     except RunNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except (RunExpiredError, RewardAlreadySetError) as e:

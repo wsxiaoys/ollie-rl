@@ -4,7 +4,7 @@ import math
 import uuid
 from typing import Dict, List, Optional
 
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update
 from ollie_rl.cookbook import Tuner, Cookbook
 from ollie_rl.cookbook.types import Example, StateStore
 from ollie_rl.db import TunerModel, ChatCompletionModel, DatumRowModel
@@ -204,46 +204,6 @@ class TunerService:
                 record.updated_at = now
         logger.info(f"Successfully recorded reward {reward} for run {run_id}")
 
-    async def get_tuner_status(self, tuner_id: str) -> Optional[dict]:
-        """
-        Retrieve the current status of a tuner for observability.
-        """
-        tuner = await self.get(tuner_id)
-        if tuner is None:
-            return None
-
-        op = await tuner.in_flight_train_op()
-        is_training = op is not None and not await op.peek()
-
-        async with self.async_session() as session:
-            from datetime import datetime
-
-            now = datetime.now()
-            pending_result = await session.execute(
-                select(func.count(RunModel.id)).where(
-                    RunModel.tuner_id == tuner_id,
-                    RunModel.reward == None,
-                    RunModel.expires_at > now,
-                )
-            )
-            pending_run_count = pending_result.scalar_one_or_none() or 0
-
-            gen_result = await session.execute(
-                select(ChatCompletionModel.policy_generation)
-                .where(ChatCompletionModel.tuner_id == tuner_id)
-                .order_by(ChatCompletionModel.created_at.desc())
-                .limit(1)
-            )
-            last_recorded_policy_generation = gen_result.scalar_one_or_none()
-
-        return {
-            "tuner_id": tuner_id,
-            "recipe": tuner.kind,
-            "training": is_training,
-            "pending_run_count": pending_run_count,
-            "last_recorded_policy_generation": last_recorded_policy_generation,
-        }
-
     async def maybe_train(self, tuner_id: str) -> None:
         """
         Attempt to start (and wait for) a train step for `tuner_id`.
@@ -282,9 +242,7 @@ class TunerService:
 
             if train_op is not None:
                 await train_op.wait()
-                logger.info(
-                    f"Successfully completed train step for tuner {tuner_id}"
-                )
+                logger.info(f"Successfully completed train step for tuner {tuner_id}")
 
     async def _collect_consumable_batch(
         self, tuner_id: str, session
@@ -435,13 +393,11 @@ class TunerService:
             if run.trained_count > 0:
                 metric.trained_count += run.trained_count
 
-        assignment = tuner.dispense_run(
-            DispenseContext(datum_metrics=metrics)
-        )
+        assignment = tuner.dispense_run(DispenseContext(datum_metrics=metrics))
         if assignment is None:
             return None
 
-        expires_at = datetime.now() + timedelta(minutes=5)
+        expires_at = datetime.now() + timedelta(minutes=120)
         run_record = RunModel(
             id=assignment.run_id,
             tuner_id=tuner_id,
