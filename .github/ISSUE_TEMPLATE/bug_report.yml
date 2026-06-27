@@ -1,0 +1,90 @@
+name: 🐛 Bug report
+description: Report a reproducible bug in ollie-rl.
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out the
+        sections below so we can reproduce and triage your issue quickly.
+
+        For security issues, please follow [SECURITY.md](../SECURITY.md)
+        instead of opening a public bug report.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear, concise description of the bug.
+      placeholder: "When I POST to /tuners with ... the server returns 500."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: |
+        Minimal steps (or a curl/Python snippet) that reproduces the issue.
+      placeholder: |
+        1. Run `docker compose -f deploy/docker-compose.yaml up -d`
+        2. `curl -X POST http://localhost:8000/tuners -d '...'`
+        3. Observe ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / stack traces
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: ollie-rl version / commit
+      placeholder: "v0.1.0 or commit sha"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running ollie-rl?
+      options:
+        - Docker / docker-compose
+        - From source (uv run)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.14.0"
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 14.4 / Ubuntu 22.04 / ..."
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I have searched [existing issues](https://github.com/wsxiaoys/ollie-rl/issues) for duplicates.
+          required: true
+        - label: I am running a recent version (latest release or `main`).
+          required: true

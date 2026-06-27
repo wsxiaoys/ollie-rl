@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/wsxiaoys/ollie-rl/discussions
+    about: |
+      Ask questions, share what you're building with ollie-rl, or float a
+      bigger idea before opening a feature request.
+  - name: 🔒 Security report
+    url: https://github.com/wsxiaoys/ollie-rl/security/advisories/new
+    about: |
+      Privately report a vulnerability. Please do not file security issues
+      in the public tracker.

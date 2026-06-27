@@ -1,0 +1,55 @@
+name: ✨ Feature request
+description: Suggest a new feature, a new trainer backend, or an API change.
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a new feature! Larger ideas (a new trainer
+        adapter, a breaking HTTP-surface change) are also welcome as a
+        discussion in
+        [GitHub Discussions](https://github.com/wsxiaoys/ollie-rl/discussions)
+        before opening a feature request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        Describe the use case in concrete terms. Who would benefit? What does
+        their workflow look like today, and what hurts?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        Sketch the API, HTTP surface, or implementation approach. Code or
+        pseudo-code snippets welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Other approaches you considered, and why you rejected them. If there
+        is an existing library that does part of this, link it.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, links, prior art, related issues.
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you be willing to implement this?
+      options:
+        - label: I'd like to send a PR for this.
+        - label: I'd like guidance from a maintainer before sending a PR.

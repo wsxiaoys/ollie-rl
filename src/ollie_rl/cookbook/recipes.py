@@ -12,12 +12,12 @@ class Recipe(BaseModel, frozen=True):
 
     # ---- Batch formation (GRPO-style grouping) --------------------------
     group_size: int = 16
-    target_group_count: int = 32
+    num_groups_per_batch: int = 32
 
 
 # ---- Named recipe instances --------------------------------------------
 
 GRPO_16x32 = Recipe(
     group_size=16,
-    target_group_count=32,
+    num_groups_per_batch=32,
 )

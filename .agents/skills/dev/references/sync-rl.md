@@ -11,23 +11,24 @@ sequenceDiagram
     participant API as Ollie RL API
     participant DB as DB
 
-    C->>API: POST /tuners { recipe, datum_ids: [...] }
-    API-->>C: { tuner_id }
+    C->>API: POST /tuners { name, recipe, trainer, datum_ids: [...] }
+    API-->>C: { tuner_id, name, recipe }
 
     loop each training step
         loop fan out N samplers (parallel)
             C->>API: POST /tuners/{id}/runs
-            alt queue open
-                API->>API: dispense_run(is_training=False, datum_pool)
-                API->>DB: INSERT runs
+            alt trainer is idle
+                API->>API: dispense_run() picks least-attempted datum
+                API->>DB: INSERT runs (expires_at = now + 2h)
                 API-->>C: 200 { run_id, datum_id, expires_at }
-                C->>API: POST /openai/v1/chat/completions { x_run_id, ... }
+                C->>API: POST /openai/v1/chat/completions { x_tuner_id, x_run_id, ... }
                 API->>DB: INSERT chat_completions (policy_generation)
                 API-->>C: ChatCompletion
                 C->>API: PUT /tuners/{id}/runs/{run_id}/reward { reward }
                 API->>DB: UPDATE runs SET reward=…
-            else barrier closed
-                API-->>C: 204 + Retry-After
+                Note over API: fire-and-forget maybe_train(tuner_id)
+            else trainer is currently training
+                API-->>C: 204 + Retry-After: 1
                 Note over C: backoff and retry
             end
         end
@@ -46,9 +47,24 @@ they all share the same `run_id`, reward, and advantage.
 | `POST /tuners/{tuner_id}/runs`                 | Request a new run assignment.             |
 | `POST /openai/v1/chat/completions`             | Sample one LLM response inside a `run_id`.|
 | `PUT /tuners/{tuner_id}/runs/{run_id}/reward`  | Submit the scalar reward for a `run_id`.  |
-| `GET /tuners/{tuner_id}`                       | Get the status of a tuner (observability). |
 
-Training is applied implicitly by the server as rewards arrive; the client does not need to trigger it explicitly.
+Training is applied implicitly by the server as rewards arrive (the
+`PUT /reward` handler schedules `TunerService.maybe_train(tuner_id)` in
+the background); the client does not need to trigger it explicitly.
+
+> Note: there is currently no `GET /tuners/{tuner_id}` observability
+> endpoint. Any unrouted path returns a `307` redirect to `/docs` (the
+> Swagger UI), which is also the easiest way to introspect the live HTTP
+> surface.
+
+### `POST /tuners` body
+
+| Field        | Required | Default        | Meaning                                   |
+|--------------|----------|----------------|-------------------------------------------|
+| `name`       | yes      | —              | Display name for the tuned model.         |
+| `datum_ids`  | yes      | —              | Non-empty list of opaque dataset item ids.|
+| `recipe`     | no       | `grpo_16x32`   | Named recipe in the `Cookbook` registry.  |
+| `trainer`    | no       | `gemini_msrl`  | Named factory in the trainer registry.    |
 
 ### Required headers on `/openai/v1/chat/completions`
 
@@ -57,7 +73,7 @@ Training is applied implicitly by the server as rewards arrive; the client does 
 | `X-Tuner-Id`  | yes      | Which tuner / policy to sample from.                        |
 | `X-Run-Id`    | yes\*    | The run this completion belongs to.                         |
 
-\* `X-Run-Id` should be sent for **any request whose output affects the final result** the agent is being scored on (i.e. completions that participate in solving the task and will be used as training examples). Auxiliary requests that do not affect the result — for example generating a chat title, summarizing logs, or other side-channel calls that are not part of the task context — should **omit** the header so they are not recorded as training examples. Note that the server automatically maps the `run_id` to its assigned `datum_id` to prevent client-side tampering.
+\* `X-Run-Id` should be sent for **any request whose output affects the final result** the agent is being scored on (i.e. completions that participate in solving the task and will be used as training examples). Auxiliary requests that do not affect the result — for example generating a chat title, summarizing logs, or other side-channel calls that are not part of the task context — should **omit** the header so they are not recorded as training examples. Note that the server automatically maps the `run_id` to its assigned `datum_id` to prevent client-side tampering; clients never send `datum_id` in a header.
 
 ## One Training Step, Visualized
 
@@ -65,15 +81,15 @@ A single sync-RL step has three phases visible to the client.
 
 ### Phase 0 — bootstrap (once per training job)
 
-`POST /tuners` with the recipe payload and `datum_ids` (non-empty list) to create a tuner.
-The server returns a `tuner_id`. Persist it somewhere durable — it is the only handle to the policy on the server.
+`POST /tuners` with `name`, `datum_ids` (non-empty), and optionally `recipe` and `trainer` to create a tuner.
+The server returns `{ tuner_id, name, recipe }`. Persist `tuner_id` somewhere durable — it is the only handle to the policy on the server.
 
 ### Phase 1 — request run assignments
 
 Workers request work by calling `POST /tuners/{tuner_id}/runs` with an empty body:
 
 - **200 OK**: Returns `{ run_id, datum_id, expires_at }`. The worker should execute the run.
-- **204 No Content**: The barrier is closed (e.g., training is in flight). The response will include a `Retry-After` header (usually `1` second). The worker should back off and retry.
+- **204 No Content**: The trainer is currently in the middle of a train step. The response includes a `Retry-After: 1` header. The worker should back off and retry.
 
 ### Phase 2 — execute run and submit reward
 
@@ -93,7 +109,8 @@ sequenceDiagram
     end
     Note over C: client scores the run
     C->>API: PUT /tuners/{tuner_id}/runs/{run_id}/reward<br/>{ reward: 0.75 }
-    API-->>C: 200 OK
+    API-->>C: 200 { run_id, reward }
+    Note over API: maybe_train(tuner_id) fires in background
 ```
 
 ### Phase 3 — loop
@@ -104,6 +121,8 @@ The client simply continues the loop, requesting the next run assignment. The se
 
 - **Never reuse a `run_id`.** The server allocates the `run_id` dynamically; always use the `run_id` dispensed by the server.
 - **Send `X-Run-Id` on result-affecting completions.** Without it, the completion is not recorded and the run cannot contribute to training. Conversely, omit it on auxiliary calls so they are not picked up as training examples.
-- **Submit rewards before the run expires.** Every run is leased with an expiration deadline (`expires_at`, default `5 minutes`). If a reward is posted after the lease expires, the server returns `409 Conflict` because the dispenser may have already re-issued that datum to another worker.
+- **Submit rewards before the run expires.** Every run is leased with an expiration deadline (`expires_at`, default **2 hours / 7200 s** — see `dispense_run` in `tuner_service.py`). If a reward is posted after the lease expires, the server returns `409 Conflict` because the dispenser may have already re-issued that datum to another worker.
 - **Rewards are write-once.** Once a reward has been submitted for a `run_id`, it cannot be changed. Subsequent `PUT /reward` calls on the same `run_id` return `409 Conflict`.
+- **Chat completions inside a run also respect the lease.** `POST /openai/v1/chat/completions` will return `409` if the run has already been rewarded or its lease has expired, and `400` if the `X-Run-Id` is unknown.
 - **Pace yourself.** The server does not limit concurrent completions or rewards. A sync-RL driver should bound its own fan-out so the server is not overwhelmed by a flood of HTTP work.
+- **Expect `204 + Retry-After` during training barriers.** Implicit training is triggered fire-and-forget when a reward is posted. While a `train_step` is in flight on a tuner, `POST /tuners/{tuner_id}/runs` returns `204 No Content` with `Retry-After: 1`. Clients should treat this as a polite "come back in a second", not an error.

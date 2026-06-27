@@ -351,15 +351,15 @@ class TunerService:
                 )
             rollouts.append(Rollout(runs=rollout_runs))
 
-        if len(rollouts) < recipe.target_group_count:
+        if len(rollouts) < recipe.num_groups_per_batch:
             logger.info(
                 f"Not enough groups ready for training under tuner {tuner_id} "
-                f"(got {len(rollouts)}, need at least {recipe.target_group_count})"
+                f"(got {len(rollouts)}, need at least {recipe.num_groups_per_batch})"
             )
             return [], []
 
-        # If there are more than target_group_count groups, only pick the first target_group_count
-        rollouts = rollouts[: recipe.target_group_count]
+        # If there are more than num_groups_per_batch groups, only pick the first num_groups_per_batch
+        rollouts = rollouts[: recipe.num_groups_per_batch]
 
         # Map run advantages
         run_advantages: Dict[str, float] = {}

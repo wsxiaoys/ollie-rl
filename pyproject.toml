@@ -1,9 +1,35 @@
 [project]
 name = "ollie-rl"
 version = "0.1.0"
-description = "Add your description here"
+description = "An OpenAI-compatible chat-completions server with a built-in online GRPO training loop."
 readme = "README.md"
 requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Meng Zhang", email = "meng@tabbyml.com" },
+]
+keywords = [
+    "reinforcement-learning",
+    "grpo",
+    "rlhf",
+    "llm",
+    "fastapi",
+    "openai-api",
+    "gemini",
+    "tinker",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "aiosqlite>=0.22.1",
     "asyncpg>=0.31.0",
@@ -20,6 +46,12 @@ dependencies = [
     "transformers>=5.12.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/wsxiaoys/ollie-rl"
+Repository = "https://github.com/wsxiaoys/ollie-rl"
+Issues = "https://github.com/wsxiaoys/ollie-rl/issues"
+Changelog = "https://github.com/wsxiaoys/ollie-rl/releases"
+
 [dependency-groups]
 dev = [
     "poethepoet>=0.46.0",
@@ -33,8 +65,36 @@ dev = [
 requires = ["uv_build>=0.11.23,<0.12.0"]
 build-backend = "uv_build"
 
+# ---- Developer task runner (`uv run poe <task>`) ----------------------------
+
 [tool.poe.tasks.dev]
+help = "Run the FastAPI server locally with auto-reload."
 script = "ollie_rl:dev"
 
+[tool.poe.tasks.test]
+help = "Run the pytest suite."
+cmd = "uv run pytest"
+
+[tool.poe.tasks.check]
+help = "Run the ty type checker."
+cmd = "uv run ty check"
+
+[tool.poe.tasks.lint]
+help = "Lint with ruff (no autofix)."
+cmd = "uvx ruff check ."
+
 [tool.poe.tasks.format]
+help = "Autofix lint + format the codebase."
 shell = "uvx ruff check . --select F401 --output-format concise --fix && uv format"
+
+[tool.poe.tasks.docker-build]
+help = "Build the Docker image locally."
+cmd = "docker build -t ollie-rl:dev ."
+
+[tool.poe.tasks.docker-up]
+help = "Run the Docker compose stack (production-style)."
+cmd = "docker compose -f deploy/docker-compose.yaml up -d"
+
+[tool.poe.tasks.docker-down]
+help = "Stop the Docker compose stack."
+cmd = "docker compose -f deploy/docker-compose.yaml down"
