@@ -17,8 +17,8 @@ class ChatCompletionRequest(BaseModel):
 
 class CreateTunerRequest(BaseModel):
     name: str
-    recipe: str = "grpo_16x32"
-    trainer: str = "gemini_msrl"
+    recipe: str
+    trainer: str
     datum_ids: List[str]
 
 

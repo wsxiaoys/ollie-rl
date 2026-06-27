@@ -287,7 +287,7 @@ class TunerService:
                         return
 
                     train_op = await trainer.train_step(
-                        batch
+                        batch,
                     )  # submits LRO + state_store.save
                     await session.execute(  # bump trained_count
                         update(RunModel)

@@ -76,7 +76,7 @@ a run, let the agent solve the task, and score it:
 # One-time: create a tuner over your task list
 TUNER_ID=$(curl -s -X POST http://localhost:8000/tuners \
   -H 'Content-Type: application/json' \
-  -d '{"name":"my-policy","datum_ids":["task-1","task-2","task-3"]}' \
+  -d '{"name":"my-policy","recipe":"grpo_16x32","trainer":"tinker","datum_ids":["task-1","task-2","task-3"]}' \
   | jq -r .tuner_id)
 
 # Per run: request a run assignment
@@ -106,7 +106,7 @@ sequenceDiagram
     participant API as ollie-rl
     participant T as Trainer backend
 
-    C->>API: POST /tuners { name, datum_ids }
+    C->>API: POST /tuners { name, recipe, trainer, datum_ids }
     API-->>C: { tuner_id }
 
     loop training step

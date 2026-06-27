@@ -9,6 +9,10 @@ from .types import (
     SampleOp,
 )
 
+# Import trainer implementations to trigger registration
+from . import gemini_msrl as gemini_msrl
+from . import fake as fake
+
 __all__ = [
     "Trainer",
     "TrainerFactory",

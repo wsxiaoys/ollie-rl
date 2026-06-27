@@ -35,7 +35,7 @@ from ollie_rl.types import ChatCompletionRequest
 # ---------------------------------------------------------------------------
 
 _RECIPE = "grpo_16x32"
-_TRAINER_KIND = "fake"
+_TRAINER_KIND = "mock"
 
 
 def _make_chat_completion(completion_id: str = "cmpl-test") -> ChatCompletion:
