@@ -240,34 +240,17 @@ class TinkerTrainerFactory(TrainerFactory):
         self,
         name: str,
         state_store: StateStore,
-        **bootstrap,
     ) -> TinkerTrainer:
-        service_url = (
-            bootstrap.get("service_url")
-            or os.environ.get("TINKER_SERVICE_URL")
-            or os.environ.get("TINKER_BASE_URL")
+        service_url = os.environ.get("TINKER_SERVICE_URL") or os.environ.get(
+            "TINKER_BASE_URL"
         )
-        api_key = bootstrap.get("api_key") or os.environ.get("TINKER_API_KEY")
+        api_key = os.environ.get("TINKER_API_KEY")
 
         config_kwargs: dict[str, Any] = {}
         if service_url:
             config_kwargs["service_url"] = service_url
         if api_key:
             config_kwargs["api_key"] = api_key
-
-        for field in [
-            "base_model",
-            "lora_rank",
-            "learning_rate",
-            "max_tokens",
-            "temperature",
-            "kl_penalty_coef",
-            "loss_fn",
-            "max_steps_off_policy",
-            "sampler_promotion_every",
-        ]:
-            if field in bootstrap:
-                config_kwargs[field] = bootstrap[field]
 
         config = TinkerTrainerConfig(**config_kwargs)
 

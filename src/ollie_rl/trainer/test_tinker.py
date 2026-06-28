@@ -267,7 +267,6 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
             trainer = await factory.open(
                 name="test-tuner",
                 state_store=fresh_store,
-                base_model="meta-llama/Llama-3.1-8B-Instruct",
             )
 
         self.assertEqual(
