@@ -80,7 +80,7 @@ The `Trainer` / `TrainerFactory` contract lives in
 [`src/ollie_rl/trainer/types.py`](./src/ollie_rl/trainer/types.py). The
 shortest path to a new backend is:
 
-1. Implement `Trainer` (`sample`, `train_step`, `in_flight_train_op`).
+1. Implement `Trainer` (`sample`, `train_step`).
 2. Implement `TrainerFactory.open(...)` to bootstrap or restore your trainer
    from a `StateStore`.
 3. Register it via the factory registry in

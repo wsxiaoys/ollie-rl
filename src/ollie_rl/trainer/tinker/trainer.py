@@ -81,6 +81,28 @@ class TinkerTrainerState(BaseModel):
 
 
 class TinkerTrainOp(TrainOp):
+    """
+    Completed-op sentinel for :class:`TinkerTrainer`.
+
+    Unlike LRO-style backends (e.g. Gemini MSRL), Tinker's training
+    primitives are exposed as locally-awaited futures rather than
+    remote long-running operations we can poll for. We therefore drive
+    the entire pipeline (``forward_backward_async`` →
+    ``optim_step_async`` → optional sampler promotion → state
+    persist) inline inside :meth:`TinkerTrainer.train_step` and only
+    return once everything has been awaited.
+
+    Consequently the returned op is *already finished* by
+    construction:
+
+    - :meth:`peek` always returns ``True`` (the work is done).
+    - :meth:`wait` is a no-op.
+
+    This is intentional. Callers that use ``await train_op.wait()``
+    as a uniform completion barrier across backends will simply fall
+    through.
+    """
+
     async def wait(self) -> None:
         return None
 
@@ -106,7 +128,6 @@ class TinkerTrainer(Trainer):
     state_store: StateStore
     _sampling_client: tinker.SamplingClient
     _training_client: tinker.TrainingClient
-    _train_op: Optional[TrainOp] = None
 
     def __init__(
         self,
@@ -123,7 +144,6 @@ class TinkerTrainer(Trainer):
         self.state_store = state_store
         self._sampling_client = sampling_client
         self._training_client = training_client
-        self._train_op = None
 
         # Set up renderer and tokenizer
         tokenizer = self._sampling_client.get_tokenizer()
@@ -364,12 +384,7 @@ class TinkerTrainer(Trainer):
             await self._promote_sampler()
         await self._persist_state()
 
-        op = TinkerTrainOp()
-        self._train_op = op
-        return op
-
-    async def in_flight_train_op(self) -> Optional[TrainOp]:
-        return self._train_op
+        return TinkerTrainOp()
 
 
 class TinkerTrainerFactory(TrainerFactory):

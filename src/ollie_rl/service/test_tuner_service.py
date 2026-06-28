@@ -71,8 +71,6 @@ class FakeTrainer(Trainer):
 
     def __init__(self):
         self._sample_op = _make_sample_op()
-        self._train_op: Optional[AsyncMock] = None
-        self._is_training = False
 
     async def sample(self, request: ChatCompletionRequest):
         return self._sample_op
@@ -81,16 +79,7 @@ class FakeTrainer(Trainer):
         op = AsyncMock()
         op.wait = AsyncMock(return_value=None)
         op.peek = AsyncMock(return_value=True)
-        self._train_op = op
         return op
-
-    async def in_flight_train_op(self):
-        return self._train_op
-
-    async def is_training(self) -> bool:
-        if self._train_op is None:
-            return False
-        return not await self._train_op.peek()
 
 
 class FakeTrainerFactory(TrainerFactory):
@@ -265,7 +254,6 @@ class TestDispenseRun(TunerServiceTestCase):
         RECIPES["test_async"] = Recipe(
             group_size=16,
             num_groups_per_batch=32,
-            allow_dispense_during_training=True,
         )
 
         tuner_id = await self.service.create_tuner(
@@ -277,46 +265,11 @@ class TestDispenseRun(TunerServiceTestCase):
 
         trainer = self.service.active_trainers[tuner_id]
         assert isinstance(trainer, FakeTrainer)
-        # Put trainer into an active training state.
-        trainer._is_training = True
-        op = AsyncMock()
-        op.peek = AsyncMock(return_value=False)  # still running
-        trainer._train_op = op
 
         result = await self.service.dispense_run(tuner_id)
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(result.datum_id, "datum-1")
-
-    async def test_dispense_run_returns_none_when_trainer_is_training_and_not_allow_dispense_during_training(
-        self,
-    ):
-        from ollie_rl.cookbook import RECIPES
-        from ollie_rl.cookbook.recipes import Recipe
-
-        # Register a strict on-policy recipe that disallows dispensing during training
-        RECIPES["test_strict"] = Recipe(
-            group_size=2,
-            num_groups_per_batch=2,
-            allow_dispense_during_training=False,
-        )
-
-        tuner_id = await self.service.create_tuner(
-            recipe="test_strict",
-            name="test-tuner-strict",
-            datum_ids=["datum-1", "datum-2"],
-            trainer=_TRAINER_KIND,
-        )
-
-        trainer = self.service.active_trainers[tuner_id]
-        assert isinstance(trainer, FakeTrainer)
-        # Put trainer into an active training state.
-        op = AsyncMock()
-        op.peek = AsyncMock(return_value=False)  # still running
-        trainer._train_op = op
-
-        result = await self.service.dispense_run(tuner_id)
-        self.assertIsNone(result)
 
     async def test_returns_dispense_run_with_valid_fields(self):
         tuner_id = await self._create_tuner(datum_ids=["d1", "d2"])
@@ -574,26 +527,6 @@ class TestMaybeTrain(TunerServiceTestCase):
 
         self.assertEqual(called, [])
 
-    async def test_no_op_when_already_training(self):
-        tuner_id = await self._create_tuner()
-        trainer = self.service.active_trainers[tuner_id]
-        assert isinstance(trainer, FakeTrainer)
-        # Simulate an in-flight training op.
-        op = AsyncMock()
-        op.peek = AsyncMock(return_value=False)
-        trainer._train_op = op
-
-        called = []
-        original = trainer.train_step
-
-        async def spy(examples):
-            called.append(examples)
-            return await original(examples)
-
-        trainer.train_step = spy  # type: ignore
-        await self.service.maybe_train(tuner_id)
-        self.assertEqual(called, [])
-
     async def test_train_step_receives_policy_generation(self):
         from ollie_rl.cookbook import RECIPES
         from ollie_rl.cookbook.recipes import Recipe
@@ -602,7 +535,6 @@ class TestMaybeTrain(TunerServiceTestCase):
         RECIPES["test_2x2"] = Recipe(
             group_size=2,
             num_groups_per_batch=2,
-            allow_dispense_during_training=True,
         )
 
         tuner_id = await self.service.create_tuner(

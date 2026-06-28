@@ -113,8 +113,6 @@ From the cookbook `Config` (not exhaustive):
   cookbook types it as `LossFnType` (`Literal`) end-to-end.
 - State persistence cadence: we persist on every successful `train_step`;
   cookbook persists at `save_every`.
-- We expose `in_flight_train_op()` because the orchestrator polls; cookbook
-  awaits everything inline.
 
 ## TL;DR
 

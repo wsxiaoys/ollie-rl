@@ -70,16 +70,6 @@ class Trainer(ABC):
     @abstractmethod
     async def train_step(self, examples: List[Example]) -> TrainOp: ...
 
-    @abstractmethod
-    async def in_flight_train_op(self) -> Optional[TrainOp]: ...
-
-    async def is_training(self) -> bool:
-        op = await self.in_flight_train_op()
-        if op:
-            return not await op.peek()
-        return False
-
-
 class TrainerFactory(ABC):
     """
     Async factory that bootstraps or restores a Trainer against a StateStore.

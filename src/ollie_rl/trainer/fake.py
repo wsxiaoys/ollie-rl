@@ -41,7 +41,7 @@ class FakeSampleOp(SampleOp):
 
 class FakeTrainer(Trainer):
     def __init__(self):
-        self._train_op: Optional[TrainOp] = None
+        pass
 
     async def sample(self, request: ChatCompletionRequest) -> SampleOp:
         completion_id = f"cmpl-{uuid.uuid4()}"
@@ -69,12 +69,7 @@ class FakeTrainer(Trainer):
 
     async def train_step(self, examples: List[Example]) -> TrainOp:
         logger.info(f"FakeTrainer training step with {len(examples)} examples.")
-        op = FakeTrainOp()
-        self._train_op = op
-        return op
-
-    async def in_flight_train_op(self) -> Optional[TrainOp]:
-        return self._train_op
+        return FakeTrainOp()
 
 
 class FakeTrainerFactory(TrainerFactory):

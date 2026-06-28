@@ -396,14 +396,6 @@ class GeminiMsrlTrainer(Trainer):
             op.name,
         )
 
-    async def in_flight_train_op(self) -> Optional[TrainOp]:
-        if not self.state.last_train_op:
-            return None
-        return GeminiMsrlTrainingOp(
-            self.client,
-            self.state.last_train_op,
-        )
-
 
 class GeminiMsrlTrainerFactory(TrainerFactory):
     """
