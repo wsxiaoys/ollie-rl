@@ -205,6 +205,8 @@ class TunerService:
                 run_id=run_id,
                 datum_id=datum_id,
                 policy_generation=policy_generation,
+                tokens=sample.tokens,
+                logprobs=sample.logprobs,
             )
 
         return sample.completion
@@ -216,9 +218,16 @@ class TunerService:
         run_id: str,
         datum_id: str,
         policy_generation: str,
+        tokens: Optional[List[int]] = None,
+        logprobs: Optional[List[float]] = None,
     ) -> None:
         """
         Record a chat completion event in the database.
+
+        `tokens` and `logprobs` are optional sample-time tensors required
+        by trainers (e.g. Tinker) that train on raw rollouts. They are
+        stored as JSON-encoded text and may be NULL for trainers that do
+        not provide them.
         """
         async with self.async_session() as session:
             async with session.begin():
@@ -228,6 +237,8 @@ class TunerService:
                     run_id=run_id,
                     datum_id=datum_id,
                     policy_generation=policy_generation,
+                    tokens=tokens,
+                    logprobs=logprobs,
                 )
                 session.add(db_completion)
 
@@ -384,12 +395,15 @@ class TunerService:
             )
             return [], []
 
-        # Create Examples for Trainer.train_step
+        # Create Examples for Trainer.train_step. `tokens` / `logprobs`
+        # are decoded transparently by the model-layer TypeDecorators.
         examples = [
             Example(
                 chat_completion_id=c.id,
                 advantage=run_advantages[c.run_id],
                 policy_generation=c.policy_generation,
+                tokens=c.tokens,
+                logprobs=c.logprobs,
             )
             for c in completions
             if c.run_id in run_advantages

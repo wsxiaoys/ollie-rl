@@ -1,16 +1,77 @@
+import array
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 import uuid
 from sqlalchemy import (
     Integer,
+    LargeBinary,
     String,
     Text,
     ForeignKey,
     Float,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 
 from ollie_rl.db.types import UtcDateTime, utcnow
+
+
+class _PackedIntList(TypeDecorator[List[int]]):
+    """
+    Stores a `List[int]` as a compact int64 little-endian BLOB.
+
+    Encoding/decoding stays inside the model layer so the service /
+    trainer layers can read and write the column as a plain
+    `List[int]`. Uses the stdlib `array` module ("q" = signed int64),
+    ample for any practical vocab size, no extra dependency.
+    """
+
+    impl = LargeBinary
+    cache_ok = True
+
+    def process_bind_param(
+        self, value: Optional[List[int]], dialect
+    ) -> Optional[bytes]:
+        if value is None:
+            return None
+        return array.array("q", value).tobytes()
+
+    def process_result_value(
+        self, value: Optional[bytes], dialect
+    ) -> Optional[List[int]]:
+        if value is None:
+            return None
+        buf = array.array("q")
+        buf.frombytes(value)
+        return list(buf)
+
+
+class _PackedFloatList(TypeDecorator[List[float]]):
+    """
+    Stores a `List[float]` as a compact float32 little-endian BLOB.
+
+    Float32 matches the precision tinker stores on `SampledSequence`,
+    so the round-trip is lossless for the values we actually see.
+    """
+
+    impl = LargeBinary
+    cache_ok = True
+
+    def process_bind_param(
+        self, value: Optional[List[float]], dialect
+    ) -> Optional[bytes]:
+        if value is None:
+            return None
+        return array.array("f", value).tobytes()
+
+    def process_result_value(
+        self, value: Optional[bytes], dialect
+    ) -> Optional[List[float]]:
+        if value is None:
+            return None
+        buf = array.array("f")
+        buf.frombytes(value)
+        return list(buf)
 
 
 def generate_tuner_id() -> str:
@@ -83,6 +144,17 @@ class ChatCompletionModel(BaseModel):
         String(255), nullable=False, index=True
     )
     datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # Optional cached sample-time tensors written by trainers that need
+    # to replay rollouts at train time (Tinker). Encoding/decoding is
+    # handled transparently by the `_PackedIntList` / `_PackedFloatList`
+    # type decorators so the rest of the codebase reads and writes
+    # plain `List[int]` / `List[float]`. NULL for trainers that retain
+    # candidates server-side (e.g. gemini_msrl) or that do not train
+    # at all (fake).
+    tokens: Mapped[Optional[List[int]]] = mapped_column(_PackedIntList(), nullable=True)
+    logprobs: Mapped[Optional[List[float]]] = mapped_column(
+        _PackedFloatList(), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=utcnow
     )

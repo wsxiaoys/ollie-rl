@@ -4,8 +4,9 @@ import logging
 import os
 import time
 import uuid
-from typing import List, Optional, Any
+from typing import Any, List, Optional, Tuple
 
+import torch
 from pydantic import BaseModel
 from openai.types.chat import (
     ChatCompletion,
@@ -35,6 +36,18 @@ from ollie_rl.trainer import factory
 logger = logging.getLogger(__name__)
 
 
+class StaleBatchError(RuntimeError):
+    """
+    Raised when too many examples in a `train_step` batch fail the
+    client-side staleness filter (more than
+    `TinkerTrainerConfig.max_stale_fraction`).
+
+    Signals that the async-RL pipeline is running too off-policy for the
+    configured tolerance — operators should tighten `max_steps_off_policy`,
+    raise `sampler_promotion_every` cadence, or reduce sampler throughput.
+    """
+
+
 class TinkerTrainerConfig(BaseModel):
     service_url: Optional[str] = None
     api_key: Optional[str] = None
@@ -47,6 +60,11 @@ class TinkerTrainerConfig(BaseModel):
     loss_fn: str = "importance_sampling"
     max_steps_off_policy: int = 4
     sampler_promotion_every: int = 1
+    # Maximum fraction of a `train_step` batch allowed to be filtered out
+    # as stale before `train_step` raises `StaleBatchError`. Default 0.4
+    # mirrors the rule-of-thumb that an off-policy pipeline running more
+    # than ~40% stale is mis-tuned, not just noisy.
+    max_stale_fraction: float = 0.4
 
 
 class TinkerTrainerState(BaseModel):
@@ -159,6 +177,19 @@ class TinkerTrainer(Trainer):
             raise RuntimeError("Sampling returned no sequences")
 
         sequence = response.sequences[0]
+        # Snapshot the prompt + completion tokens (and per-completion-token
+        # logprobs) so train_step can replay them through
+        # forward_backward without re-sampling. Layout matches
+        # Sample.tokens / Sample.logprobs:
+        #   tokens   = prompt_tokens + completion_tokens
+        #   logprobs = completion logprobs only
+        # (Hence prompt_len = len(tokens) - len(logprobs).)
+        prompt_tokens = model_input.to_ints()
+        completion_tokens = list(sequence.tokens)
+        completion_logprobs = (
+            list(sequence.logprobs) if sequence.logprobs is not None else []
+        )
+        full_tokens = prompt_tokens + completion_tokens
         parsed_message, parse_success = self.renderer.parse_response(sequence.tokens)
         if not parse_success and sequence.stop_reason != "length":
             raise NotImplementedError("Malformed assistant response or function call")
@@ -217,16 +248,202 @@ class TinkerTrainer(Trainer):
         return Sample(
             completion=completion,
             policy_generation=str(self.state.sampler_step),
+            tokens=full_tokens,
+            logprobs=completion_logprobs,
+        )
+
+    def _filter_stale(self, examples: List[Example]) -> Tuple[List[Example], int]:
+        """
+        Drop examples whose `policy_generation` is more than
+        `config.max_steps_off_policy` steps behind `state.train_step`.
+
+        This is the client-side analogue of tinker-cookbook's
+        `filter_stale_trajectory_group`. The cutoff is inclusive: an
+        example sampled at generation `g` survives iff
+        `state.train_step - g <= max_steps_off_policy`. Examples whose
+        `policy_generation` is not a parseable int are conservatively
+        counted as stale (with a warning) — every shipping backend
+        stamps it as a stringified int (we do too), so this should
+        never trip in practice.
+
+        Returns `(survivors, dropped_count)`.
+        """
+        cutoff = self.state.train_step - self.config.max_steps_off_policy
+        survivors: List[Example] = []
+        dropped = 0
+        for ex in examples:
+            try:
+                gen = int(ex.policy_generation)
+            except ValueError:
+                logger.warning(
+                    "TinkerTrainer dropping example with unparseable "
+                    f"policy_generation={ex.policy_generation!r}"
+                )
+                dropped += 1
+                continue
+            if gen < cutoff:
+                dropped += 1
+                continue
+            survivors.append(ex)
+        if dropped:
+            logger.info(
+                f"TinkerTrainer staleness filter dropped {dropped}/{len(examples)} "
+                f"examples (train_step={self.state.train_step}, "
+                f"max_steps_off_policy={self.config.max_steps_off_policy})"
+            )
+        return survivors, dropped
+
+    def _example_to_datum(self, example: Example) -> Optional[tinker.Datum]:
+        """
+        Convert an `Example` to a single `tinker.Datum` for
+        `forward_backward`. Returns None if the example is missing the
+        cached tokens/logprobs needed to replay it.
+
+        Layout mirrors `tinker_cookbook.rl.data_processing.trajectory_to_data`
+        for the single-turn case:
+
+            full_seq      = prompt + completion
+            sampled_lp    = [0.0]*prompt_len + completion_logprobs
+            advantages    = [0.0]*prompt_len + [advantage]*completion_len
+            mask          = [0.0]*prompt_len + [1.0]*completion_len
+
+            model_input   = full_seq[:-1]   (next-token-prediction inputs)
+            target_tokens = full_seq[1:]
+            (loss_fn_inputs are all sliced [1:] to align with targets)
+        """
+        if example.tokens is None or example.logprobs is None:
+            logger.warning(
+                f"TinkerTrainer skipping example {example.chat_completion_id}: "
+                "no cached tokens/logprobs"
+            )
+            return None
+
+        full_tokens = example.tokens
+        completion_logprobs = example.logprobs
+        completion_len = len(completion_logprobs)
+        prompt_len = len(full_tokens) - completion_len
+        if prompt_len < 1 or completion_len < 1:
+            logger.warning(
+                f"TinkerTrainer skipping example {example.chat_completion_id}: "
+                f"degenerate prompt_len={prompt_len}, completion_len={completion_len}"
+            )
+            return None
+
+        sampled_logprobs = [0.0] * prompt_len + list(completion_logprobs)
+        advantages = [0.0] * prompt_len + [example.advantage] * completion_len
+        mask = [0.0] * prompt_len + [1.0] * completion_len
+
+        # Drop the leading position so loss inputs align with target_tokens.
+        target_tokens = full_tokens[1:]
+        sampled_logprobs = sampled_logprobs[1:]
+        advantages = advantages[1:]
+        mask = mask[1:]
+
+        input_tokens = tinker.ModelInput.from_ints(tokens=full_tokens[:-1])
+        return tinker.Datum(
+            model_input=input_tokens,
+            loss_fn_inputs={
+                "target_tokens": tinker.TensorData.from_torch(
+                    torch.tensor(target_tokens, dtype=torch.int64)
+                ),
+                "logprobs": tinker.TensorData.from_torch(
+                    torch.tensor(sampled_logprobs, dtype=torch.float32)
+                ),
+                "advantages": tinker.TensorData.from_torch(
+                    torch.tensor(advantages, dtype=torch.float32)
+                ),
+                "mask": tinker.TensorData.from_torch(
+                    torch.tensor(mask, dtype=torch.float32)
+                ),
+            },
+        )
+
+    async def _promote_sampler(self) -> None:
+        """
+        Snapshot the current weights into a new sampler checkpoint and
+        swap `self._sampling_client` to it. Updates `state.sampler_path`
+        and `state.sampler_step`. Caller is responsible for persisting
+        state.
+        """
+        sampler_name = f"sampler-step-{self.state.train_step}-{uuid.uuid4().hex[:8]}"
+        future = await self._training_client.save_weights_for_sampler_async(
+            name=sampler_name
+        )
+        save_response = await future
+        new_sampler_path = save_response.path
+        new_sampling_client = await self.service_client.create_sampling_client_async(
+            model_path=new_sampler_path
+        )
+        self._sampling_client = new_sampling_client
+        self.state.sampler_path = new_sampler_path
+        self.state.sampler_step = self.state.train_step
+        logger.info(
+            f"TinkerTrainer promoted sampler to step {self.state.sampler_step} "
+            f"({new_sampler_path})"
         )
 
     async def train_step(self, examples: List[Example]) -> TrainOp:
-        logger.info(
-            f"TinkerTrainer train_step called with {len(examples)} examples (no-op in Phase 2)."
+        logger.info(f"TinkerTrainer.train_step called with {len(examples)} examples")
+
+        if not examples:
+            # Empty batch is a structural caller bug, not a staleness
+            # problem; surface it the same way (consistent with the
+            # plan's "too few survive → fail loudly" branch).
+            raise StaleBatchError("TinkerTrainer.train_step received an empty batch")
+
+        # 1. Client-side staleness filter. If too large a fraction of
+        # the batch is stale, refuse to advance and surface the problem
+        # to the operator instead of silently no-op'ing.
+        survivors, dropped = self._filter_stale(examples)
+        stale_fraction = dropped / len(examples)
+        if stale_fraction > self.config.max_stale_fraction:
+            raise StaleBatchError(
+                f"TinkerTrainer.train_step rejecting batch: "
+                f"{dropped}/{len(examples)} examples stale "
+                f"(fraction={stale_fraction:.2f} > "
+                f"max_stale_fraction={self.config.max_stale_fraction:.2f}). "
+                f"Tighten max_steps_off_policy, raise sampler_promotion_every "
+                "cadence, or slow sampler throughput."
+            )
+
+        # 2. Build Datum list (skipping rows missing cached tokens).
+        data: List[tinker.Datum] = []
+        for ex in survivors:
+            datum = self._example_to_datum(ex)
+            if datum is not None:
+                data.append(datum)
+
+        if not data:
+            raise StaleBatchError(
+                "TinkerTrainer.train_step rejecting batch: no surviving "
+                "examples carry cached tokens/logprobs after staleness "
+                "filter. Verify sample() is writing tokens/logprobs into "
+                "ChatCompletionModel."
+            )
+
+        # 3. forward_backward + optim_step.
+        loss_fn_config = {"kl_penalty_coef": self.config.kl_penalty_coef}
+        # `loss_fn` is a tinker Literal type; we hold it as `str` on the
+        # config (lets us accept future loss kinds without bumping the
+        # config schema) and cast at the call boundary.
+        loss_fn: Any = self.config.loss_fn
+        fb_future = await self._training_client.forward_backward_async(
+            data,
+            loss_fn,
+            loss_fn_config=loss_fn_config,
         )
+        await fb_future
+        opt_future = await self._training_client.optim_step_async(
+            tinker.AdamParams(learning_rate=self.config.learning_rate)
+        )
+        await opt_future
+
+        # 4. Advance step counter; promote sampler at cadence.
         self.state.train_step += 1
         if self.state.train_step % self.config.sampler_promotion_every == 0:
-            self.state.sampler_step = self.state.train_step
+            await self._promote_sampler()
         await self._persist_state()
+
         op = TinkerTrainOp()
         self._train_op = op
         return op

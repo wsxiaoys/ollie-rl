@@ -720,23 +720,84 @@ consumers from day one: `fake` (tests) and `gemini_msrl` (production).
 - Tests: factory create/restore round-trip; sample stamps a
   `policy_generation`.
 
-### Phase 3 — real tinker `train_step` (1 PR)
-- Add `tokens` + `logprobs` columns to `ChatCompletionModel` (Alembic
-  migration + model bump).
-- `TinkerTrainer.sample()` writes those blobs into a side cache that
-  `TunerService.record_chat_completion` flushes.
+### Phase 3 — real tinker `train_step` (1 PR) [COMPLETED]
+- Add `tokens` + `logprobs` columns to `ChatCompletionModel`. Stored
+  as nullable `LargeBinary` BLOBs (no Alembic migration yet —
+  `Base.metadata.create_all` picks them up on fresh databases).
+  Encoding / decoding lives in the model layer via two
+  `TypeDecorator`s (`_PackedIntList`, `_PackedFloatList`) that use
+  the stdlib `array` module — int64 little-endian for tokens,
+  float32 little-endian for logprobs. The service / trainer layers
+  read and write the columns as plain `List[int]` / `List[float]`
+  and never see the binary representation. Other backends leave
+  the columns NULL.
+- Extend `Sample` and `Example` with optional `tokens` / `logprobs`
+  carrying the same layout convention used at training time:
+  `tokens` is the full prompt+completion sequence and `logprobs` is
+  the per-completion-token logprobs (so
+  `prompt_len = len(tokens) - len(logprobs)`).
+- `TinkerTrainer.sample()` snapshots prompt tokens (from the rendered
+  `ModelInput`) and the sampled tokens + logprobs, returning them on
+  `Sample`. `TunerService.sample()` forwards them to
+  `record_chat_completion`, which persists them to the new columns.
+  `_collect_consumable_batch` reads them back and hands them to
+  `Trainer.train_step` via `Example`.
 - `TinkerTrainer.train_step()`:
   1. Applies the client-side staleness filter using
      `Example.policy_generation`, `state.train_step`, and
-     `config.max_steps_off_policy`.
-  2. Builds the `forward_backward` payload from cached tokens/logprobs
-     and `Example.advantage`.
-  3. Runs `optim_step`.
-  4. Promotes the sampler every `config.sampler_promotion_every`
-     steps.
-- Tests: in-trainer staleness filter (`config.max_steps_off_policy`
-  drops the right rows); end-to-end one batch on a fake tinker
-  service that validates the payload shape.
+     `config.max_steps_off_policy` (the cutoff is inclusive:
+     `gen >= state.train_step - max_steps_off_policy`).
+  2. If the fraction of dropped examples exceeds
+     `config.max_stale_fraction` (default `0.4`), raises
+     `StaleBatchError` rather than silently no-op'ing. Refined from
+     the original "return a no-op TrainOp" branch: surfacing the
+     mis-tuned async pipeline (too-loose `max_steps_off_policy`,
+     too-rare sampler promotion, etc.) is preferable to dropping
+     gradient signal silently. Operators see the error in the
+     `maybe_train` log and can re-tune.
+  3. Builds one `tinker.Datum` per surviving example following the
+     `tinker_cookbook.rl.data_processing.trajectory_to_data` layout
+     (`target_tokens`, `logprobs`, `advantages`, `mask`) for the
+     single-turn case. Examples missing cached tokens/logprobs are
+     skipped (with a warning); if every example lacked them,
+     `StaleBatchError` is raised.
+  4. Calls `forward_backward_async` (with
+     `loss_fn=config.loss_fn`,
+     `loss_fn_config={"kl_penalty_coef": config.kl_penalty_coef}`)
+     and `optim_step_async` (with `AdamParams(learning_rate=...)`),
+     awaiting both futures.
+  5. Bumps `state.train_step` and — every
+     `config.sampler_promotion_every` steps — snapshots a new
+     sampler via `save_weights_for_sampler_async` +
+     `create_sampling_client_async`, swapping `self._sampling_client`
+     and updating `state.sampler_path` / `state.sampler_step`.
+- Tests in `trainer/test_tinker.py`:
+  - `test_train_step_invokes_forward_backward_and_optim_step` —
+    verifies `forward_backward_async` and `optim_step_async` are
+    awaited with the expected `loss_fn` / `loss_fn_config`.
+  - `test_train_step_promotes_sampler_on_cadence` — verifies sampler
+    is only promoted when `train_step % sampler_promotion_every == 0`.
+  - `test_train_step_filters_stale_examples` — verifies the inclusive
+    cutoff `gen >= state.train_step - max_steps_off_policy` keeps
+    fresh rows and drops stale ones (below the threshold).
+  - `test_train_step_tolerates_stale_below_threshold` — verifies
+    `max_stale_fraction` allows partial staleness.
+  - `test_train_step_raises_when_too_many_stale` — verifies
+    `StaleBatchError` is raised when the stale fraction exceeds
+    `config.max_stale_fraction`, and that state does **not** advance.
+  - `test_train_step_raises_on_empty_batch` — verifies an empty
+    batch is rejected with `StaleBatchError`.
+  - `test_train_step_skips_examples_without_cached_tokens` —
+    verifies cache-less examples are silently skipped during Datum
+    construction so long as fresh examples remain.
+  - `test_train_step_raises_when_all_examples_lack_tokens` —
+    verifies `StaleBatchError` if every example lacks the cached
+    tensors.
+- Tests in `service/test_tuner_service.py`:
+  - `test_persists_tokens_and_logprobs` — round-trips tokens /
+    logprobs through `ChatCompletionModel` and asserts the columns
+    surface as plain Python lists (decoding handled inside the
+    model-layer `TypeDecorator`s).
 
 Each phase is shippable independently. Phase 1 alone unlocks
 async-mode `gemini_msrl`. Phase 1+2 deliver a working (no-op

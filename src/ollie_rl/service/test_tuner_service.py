@@ -481,6 +481,49 @@ class TestRecordChatCompletion(TunerServiceTestCase):
         assert record is not None
         self.assertEqual(record.policy_generation, "gen-1")
         self.assertEqual(record.datum_id, run.datum_id)
+        # No tokens/logprobs supplied → columns stay NULL.
+        self.assertIsNone(record.tokens)
+        self.assertIsNone(record.logprobs)
+
+    async def test_persists_tokens_and_logprobs(self):
+        from sqlalchemy import select
+
+        from ollie_rl.db.connection import get_sessionmaker
+        from ollie_rl.db.models import ChatCompletionModel
+
+        tuner_id = await self._create_tuner()
+        run = await self._add_run(tuner_id)
+
+        tokens = [10, 11, 12, 13, 14]
+        logprobs = [-0.1, -0.2, -0.3]
+        await self.service.record_chat_completion(
+            completion_id="cmpl-with-tokens",
+            tuner_id=tuner_id,
+            run_id=run.id,
+            datum_id=run.datum_id,
+            policy_generation="gen-7",
+            tokens=tokens,
+            logprobs=logprobs,
+        )
+
+        async_session = get_sessionmaker()
+        async with async_session() as session:
+            result = await session.execute(
+                select(ChatCompletionModel).where(
+                    ChatCompletionModel.id == "cmpl-with-tokens"
+                )
+            )
+            record = result.scalar_one_or_none()
+
+        # The model-layer `_PackedIntList` / `_PackedFloatList` type
+        # decorators transparently round-trip the BLOB representation,
+        # so the columns surface as plain Python lists.
+        assert record is not None
+        self.assertEqual(record.tokens, tokens)
+        assert record.logprobs is not None
+        self.assertEqual(len(record.logprobs), len(logprobs))
+        for got, want in zip(record.logprobs, logprobs):
+            self.assertAlmostEqual(got, want, places=5)
 
 
 # ---------------------------------------------------------------------------
