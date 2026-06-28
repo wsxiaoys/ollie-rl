@@ -457,6 +457,7 @@ class TinkerTrainerFactory(TrainerFactory):
         self,
         name: str,
         state_store: StateStore,
+        trainer_params: Optional[dict] = None,
     ) -> TinkerTrainer:
         service_url = os.environ.get("TINKER_SERVICE_URL") or os.environ.get(
             "TINKER_BASE_URL"
@@ -468,6 +469,9 @@ class TinkerTrainerFactory(TrainerFactory):
             config_kwargs["service_url"] = service_url
         if api_key:
             config_kwargs["api_key"] = api_key
+
+        if trainer_params:
+            config_kwargs.update(trainer_params)
 
         config = TinkerTrainerConfig(**config_kwargs)
 

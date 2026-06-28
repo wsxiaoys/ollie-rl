@@ -82,6 +82,7 @@ class FakeTrainerFactory(TrainerFactory):
         self,
         name: str,
         state_store: StateStore,
+        trainer_params: Optional[dict] = None,
     ) -> Trainer:
         return FakeTrainer()
 

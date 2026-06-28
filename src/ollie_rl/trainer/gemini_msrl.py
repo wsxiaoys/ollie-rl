@@ -417,6 +417,7 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         self,
         name: str,
         state_store: StateStore,
+        trainer_params: Optional[dict] = None,
     ) -> GeminiMsrlTrainer:
         # build config from environment
         auth_token = os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token")
@@ -426,6 +427,9 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
             "auth_token": auth_token,
             "project_id": project_id,
         }
+
+        if trainer_params:
+            config_kwargs.update(trainer_params)
 
         config = GeminiMsrlTrainerConfig(**config_kwargs)
         # If GEMINI_MSRL_ENV_FILE is set, the client will re-read the auth

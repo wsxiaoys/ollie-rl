@@ -107,7 +107,19 @@ class TunerService:
         logger.info(f"Lazily restoring trainer for tuner: {tuner_id} (kind: {trainer})")
         state_store = _DbStateStore(tuner_id)
         factory = trainer_factory.get(trainer)
-        trainer_instance = await factory.open(record.name, state_store)
+
+        import json
+
+        trainer_params = None
+        if record.trainer_params:
+            try:
+                trainer_params = json.loads(record.trainer_params)
+            except Exception:
+                logger.warning(f"Failed to parse trainer_params for tuner {tuner_id}")
+
+        trainer_instance = await factory.open(
+            record.name, state_store, trainer_params=trainer_params
+        )
         self.active_trainers[tuner_id] = trainer_instance
         return trainer_instance
 
@@ -117,6 +129,7 @@ class TunerService:
         name: str,
         datum_ids: List[str],
         trainer: str,
+        trainer_params: Optional[dict] = None,
     ) -> str:
         """
         Create and initialize a tuner using the Cookbook and register it.
@@ -124,12 +137,19 @@ class TunerService:
         assert Cookbook.has(recipe)
         factory = trainer_factory.get(trainer)  # validate now, fail fast
 
+        import json
+
+        trainer_params_json = (
+            json.dumps(trainer_params) if trainer_params is not None else None
+        )
+
         async with self.async_session() as session:
             async with session.begin():
                 tuner_record = TunerModel(
                     name=name,
                     recipe=recipe,
                     trainer=trainer,
+                    trainer_params=trainer_params_json,
                     state=None,
                 )
                 session.add(tuner_record)
@@ -144,7 +164,9 @@ class TunerService:
 
         tuner_id = tuner_record.id
         state_store = _DbStateStore(tuner_id)
-        trainer_instance = await factory.open(name, state_store)
+        trainer_instance = await factory.open(
+            name, state_store, trainer_params=trainer_params
+        )
         self.active_trainers[tuner_id] = trainer_instance
 
         logger.info(f"Successfully created tuner {tuner_id}")

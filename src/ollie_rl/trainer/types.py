@@ -92,4 +92,5 @@ class TrainerFactory(ABC):
         self,
         name: str,
         state_store: StateStore,
+        trainer_params: Optional[dict] = None,
     ) -> Trainer: ...

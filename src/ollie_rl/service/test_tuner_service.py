@@ -94,7 +94,12 @@ class FakeTrainer(Trainer):
 
 
 class FakeTrainerFactory(TrainerFactory):
-    async def open(self, name: str, state_store: StateStore) -> Trainer:
+    async def open(
+        self,
+        name: str,
+        state_store: StateStore,
+        trainer_params: Optional[dict] = None,
+    ) -> Trainer:
         return FakeTrainer()
 
 
