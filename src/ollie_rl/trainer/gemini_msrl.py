@@ -1,6 +1,5 @@
 from __future__ import annotations
 import logging
-import os
 import time
 import uuid
 from typing import List, Optional, Any
@@ -105,9 +104,6 @@ def _sanitize_json_schema(node):
 
 
 class GeminiMsrlTrainerConfig(BaseModel):
-    auth_token: str
-    project_id: str
-    location: str = "us-central1"
     base_model: str = "gemini-3.5-flash"
     adapter_size: str = "ADAPTER_SIZE_SIXTEEN"
     checkpoint_interval: int = 10
@@ -420,14 +416,7 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         state_store: StateStore,
         trainer_params: Optional[dict] = None,
     ) -> GeminiMsrlTrainer:
-        # build config from environment
-        auth_token = os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token")
-        project_id = os.environ.get("GEMINI_MSRL_PROJECT_ID", "dummy-project-id")
-
-        config_kwargs: dict[str, Any] = {
-            "auth_token": auth_token,
-            "project_id": project_id,
-        }
+        config_kwargs: dict[str, Any] = {}
 
         if trainer_params:
             config_kwargs.update(trainer_params)
@@ -437,12 +426,7 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         # token from that file (by mtime) on every outgoing request. This lets
         # us refresh tokens externally (e.g. `gcloud auth application-default
         # print-access-token > .env`) without restarting the server.
-        client = GeminiMsrlClient(
-            auth_token=config.auth_token,
-            project_id=config.project_id,
-            location=config.location,
-            token_env_file=os.environ.get("GEMINI_MSRL_ENV_FILE"),
-        )
+        client = GeminiMsrlClient()
 
         # Bootstrap path: create a fresh tuning job and persist its name.
         req = CreateTuningJobRequest(
@@ -501,12 +485,7 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         # token from that file (by mtime) on every outgoing request. This lets
         # us refresh tokens externally (e.g. `gcloud auth application-default
         # print-access-token > .env`) without restarting the server.
-        client = GeminiMsrlClient(
-            auth_token=config.auth_token,
-            project_id=config.project_id,
-            location=config.location,
-            token_env_file=os.environ.get("GEMINI_MSRL_ENV_FILE"),
-        )
+        client = GeminiMsrlClient()
 
         logger.info(
             f"Restoring Gemini MSRL tuning job from state: {state.tuning_job_name}"

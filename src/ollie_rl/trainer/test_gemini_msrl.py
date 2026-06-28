@@ -33,10 +33,7 @@ class InMemoryStateStore(StateStore):
 
 class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.config = GeminiMsrlTrainerConfig(
-            auth_token="test-token",
-            project_id="test-project",
-        )
+        self.config = GeminiMsrlTrainerConfig()
         self.mock_client = AsyncMock()
         self.state_store = InMemoryStateStore()
         self.job = GeminiMsrlTrainer(
@@ -257,19 +254,23 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Pre-seed a state store as if a previous run had persisted state.
         state_dict = {
             "tuning_job_name": "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
-            "config": {
-                "auth_token": "dummy-auth-token",
-                "project_id": "dummy-project-id",
-            },
+            "config": {},
         }
         seeded_store = InMemoryStateStore(initial=json.dumps(state_dict))
 
         factory = GeminiMsrlTrainerFactory()
         self.mock_client.wait_for_tuning_job_running = AsyncMock()
 
-        with patch(
-            "ollie_rl.trainer.gemini_msrl.GeminiMsrlClient"
-        ) as mock_client_class:
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "GEMINI_MSRL_AUTH_TOKEN": "dummy-auth-token",
+                    "GEMINI_MSRL_PROJECT_ID": "dummy-project-id",
+                },
+            ),
+            patch("ollie_rl.trainer.gemini_msrl.GeminiMsrlClient") as mock_client_class,
+        ):
             mock_client_class.return_value = self.mock_client
             trainer = await factory.restore("test-display-name", seeded_store)
             self.assertEqual(
@@ -291,9 +292,16 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         self.mock_client.wait_for_tuning_job_running = AsyncMock()
 
         factory = GeminiMsrlTrainerFactory()
-        with patch(
-            "ollie_rl.trainer.gemini_msrl.GeminiMsrlClient"
-        ) as mock_client_class:
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "GEMINI_MSRL_AUTH_TOKEN": "dummy-auth-token",
+                    "GEMINI_MSRL_PROJECT_ID": "dummy-project-id",
+                },
+            ),
+            patch("ollie_rl.trainer.gemini_msrl.GeminiMsrlClient") as mock_client_class,
+        ):
             mock_client_class.return_value = self.mock_client
             trainer = await factory.create("test-display-name", fresh_store)
 

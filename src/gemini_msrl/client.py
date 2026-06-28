@@ -96,36 +96,30 @@ class GeminiMsrlClient:
 
     def __init__(
         self,
-        auth_token: str,
-        project_id: str,
-        location: str = "us-central1",
         base_url: str = "https://us-central1-staging-aiplatform.sandbox.googleapis.com",
         client: Optional[httpx.AsyncClient] = None,
-        token_env_file: Optional[str] = None,
-        token_env_key: str = "GEMINI_MSRL_AUTH_TOKEN",
     ):
-        self.auth_token = auth_token
+        project_id = os.environ.get("GEMINI_MSRL_PROJECT_ID")
+        if not project_id:
+            raise ValueError("GEMINI_MSRL_PROJECT_ID environment variable must be set")
+
         self.project_id = project_id
-        self.location = location
+        self.location = "us-central1"
         self.base_url = base_url.rstrip("/")
 
-        # Token source: if an env file path is provided (or GEMINI_MSRL_ENV_FILE
-        # is set), the client re-reads the token from that file when its mtime
-        # changes, so external `gcloud auth ...` refreshes propagate without a
-        # server restart. Falls back to the initial `auth_token` when the file
-        # is missing or doesn't contain the key.
-        env_file = token_env_file or os.environ.get("GEMINI_MSRL_ENV_FILE")
-        self._token_source: Optional[_EnvFileTokenSource] = (
-            _EnvFileTokenSource(env_file, token_env_key, initial=auth_token)
-            if env_file
-            else None
-        )
+        # Token source: the client re-reads the token from GEMINI_MSRL_ENV_FILE
+        # when its mtime changes, so external `gcloud auth ...` refreshes
+        # propagate without a server restart.
+        env_file = os.environ.get("GEMINI_MSRL_ENV_FILE")
+        if not env_file:
+            raise ValueError("GEMINI_MSRL_ENV_FILE environment variable must be set")
+        self._token_source = _EnvFileTokenSource(env_file, "GEMINI_MSRL_AUTH_TOKEN")
 
         # Static headers (Authorization is injected per-request from the
         # current token, so it's intentionally NOT pinned here).
         self.headers = {
             "Content-Type": "application/json",
-            "x-goog-user-project": project_id,
+            "x-goog-user-project": self.project_id,
         }
 
         # Use provided AsyncClient or manage one internally
@@ -133,11 +127,10 @@ class GeminiMsrlClient:
         self._owns_client = client is None
 
     def _current_token(self) -> str:
-        if self._token_source is not None:
-            tok = self._token_source.get()
-            if tok:
-                return tok
-        return self.auth_token
+        tok = self._token_source.get()
+        if not tok:
+            raise ValueError("GEMINI_MSRL_AUTH_TOKEN not found in environment file")
+        return tok
 
     async def get_client(self) -> httpx.AsyncClient:
         """Get or initialize the underlying httpx.AsyncClient.
