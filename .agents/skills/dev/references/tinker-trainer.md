@@ -25,30 +25,51 @@ this plan must preserve.
   `src/ollie_rl/trainer/tinker.py`, registered under the name `"tinker"`
   (the same string the README already advertises in
   `POST /tuners { "trainer": "tinker" }`).
-- Reuse the existing `Trainer` protocol **unchanged**. No new methods,
-  no per-trainer capability flags.
-- Add **async-RL semantics** to `TunerService` via a single recipe-level
-  switch (`max_steps_off_policy`) that drives **both** the off-policy
-  filter in `_collect_consumable_batch` and the gate in
-  `dispense_run`. The latter reads a derived
-  `Recipe.allow_sample_during_train` `@property` so call sites stay
-  declarative. ollie-rl's HTTP surface already provides the
-  parallelism that the four-coroutine loop in
-  `tinker-cookbook/rl/train.py` builds in-process.
-- Extend `Recipe` with one optional knob (`max_steps_off_policy`) and
-  a derived `allow_sample_during_train` property to express the
-  async-RL contract declaratively. The other half of tinker's
-  `AsyncConfig` (`groups_per_batch`) is already covered by the
-  existing `num_groups_per_batch`. Sync vs. async is a recipe choice —
-  the same `TinkerTrainer` / `GeminiMsrlTrainer` runs in either mode
-  unchanged, because both backends already serialize sample/train
-  internally.
+- Reuse the existing `Trainer` protocol **unchanged** at the method
+  level. No new methods, no per-trainer capability flags.
+- **Key reframing:** the `Trainer` protocol is already async-native.
+  Both shipping backends (`gemini_msrl` and the future `tinker`)
+  tolerate concurrent `sample()` and `train_step()` internally. What
+  forces sync GRPO today is a single `is_training()` short-circuit in
+  `TunerService.dispense_run` — and that short-circuit has **no
+  correctness role**. It was a throughput proxy doing the wrong job at
+  the wrong layer. Freshness is each trainer's concern, keyed off
+  `policy_generation`.
+- **No `Recipe` change.** Earlier drafts of this plan added an
+  `allow_sample_during_train` flag; on reflection that flag was
+  misleadingly named (it gates `dispense_run`, not `sample`) and not
+  semantically necessary. The cleaner move is to delete the gate
+  unconditionally and let trainers own off-policy semantics.
+- **All mechanical async knobs live on per-trainer config.**
+  `gemini_msrl` handles staleness server-side (the `TrainStepResponse`
+  reports rejected candidates) and will surface a per-train-request
+  promotion flag in a future API. `tinker` will enforce its own
+  client-side staleness filter inside `TinkerTrainer.train_step` using
+  `max_steps_off_policy` and `sampler_promotion_every` from
+  `TinkerTrainerConfig`. Each backend owns its own off-policy
+  mechanics — ollie-rl just hands trainers honest data.
+- **Tiny protocol extension:** `Example` gains a `policy_generation:
+  str` field (already on `ChatCompletionModel`, just plumbed through)
+  so trainers that care about staleness can filter without DB access.
+  `fake` and `gemini_msrl` ignore it; `tinker` uses it.
+- **One TunerService change:** delete the `is_training()`
+  short-circuit in `dispense_run`. Unconditional. `_collect_consumable_batch`
+  is **not** touched. The `_train_lock` and `is_training()` check in
+  `maybe_train` stay — those are *liveness* guards (don't fire two
+  concurrent `train_step`s), not freshness.
+- `num_groups_per_batch` continues to play the role of tinker's
+  `AsyncConfig.groups_per_batch` — no new recipe knob needed for
+  batch sizing.
 - Persist tinker checkpoint state through the existing `StateStore`
   (already SQL-backed via `_DbStateStore` in `TunerService`).
 
-The HTTP surface and DB schema do **not** change. The training loop in
-`TunerService.maybe_train` gets one new filter; the rest is contained
-inside the new trainer module.
+The HTTP surface change is minor: `POST /tuners/{id}/runs` stops
+returning `204 + Retry-After: 1` during training; it just keeps
+issuing runs. DB schema does **not** change in Phase 1. A small
+`ChatCompletionModel` column addition lands later with the real
+tinker `train_step`. Async RL has an **immediate consumer** the day
+Phase 1 lands: `gemini_msrl`, which is naturally off-policy and was
+only being throttled by the now-deleted gate.
 
 ---
 
@@ -166,20 +187,23 @@ ollie-rl already has the dataloader, the workers, and the queues —
 | Dataloader loop | The client's outer loop that calls `POST /tuners/{id}/runs`. |
 | `env_group_builders_queue` | `dispense_run` + the `datum_pool` table. |
 | Trajectory worker loops | The client process(es) that drive `POST /openai/v1/chat/completions` and finally `PUT /reward`. |
-| `WrappedTrajectoryGroup.sampling_client_step` | `ChatCompletionModel.policy_generation` (already stamped at sample time). |
+| `WrappedTrajectoryGroup.sampling_client_step` | `ChatCompletionModel.policy_generation`, plumbed onto `Example.policy_generation` at batch-collection time. |
 | `trajectory_groups_queue` | `RunModel` rows with `reward IS NOT NULL AND trained_count <= 0`. |
-| Training loop / `filter_stale_trajectory_group` | `TunerService._collect_consumable_batch` + a new staleness filter. |
+| Training loop / `filter_stale_trajectory_group` | **Owned inside `TinkerTrainer.train_step`**, not in `TunerService`. Driven by `TinkerTrainerConfig.max_steps_off_policy` against `Example.policy_generation`. (`gemini_msrl` does the equivalent server-side.) |
 | `forward_backward` + `optim_step` | `Trainer.train_step(examples)`. |
-| `save_weights_and_get_sampling_client_async()` | `train_op.wait()` resolution + a new sampler swap inside `TinkerTrainer`. |
+| `save_weights_and_get_sampling_client_async()` | `train_op.wait()` resolution + a new sampler swap inside `TinkerTrainer`, cadence controlled by `TinkerTrainerConfig.sampler_promotion_every`. |
 | `kl_reference_client` | Owned internally by `TinkerTrainer`; not exposed. |
-| `Recipe.num_groups_per_batch` | Already present; same role as
-  `AsyncConfig.groups_per_batch`. |
+| `Recipe.num_groups_per_batch` | Already present; same role as `AsyncConfig.groups_per_batch`. No other Recipe changes are required. |
 
 **This is the central insight of the plan**: ollie-rl's HTTP surface
-already implements the structure of the async training loop. We do not
-need to spin up four coroutines inside the server — we need to teach
-`TunerService` the *one* missing rule (staleness) and ship a trainer
-that owns its tinker checkpoint lifecycle.
+already implements the structure of the async training loop, and the
+`Trainer` protocol is already async-native. We do not need to spin up
+four coroutines inside the server — we need to (a) delete one
+artificially synchronous gate in `dispense_run`, and (b) let each
+trainer own its own off-policy semantics. The tinker integration adds
+a trainer that knows how to filter stale `Example`s before calling
+`forward_backward`; the `gemini_msrl` integration already has the
+backend doing this for it.
 
 ---
 
@@ -195,7 +219,7 @@ flowchart LR
 
     subgraph Server["ollie-rl server"]
         APP["server/app.py<br/>FastAPI"]
-        TS["service/tuner_service.py<br/>TunerService<br/>+ async-RL staleness filter"]
+        TS["service/tuner_service.py<br/>TunerService<br/>(dispense_run gate is recipe-driven)"]
         DB[("SQL: RunModel,<br/>ChatCompletionModel,<br/>TunerModel")]
     end
 
@@ -283,11 +307,21 @@ Constructed in `TinkerTrainerFactory.open` from environment + the
 | `temperature` / `max_tokens` | bootstrap | Sampling defaults. |
 | `kl_penalty_coef` | bootstrap, default `0.0` | Forwarded to `loss_fn_config`. |
 | `loss_fn` | bootstrap, default `"importance_sampling"` | Tinker loss kind. |
-| `sampler_promotion_every` | bootstrap, default 1 | Number of `train_step`s between sampler snapshots. 1 = promote after every step. |
+| `max_steps_off_policy` | bootstrap, default 4 | **Tinker-specific** off-policy bound. Tinker filters stale `Example`s client-side inside `train_step` using this. (gemini_msrl does the equivalent server-side; fake ignores it.) |
+| `sampler_promotion_every` | bootstrap, default 1 | Number of `train_step`s between sampler snapshots. 1 = promote after every step. Tinker-specific mechanical knob; not on Recipe. |
 
 We deliberately keep `bootstrap` permissive (kwargs forwarded by
 factory) to avoid a schema dance at this stage — the
 `TinkerTrainerFactory` is the only place that needs to know these keys.
+
+**Why these knobs are on `TinkerTrainerConfig` and not on `Recipe`:**
+they are *mechanical* (how-to), not *algorithmic* (what-to). Different
+backends interpret off-policy bounds differently — Gemini does it
+server-side and reports rejections in `TrainStepResponse`; Tinker does
+it client-side before `forward_backward`; future backends may handle
+it some other way. Centralizing the knob on `Recipe` would force a
+leaky abstraction. The `Recipe` only carries the single boolean that
+says "this is an async-RL run" (see *Recipe surface changes* below).
 
 ### Implementing the protocol
 
@@ -300,18 +334,30 @@ class TinkerTrainer(Trainer):
         # 4. Wrap result in a TinkerSampleOp.
 
     async def train_step(self, examples: List[Example]) -> TrainOp:
-        # 1. Resolve each Example.chat_completion_id → the tokens + logprobs
-        #    cached at sample time (we will need a new column on
+        # 1. STALENESS FILTER (tinker-owned). Drop any Example whose
+        #    int(policy_generation) < self.state.train_step
+        #    - self.config.max_steps_off_policy.
+        #    This is the client-side analogue of tinker-cookbook's
+        #    filter_stale_trajectory_group; gemini_msrl gets the same
+        #    effect server-side via TrainStepResponse rejections.
+        # 2. If the surviving batch is too small, return a no-op TrainOp
+        #    (do not bump train_step). TunerService already bumped
+        #    trained_count optimistically — design choice: either
+        #    (a) accept the implicit "drop" of those rows, or
+        #    (b) extend TrainOp to surface the kept-vs-dropped set so
+        #        TunerService can refund trained_count. Decide in Phase 3.
+        # 3. Resolve each surviving Example.chat_completion_id → the
+        #    tokens + logprobs cached at sample time (new column on
         #    ChatCompletionModel; see "Open questions" below).
-        # 2. Build TensorData payload (see tinker_cookbook/rl/data_processing.py).
-        # 3. Apply per-token advantage broadcast from Example.advantage.
-        # 4. await self._training_client.forward_backward_async(...).
-        # 5. await self._training_client.optim_step_async(...).
-        # 6. If self.state.train_step % sampler_promotion_every == 0:
+        # 4. Build TensorData payload (see tinker_cookbook/rl/data_processing.py).
+        # 5. Apply per-token advantage broadcast from Example.advantage.
+        # 6. await self._training_client.forward_backward_async(...).
+        # 7. await self._training_client.optim_step_async(...).
+        # 8. If self.state.train_step % self.config.sampler_promotion_every == 0:
         #       new_sc = await self._training_client.save_weights_and_get_sampling_client_async()
         #       self._sampling_client = new_sc
         #       self.state.sampler_step = self.state.train_step
-        # 7. Bump self.state.train_step, persist via state_store.
+        # 9. Bump self.state.train_step, persist via state_store.
 
     async def in_flight_train_op(self) -> Optional[TrainOp]:
         # Return the most recently issued op until its .wait() resolves.
@@ -339,54 +385,110 @@ This mirrors `GeminiMsrlTrainerFactory.open` (see the
 
 ## Design: async-RL inside `TunerService`
 
-### One new rule, no architectural change
+### One gate deletion, one new field on `Example`
 
-Today's `_collect_consumable_batch` only filters on
-`trained_count <= 0 AND reward IS NOT NULL`. The async-RL rule is
-literally one additional `WHERE` clause derived from the recipe and
-the current trainer step:
+The `Trainer` protocol is already async-native — both `tinker` and
+`gemini_msrl` tolerate concurrent `sample()` while a `train_step` LRO
+is in flight on the backend. The only thing forcing sync GRPO today
+is a single gate in `TunerService.dispense_run`:
 
 ```python
-# Pseudocode addition inside _collect_consumable_batch:
-recipe = await self._recipe_for(tuner_id)
-trainer_step = await trainer.current_step()  # NEW small method on Trainer
-
-stmt = (
-    select(RunModel)
-    .join(ChatCompletionModel, ChatCompletionModel.run_id == RunModel.id)
-    .where(
-        RunModel.tuner_id == tuner_id,
-        RunModel.trained_count <= 0,
-        RunModel.reward.is_not(None),
-    )
-)
-if recipe.max_steps_off_policy is not None:
-    # Discard runs whose oldest contributing completion is too stale.
-    stmt = stmt.where(
-        cast(ChatCompletionModel.policy_generation, Integer)
-        >= trainer_step - recipe.max_steps_off_policy
-    )
+# Today (sync-only):
+if await trainer.is_training():
+    return None
 ```
 
-A run is **stale** if any of its chat completions was produced more
-than `max_steps_off_policy` sampler steps ago. We use the per-completion
-`policy_generation` already stamped by `record_chat_completion`.
+This gate has **no correctness role**. It was a throughput proxy:
+"don't issue runs whose completions might end up stale." But every
+backend that cares about staleness already handles it at the right
+layer:
+
+- `gemini_msrl` — server-side rejection in `TrainStepResponse`.
+- `tinker` (future) — client-side filter inside `train_step` using
+  `TinkerTrainerConfig.max_steps_off_policy`.
+- `fake` — doesn't care; `policy_generation` never changes.
+
+The proxy gate is doing the wrong job at the wrong layer. The
+correct freshness key is `policy_generation`, owned by each trainer.
+The whole TunerService change for async RL is therefore:
+
+```python
+# After (async-aware): the gate is gone, full stop.
+# No recipe flag. No conditional. Just delete it.
+```
+
+…and **plumbing `policy_generation` through** to `Example` so trainers
+can do their own off-policy filtering:
+
+```python
+# In ollie_rl/trainer/types.py:
+class Example(BaseModel):
+    chat_completion_id: str
+    advantage: float
+    policy_generation: str   # NEW
+```
+
+```python
+# In _collect_consumable_batch:
+examples = [
+    Example(
+        chat_completion_id=c.id,
+        advantage=run_advantages[c.run_id],
+        policy_generation=c.policy_generation,   # NEW
+    )
+    for c in completions
+    if c.run_id in run_advantages
+]
+```
+
+`_collect_consumable_batch` itself is **not** otherwise changed. There
+is no central staleness filter, no new `cast(...)` SQL, no new method
+on `Trainer`. Staleness is each backend's concern (see the
+`TinkerTrainer.train_step` outline above).
+
+### Why no Recipe flag?
+
+Earlier drafts of this plan introduced a
+`Recipe.allow_sample_during_train: bool` to control the gate. We
+dropped it because:
+
+1. The name was misleading — the flag controlled `dispense_run`, not
+   `sample`. A more honest name (`allow_dispense_run_during_training`)
+   underscored that the flag was about HTTP scheduling, not about an
+   algorithmic mode.
+2. The flag had no semantic role. Once trainers own freshness via
+   `policy_generation`, neither sync GRPO nor async RL needs ollie-rl
+   to gate dispense at all. Sync recipes that want strict on-policy
+   training express it as a trainer-side bound (e.g.
+   `max_steps_off_policy=0` on `TinkerTrainerConfig`), not as a
+   service-level gate.
+3. Existing backends gain throughput unconditionally — even
+   `gemini_msrl` running a "sync" recipe stops sitting on `204
+   Retry-After` responses during training.
+
+If a future scenario genuinely needs strict gating at the TunerService
+level (e.g. a deterministic regression test with the `fake` trainer),
+that scenario can re-introduce the flag with a precise name and a
+narrow scope. For now: simpler is better.
 
 ### What about requeueing?
 
 In `tinker-cookbook`, stale groups can be requeued so the dataloader
 re-rolls them. ollie-rl's natural analogue is simpler: a stale run is
-abandoned (we leave `trained_count = 0`, so a future `dispense_run`
-will still avoid double-counting the **datum**, not the **run**, via
-the existing `_pick_datum` "fewest pending+completed" heuristic, and a
-fresh run will be issued naturally when the next worker asks).
+abandoned. The trainer drops the stale `Example`s before
+`forward_backward`; `TunerService` has already optimistically bumped
+`trained_count` for those rows, so the runs are simply consumed
+(stale or not). The existing `_pick_datum` "fewest pending+completed"
+heuristic ensures the **datum** keeps getting fresh runs scheduled
+naturally as workers ask.
 
-If we ever want explicit requeue, the right place is a background task
-in `TunerService` that bumps `expires_at` to `now` on stale, unrewarded
-runs and then deletes (or soft-deletes) stale rewarded runs. We do
-**not** need this for an MVP — drop and re-issue is the simpler
-contract and matches the "discard during shutdown" branch in
-`tinker-cookbook`'s `filter_stale_trajectory_group`.
+If we ever want stricter requeue semantics, the right shape is to
+extend `TrainOp` (or the result wrapper) so the trainer can report
+back which `chat_completion_id`s were actually consumed; `TunerService`
+can then refund `trained_count` on the dropped ones. Defer to
+post-MVP — drop and re-issue is the simpler contract and matches the
+"discard during shutdown" branch in `tinker-cookbook`'s
+`filter_stale_trajectory_group`.
 
 ### What about tinker's `groups_per_batch`?
 
@@ -394,140 +496,90 @@ contract and matches the "discard during shutdown" branch in
 this many **non-stale** trajectory groups before firing
 `forward_backward` + `optim_step`. ollie-rl already enforces the
 "this many" half via `recipe.num_groups_per_batch` in
-`_collect_consumable_batch`. Once we add the staleness filter on top,
-the existing batch-readiness check ("not enough groups ready, return
-`[], []`") gives us the **non-stale** half for free. So we do *not*
-need a separate recipe knob — `num_groups_per_batch` plays both roles.
+`_collect_consumable_batch`. The **non-stale** half is enforced inside
+`TinkerTrainer.train_step` (after the client-side filter), which may
+choose to return a no-op `TrainOp` if too few survive. Either way no
+new recipe knob is needed — `num_groups_per_batch` covers the
+ollie-rl side; the trainer covers the freshness side.
 
-### Concurrent train + sample
+### Concurrent train + sample: the underlying observation
 
 Today `maybe_train` is guarded by `self._train_lock` (process-wide),
 and `dispense_run` returns `204` while `trainer.is_training()` is
-true. For genuine **async RL** we want the trainer to keep accepting
-samples while a `train_step` is in flight on the backend.
+true. The `_train_lock` is a genuine *liveness* guard (don't fire
+two concurrent `train_step`s; `gemini_msrl` raises `RuntimeError` if
+you try). It **stays**, along with the `is_training()` check in
+`maybe_train`. Only the `dispense_run` short-circuit is removed.
 
-This is not a backend capability question — both real trainers
-(`tinker`, `gemini_msrl`) already serialize sampling and training
-internally and can absorb a `sample()` call while a `train_step` LRO
-is mid-flight. The `204 Retry-After` short-circuit is purely an
-ollie-rl-side decision, and the **right place to express it is the
-recipe** (sync GRPO vs. async RL is an algorithmic mode, not a
-trainer capability).
-
-The plan is therefore: **expose an explicit
-`Recipe.allow_sample_during_train` property** (see the "Recipe
-surface changes" section below) and let `dispense_run` read it. The
-property is derived from `max_steps_off_policy`, so async-mode opt-in
-stays a single field — but call sites stay declarative.
+Look at `GeminiMsrlSamplingOp.wait()`:
 
 ```python
-# In TunerService.dispense_run:
-trainer = await self.get_trainer(tuner_id)
-if not trainer:
-    raise TunerNotFoundError(...)
-
-recipe = await self._recipe_for(tuner_id)
-# Sync GRPO recipes still pause sampling while a train_step is in flight.
-# Async-RL recipes do not — staleness is bounded instead by the
-# off-policy filter in _collect_consumable_batch.
-if not recipe.allow_sample_during_train and await trainer.is_training():
-    return None
+return Sample(completion=completion, policy_generation=response.train_step_id)
 ```
 
-No new `Trainer` protocol method, no per-trainer capability flag, no
-HTTP contract change. The recipe is already the right surface: it's
-where `group_size` and `num_groups_per_batch` live, and async mode is
-the same kind of declarative algorithmic knob.
-
-Concretely:
-
-- **Sync GRPO recipes** (e.g. the current `grpo_16x32`):
-  `max_steps_off_policy=None` → `allow_sample_during_train=False` →
-  `dispense_run` keeps returning `204 + Retry-After: 1` while
-  training is in flight. All existing trainers (`fake`,
-  `gemini_msrl`) and tests behave identically to today.
-- **Async-RL recipes** (e.g. the new `tinker_async_8x4`):
-  `max_steps_off_policy` set to a positive int →
-  `allow_sample_during_train=True` → `dispense_run` keeps handing out
-  runs during training; the off-policy filter in
-  `_collect_consumable_batch` is what bounds staleness.
-
-This is a strictly cleaner story than gating it on a
-`Trainer.can_sample_while_training()` method — the same trainer
-(e.g. `tinker`) can be driven in either sync or async mode just by
-swapping the recipe.
+The trainer stamps each sample with whatever `train_step_id` Gemini
+returns. It never rejects a sample because training is in flight; it
+just records the generation that produced it. Gemini's server-side
+mechanics already filter stale candidates inside `TrainStepResponse`.
+Tinker will do the same client-side. **So the only reason ollie-rl
+currently runs synchronously is the one gate in `dispense_run`.** Lift
+it and async RL falls out of the existing protocol for free, with no
+recipe changes and no trainer protocol changes.
 
 ---
 
-## Recipe surface changes
+## Protocol surface changes
 
-Add the new knob(s) to `Recipe`, keeping defaults that match today's
-behaviour (= sync GRPO), and expose a derived **`allow_sample_during_train`**
-property so call sites read declaratively instead of inferring from
-`max_steps_off_policy is not None`:
+### `Recipe`: no changes
+
+The `Recipe` shape stays exactly as it is today. We considered an
+`allow_sample_during_train` (later renamed `allow_dispense_run_during_training`)
+boolean and rejected it: the gate it would have controlled has no
+correctness role, so a recipe flag would just be inherited complexity.
+See *Why no Recipe flag?* in the previous section.
+
+The existing knobs (`group_size`, `num_groups_per_batch`) are
+sufficient for both sync and async use cases. A "sync" recipe is just
+one driven by a trainer whose config holds `max_steps_off_policy=0`
+(or whose backend filters server-side at zero tolerance); an "async"
+recipe is the same recipe driven by a trainer with a positive bound.
+
+### `Example`: one new field
+
+The only protocol shape change is to the `Example` type that
+`TunerService` hands to `Trainer.train_step`:
 
 ```python
-class Recipe(BaseModel, frozen=True):
-    group_size: int = 16
-    num_groups_per_batch: int = 32  # plays the role of tinker's AsyncConfig.groups_per_batch
-
-    # NEW: async-RL knob (optional; None ≡ sync behaviour)
-    max_steps_off_policy: int | None = None
-    # NEW: how often the trainer promotes a fresh sampler snapshot
-    sampler_promotion_every: int = 1
-
-    @property
-    def allow_sample_during_train(self) -> bool:
-        """
-        Whether `TunerService.dispense_run` may hand out new runs while a
-        `train_step` is in flight on the trainer.
-
-        Derived from `max_steps_off_policy`: setting an off-policy
-        tolerance is the explicit opt-in to async RL, and async RL by
-        definition keeps sampling alive across training barriers.
-        Sync GRPO recipes (`max_steps_off_policy=None`) keep today's
-        `204 + Retry-After: 1` behaviour intact.
-
-        Both shipping trainers (`tinker`, `gemini_msrl`) already
-        serialize sample/train internally, so this is a recipe-level
-        decision, not a backend capability.
-        """
-        return self.max_steps_off_policy is not None
+# src/ollie_rl/trainer/types.py
+class Example(BaseModel):
+    chat_completion_id: str
+    advantage: float
+    policy_generation: str   # NEW — opaque sample-time stamp
 ```
 
-The property has no setter — it is a pure function of
-`max_steps_off_policy`. This keeps a single source of truth at the
-recipe-definition site while letting call sites stay readable:
+Strictly additive. `fake` and `gemini_msrl` ignore the new field;
+`tinker` uses it to drop stale rows before `forward_backward`.
+
+### Recipe registrations (cookbook follow-up)
+
+We can register a tinker-shaped recipe once Phase 2 lands, but it
+needs no special fields:
 
 ```python
-# In TunerService.dispense_run:
-if not recipe.allow_sample_during_train and await trainer.is_training():
-    return None
-```
-
-If we later discover a recipe that wants async sampling **without** an
-off-policy bound (or vice versa), `allow_sample_during_train` can be
-promoted from a `@property` to an explicit field with the same name —
-the call-site code does not need to change.
-
-And register at least one tinker-tuned recipe in
-`src/ollie_rl/cookbook/recipes.py`:
-
-```python
+# Lands with Phase 2; shape mirrors harbor_rl's small-scale launch
+# (group_size=4, groups_per_batch=8 in harbor_rl naming, which inverts
+# to group_size=8, num_groups_per_batch=4 in our schema for the same
+# 32-run batch).
 TINKER_ASYNC_8x4 = Recipe(
     group_size=8,
     num_groups_per_batch=4,
-    max_steps_off_policy=2,
-    sampler_promotion_every=1,
 )
 ```
 
-`src/ollie_rl/cookbook/__init__.py` wires it into `RECIPES`.
-
-The chosen `8x4` shape mirrors the `harbor_rl` README's small-scale
-launch (`group_size=4`, `groups_per_batch=8` — note: `harbor_rl`
-inverts the naming convention, so `group_size=8, num_groups_per_batch=4`
-in our schema gives the same 32-run batch).
+`max_steps_off_policy` and `sampler_promotion_every` for the tinker
+backend come from `TinkerTrainerConfig`, constructed from env +
+`bootstrap` kwargs at `TrainerFactory.open` time. The recipe itself
+stays pure data, backend-agnostic.
 
 ---
 
@@ -563,30 +615,52 @@ This is the **one DB schema change** the plan calls for.
 
 ## Tests
 
-Land all new tests under `src/ollie_rl/trainer/test_tinker.py` and
-extend `src/ollie_rl/service/test_tuner_service.py`:
+Tests are split by responsibility. **TunerService** is responsible
+only for plumbing; **each trainer** owns its own freshness policy.
 
-- **TinkerTrainer (unit, fake `tinker.ServiceClient`)**
+- **TunerService dispense behaviour (integration, with `fake` trainer)**
+  - With `trainer.is_training() == True`, `dispense_run` still
+    returns a fresh `DispenseRun` (regression-guards the gate
+    deletion). This replaces the old "returns `None` while
+    training" test, which we expect to delete in Phase 1.
+  - `Example` instances handed to `Trainer.train_step` carry
+    `policy_generation` populated from `ChatCompletionModel`.
+  - `_collect_consumable_batch` produces the same batch shape as
+    today — no new SQL filter applied. Verifies we did **not**
+    sneak a centralized staleness filter in by accident.
+
+- **TunerService liveness (integration, with `fake` trainer)**
+  - `maybe_train` still serializes on `_train_lock` + `is_training()`;
+    two concurrent calls do not both fire `train_step`.
+
+- **TinkerTrainer staleness filter (unit, fake `tinker.ServiceClient`)**
+  - Construct a batch of `Example`s with `policy_generation`
+    `"0".."3"`; set `state.train_step=3` and
+    `config.max_steps_off_policy=1`. `train_step` must drop the
+    rows from generation 0 and 1, and submit only the survivors to
+    `forward_backward`.
+  - `max_steps_off_policy` large enough that all rows survive → all
+    are submitted.
+  - Surviving batch falls below an internal threshold → trainer
+    returns a no-op `TrainOp` and does **not** bump
+    `state.train_step`.
+
+- **TinkerTrainer lifecycle (unit, fake `tinker.ServiceClient`)**
   - `open()` from scratch persists initial state and creates a sampler.
   - `open()` from existing state rehydrates without recreating
     training_client.
-  - `sample()` stamps `policy_generation == state.sampler_step`.
+  - `sample()` stamps `policy_generation == str(state.sampler_step)`.
   - `train_step()` increments `train_step` and (on cadence) promotes
     the sampler.
   - Crash mid-`train_step` (raise after `forward_backward`,
     before `optim_step`) leaves `state.train_step` unchanged.
 
-- **TunerService async-RL filter (integration)**
-  - Pre-populate runs whose completions span `policy_generation`
-    `0..3`; set `max_steps_off_policy=1` and `current_step=3`.
-    `_collect_consumable_batch` must drop runs from generation 0 and 1.
-  - Setting `max_steps_off_policy=None` recovers today's behaviour
-    exactly (regression-guards `fake` and `gemini_msrl`).
-
-- **End-to-end (HTTP, with `fake` trainer + new staleness filter)**
-  Already covered by `test_app.py` / `test_integration.py` patterns;
-  extend with a recipe that has `max_steps_off_policy=2` to exercise
-  the new path without booting tinker.
+- **End-to-end (HTTP, with `fake` trainer)**
+  Existing `test_app.py` / `test_integration.py` patterns continue to
+  apply. Add a coverage step that fires a long-running fake
+  `train_step` and verifies the client can still call
+  `POST /tuners/{id}/runs` and `POST /openai/v1/chat/completions`
+  throughout. No tinker needed.
 
 A live tinker smoke test belongs in a separate `tests/integration/`
 directory gated by a `TINKER_API_KEY` env var (out of scope for the
@@ -598,18 +672,48 @@ default `uv run pytest` invocation; will be wired into a CI job later).
 
 ```mermaid
 flowchart TB
-    P1["Phase 1: skeleton<br/>(no async, no real weights)"] --> P2
-    P2["Phase 2: real train_step"] --> P3
-    P3["Phase 3: async-RL mode<br/>(recipe-driven)"]
+    P1["Phase 1: async-RL as natural mode<br/>(Example.policy_generation<br/>+ dispense_run gate deletion)"] --> P2
+    P2["Phase 2: tinker skeleton<br/>(sample-only, no real weights)"] --> P3
+    P3["Phase 3: real tinker train_step<br/>(client-side staleness filter<br/>via TinkerTrainerConfig)"]
 ```
 
-### Phase 1 — skeleton (1 PR)
+The reorder is deliberate. Async mode is **backend-agnostic** and has
+an **immediate consumer** (`gemini_msrl` is naturally off-policy and
+benefits from gate deletion the day Phase 1 lands). Landing it first
+de-risks the protocol shape before any tinker SDK plumbing touches
+the tree.
+
+### Phase 1 — async-RL as the natural mode (1 PR)
+No tinker code lands in this PR. Pure ollie-rl-side change. Real
+consumers from day one: `fake` (tests) and `gemini_msrl` (production).
+
+- Extend `Example` with `policy_generation: str` and plumb it through
+  `_collect_consumable_batch` from `ChatCompletionModel.policy_generation`.
+- **Delete** the `if await trainer.is_training(): return None`
+  short-circuit in `TunerService.dispense_run`. Unconditional. No
+  recipe flag, no per-tuner state change.
+- Keep `_train_lock` and the `is_training()` check in `maybe_train`
+  exactly as today — those are liveness guards, not freshness.
+- **Do not** touch `_collect_consumable_batch`. No staleness filter,
+  no SQL change.
+- **Do not** add any new fields to `Recipe`. Existing cookbook entries
+  (`grpo_16x32`) work as-is.
+- Note the wire-behaviour change in the public docs:
+  `POST /tuners/{id}/runs` no longer returns `204 + Retry-After: 1`
+  during training. Existing clients that handle 204 will see fewer of
+  them; none should break.
+- Tests (see *Tests* above): TunerService dispense after gate
+  removal; TunerService liveness still intact;
+  `Example.policy_generation` populated.
+
+### Phase 2 — tinker skeleton trainer (1 PR)
 - `src/ollie_rl/trainer/tinker.py` with `TinkerTrainer`,
-  `TinkerTrainerFactory`, `TinkerTrainerState`.
-- Implements `sample()` against a tinker `SamplingClient`.
+  `TinkerTrainerFactory`, `TinkerTrainerState`, `TinkerTrainerConfig`.
+- Implements `sample()` against a tinker `SamplingClient`. Stamps
+  `policy_generation = str(state.sampler_step)`.
 - `train_step()` is a no-op that just persists state (so we can
   exercise the registration and HTTP flow with a real tinker
-  endpoint).
+  endpoint, including in async mode).
 - Add `tinker` to `pyproject.toml` via `uv add tinker` (or pin to a
   specific version). Make it an **optional** dependency group so the
   current minimal install does not pull it in.
@@ -617,63 +721,32 @@ flowchart TB
 - Tests: factory create/restore round-trip; sample stamps a
   `policy_generation`.
 
-### Phase 2 — real `train_step` (1 PR)
+### Phase 3 — real tinker `train_step` (1 PR)
 - Add `tokens` + `logprobs` columns to `ChatCompletionModel` (Alembic
   migration + model bump).
 - `TinkerTrainer.sample()` writes those blobs into a side cache that
   `TunerService.record_chat_completion` flushes.
-- `TinkerTrainer.train_step()` builds the `forward_backward` payload
-  from those blobs and the `Example.advantage` values, runs the
-  optimizer, and (per `sampler_promotion_every`) refreshes the
-  sampler.
-- Tests: end-to-end one batch on a fake tinker service that just
-  validates the payload shape.
+- `TinkerTrainer.train_step()`:
+  1. Applies the client-side staleness filter using
+     `Example.policy_generation`, `state.train_step`, and
+     `config.max_steps_off_policy`.
+  2. Builds the `forward_backward` payload from cached tokens/logprobs
+     and `Example.advantage`.
+  3. Runs `optim_step`.
+  4. Promotes the sampler every `config.sampler_promotion_every`
+     steps.
+- Tests: in-trainer staleness filter (`config.max_steps_off_policy`
+  drops the right rows); end-to-end one batch on a fake tinker
+  service that validates the payload shape.
 
-### Phase 3 — async-RL mode (single PR, recipe-driven)
-Async RL is a **recipe-level** mode, not a trainer-level capability.
-The whole behaviour is gated by the new
-`Recipe.allow_sample_during_train` property (derived from
-`max_steps_off_policy`). Both `TinkerTrainer` and `GeminiMsrlTrainer`
-already serialize sample/train internally, so they need no changes to
-run in async mode — flipping the recipe is enough.
-
-- Extend `Recipe` with:
-  - field `max_steps_off_policy: int | None = None`
-  - field `sampler_promotion_every: int = 1`
-  - `@property` `allow_sample_during_train` returning
-    `self.max_steps_off_policy is not None`.
-
-  Defaults preserve sync GRPO.
-- Register at least one async recipe (e.g. `TINKER_ASYNC_8x4`) in the
-  cookbook.
-- Implement the staleness filter in
-  `TunerService._collect_consumable_batch`, keyed off
-  `recipe.max_steps_off_policy` and
-  `ChatCompletionModel.policy_generation`.
-- Relax `TunerService.dispense_run` to **skip** the
-  `is_training()` short-circuit when
-  `recipe.allow_sample_during_train` is `True`. Sync recipes
-  (`allow_sample_during_train == False`) keep the current
-  `204 + Retry-After: 1` behaviour byte-for-byte.
-- Tests:
-  - Recipe-level: `grpo_16x32.allow_sample_during_train is False`;
-    `tinker_async_8x4.allow_sample_during_train is True`.
-  - With a sync recipe: `dispense_run` and `_collect_consumable_batch`
-    must behave identically to today (regression-guard for `fake`
-    and `gemini_msrl`).
-  - With an async recipe and a long-running train op on the fake
-    trainer: `dispense_run` keeps returning `200`s, and
-    `_collect_consumable_batch` drops runs whose
-    `policy_generation` lags by more than `max_steps_off_policy`.
-
-Each phase is shippable independently. Phase 1+2 alone deliver a
-working sync tinker trainer; phase 3 turns on the async story (and
-incidentally also unlocks async-mode for `gemini_msrl` if anyone
-registers an async recipe pointing at it).
+Each phase is shippable independently. Phase 1 alone unlocks
+async-mode `gemini_msrl`. Phase 1+2 deliver a working (no-op
+training) tinker registration that can be exercised end-to-end against
+a real tinker endpoint. Phase 3 closes the loop.
 
 ---
 
-## Open questions (decide before phase 2)
+## Open questions (decide before phase 3)
 
 1. **Where do tokens/logprobs live?** Column on `ChatCompletionModel`
    vs. side table (see "Database changes"). Default
@@ -733,5 +806,10 @@ registers an async recipe pointing at it).
 - The contract this plan must preserve: `data-model.md`, `sync-rl.md`.
 
 When in doubt, prefer **minimal additions to the existing protocol**
-and **encode async-RL semantics in the recipe**, not in new HTTP
-surfaces.
+and **let each trainer own its own off-policy mechanics**. The
+`Recipe` stays backend-agnostic (`group_size`, `num_groups_per_batch`,
+nothing async-specific); backend knobs (`max_steps_off_policy`,
+`sampler_promotion_every`, sampler-promotion strategy) live on
+per-trainer config where they can't lie to the other backends; and
+freshness is propagated through `Example.policy_generation` rather
+than enforced by a TunerService-level gate.
