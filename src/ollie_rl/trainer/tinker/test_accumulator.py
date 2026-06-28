@@ -18,7 +18,7 @@ class TestTinkerAccumulator(unittest.TestCase):
         return Example(
             chat_completion_id=chat_completion_id,
             advantage=advantage,
-            policy_generation="0",
+            policy_generation=0,
             tokens=tokens,
             logprobs=logprobs,
         )
@@ -214,7 +214,7 @@ class TestTinkerAccumulator(unittest.TestCase):
         bad_ex = Example(
             chat_completion_id="bad",
             advantage=1.0,
-            policy_generation="0",
+            policy_generation=0,
             tokens=None,
             logprobs=None,
         )

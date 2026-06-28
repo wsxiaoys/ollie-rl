@@ -112,7 +112,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         sample_res = await sample_op.wait()
 
         # Verify policy generation matches sampler_step
-        self.assertEqual(sample_res.policy_generation, str(self.state.sampler_step))
+        self.assertEqual(sample_res.policy_generation, self.state.sampler_step)
         completion = sample_res.completion
 
         # Assertions
@@ -158,7 +158,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         sample_op = await self.trainer.sample(request)
         sample_res = await sample_op.wait()
 
-        self.assertEqual(sample_res.policy_generation, str(self.state.sampler_step))
+        self.assertEqual(sample_res.policy_generation, self.state.sampler_step)
         completion = sample_res.completion
 
         self.assertEqual(len(completion.choices), 1)
@@ -213,7 +213,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         self,
         chat_completion_id: str = "chatcmpl-1",
         advantage: float = 1.0,
-        policy_generation: str = "0",
+        policy_generation: int = 0,
         prompt_len: int = 3,
         completion_len: int = 4,
         tokens: list[int] | None = None,
@@ -305,11 +305,11 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         self.trainer.config.max_steps_off_policy = 1
 
         examples = [
-            self._make_example("cmpl-0", policy_generation="0"),  # stale
-            self._make_example("cmpl-1", policy_generation="2"),
-            self._make_example("cmpl-2", policy_generation="2"),
-            self._make_example("cmpl-3", policy_generation="3"),
-            self._make_example("cmpl-4", policy_generation="3"),
+            self._make_example("cmpl-0", policy_generation=0),  # stale
+            self._make_example("cmpl-1", policy_generation=2),
+            self._make_example("cmpl-2", policy_generation=2),
+            self._make_example("cmpl-3", policy_generation=3),
+            self._make_example("cmpl-4", policy_generation=3),
         ]
         await (await self.trainer.train_step(examples)).wait()
 
@@ -329,8 +329,8 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
 
         # All stale → 100% stale, well above the 0.4 threshold.
         examples = [
-            self._make_example("cmpl-old", policy_generation="5"),
-            self._make_example("cmpl-old2", policy_generation="7"),
+            self._make_example("cmpl-old", policy_generation=5),
+            self._make_example("cmpl-old2", policy_generation=7),
         ]
         with self.assertRaises(StaleBatchError):
             await self.trainer.train_step(examples)
@@ -352,11 +352,11 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         self.trainer.config.max_stale_fraction = 0.4
 
         examples = [
-            self._make_example("cmpl-0", policy_generation="0"),  # stale (cutoff=2)
-            self._make_example("cmpl-1", policy_generation="2"),
-            self._make_example("cmpl-2", policy_generation="3"),
-            self._make_example("cmpl-3", policy_generation="3"),
-            self._make_example("cmpl-4", policy_generation="3"),
+            self._make_example("cmpl-0", policy_generation=0),  # stale (cutoff=2)
+            self._make_example("cmpl-1", policy_generation=2),
+            self._make_example("cmpl-2", policy_generation=3),
+            self._make_example("cmpl-3", policy_generation=3),
+            self._make_example("cmpl-4", policy_generation=3),
         ]
         await (await self.trainer.train_step(examples)).wait()
 
@@ -380,7 +380,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         bad = Example(
             chat_completion_id="cmpl-bad",
             advantage=1.0,
-            policy_generation="0",
+            policy_generation=0,
             tokens=None,
             logprobs=None,
         )
@@ -396,14 +396,14 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         bad_a = Example(
             chat_completion_id="cmpl-bad-a",
             advantage=1.0,
-            policy_generation="0",
+            policy_generation=0,
             tokens=None,
             logprobs=None,
         )
         bad_b = Example(
             chat_completion_id="cmpl-bad-b",
             advantage=1.0,
-            policy_generation="0",
+            policy_generation=0,
             tokens=None,
             logprobs=None,
         )

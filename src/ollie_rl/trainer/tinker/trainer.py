@@ -241,7 +241,7 @@ class TinkerTrainer(Trainer):
 
         return Sample(
             completion=completion,
-            policy_generation=str(self.state.sampler_step),
+            policy_generation=self.state.sampler_step,
             tokens=full_tokens,
             logprobs=completion_logprobs,
         )
@@ -254,11 +254,7 @@ class TinkerTrainer(Trainer):
         This is the client-side analogue of tinker-cookbook's
         `filter_stale_trajectory_group`. The cutoff is inclusive: an
         example sampled at generation `g` survives iff
-        `state.train_step - g <= max_steps_off_policy`. Examples whose
-        `policy_generation` is not a parseable int are conservatively
-        counted as stale (with a warning) — every shipping backend
-        stamps it as a stringified int (we do too), so this should
-        never trip in practice.
+        `state.train_step - g <= max_steps_off_policy`.
 
         Returns `(survivors, dropped_count)`.
         """
@@ -266,15 +262,7 @@ class TinkerTrainer(Trainer):
         survivors: List[Example] = []
         dropped = 0
         for ex in examples:
-            try:
-                gen = int(ex.policy_generation)
-            except ValueError:
-                logger.warning(
-                    "TinkerTrainer dropping example with unparseable "
-                    f"policy_generation={ex.policy_generation!r}"
-                )
-                dropped += 1
-                continue
+            gen = ex.policy_generation
             if gen < cutoff:
                 dropped += 1
                 continue

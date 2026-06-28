@@ -54,7 +54,7 @@ def _make_chat_completion(completion_id: str = "cmpl-test") -> ChatCompletion:
     )
 
 
-def _make_sample_op(completion_id: str = "cmpl-test", policy_generation: str = "gen-0"):
+def _make_sample_op(completion_id: str = "cmpl-test", policy_generation: int = 0):
     sample = Sample(
         completion=_make_chat_completion(completion_id),
         policy_generation=policy_generation,
@@ -477,7 +477,7 @@ class TestRecordChatCompletion(TunerServiceTestCase):
             tuner_id=tuner_id,
             run_id=run.id,
             datum_id=run.datum_id,
-            policy_generation="gen-1",
+            policy_generation=1,
         )
 
         async_session = get_sessionmaker()
@@ -491,7 +491,7 @@ class TestRecordChatCompletion(TunerServiceTestCase):
 
         self.assertIsNotNone(record)
         assert record is not None
-        self.assertEqual(record.policy_generation, "gen-1")
+        self.assertEqual(record.policy_generation, 1)
         self.assertEqual(record.datum_id, run.datum_id)
         # No tokens/logprobs supplied → columns stay NULL.
         self.assertIsNone(record.tokens)
@@ -513,7 +513,7 @@ class TestRecordChatCompletion(TunerServiceTestCase):
             tuner_id=tuner_id,
             run_id=run.id,
             datum_id=run.datum_id,
-            policy_generation="gen-7",
+            policy_generation=7,
             tokens=tokens,
             logprobs=logprobs,
         )
@@ -635,7 +635,7 @@ class TestMaybeTrain(TunerServiceTestCase):
                     tuner_id=tuner_id,
                     run_id=run.id,
                     datum_id=datum_id,
-                    policy_generation=f"policy-gen-{datum_id}-{i}",
+                    policy_generation=i,
                 )
                 await self.service.update_reward(tuner_id, run.id, 1.0)
 
@@ -646,7 +646,7 @@ class TestMaybeTrain(TunerServiceTestCase):
         self.assertEqual(len(called_examples), 4)
         for example in called_examples:
             self.assertIsNotNone(example.policy_generation)
-            self.assertTrue(example.policy_generation.startswith("policy-gen-"))
+            self.assertIn(example.policy_generation, [0, 1])
 
 
 if __name__ == "__main__":

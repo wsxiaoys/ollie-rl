@@ -63,7 +63,7 @@ class FakeTrainer(Trainer):
         )
         sample = Sample(
             completion=completion,
-            policy_generation="fake-generation-id",
+            policy_generation=0,
         )
         return FakeSampleOp(sample)
 

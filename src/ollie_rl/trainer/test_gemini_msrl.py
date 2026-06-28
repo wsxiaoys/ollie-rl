@@ -57,7 +57,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         response_payload = GenerateContentTuningScopeResponse(
             candidates={"candidate_1": candidate},
             usage_metadata=None,
-            train_step_id="step-123",
+            train_step_id="123",
         )
 
         mock_op = MagicMock()
@@ -78,7 +78,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Call sample
         sample_op = await self.job.sample(request)
         sample_res = await sample_op.wait()
-        self.assertEqual(sample_res.policy_generation, "step-123")
+        self.assertEqual(sample_res.policy_generation, 123)
         completion = sample_res.completion
 
         # Assertions
@@ -131,7 +131,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Call sample
         sample_op = await self.job.sample(request)
         sample_res = await sample_op.wait()
-        self.assertEqual(sample_res.policy_generation, "456")
+        self.assertEqual(sample_res.policy_generation, 456)
         completion = sample_res.completion
 
         # Assertions
@@ -172,7 +172,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         response_payload = GenerateContentTuningScopeResponse(
             candidates={"candidate_3": candidate},
             usage_metadata=None,
-            train_step_id="step-789",
+            train_step_id="789",
         )
 
         mock_op = MagicMock()
@@ -193,7 +193,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Call sample
         sample_op = await self.job.sample(request)
         sample_res = await sample_op.wait()
-        self.assertEqual(sample_res.policy_generation, "step-789")
+        self.assertEqual(sample_res.policy_generation, 789)
         completion = sample_res.completion
 
         # Assertions
@@ -218,7 +218,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         from ollie_rl.trainer.types import Example
 
         # Mock TrainStepResponse with completed_train_step_id
-        response_payload = TrainStepResponse(completed_train_step_id="step-12345")
+        response_payload = TrainStepResponse(completed_train_step_id="12345")
 
         mock_op = MagicMock()
         mock_op.name = "operation-train-step"
@@ -232,7 +232,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
             Example(
                 chat_completion_id="chatcmpl-1",
                 advantage=1.0,
-                policy_generation="fake-generation",
+                policy_generation=123,
             )
         ]
 
@@ -368,7 +368,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
             Example(
                 chat_completion_id="chatcmpl-1",
                 advantage=1.0,
-                policy_generation="fake-generation",
+                policy_generation=123,
             )
         ]
 
@@ -406,7 +406,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
             Example(
                 chat_completion_id="chatcmpl-1",
                 advantage=1.0,
-                policy_generation="fake-generation",
+                policy_generation=123,
             )
         ]
 
@@ -439,7 +439,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
             Example(
                 chat_completion_id="chatcmpl-1",
                 advantage=1.0,
-                policy_generation="fake-generation",
+                policy_generation=123,
             )
         ]
 

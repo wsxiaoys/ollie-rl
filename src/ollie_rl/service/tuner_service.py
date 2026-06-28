@@ -221,7 +221,7 @@ class TunerService:
         tuner_id: str,
         run_id: str,
         datum_id: str,
-        policy_generation: str,
+        policy_generation: int,
         tokens: Optional[List[int]] = None,
         logprobs: Optional[List[float]] = None,
     ) -> None:

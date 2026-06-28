@@ -11,7 +11,7 @@ T = TypeVar("T")
 class Example(BaseModel):
     chat_completion_id: str
     advantage: float
-    policy_generation: str
+    policy_generation: int
     # Optional cached sample-time data needed by trainers that train on
     # raw tokens/logprobs (e.g. Tinker). Layout convention:
     #   tokens   : full sequence (prompt + completion)
@@ -24,7 +24,7 @@ class Example(BaseModel):
 
 class Sample(BaseModel):
     completion: ChatCompletion
-    policy_generation: str
+    policy_generation: int
     # Optional cached sample-time data. Same layout convention as Example.
     tokens: Optional[List[int]] = None
     logprobs: Optional[List[float]] = None
