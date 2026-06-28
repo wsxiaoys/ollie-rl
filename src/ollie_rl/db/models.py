@@ -134,9 +134,7 @@ class ChatCompletionModel(BaseModel):
     tuner_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("tuners.id"), nullable=False
     )
-    policy_generation: Mapped[int] = mapped_column(
-        Integer, nullable=False, index=True
-    )
+    policy_generation: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     # trajectory_id: Mapped[Optional[str]] = mapped_column(
     #     String(255), nullable=False, index=True
     # )

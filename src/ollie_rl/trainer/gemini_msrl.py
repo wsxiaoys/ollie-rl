@@ -236,7 +236,9 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
             ),
         )
 
-        return Sample(completion=completion, policy_generation=int(response.train_step_id))
+        return Sample(
+            completion=completion, policy_generation=int(response.train_step_id)
+        )
 
 
 class GeminiMsrlTrainingOp(GeminiMsrlOp, TrainOp):

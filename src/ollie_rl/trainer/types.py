@@ -70,6 +70,7 @@ class Trainer(ABC):
     @abstractmethod
     async def train_step(self, examples: List[Example]) -> TrainOp: ...
 
+
 class TrainerFactory(ABC):
     """
     Async factory that bootstraps or restores a Trainer against a StateStore.
