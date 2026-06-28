@@ -2,11 +2,13 @@ import unittest
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from ollie_rl.trainer.tinker import (
-    StaleBatchError,
-    TinkerTrainerConfig,
-    TinkerTrainerState,
+from . import (
     TinkerTrainer,
+    TinkerTrainerConfig,
+)
+from .trainer import (
+    StaleBatchError,
+    TinkerTrainerState,
     TinkerTrainerFactory,
 )
 from ollie_rl.trainer.types import StateStore, Example
