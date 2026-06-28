@@ -35,11 +35,11 @@ this plan must preserve.
   correctness role**. It was a throughput proxy doing the wrong job at
   the wrong layer. Freshness is each trainer's concern, keyed off
   `policy_generation`.
-- **No `Recipe` change.** Earlier drafts of this plan added an
-  `allow_sample_during_train` flag; on reflection that flag was
-  misleadingly named (it gates `dispense_run`, not `sample`) and not
-  semantically necessary. The cleaner move is to delete the gate
-  unconditionally and let trainers own off-policy semantics.
+- **Recipe change.** `Recipe` gains an `allow_dispense_during_training: bool`
+  required field. This explicitly governs the `is_training()` gate in
+  `TunerService.dispense_run`. Existing recipes like `GRPO_16x32` set it
+  to `False` to preserve synchronous behavior, while new async recipes
+  can set it to `True`.
 - **All mechanical async knobs live on per-trainer config.**
   `gemini_msrl` handles staleness server-side (the `TrainStepResponse`
   reports rejected candidates) and will surface a per-train-request
@@ -530,19 +530,18 @@ recipe changes and no trainer protocol changes.
 
 ## Protocol surface changes
 
-### `Recipe`: no changes
+### `Recipe`: allow_dispense_during_training
 
-The `Recipe` shape stays exactly as it is today. We considered an
-`allow_sample_during_train` (later renamed `allow_dispense_run_during_training`)
-boolean and rejected it: the gate it would have controlled has no
-correctness role, so a recipe flag would just be inherited complexity.
-See *Why no Recipe flag?* in the previous section.
+The `Recipe` shape gains a required `allow_dispense_during_training: bool` field:
 
-The existing knobs (`group_size`, `num_groups_per_batch`) are
-sufficient for both sync and async use cases. A "sync" recipe is just
-one driven by a trainer whose config holds `max_steps_off_policy=0`
-(or whose backend filters server-side at zero tolerance); an "async"
-recipe is the same recipe driven by a trainer with a positive bound.
+```python
+class Recipe(BaseModel, frozen=True):
+    group_size: int = 16
+    num_groups_per_batch: int = 32
+    allow_dispense_during_training: bool
+```
+
+This explicitly governs whether `TunerService.dispense_run` is allowed to dispense runs while training is actively in progress. It is set to `False` on the standard `GRPO_16x32` recipe to preserve synchronous behavior, but can be set to `True` for async recipes.
 
 ### `Example`: one new field
 
@@ -683,7 +682,7 @@ benefits from gate deletion the day Phase 1 lands). Landing it first
 de-risks the protocol shape before any tinker SDK plumbing touches
 the tree.
 
-### Phase 1 — async-RL as the natural mode (1 PR)
+### Phase 1 — async-RL as the natural mode (1 PR) [COMPLETED]
 No tinker code lands in this PR. Pure ollie-rl-side change. Real
 consumers from day one: `fake` (tests) and `gemini_msrl` (production).
 
@@ -760,9 +759,8 @@ The three pieces:
 
 1. **Preventive (start-gate).** Re-introduce the "disallow
    `dispense_run` during training" check, but opt-in — driven by e.g.
-   `Recipe.strict_on_policy: bool` or derived from
-   `TrainerConfig.max_steps_off_policy == 0`. Prevents *new* runs from
-   starting on a policy that's about to be replaced.
+   `Recipe.allow_dispense_during_training: bool` (set to `False` to
+   prevent *new* runs from starting on a policy that's about to be replaced).
 
 2. **Active (interrupt-in-flight).** Cancel `sample()` ops that are
    still in flight when `train_step` fires, and mark their parent runs
