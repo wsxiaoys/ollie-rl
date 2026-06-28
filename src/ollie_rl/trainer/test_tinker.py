@@ -74,13 +74,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
             optimizer_path=None,
             train_step=0,
             sampler_step=0,
-            base_model=self.config.base_model,
-            lora_rank=self.config.lora_rank,
-            learning_rate=self.config.learning_rate,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
-            kl_penalty_coef=self.config.kl_penalty_coef,
-            loss_fn=self.config.loss_fn,
+            config=self.config,
         )
 
         self.trainer = TinkerTrainer(
@@ -461,11 +455,13 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
             "optimizer_path": "tinker://restored-run/weights/optimizer-checkpoint",
             "train_step": 10,
             "sampler_step": 8,
-            "base_model": "meta-llama/Llama-3.1-8B-Instruct",
-            "lora_rank": 32,
-            "learning_rate": 1e-5,
-            "kl_penalty_coef": 0.0,
-            "loss_fn": "importance_sampling",
+            "config": {
+                "base_model": "meta-llama/Llama-3.1-8B-Instruct",
+                "lora_rank": 32,
+                "learning_rate": 1e-5,
+                "kl_penalty_coef": 0.0,
+                "loss_fn": "importance_sampling",
+            },
         }
         seeded_store = InMemoryStateStore(initial=json.dumps(state_dict))
 

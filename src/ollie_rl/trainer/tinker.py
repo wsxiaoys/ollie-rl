@@ -77,16 +77,7 @@ class TinkerTrainerState(BaseModel):
     sampler_step: int  # train_step at which `sampler_path` was published
 
     # Backend config (frozen at create-time)
-    base_model: str
-    lora_rank: int
-    learning_rate: float
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    kl_penalty_coef: float
-    loss_fn: str  # e.g. "importance_sampling"
-    max_steps_off_policy: int = 4
-    sampler_promotion_every: int = 1
-    max_stale_fraction: float = 0.4
+    config: TinkerTrainerConfig
 
 
 class TinkerTrainOp(TrainOp):
@@ -137,7 +128,7 @@ class TinkerTrainer(Trainer):
         # Set up renderer and tokenizer
         tokenizer = self._sampling_client.get_tokenizer()
         try:
-            renderer_name = get_recommended_renderer_name(self.state.base_model)
+            renderer_name = get_recommended_renderer_name(self.state.config.base_model)
         except Exception:
             renderer_name = "role_colon"
         self.renderer = get_renderer(renderer_name, tokenizer)
@@ -513,16 +504,7 @@ class TinkerTrainerFactory(TrainerFactory):
                 optimizer_path=None,
                 train_step=0,
                 sampler_step=0,
-                base_model=config.base_model,
-                lora_rank=config.lora_rank,
-                learning_rate=config.learning_rate,
-                max_tokens=config.max_tokens,
-                temperature=config.temperature,
-                kl_penalty_coef=config.kl_penalty_coef,
-                loss_fn=config.loss_fn,
-                max_steps_off_policy=config.max_steps_off_policy,
-                sampler_promotion_every=config.sampler_promotion_every,
-                max_stale_fraction=config.max_stale_fraction,
+                config=config,
             )
 
             instance = TinkerTrainer(
@@ -541,16 +523,7 @@ class TinkerTrainerFactory(TrainerFactory):
             )
 
             # Override config fields with frozen values from state
-            config.base_model = state.base_model
-            config.lora_rank = state.lora_rank
-            config.learning_rate = state.learning_rate
-            config.max_tokens = state.max_tokens
-            config.temperature = state.temperature
-            config.kl_penalty_coef = state.kl_penalty_coef
-            config.loss_fn = state.loss_fn
-            config.max_steps_off_policy = state.max_steps_off_policy
-            config.sampler_promotion_every = state.sampler_promotion_every
-            config.max_stale_fraction = state.max_stale_fraction
+            config = state.config
 
             if state.optimizer_path:
                 training_client = await service_client.create_training_client_from_state_with_optimizer_async(
