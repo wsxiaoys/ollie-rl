@@ -84,6 +84,9 @@ class TinkerTrainerState(BaseModel):
     temperature: Optional[float] = None
     kl_penalty_coef: float
     loss_fn: str  # e.g. "importance_sampling"
+    max_steps_off_policy: int = 4
+    sampler_promotion_every: int = 1
+    max_stale_fraction: float = 0.4
 
 
 class TinkerTrainOp(TrainOp):
@@ -517,6 +520,9 @@ class TinkerTrainerFactory(TrainerFactory):
                 temperature=config.temperature,
                 kl_penalty_coef=config.kl_penalty_coef,
                 loss_fn=config.loss_fn,
+                max_steps_off_policy=config.max_steps_off_policy,
+                sampler_promotion_every=config.sampler_promotion_every,
+                max_stale_fraction=config.max_stale_fraction,
             )
 
             instance = TinkerTrainer(
@@ -533,6 +539,18 @@ class TinkerTrainerFactory(TrainerFactory):
             logger.info(
                 f"Restoring Tinker trainer from state. Sampler path: {state.sampler_path}"
             )
+
+            # Override config fields with frozen values from state
+            config.base_model = state.base_model
+            config.lora_rank = state.lora_rank
+            config.learning_rate = state.learning_rate
+            config.max_tokens = state.max_tokens
+            config.temperature = state.temperature
+            config.kl_penalty_coef = state.kl_penalty_coef
+            config.loss_fn = state.loss_fn
+            config.max_steps_off_policy = state.max_steps_off_policy
+            config.sampler_promotion_every = state.sampler_promotion_every
+            config.max_stale_fraction = state.max_stale_fraction
 
             if state.optimizer_path:
                 training_client = await service_client.create_training_client_from_state_with_optimizer_async(
