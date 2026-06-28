@@ -261,6 +261,36 @@ class TestDispenseRun(TunerServiceTestCase):
         assert result is not None
         self.assertEqual(result.datum_id, "datum-1")
 
+    async def test_dispense_run_returns_none_when_trainer_is_training_and_not_allow_dispense_during_training(
+        self,
+    ):
+        from ollie_rl.cookbook import RECIPES
+        from ollie_rl.cookbook.recipes import Recipe
+
+        # Register a strict on-policy recipe that disallows dispensing during training
+        RECIPES["test_strict"] = Recipe(
+            group_size=2,
+            num_groups_per_batch=2,
+            allow_dispense_during_training=False,
+        )
+
+        tuner_id = await self.service.create_tuner(
+            recipe="test_strict",
+            name="test-tuner-strict",
+            datum_ids=["datum-1", "datum-2"],
+            trainer=_TRAINER_KIND,
+        )
+
+        trainer = self.service.active_trainers[tuner_id]
+        assert isinstance(trainer, FakeTrainer)
+        # Put trainer into an active training state.
+        op = AsyncMock()
+        op.peek = AsyncMock(return_value=False)  # still running
+        trainer._train_op = op
+
+        result = await self.service.dispense_run(tuner_id)
+        self.assertIsNone(result)
+
     async def test_returns_dispense_run_with_valid_fields(self):
         tuner_id = await self._create_tuner(datum_ids=["d1", "d2"])
         result = await self.service.dispense_run(tuner_id)

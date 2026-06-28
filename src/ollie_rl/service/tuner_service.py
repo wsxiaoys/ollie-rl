@@ -407,6 +407,11 @@ class TunerService:
                 f"Tuner '{tuner_id}' not found or not initialized."
             )
 
+        recipe = await self._recipe_for(tuner_id)
+        if recipe and not recipe.allow_dispense_during_training:
+            if await trainer.is_training():
+                return None
+
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 

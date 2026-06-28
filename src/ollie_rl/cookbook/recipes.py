@@ -14,6 +14,9 @@ class Recipe(BaseModel, frozen=True):
     group_size: int = 16
     num_groups_per_batch: int = 32
 
+    # ---- Policy synchronization -----------------------------------------
+    allow_dispense_during_training: bool = True
+
 
 # ---- Named recipe instances --------------------------------------------
 

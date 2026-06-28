@@ -760,9 +760,8 @@ The three pieces:
 
 1. **Preventive (start-gate).** Re-introduce the "disallow
    `dispense_run` during training" check, but opt-in — driven by e.g.
-   `Recipe.strict_on_policy: bool` or derived from
-   `TrainerConfig.max_steps_off_policy == 0`. Prevents *new* runs from
-   starting on a policy that's about to be replaced.
+   `Recipe.allow_dispense_during_training: bool = True` (set to `False` to
+   prevent *new* runs from starting on a policy that's about to be replaced).
 
 2. **Active (interrupt-in-flight).** Cancel `sample()` ops that are
    still in flight when `train_step` fires, and mark their parent runs
