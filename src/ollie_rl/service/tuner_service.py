@@ -108,7 +108,7 @@ class TunerService:
         state_store = _DbStateStore(tuner_id)
         factory = trainer_factory.get(trainer)
 
-        trainer_instance = await factory.open(record.name, state_store)
+        trainer_instance = await factory.restore(record.name, state_store)
         self.active_trainers[tuner_id] = trainer_instance
         return trainer_instance
 
@@ -146,7 +146,7 @@ class TunerService:
 
         tuner_id = tuner_record.id
         state_store = _DbStateStore(tuner_id)
-        trainer_instance = await factory.open(
+        trainer_instance = await factory.create(
             name, state_store, trainer_params=trainer_params
         )
         self.active_trainers[tuner_id] = trainer_instance

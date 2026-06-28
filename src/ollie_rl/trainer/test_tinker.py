@@ -430,7 +430,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
 
         factory = TinkerTrainerFactory()
         with patch("tinker.ServiceClient", return_value=self.mock_service_client):
-            trainer = await factory.open(
+            trainer = await factory.create(
                 name="test-tuner",
                 state_store=fresh_store,
             )
@@ -474,7 +474,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
 
         factory = TinkerTrainerFactory()
         with patch("tinker.ServiceClient", return_value=self.mock_service_client):
-            trainer = await factory.open(
+            trainer = await factory.restore(
                 name="test-tuner",
                 state_store=seeded_store,
             )

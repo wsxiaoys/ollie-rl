@@ -44,6 +44,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
             client=self.mock_client,
             state=GeminiMsrlTrainerState(
                 tuning_job_name="projects/test-project/locations/us-central1/tuningJobs/test-job-id",
+                config=self.config,
             ),
             state_store=self.state_store,
         )
@@ -256,6 +257,10 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Pre-seed a state store as if a previous run had persisted state.
         state_dict = {
             "tuning_job_name": "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
+            "config": {
+                "auth_token": "dummy-auth-token",
+                "project_id": "dummy-project-id",
+            },
         }
         seeded_store = InMemoryStateStore(initial=json.dumps(state_dict))
 
@@ -266,7 +271,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
             "ollie_rl.trainer.gemini_msrl.GeminiMsrlClient"
         ) as mock_client_class:
             mock_client_class.return_value = self.mock_client
-            trainer = await factory.open("test-display-name", seeded_store)
+            trainer = await factory.restore("test-display-name", seeded_store)
             self.assertEqual(
                 trainer.tuning_job_name,
                 "projects/test-project/locations/us-central1/tuningJobs/test-job-id",
@@ -290,7 +295,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
             "ollie_rl.trainer.gemini_msrl.GeminiMsrlClient"
         ) as mock_client_class:
             mock_client_class.return_value = self.mock_client
-            trainer = await factory.open("test-display-name", fresh_store)
+            trainer = await factory.create("test-display-name", fresh_store)
 
         # Trainer created the job and persisted its initial state via the store.
         self.assertEqual(trainer.tuning_job_name, mock_job.name)

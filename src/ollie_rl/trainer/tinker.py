@@ -447,7 +447,7 @@ class TinkerTrainer(Trainer):
 
 
 class TinkerTrainerFactory(TrainerFactory):
-    async def open(
+    async def create(
         self,
         name: str,
         state_store: StateStore,
@@ -477,78 +477,106 @@ class TinkerTrainerFactory(TrainerFactory):
 
         service_client = tinker.ServiceClient(**client_kwargs)
 
+        logger.info(
+            f"Bootstrapping Tinker training client for model: {config.base_model}"
+        )
+        training_client = await service_client.create_lora_training_client_async(
+            base_model=config.base_model,
+            rank=config.lora_rank,
+        )
+
+        logger.info("Saving initial weights for sampler...")
+        initial_sampler_name = f"sampler-init-{uuid.uuid4().hex}"
+        future = await training_client.save_weights_for_sampler_async(
+            name=initial_sampler_name
+        )
+        save_response = await future
+        sampler_path = save_response.path
+
+        sampling_client = await service_client.create_sampling_client_async(
+            model_path=sampler_path
+        )
+
+        state = TinkerTrainerState(
+            sampler_path=sampler_path,
+            optimizer_path=None,
+            train_step=0,
+            sampler_step=0,
+            config=config,
+        )
+
+        instance = TinkerTrainer(
+            config=config,
+            service_client=service_client,
+            state=state,
+            state_store=state_store,
+            sampling_client=sampling_client,
+            training_client=training_client,
+        )
+        await instance._persist_state()
+        return instance
+
+    async def restore(
+        self,
+        name: str,
+        state_store: StateStore,
+    ) -> TinkerTrainer:
+        service_url = os.environ.get("TINKER_SERVICE_URL") or os.environ.get(
+            "TINKER_BASE_URL"
+        )
+        api_key = os.environ.get("TINKER_API_KEY")
+
+        config_kwargs: dict[str, Any] = {}
+        if service_url:
+            config_kwargs["service_url"] = service_url
+        if api_key:
+            config_kwargs["api_key"] = api_key
+
         raw_state = await state_store.load()
         if raw_state is None:
-            logger.info(
-                f"Bootstrapping Tinker training client for model: {config.base_model}"
-            )
-            training_client = await service_client.create_lora_training_client_async(
-                base_model=config.base_model,
-                rank=config.lora_rank,
+            raise ValueError(
+                f"Cannot restore Tinker trainer for {name}: no persisted state found."
             )
 
-            logger.info("Saving initial weights for sampler...")
-            initial_sampler_name = f"sampler-init-{uuid.uuid4().hex}"
-            future = await training_client.save_weights_for_sampler_async(
-                name=initial_sampler_name
-            )
-            save_response = await future
-            sampler_path = save_response.path
+        state = TinkerTrainerState.model_validate_json(raw_state)
+        logger.info(
+            f"Restoring Tinker trainer from state. Sampler path: {state.sampler_path}"
+        )
 
-            sampling_client = await service_client.create_sampling_client_async(
-                model_path=sampler_path
-            )
+        # Override config fields with frozen values from state
+        config = state.config
 
-            state = TinkerTrainerState(
-                sampler_path=sampler_path,
-                optimizer_path=None,
-                train_step=0,
-                sampler_step=0,
-                config=config,
-            )
+        client_kwargs: dict[str, Any] = {}
+        if config.api_key:
+            client_kwargs["api_key"] = config.api_key
+        if config.service_url:
+            client_kwargs["base_url"] = config.service_url
 
-            instance = TinkerTrainer(
-                config=config,
-                service_client=service_client,
-                state=state,
-                state_store=state_store,
-                sampling_client=sampling_client,
-                training_client=training_client,
+        service_client = tinker.ServiceClient(**client_kwargs)
+
+        if state.optimizer_path:
+            training_client = await service_client.create_training_client_from_state_with_optimizer_async(
+                path=state.optimizer_path
             )
-            await instance._persist_state()
         else:
-            state = TinkerTrainerState.model_validate_json(raw_state)
-            logger.info(
-                f"Restoring Tinker trainer from state. Sampler path: {state.sampler_path}"
-            )
-
-            # Override config fields with frozen values from state
-            config = state.config
-
-            if state.optimizer_path:
-                training_client = await service_client.create_training_client_from_state_with_optimizer_async(
-                    path=state.optimizer_path
+            training_client = (
+                await service_client.create_training_client_from_state_async(
+                    path=state.sampler_path
                 )
-            else:
-                training_client = (
-                    await service_client.create_training_client_from_state_async(
-                        path=state.sampler_path
-                    )
-                )
-
-            sampling_client = await service_client.create_sampling_client_async(
-                model_path=state.sampler_path
             )
 
-            instance = TinkerTrainer(
-                config=config,
-                service_client=service_client,
-                state=state,
-                state_store=state_store,
-                sampling_client=sampling_client,
-                training_client=training_client,
-            )
+        sampling_client = await service_client.create_sampling_client_async(
+            model_path=state.sampler_path
+        )
 
+        instance = TinkerTrainer(
+            config=config,
+            service_client=service_client,
+            state=state,
+            state_store=state_store,
+            sampling_client=sampling_client,
+            training_client=training_client,
+        )
         return instance
 
 

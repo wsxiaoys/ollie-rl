@@ -88,9 +88,16 @@ class TrainerFactory(ABC):
     """
 
     @abstractmethod
-    async def open(
+    async def create(
         self,
         name: str,
         state_store: StateStore,
         trainer_params: Optional[dict] = None,
+    ) -> Trainer: ...
+
+    @abstractmethod
+    async def restore(
+        self,
+        name: str,
+        state_store: StateStore,
     ) -> Trainer: ...
