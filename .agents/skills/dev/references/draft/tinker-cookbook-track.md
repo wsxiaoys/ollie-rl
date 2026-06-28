@@ -148,4 +148,108 @@ Order in which it is likely worth closing the gap, increasing in scope:
    `AsyncConfig.groups_per_batch` semantics.
 7. Optional `trajectory_to_data`-style prefix-merge for multi-turn runs to
    avoid redundant forward/backward over shared prefixes (pure compute win,
-   no semantic change).
+   no semantic change). See **"`trajectory_to_data` in ollie-rl"** below for
+   the design caveat — `run_id` is *not* a trajectory.
+
+## `trajectory_to_data` in ollie-rl
+
+Cookbook's `trajectory_to_data` walks a `Trajectory.transitions` list — an
+ordered sequence of `(obs, action)` pairs that the rollout pipeline knows are
+all part of one episode. ollie-rl does not have that information at the
+trainer boundary: by the time examples reach `TinkerTrainer.train_step`, the
+trajectory structure has been flattened into per-`ChatCompletion` rows.
+
+### Why `run_id` is *not* a trajectory
+
+From `data-model.md`:
+
+> A **run** is the unit of reward / advantage. A single run may internally
+> contain multiple trajectories (e.g. multi-step or agent-with-sub-agent
+> setups); they all share the same `run_id`, reward, and advantage.
+
+A `run_id` is therefore a **bag of trajectories that share an advantage**,
+not a single trajectory. Concretely:
+
+- **Sub-agent.** The main agent's thread and the sub-agent's thread don't
+  share a system prompt — they are two disjoint token-prefix trees.
+- **Multi-agent / committee.** N agents collaborating, each with its own
+  thread.
+- **Pure parallel attempts.** Multiple independent chat threads inside one
+  run.
+
+So naïvely sorting all completions in a `run_id` by `created_at` and treating
+them as one linear chain would force a non-extending turn to flush mid-run
+and produce semantic nonsense merges (e.g. attaching sub-agent tokens onto
+the end of the main agent's trajectory). `turn_index` is the wrong key.
+
+### The correct shape
+
+What we actually need is exactly cookbook's per-token `(advantage, mask)`
+layout — but in ollie-rl the trajectory boundary must be **discovered from
+the token sequences themselves**:
+
+```
+Run (shared advantage)
+├── Trajectory A   (main agent)        ┐
+│   ├── ChatCompletion a1               ├─ same prefix tree
+│   ├── ChatCompletion a2               │
+│   └── ChatCompletion a3               ┘
+└── Trajectory B   (sub-agent)         ┐
+    ├── ChatCompletion b1               ├─ different prefix tree
+    └── ChatCompletion b2               ┘
+```
+
+Two completions belong to the same trajectory iff one's prompt is a
+**token-prefix extension** of the other's full token sequence. That is a
+prefix-graph partitioning problem, not a sort.
+
+### Revised algorithm
+
+Per run (advantage is per-run, so runs must stay separate):
+
+1. **Sort completions by `len(prompt_tokens)` ascending** to make the
+   partitioning greedy.
+2. **Maintain a set of open trajectory accumulators**, each holding
+   `(full_seq, sampled_lp, advantages, mask)`.
+3. **For each completion** with prompt `ob` and completion `ac`:
+   - Find the open accumulator whose `full_seq` is the **longest** prefix
+     of `ob` (trivial linear scan; runs are small).
+   - If one exists: attach.
+     `delta_ob = ob[len(full_seq):]` → append with zeros for
+     `lp`/`advantage`/`mask`; then append `ac` with `lp = ex.logprobs`,
+     `advantage = [ex.advantage] * len(ac)`, `mask = [1.0] * len(ac)`.
+   - If none exists: open a fresh accumulator seeded with `ob + ac` (zeros
+     on `ob`, real values on `ac`).
+4. **Flush each open accumulator as its own `tinker.Datum`** at end of run,
+   with the right-shift / left-shift slicing we already do.
+
+This correctly handles:
+
+| Case | Outcome |
+|---|---|
+| Linear multi-turn (single agent) | One accumulator grows; **1 Datum** per run. |
+| Sub-agent | Main + sub each build their own accumulator; **2 Datums** per run. |
+| Pure parallel attempts (N threads) | **N Datums** per run. |
+| Renderer re-encodes history non-monotonically | Mismatch on every turn → degenerates to **1 Datum per completion** — same as today's `_example_to_datum`. Safe fallback. |
+
+### Implications for the contract change
+
+- **`Example` needs `run_id`** — advantage is per-run; can't merge across
+  runs. Required.
+- **No `turn_index`.** Don't expose creation-order to the trainer; let the
+  trainer discover trajectory structure from tokens. `created_at` is at most
+  a tie-breaker within a trajectory after partitioning, not the partition
+  key.
+- **Service stays trajectory-agnostic.** `_collect_consumable_batch` just
+  emits `Example(run_id, advantage, tokens, logprobs)` per chat completion.
+  Trajectory detection lives entirely in `TinkerTrainer._run_to_data`.
+
+### Equivalence to cookbook
+
+In cookbook, trajectory boundaries are *given* by the rollout pipeline.
+ollie-rl's HTTP design trades that structural information for being
+client-agnostic, so we **recover it from tokens** before applying the same
+merge math. Once recovered, the per-token `(advantage, mask, logprobs)`
+layout is byte-identical to cookbook's, and the resulting Datums are
+drop-in compatible with the cookbook KL / `_remove_mask` flow we'll port
+later.
