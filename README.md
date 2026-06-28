@@ -59,8 +59,8 @@ adding one provider block to `opencode.json`:
         "baseURL": "http://localhost:8000/openai/v1",
         "apiKey": "any-key",
         "headers": {
-          "X-Tuner-Id": "{env:X_TUNER_ID}",
-          "X-Run-Id":   "{env:X_RUN_ID}"
+          "X-Tuner-Id": "{env:TUNER_ID}",
+          "X-Run-Id":   "{env:RUN_ID}"
         }
       },
       "models": { "tinker": {} }
@@ -81,15 +81,15 @@ TUNER_ID=$(curl -s -X POST http://localhost:8000/tuners \
 
 # Per run: request a run assignment
 RUN=$(curl -s -X POST http://localhost:8000/tuners/$TUNER_ID/runs)
-export X_TUNER_ID=$TUNER_ID
-export X_RUN_ID=$(jq -r .run_id  <<< "$RUN")
+export TUNER_ID
+export RUN_ID=$(jq -r .run_id  <<< "$RUN")
 DATUM_ID=$(jq   -r .datum_id <<< "$RUN")
 
 # Run the agent against the live (and learning) policy
 opencode run "Solve this task: $DATUM_ID"
 
 # Score the run — the server learns from it implicitly
-curl -X PUT http://localhost:8000/tuners/$X_TUNER_ID/runs/$X_RUN_ID/reward \
+curl -X PUT http://localhost:8000/tuners/$TUNER_ID/runs/$RUN_ID/reward \
   -H 'Content-Type: application/json' \
   -d '{"reward": 1.0}'
 ```
