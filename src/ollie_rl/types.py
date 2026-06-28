@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional
+from pydantic import BaseModel
+from typing import List, Optional
 from openai.types.chat import (
     ChatCompletionFunctionTool,
     ChatCompletionMessageParam,
@@ -20,11 +20,6 @@ class CreateTunerRequest(BaseModel):
     recipe: str
     trainer: str
     datum_ids: List[str]
-    # Trainer-specific bootstrap overrides forwarded as **kwargs to
-    # `TrainerFactory.open(...)`. Lets callers adopt an existing backend
-    # resource (e.g. a pre-warmed Vertex tuning job) instead of provisioning
-    # a fresh one. Schema is intentionally trainer-defined.
-    bootstrap: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateTunerResponse(BaseModel):

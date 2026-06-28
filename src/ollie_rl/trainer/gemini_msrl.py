@@ -440,21 +440,7 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         )
 
         raw_state = await state_store.load()
-        adopt_job_name = bootstrap.get("tuning_job_name")
-        if raw_state is None and adopt_job_name:
-            # Adoption path: skip job creation, attach to an existing Vertex
-            # tuning job by full resource name
-            # (projects/*/locations/*/tuningJobs/*). Useful when the DB was
-            # lost or for development against a pre-warmed job.
-            logger.info(f"Adopting existing Gemini MSRL tuning job: {adopt_job_name}")
-            instance = GeminiMsrlTrainer(
-                config=config,
-                client=client,
-                state=GeminiMsrlTrainerState(tuning_job_name=adopt_job_name),
-                state_store=state_store,
-            )
-            await instance._persist_state()
-        elif raw_state is None:
+        if raw_state is None:
             # Bootstrap path: create a fresh tuning job and persist its name.
             req = CreateTuningJobRequest(
                 tuned_model_display_name=name,
