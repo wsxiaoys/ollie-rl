@@ -6,7 +6,6 @@ import time
 import uuid
 from typing import Any, List, Optional, Tuple
 
-import torch
 from pydantic import BaseModel
 from openai.types.chat import (
     ChatCompletion,
@@ -32,6 +31,7 @@ from ollie_rl.trainer.types import (
     StateStore,
 )
 from ollie_rl.trainer import factory
+from .accumulator import examples_to_data
 
 logger = logging.getLogger(__name__)
 
@@ -287,70 +287,12 @@ class TinkerTrainer(Trainer):
             )
         return survivors, dropped
 
-    def _example_to_datum(self, example: Example) -> Optional[tinker.Datum]:
+    def _examples_to_data(self, examples: List[Example]) -> List[tinker.Datum]:
         """
-        Convert an `Example` to a single `tinker.Datum` for
-        `forward_backward`. Returns None if the example is missing the
-        cached tokens/logprobs needed to replay it.
-
-        Layout mirrors `tinker_cookbook.rl.data_processing.trajectory_to_data`
-        for the single-turn case:
-
-            full_seq      = prompt + completion
-            sampled_lp    = [0.0]*prompt_len + completion_logprobs
-            advantages    = [0.0]*prompt_len + [advantage]*completion_len
-            mask          = [0.0]*prompt_len + [1.0]*completion_len
-
-            model_input   = full_seq[:-1]   (next-token-prediction inputs)
-            target_tokens = full_seq[1:]
-            (loss_fn_inputs are all sliced [1:] to align with targets)
+        Groups examples into trajectory-level tinker.Datums by reconstructing
+        the prefix-tree structure of their tokens.
         """
-        if example.tokens is None or example.logprobs is None:
-            logger.warning(
-                f"TinkerTrainer skipping example {example.chat_completion_id}: "
-                "no cached tokens/logprobs"
-            )
-            return None
-
-        full_tokens = example.tokens
-        completion_logprobs = example.logprobs
-        completion_len = len(completion_logprobs)
-        prompt_len = len(full_tokens) - completion_len
-        if prompt_len < 1 or completion_len < 1:
-            logger.warning(
-                f"TinkerTrainer skipping example {example.chat_completion_id}: "
-                f"degenerate prompt_len={prompt_len}, completion_len={completion_len}"
-            )
-            return None
-
-        sampled_logprobs = [0.0] * prompt_len + list(completion_logprobs)
-        advantages = [0.0] * prompt_len + [example.advantage] * completion_len
-        mask = [0.0] * prompt_len + [1.0] * completion_len
-
-        # Drop the leading position so loss inputs align with target_tokens.
-        target_tokens = full_tokens[1:]
-        sampled_logprobs = sampled_logprobs[1:]
-        advantages = advantages[1:]
-        mask = mask[1:]
-
-        input_tokens = tinker.ModelInput.from_ints(tokens=full_tokens[:-1])
-        return tinker.Datum(
-            model_input=input_tokens,
-            loss_fn_inputs={
-                "target_tokens": tinker.TensorData.from_torch(
-                    torch.tensor(target_tokens, dtype=torch.int64)
-                ),
-                "logprobs": tinker.TensorData.from_torch(
-                    torch.tensor(sampled_logprobs, dtype=torch.float32)
-                ),
-                "advantages": tinker.TensorData.from_torch(
-                    torch.tensor(advantages, dtype=torch.float32)
-                ),
-                "mask": tinker.TensorData.from_torch(
-                    torch.tensor(mask, dtype=torch.float32)
-                ),
-            },
-        )
+        return examples_to_data(examples)
 
     async def _promote_sampler(self) -> None:
         """
@@ -400,12 +342,8 @@ class TinkerTrainer(Trainer):
                 "cadence, or slow sampler throughput."
             )
 
-        # 2. Build Datum list (skipping rows missing cached tokens).
-        data: List[tinker.Datum] = []
-        for ex in survivors:
-            datum = self._example_to_datum(ex)
-            if datum is not None:
-                data.append(datum)
+        # 2. Build Datum list (skipping rows missing cached tokens and grouping into trajectories).
+        data = self._examples_to_data(survivors)
 
         if not data:
             raise StaleBatchError(
