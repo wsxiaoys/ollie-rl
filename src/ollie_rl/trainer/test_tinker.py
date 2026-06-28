@@ -1,0 +1,327 @@
+import unittest
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from ollie_rl.trainer.tinker import (
+    TinkerTrainerConfig,
+    TinkerTrainerState,
+    TinkerTrainer,
+    TinkerTrainerFactory,
+)
+from ollie_rl.trainer.types import StateStore, Example
+from ollie_rl.types import ChatCompletionRequest
+
+
+class InMemoryStateStore(StateStore):
+    """Trivial in-memory StateStore for tests."""
+
+    def __init__(self, initial: str | None = None):
+        self._state = initial
+        self.save_count = 0
+
+    async def load(self) -> str | None:
+        return self._state
+
+    async def save(self, state: str) -> None:
+        self._state = state
+        self.save_count += 1
+
+
+class FakeAPIFuture:
+    def __init__(self, result):
+        self._result = result
+
+    def __await__(self):
+        async def _async_get():
+            return self._result
+
+        return _async_get().__await__()
+
+
+class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.config = TinkerTrainerConfig(
+            service_url="http://test-tinker",
+            api_key="test-api-key",
+            base_model="meta-llama/Llama-3.1-8B-Instruct",
+        )
+
+        # Setup mocks
+        self.mock_service_client = MagicMock()
+        self.mock_sampling_client = MagicMock()
+        self.mock_training_client = MagicMock()
+
+        # Setup tokenizer mock
+        self.mock_tokenizer = MagicMock()
+
+        def encode_side_effect(text, **kwargs):
+            if text == "<|eot_id|>":
+                return [128009]
+            elif text == "<|begin_of_text|>":
+                return [128000]
+            return [1, 2, 3]
+
+        self.mock_tokenizer.encode.side_effect = encode_side_effect
+        self.mock_tokenizer.decode.return_value = "decoded text"
+        self.mock_sampling_client.get_tokenizer.return_value = self.mock_tokenizer
+        self.mock_training_client.get_tokenizer.return_value = self.mock_tokenizer
+
+        self.state_store = InMemoryStateStore()
+
+        self.state = TinkerTrainerState(
+            sampler_path="tinker://test-run/weights/sampler-init",
+            optimizer_path=None,
+            train_step=0,
+            sampler_step=0,
+            base_model=self.config.base_model,
+            lora_rank=self.config.lora_rank,
+            learning_rate=self.config.learning_rate,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+            kl_penalty_coef=self.config.kl_penalty_coef,
+            loss_fn=self.config.loss_fn,
+        )
+
+        self.trainer = TinkerTrainer(
+            config=self.config,
+            service_client=self.mock_service_client,
+            state=self.state,
+            state_store=self.state_store,
+            sampling_client=self.mock_sampling_client,
+            training_client=self.mock_training_client,
+        )
+
+    async def test_sample_stamps_policy_generation(self):
+        # Mock sample response
+        mock_sequence = MagicMock()
+        mock_sequence.tokens = [4, 5, 6, 128009]
+        mock_sequence.stop_reason = "stop"
+
+        mock_response = MagicMock()
+        mock_response.sequences = [mock_sequence]
+
+        # Make sample_async return the mock response
+        self.mock_sampling_client.sample_async = AsyncMock(return_value=mock_response)
+
+        # Create request
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=100,
+        )
+
+        # Call sample
+        sample_op = await self.trainer.sample(request)
+        sample_res = await sample_op.wait()
+
+        # Verify policy generation matches sampler_step
+        self.assertEqual(sample_res.policy_generation, str(self.state.sampler_step))
+        completion = sample_res.completion
+
+        # Assertions
+        self.assertEqual(len(completion.choices), 1)
+        choice = completion.choices[0]
+        self.assertEqual(choice.finish_reason, "stop")
+        self.assertEqual(choice.message.content, "decoded text")
+        self.assertEqual(choice.message.role, "assistant")
+
+    async def test_sample_tool_call_response(self):
+        from tinker_cookbook.renderers import ToolCall
+
+        mock_sequence = MagicMock()
+        mock_sequence.tokens = [4, 5, 6]
+        mock_sequence.stop_reason = "stop"
+
+        mock_response = MagicMock()
+        mock_response.sequences = [mock_sequence]
+
+        self.mock_sampling_client.sample_async = AsyncMock(return_value=mock_response)
+
+        # Mock parsed message with a tool call
+        mock_tool_call = ToolCall(
+            id="call_123",
+            function=ToolCall.FunctionBody(
+                name="get_weather", arguments='{"location": "San Francisco"}'
+            ),
+        )
+        parsed_message = {"content": None, "tool_calls": [mock_tool_call]}
+
+        # Patch self.trainer.renderer.parse_response
+        self.trainer.renderer.parse_response = MagicMock(
+            return_value=(parsed_message, True)
+        )
+
+        # Create request
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "What is the weather?"}],
+            max_tokens=100,
+        )
+
+        sample_op = await self.trainer.sample(request)
+        sample_res = await sample_op.wait()
+
+        self.assertEqual(sample_res.policy_generation, str(self.state.sampler_step))
+        completion = sample_res.completion
+
+        self.assertEqual(len(completion.choices), 1)
+        choice = completion.choices[0]
+        self.assertEqual(choice.finish_reason, "tool_calls")
+        self.assertIsNone(choice.message.content)
+        self.assertIsNotNone(choice.message.tool_calls)
+        assert choice.message.tool_calls is not None
+        self.assertEqual(len(choice.message.tool_calls), 1)
+
+        from openai.types.chat import ChatCompletionMessageToolCall
+
+        tc = choice.message.tool_calls[0]
+        assert isinstance(tc, ChatCompletionMessageToolCall)
+        self.assertEqual(tc.function.name, "get_weather")
+        self.assertEqual(tc.function.arguments, '{"location": "San Francisco"}')
+
+    async def test_sample_malformed_response_raises_not_implemented_error(self):
+        mock_sequence = MagicMock()
+        mock_sequence.tokens = [4, 5, 6]
+        mock_sequence.stop_reason = "stop"
+
+        mock_response = MagicMock()
+        mock_response.sequences = [mock_sequence]
+
+        self.mock_sampling_client.sample_async = AsyncMock(return_value=mock_response)
+
+        # Mock parsed message where parse_success is False
+        parsed_message = {
+            "content": "some malformed string",
+        }
+        self.trainer.renderer.parse_response = MagicMock(
+            return_value=(parsed_message, False)
+        )
+
+        # Create request
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=100,
+        )
+
+        sample_op = await self.trainer.sample(request)
+        with self.assertRaises(NotImplementedError) as ctx:
+            await sample_op.wait()
+
+        self.assertIn(
+            "Malformed assistant response or function call", str(ctx.exception)
+        )
+
+    async def test_train_step_increments_and_promotes_sampler(self):
+        examples = [
+            Example(
+                chat_completion_id="chatcmpl-123",
+                advantage=1.0,
+                policy_generation="0",
+            )
+        ]
+
+        # First train step (train_step becomes 1, sampler promoted because sampler_promotion_every=1)
+        train_op = await self.trainer.train_step(examples)
+        await train_op.wait()
+
+        self.assertEqual(self.trainer.state.train_step, 1)
+        self.assertEqual(self.trainer.state.sampler_step, 1)
+
+        # Second train step with sampler_promotion_every=2
+        self.trainer.config.sampler_promotion_every = 2
+        train_op = await self.trainer.train_step(examples)
+        await train_op.wait()
+
+        self.assertEqual(self.trainer.state.train_step, 2)
+        self.assertEqual(self.trainer.state.sampler_step, 2)  # 2 % 2 == 0, so promoted
+
+        # Third train step (sampler NOT promoted because 3 % 2 != 0)
+        train_op = await self.trainer.train_step(examples)
+        await train_op.wait()
+
+        self.assertEqual(self.trainer.state.train_step, 3)
+        self.assertEqual(self.trainer.state.sampler_step, 2)  # Remains 2
+
+    async def test_open_bootstrap_path(self):
+        fresh_store = InMemoryStateStore()
+
+        # Mock ServiceClient creation and training client creation
+        mock_save_response = MagicMock()
+        mock_save_response.path = "tinker://new-run/weights/sampler-init"
+
+        mock_future = FakeAPIFuture(mock_save_response)
+
+        self.mock_training_client.save_weights_for_sampler_async = AsyncMock(
+            return_value=mock_future
+        )
+        self.mock_service_client.create_lora_training_client_async = AsyncMock(
+            return_value=self.mock_training_client
+        )
+        self.mock_service_client.create_sampling_client_async = AsyncMock(
+            return_value=self.mock_sampling_client
+        )
+
+        factory = TinkerTrainerFactory()
+        with patch("tinker.ServiceClient", return_value=self.mock_service_client):
+            trainer = await factory.open(
+                name="test-tuner",
+                state_store=fresh_store,
+                base_model="meta-llama/Llama-3.1-8B-Instruct",
+            )
+
+        self.assertEqual(
+            trainer.state.sampler_path, "tinker://new-run/weights/sampler-init"
+        )
+        self.assertEqual(trainer.state.train_step, 0)
+        self.assertEqual(fresh_store.save_count, 1)
+
+        # Verify the state is correctly serialized as JSON
+        assert fresh_store._state is not None
+        state_data = json.loads(fresh_store._state)
+        self.assertEqual(
+            state_data["sampler_path"], "tinker://new-run/weights/sampler-init"
+        )
+
+    async def test_open_restore_path(self):
+        # Pre-seed state dict
+        state_dict = {
+            "sampler_path": "tinker://restored-run/weights/sampler-checkpoint",
+            "optimizer_path": "tinker://restored-run/weights/optimizer-checkpoint",
+            "train_step": 10,
+            "sampler_step": 8,
+            "base_model": "meta-llama/Llama-3.1-8B-Instruct",
+            "lora_rank": 32,
+            "learning_rate": 1e-5,
+            "kl_penalty_coef": 0.0,
+            "loss_fn": "importance_sampling",
+        }
+        seeded_store = InMemoryStateStore(initial=json.dumps(state_dict))
+
+        self.mock_service_client.create_training_client_from_state_with_optimizer_async = AsyncMock(
+            return_value=self.mock_training_client
+        )
+        self.mock_service_client.create_sampling_client_async = AsyncMock(
+            return_value=self.mock_sampling_client
+        )
+
+        factory = TinkerTrainerFactory()
+        with patch("tinker.ServiceClient", return_value=self.mock_service_client):
+            trainer = await factory.open(
+                name="test-tuner",
+                state_store=seeded_store,
+            )
+
+        self.assertEqual(
+            trainer.state.sampler_path,
+            "tinker://restored-run/weights/sampler-checkpoint",
+        )
+        self.assertEqual(
+            trainer.state.optimizer_path,
+            "tinker://restored-run/weights/optimizer-checkpoint",
+        )
+        self.assertEqual(trainer.state.train_step, 10)
+        self.assertEqual(trainer.state.sampler_step, 8)
+
+        # Restore path must not overwrite the existing state store
+        self.assertEqual(seeded_store.save_count, 0)

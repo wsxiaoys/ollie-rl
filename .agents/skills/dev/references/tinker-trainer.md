@@ -705,7 +705,7 @@ consumers from day one: `fake` (tests) and `gemini_msrl` (production).
   removal; TunerService liveness still intact;
   `Example.policy_generation` populated.
 
-### Phase 2 — tinker skeleton trainer (1 PR)
+### Phase 2 — tinker skeleton trainer (1 PR) [COMPLETED]
 - `src/ollie_rl/trainer/tinker.py` with `TinkerTrainer`,
   `TinkerTrainerFactory`, `TinkerTrainerState`, `TinkerTrainerConfig`.
 - Implements `sample()` against a tinker `SamplingClient`. Stamps

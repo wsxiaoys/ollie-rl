@@ -149,7 +149,9 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
             elif finish_reason == FinishReason.MAX_TOKENS:
                 finish_reason = "length"
             elif finish_reason == FinishReason.MALFORMED_FUNCTION_CALL:
-                raise NotImplementedError()
+                raise NotImplementedError(
+                    "Malformed assistant response or function call"
+                )
             elif finish_reason in (
                 FinishReason.SAFETY,
                 FinishReason.RECITATION,
