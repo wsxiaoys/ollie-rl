@@ -75,6 +75,7 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
             name=request.name,
             datum_ids=request.datum_ids,
             trainer=request.trainer,
+            bootstrap=request.bootstrap,
         )
 
         logger.info(
