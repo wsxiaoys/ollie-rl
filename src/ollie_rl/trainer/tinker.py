@@ -77,13 +77,7 @@ class TinkerTrainerState(BaseModel):
     sampler_step: int  # train_step at which `sampler_path` was published
 
     # Backend config (frozen at create-time)
-    base_model: str
-    lora_rank: int
-    learning_rate: float
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    kl_penalty_coef: float
-    loss_fn: str  # e.g. "importance_sampling"
+    config: TinkerTrainerConfig
 
 
 class TinkerTrainOp(TrainOp):
@@ -134,7 +128,7 @@ class TinkerTrainer(Trainer):
         # Set up renderer and tokenizer
         tokenizer = self._sampling_client.get_tokenizer()
         try:
-            renderer_name = get_recommended_renderer_name(self.state.base_model)
+            renderer_name = get_recommended_renderer_name(self.state.config.base_model)
         except Exception:
             renderer_name = "role_colon"
         self.renderer = get_renderer(renderer_name, tokenizer)
@@ -453,7 +447,76 @@ class TinkerTrainer(Trainer):
 
 
 class TinkerTrainerFactory(TrainerFactory):
-    async def open(
+    async def create(
+        self,
+        name: str,
+        state_store: StateStore,
+        trainer_params: Optional[dict] = None,
+    ) -> TinkerTrainer:
+        service_url = os.environ.get("TINKER_SERVICE_URL") or os.environ.get(
+            "TINKER_BASE_URL"
+        )
+        api_key = os.environ.get("TINKER_API_KEY")
+
+        config_kwargs: dict[str, Any] = {}
+        if service_url:
+            config_kwargs["service_url"] = service_url
+        if api_key:
+            config_kwargs["api_key"] = api_key
+
+        if trainer_params:
+            config_kwargs.update(trainer_params)
+
+        config = TinkerTrainerConfig(**config_kwargs)
+
+        client_kwargs: dict[str, Any] = {}
+        if config.api_key:
+            client_kwargs["api_key"] = config.api_key
+        if config.service_url:
+            client_kwargs["base_url"] = config.service_url
+
+        service_client = tinker.ServiceClient(**client_kwargs)
+
+        logger.info(
+            f"Bootstrapping Tinker training client for model: {config.base_model}"
+        )
+        training_client = await service_client.create_lora_training_client_async(
+            base_model=config.base_model,
+            rank=config.lora_rank,
+        )
+
+        logger.info("Saving initial weights for sampler...")
+        initial_sampler_name = f"sampler-init-{uuid.uuid4().hex}"
+        future = await training_client.save_weights_for_sampler_async(
+            name=initial_sampler_name
+        )
+        save_response = await future
+        sampler_path = save_response.path
+
+        sampling_client = await service_client.create_sampling_client_async(
+            model_path=sampler_path
+        )
+
+        state = TinkerTrainerState(
+            sampler_path=sampler_path,
+            optimizer_path=None,
+            train_step=0,
+            sampler_step=0,
+            config=config,
+        )
+
+        instance = TinkerTrainer(
+            config=config,
+            service_client=service_client,
+            state=state,
+            state_store=state_store,
+            sampling_client=sampling_client,
+            training_client=training_client,
+        )
+        await instance._persist_state()
+        return instance
+
+    async def restore(
         self,
         name: str,
         state_store: StateStore,
@@ -469,7 +532,19 @@ class TinkerTrainerFactory(TrainerFactory):
         if api_key:
             config_kwargs["api_key"] = api_key
 
-        config = TinkerTrainerConfig(**config_kwargs)
+        raw_state = await state_store.load()
+        if raw_state is None:
+            raise ValueError(
+                f"Cannot restore Tinker trainer for {name}: no persisted state found."
+            )
+
+        state = TinkerTrainerState.model_validate_json(raw_state)
+        logger.info(
+            f"Restoring Tinker trainer from state. Sampler path: {state.sampler_path}"
+        )
+
+        # Override config fields with frozen values from state
+        config = state.config
 
         client_kwargs: dict[str, Any] = {}
         if config.api_key:
@@ -479,81 +554,29 @@ class TinkerTrainerFactory(TrainerFactory):
 
         service_client = tinker.ServiceClient(**client_kwargs)
 
-        raw_state = await state_store.load()
-        if raw_state is None:
-            logger.info(
-                f"Bootstrapping Tinker training client for model: {config.base_model}"
+        if state.optimizer_path:
+            training_client = await service_client.create_training_client_from_state_with_optimizer_async(
+                path=state.optimizer_path
             )
-            training_client = await service_client.create_lora_training_client_async(
-                base_model=config.base_model,
-                rank=config.lora_rank,
-            )
-
-            logger.info("Saving initial weights for sampler...")
-            initial_sampler_name = f"sampler-init-{uuid.uuid4().hex}"
-            future = await training_client.save_weights_for_sampler_async(
-                name=initial_sampler_name
-            )
-            save_response = await future
-            sampler_path = save_response.path
-
-            sampling_client = await service_client.create_sampling_client_async(
-                model_path=sampler_path
-            )
-
-            state = TinkerTrainerState(
-                sampler_path=sampler_path,
-                optimizer_path=None,
-                train_step=0,
-                sampler_step=0,
-                base_model=config.base_model,
-                lora_rank=config.lora_rank,
-                learning_rate=config.learning_rate,
-                max_tokens=config.max_tokens,
-                temperature=config.temperature,
-                kl_penalty_coef=config.kl_penalty_coef,
-                loss_fn=config.loss_fn,
-            )
-
-            instance = TinkerTrainer(
-                config=config,
-                service_client=service_client,
-                state=state,
-                state_store=state_store,
-                sampling_client=sampling_client,
-                training_client=training_client,
-            )
-            await instance._persist_state()
         else:
-            state = TinkerTrainerState.model_validate_json(raw_state)
-            logger.info(
-                f"Restoring Tinker trainer from state. Sampler path: {state.sampler_path}"
-            )
-
-            if state.optimizer_path:
-                training_client = await service_client.create_training_client_from_state_with_optimizer_async(
-                    path=state.optimizer_path
+            training_client = (
+                await service_client.create_training_client_from_state_async(
+                    path=state.sampler_path
                 )
-            else:
-                training_client = (
-                    await service_client.create_training_client_from_state_async(
-                        path=state.sampler_path
-                    )
-                )
-
-            sampling_client = await service_client.create_sampling_client_async(
-                model_path=state.sampler_path
             )
 
-            instance = TinkerTrainer(
-                config=config,
-                service_client=service_client,
-                state=state,
-                state_store=state_store,
-                sampling_client=sampling_client,
-                training_client=training_client,
-            )
+        sampling_client = await service_client.create_sampling_client_async(
+            model_path=state.sampler_path
+        )
 
+        instance = TinkerTrainer(
+            config=config,
+            service_client=service_client,
+            state=state,
+            state_store=state_store,
+            sampling_client=sampling_client,
+            training_client=training_client,
+        )
         return instance
 
 

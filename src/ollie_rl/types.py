@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from openai.types.chat import (
     ChatCompletionFunctionTool,
     ChatCompletionMessageParam,
@@ -20,6 +20,7 @@ class CreateTunerRequest(BaseModel):
     recipe: str
     trainer: str
     datum_ids: List[str]
+    trainer_params: Optional[Dict[str, Any]] = None
 
 
 class CreateTunerResponse(BaseModel):

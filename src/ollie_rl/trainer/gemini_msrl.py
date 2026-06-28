@@ -118,6 +118,7 @@ class GeminiMsrlTrainerConfig(BaseModel):
 class GeminiMsrlTrainerState(BaseModel):
     tuning_job_name: str
     last_train_op: Optional[str] = None
+    config: GeminiMsrlTrainerConfig
 
 
 class GeminiMsrlOp:
@@ -413,10 +414,11 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
     Trainer factory for Gemini MSRL trainers.
     """
 
-    async def open(
+    async def create(
         self,
         name: str,
         state_store: StateStore,
+        trainer_params: Optional[dict] = None,
     ) -> GeminiMsrlTrainer:
         # build config from environment
         auth_token = os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token")
@@ -426,6 +428,9 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
             "auth_token": auth_token,
             "project_id": project_id,
         }
+
+        if trainer_params:
+            config_kwargs.update(trainer_params)
 
         config = GeminiMsrlTrainerConfig(**config_kwargs)
         # If GEMINI_MSRL_ENV_FILE is set, the client will re-read the auth
@@ -439,46 +444,80 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
             token_env_file=os.environ.get("GEMINI_MSRL_ENV_FILE"),
         )
 
+        # Bootstrap path: create a fresh tuning job and persist its name.
+        req = CreateTuningJobRequest(
+            tuned_model_display_name=name,
+            base_model=config.base_model,
+            multi_step_reinforcement_tuning_spec=MultiStepReinforcementTuningSpec(
+                hyper_parameters=MultiStepReinforcementTuningHyperParameters(
+                    adapter_size=config.adapter_size,
+                    checkpoint_interval=config.checkpoint_interval,
+                )
+            ),
+        )
+
+        logger.info(f"Creating Gemini MSRL tuning job for model display name: {name}")
+        job = await client.create_tuning_job(req)
+
+        instance = GeminiMsrlTrainer(
+            config=config,
+            client=client,
+            state=GeminiMsrlTrainerState(tuning_job_name=job.name, config=config),
+            state_store=state_store,
+        )
+
+        # Persist initial state as soon as we have a tuning_job_name, so
+        # we can recover even if TPU warm-up is interrupted below.
+        await instance._persist_state()
+
+        # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING).
+        logger.info(
+            f"Waiting for tuning job '{instance.tuning_job_name}' to enter RUNNING state..."
+        )
+        await instance.client.wait_for_tuning_job_running(
+            instance.tuning_job_name,
+            timeout_seconds=instance.config.timeout_seconds * 2,
+            poll_interval=instance.config.poll_interval * 2,
+        )
+
+        logger.info("Gemini MSRL Tuning Job is successfully running.")
+        return instance
+
+    async def restore(
+        self,
+        name: str,
+        state_store: StateStore,
+    ) -> GeminiMsrlTrainer:
         raw_state = await state_store.load()
         if raw_state is None:
-            # Bootstrap path: create a fresh tuning job and persist its name.
-            req = CreateTuningJobRequest(
-                tuned_model_display_name=name,
-                base_model=config.base_model,
-                multi_step_reinforcement_tuning_spec=MultiStepReinforcementTuningSpec(
-                    hyper_parameters=MultiStepReinforcementTuningHyperParameters(
-                        adapter_size=config.adapter_size,
-                        checkpoint_interval=config.checkpoint_interval,
-                    )
-                ),
+            raise ValueError(
+                f"Cannot restore Gemini MSRL trainer for {name}: no persisted state found."
             )
 
-            logger.info(
-                f"Creating Gemini MSRL tuning job for model display name: {name}"
-            )
-            job = await client.create_tuning_job(req)
+        state = GeminiMsrlTrainerState.model_validate_json(raw_state)
+        config = state.config
 
-            instance = GeminiMsrlTrainer(
-                config=config,
-                client=client,
-                state=GeminiMsrlTrainerState(tuning_job_name=job.name),
-                state_store=state_store,
-            )
+        # If GEMINI_MSRL_ENV_FILE is set, the client will re-read the auth
+        # token from that file (by mtime) on every outgoing request. This lets
+        # us refresh tokens externally (e.g. `gcloud auth application-default
+        # print-access-token > .env`) without restarting the server.
+        client = GeminiMsrlClient(
+            auth_token=config.auth_token,
+            project_id=config.project_id,
+            location=config.location,
+            token_env_file=os.environ.get("GEMINI_MSRL_ENV_FILE"),
+        )
 
-            # Persist initial state as soon as we have a tuning_job_name, so
-            # we can recover even if TPU warm-up is interrupted below.
-            await instance._persist_state()
-        else:
-            # Restore path: rehydrate from the persisted blob.
-            instance = GeminiMsrlTrainer(
-                config=config,
-                client=client,
-                state=GeminiMsrlTrainerState.model_validate_json(raw_state),
-                state_store=state_store,
-            )
-            logger.info(
-                f"Restoring Gemini MSRL tuning job from state: {instance.tuning_job_name}"
-            )
+        logger.info(
+            f"Restoring Gemini MSRL tuning job from state: {state.tuning_job_name}"
+        )
+
+        instance = GeminiMsrlTrainer(
+            config=config,
+            client=client,
+            state=state,
+            state_store=state_store,
+        )
 
         # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING).
         logger.info(
