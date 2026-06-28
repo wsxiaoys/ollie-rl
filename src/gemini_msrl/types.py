@@ -52,6 +52,7 @@ class TrainStepOperationMetadata(BaseModelConfig):
 class MultiStepReinforcementTuningHyperParameters(BaseModelConfig):
     adapter_size: Optional[str] = None
     checkpoint_interval: Optional[int] = None
+    learning_rate_multiplier: Optional[float] = None
 
 
 class MultiStepReinforcementTuningSpec(BaseModelConfig):
@@ -73,6 +74,21 @@ class TuningJobMetadata(BaseModelConfig):
 
 
 class TuningJob(BaseModelConfig):
+    # Response-side model: Vertex returns many fields that are not captured here
+    # (e.g. start_time, experiment, tuned_model). Allow extras so the client
+    # is resilient to API evolution. Fields we actively read remain strict.
+    model_config = ConfigDict(
+        alias_generator=alias_generators.to_camel,
+        populate_by_name=True,
+        from_attributes=True,
+        protected_namespaces=(),
+        extra="allow",
+        arbitrary_types_allowed=True,
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+        ignored_types=(TypeVar,),
+    )
+
     name: str
     tuned_model_display_name: str
     description: Optional[str] = None
@@ -114,11 +130,30 @@ class TuningCandidate(BaseModelConfig):
 
 class UsageMetadata(BaseModelConfig):
     prompt_token_count: int
-    candidates_token_count: int
+    # Optional: absent when generation was cut off before a visible candidate
+    # was produced (e.g. all tokens were consumed by reasoning/"thinking").
+    candidates_token_count: Optional[int] = None
     total_token_count: int
+    # Optional reasoning/thinking token count returned by Gemini "thinking"
+    # variants. Not present on every response.
+    thoughts_token_count: Optional[int] = None
 
 
 class GenerateContentTuningScopeResponse(BaseModelConfig):
+    # Vertex returns the standard protobuf Any-wrapper `@type` discriminator
+    # (plus potentially other future fields). Allow extras here so we don't
+    # have to chase response-shape drift one field at a time.
+    model_config = ConfigDict(
+        alias_generator=alias_generators.to_camel,
+        populate_by_name=True,
+        from_attributes=True,
+        protected_namespaces=(),
+        extra="allow",
+        arbitrary_types_allowed=True,
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+        ignored_types=(TypeVar,),
+    )
     candidates: Dict[str, Candidate] = Field(default_factory=dict)
     tuning_candidates: List[TuningCandidate] = Field(default_factory=list)
     usage_metadata: Optional[UsageMetadata] = None
@@ -166,6 +201,21 @@ class TrainStepMetric(BaseModelConfig):
 
 
 class TrainStepResponse(BaseModelConfig):
+    # Vertex wraps the response in a protobuf Any with a `@type` discriminator
+    # (plus potentially other future fields). Allow extras so parsing doesn't
+    # break on response-shape drift. Mirrors the policy used by
+    # `GenerateContentTuningScopeResponse`.
+    model_config = ConfigDict(
+        alias_generator=alias_generators.to_camel,
+        populate_by_name=True,
+        from_attributes=True,
+        protected_namespaces=(),
+        extra="allow",
+        arbitrary_types_allowed=True,
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+        ignored_types=(TypeVar,),
+    )
     completed_train_step_id: Optional[str] = None
     candidate_audit: Optional[CandidateAudit] = None
     tuned_model_checkpoint: Optional[TunedModelCheckpoint] = None

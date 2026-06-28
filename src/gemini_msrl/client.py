@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 import httpx
@@ -31,6 +33,62 @@ class GeminiMsrlHttpError(GeminiMsrlError):
         self.details = details
 
 
+def _parse_env_file(path: Path) -> Dict[str, str]:
+    """Minimal KEY=VALUE parser. Ignores blank lines and `#` comments. Strips
+    surrounding single/double quotes from values."""
+    out: Dict[str, str] = {}
+    try:
+        with path.open("r") as fp:
+            for raw in fp:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                    v = v[1:-1]
+                out[k.strip()] = v
+    except FileNotFoundError:
+        pass
+    return out
+
+
+class _EnvFileTokenSource:
+    """Token source that re-reads a key from an env file when its mtime changes.
+
+    Lets the server pick up refreshed tokens without restarting. Updating .env
+    on disk is enough; the next outgoing request will use the new value.
+    """
+
+    def __init__(self, env_path: str, key: str, initial: Optional[str] = None):
+        self._path = Path(env_path)
+        self._key = key
+        self._cached_token: Optional[str] = initial
+        self._cached_mtime: Optional[float] = None
+
+    def get(self) -> Optional[str]:
+        try:
+            mtime = self._path.stat().st_mtime
+        except FileNotFoundError:
+            return self._cached_token
+        if mtime != self._cached_mtime:
+            parsed = _parse_env_file(self._path)
+            new_token = parsed.get(self._key)
+            if new_token and new_token != self._cached_token:
+                logger.info(
+                    "GeminiMsrlClient: refreshed %s from %s", self._key, self._path
+                )
+                self._cached_token = new_token
+            elif new_token is None:
+                logger.warning(
+                    "GeminiMsrlClient: %s not present in %s; keeping cached token",
+                    self._key,
+                    self._path,
+                )
+            self._cached_mtime = mtime
+        return self._cached_token
+
+
 class GeminiMsrlClient:
     """
     Asynchronous API Client for the Gemini Multi-Step Reinforcement Learning (MSRL) Tuning Service.
@@ -41,17 +99,31 @@ class GeminiMsrlClient:
         auth_token: str,
         project_id: str,
         location: str = "us-central1",
-        base_url: str = "https://us-central1-autopush-aiplatform.sandbox.googleapis.com",
+        base_url: str = "https://us-central1-staging-aiplatform.sandbox.googleapis.com",
         client: Optional[httpx.AsyncClient] = None,
+        token_env_file: Optional[str] = None,
+        token_env_key: str = "GEMINI_MSRL_AUTH_TOKEN",
     ):
         self.auth_token = auth_token
         self.project_id = project_id
         self.location = location
         self.base_url = base_url.rstrip("/")
 
-        # Initialize headers
+        # Token source: if an env file path is provided (or GEMINI_MSRL_ENV_FILE
+        # is set), the client re-reads the token from that file when its mtime
+        # changes, so external `gcloud auth ...` refreshes propagate without a
+        # server restart. Falls back to the initial `auth_token` when the file
+        # is missing or doesn't contain the key.
+        env_file = token_env_file or os.environ.get("GEMINI_MSRL_ENV_FILE")
+        self._token_source: Optional[_EnvFileTokenSource] = (
+            _EnvFileTokenSource(env_file, token_env_key, initial=auth_token)
+            if env_file
+            else None
+        )
+
+        # Static headers (Authorization is injected per-request from the
+        # current token, so it's intentionally NOT pinned here).
         self.headers = {
-            "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json",
             "x-goog-user-project": project_id,
         }
@@ -60,8 +132,19 @@ class GeminiMsrlClient:
         self._client = client
         self._owns_client = client is None
 
+    def _current_token(self) -> str:
+        if self._token_source is not None:
+            tok = self._token_source.get()
+            if tok:
+                return tok
+        return self.auth_token
+
     async def get_client(self) -> httpx.AsyncClient:
-        """Get or initialize the underlying httpx.AsyncClient."""
+        """Get or initialize the underlying httpx.AsyncClient.
+
+        Note: Authorization is *not* set as a default header on the AsyncClient
+        because the token may be refreshed between requests (see _request).
+        """
         if self._client is None:
             self._client = httpx.AsyncClient(headers=self.headers)
         return self._client
@@ -90,8 +173,15 @@ class GeminiMsrlClient:
         client = await self.get_client()
         url = f"{self.base_url}/{path.lstrip('/')}"
 
+        # Pull a fresh token per-request so external refreshes (e.g. updates
+        # to the env file by a `gcloud auth ...` cron) propagate without a
+        # server restart.
+        request_headers = {"Authorization": f"Bearer {self._current_token()}"}
+
         try:
-            response = await client.request(method, url, json=json_data, params=params)
+            response = await client.request(
+                method, url, json=json_data, params=params, headers=request_headers
+            )
         except httpx.RequestError as exc:
             logger.error(f"An error occurred while requesting {exc.request.url!r}.")
             raise GeminiMsrlError(f"Request failed: {exc}") from exc
