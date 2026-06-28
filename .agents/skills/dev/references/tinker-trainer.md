@@ -746,6 +746,54 @@ a real tinker endpoint. Phase 3 closes the loop.
 
 ---
 
+## Future work: strict sync mode
+
+Deleting the `dispense_run` gate unconditionally in Phase 1 makes
+*async* the natural mode. A future recipe may want **strict sync mode**
+— zero off-policy tolerance, where every `Example` consumed by
+`train_step` was sampled against the exact policy generation being
+trained. This is *additive* on top of Phase 1, not a regression: the
+gate is re-introduced behind an opt-in flag, plus two new pieces of
+machinery.
+
+The three pieces:
+
+1. **Preventive (start-gate).** Re-introduce the "disallow
+   `dispense_run` during training" check, but opt-in — driven by e.g.
+   `Recipe.strict_on_policy: bool` or derived from
+   `TrainerConfig.max_steps_off_policy == 0`. Prevents *new* runs from
+   starting on a policy that's about to be replaced.
+
+2. **Active (interrupt-in-flight).** Cancel `sample()` ops that are
+   still in flight when `train_step` fires, and mark their parent runs
+   as dropped. This is *new capability*: today `Trainer.sample()`
+   returns an op you await, with no cancellation path. Two
+   implementation options:
+   - Add `SampleOp.cancel()` to the `Trainer` protocol (backends
+     opt-in; tinker can cancel via `SamplingClient`; `gemini_msrl`
+     abandons the LRO).
+   - Server-side only: `TunerService` cancels the awaiting asyncio
+     task and marks the `RunModel` as dropped, letting the backend op
+     complete and discarding its result.
+
+3. **Wire contract.** The dropped run needs to be communicated back to
+   the client. Cleanest shape: the in-flight `chat/completions` call
+   returns an error (e.g. `409 Conflict` "run cancelled by policy
+   promotion") and the cookbook client treats it as "this run is dead,
+   skip to next batch item".
+
+**Multi-turn nuance.** For agentic / multi-turn runs, "drop the run"
+is the *only* consistent choice — you cannot have turn 1 on policy
+*N* and turn 3 on policy *N+1* in the same trajectory. Single-turn
+runs could in principle just retry on the new policy, but treating
+both the same (drop) keeps the contract uniform.
+
+None of this lands in Phase 1–3. Captured here so the design intent
+isn't lost: when a real strict-sync consumer appears, it builds on the
+Phase 1 boundary rather than reverting it.
+
+---
+
 ## Open questions (decide before phase 3)
 
 1. **Where do tokens/logprobs live?** Column on `ChatCompletionModel`
