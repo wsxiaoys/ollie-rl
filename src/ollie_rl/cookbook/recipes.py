@@ -15,7 +15,7 @@ class Recipe(BaseModel, frozen=True):
     num_groups_per_batch: int = 32
 
     # ---- Policy synchronization -----------------------------------------
-    allow_dispense_during_training: bool = True
+    allow_dispense_during_training: bool
 
 
 # ---- Named recipe instances --------------------------------------------
@@ -23,4 +23,5 @@ class Recipe(BaseModel, frozen=True):
 GRPO_16x32 = Recipe(
     group_size=16,
     num_groups_per_batch=32,
+    allow_dispense_during_training=False,
 )

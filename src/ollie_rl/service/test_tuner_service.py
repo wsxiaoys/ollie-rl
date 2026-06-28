@@ -247,7 +247,22 @@ class TestDispenseRun(TunerServiceTestCase):
             await self.service.dispense_run("tuner_unknown")
 
     async def test_dispense_run_when_trainer_is_training(self):
-        tuner_id = await self._create_tuner()
+        from ollie_rl.cookbook import RECIPES
+        from ollie_rl.cookbook.recipes import Recipe
+
+        RECIPES["test_async"] = Recipe(
+            group_size=16,
+            num_groups_per_batch=32,
+            allow_dispense_during_training=True,
+        )
+
+        tuner_id = await self.service.create_tuner(
+            recipe="test_async",
+            name="test-tuner-async",
+            datum_ids=["datum-1", "datum-2"],
+            trainer=_TRAINER_KIND,
+        )
+
         trainer = self.service.active_trainers[tuner_id]
         assert isinstance(trainer, FakeTrainer)
         # Put trainer into an active training state.
@@ -529,7 +544,11 @@ class TestMaybeTrain(TunerServiceTestCase):
         from ollie_rl.cookbook.recipes import Recipe
 
         # Register a small test recipe
-        RECIPES["test_2x2"] = Recipe(group_size=2, num_groups_per_batch=2)
+        RECIPES["test_2x2"] = Recipe(
+            group_size=2,
+            num_groups_per_batch=2,
+            allow_dispense_during_training=True,
+        )
 
         tuner_id = await self.service.create_tuner(
             recipe="test_2x2",
