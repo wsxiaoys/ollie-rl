@@ -82,7 +82,6 @@ class FakeTrainerFactory(TrainerFactory):
         self,
         name: str,
         state_store: StateStore,
-        **bootstrap,
     ) -> Trainer:
         return FakeTrainer()
 

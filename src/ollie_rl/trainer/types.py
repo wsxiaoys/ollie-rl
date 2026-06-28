@@ -73,8 +73,7 @@ class TrainerFactory(ABC):
     """
     Async factory that bootstraps or restores a Trainer against a StateStore.
 
-    Has no knowledge of recipes or scheduling. May accept backend-specific
-    bootstrap kwargs (base_model, adapter_size, …) via `open(...)`.
+    Has no knowledge of recipes or scheduling.
     """
 
     @abstractmethod
@@ -82,5 +81,4 @@ class TrainerFactory(ABC):
         self,
         name: str,
         state_store: StateStore,
-        **bootstrap,
     ) -> Trainer: ...

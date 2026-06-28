@@ -149,7 +149,9 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
             elif finish_reason == FinishReason.MAX_TOKENS:
                 finish_reason = "length"
             elif finish_reason == FinishReason.MALFORMED_FUNCTION_CALL:
-                raise NotImplementedError()
+                raise NotImplementedError(
+                    "Malformed assistant response or function call"
+                )
             elif finish_reason in (
                 FinishReason.SAFETY,
                 FinishReason.RECITATION,
@@ -355,30 +357,15 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         self,
         name: str,
         state_store: StateStore,
-        **bootstrap,
     ) -> GeminiMsrlTrainer:
-        # build config from environment and override with bootstrap kwargs
-        auth_token = bootstrap.get("auth_token") or os.environ.get(
-            "GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token"
-        )
-        project_id = bootstrap.get("project_id") or os.environ.get(
-            "GEMINI_MSRL_PROJECT_ID", "dummy-project-id"
-        )
+        # build config from environment
+        auth_token = os.environ.get("GEMINI_MSRL_AUTH_TOKEN", "dummy-auth-token")
+        project_id = os.environ.get("GEMINI_MSRL_PROJECT_ID", "dummy-project-id")
 
         config_kwargs: dict[str, Any] = {
             "auth_token": auth_token,
             "project_id": project_id,
         }
-        for field in [
-            "location",
-            "base_model",
-            "adapter_size",
-            "checkpoint_interval",
-            "poll_interval",
-            "timeout_seconds",
-        ]:
-            if field in bootstrap:
-                config_kwargs[field] = bootstrap[field]
 
         config = GeminiMsrlTrainerConfig(**config_kwargs)
         client = GeminiMsrlClient(
