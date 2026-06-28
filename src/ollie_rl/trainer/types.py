@@ -12,11 +12,22 @@ class Example(BaseModel):
     chat_completion_id: str
     advantage: float
     policy_generation: str
+    # Optional cached sample-time data needed by trainers that train on
+    # raw tokens/logprobs (e.g. Tinker). Layout convention:
+    #   tokens   : full sequence (prompt + completion)
+    #   logprobs : per-completion-token logprobs
+    # Hence prompt_len = len(tokens) - len(logprobs). Backends that do not
+    # need these (e.g. gemini_msrl, fake) ignore them.
+    tokens: Optional[List[int]] = None
+    logprobs: Optional[List[float]] = None
 
 
 class Sample(BaseModel):
     completion: ChatCompletion
     policy_generation: str
+    # Optional cached sample-time data. Same layout convention as Example.
+    tokens: Optional[List[int]] = None
+    logprobs: Optional[List[float]] = None
 
 
 class StateStore(Protocol):

@@ -3,6 +3,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from ollie_rl.trainer.tinker import (
+    StaleBatchError,
     TinkerTrainerConfig,
     TinkerTrainerState,
     TinkerTrainer,
@@ -212,36 +213,207 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
             "Malformed assistant response or function call", str(ctx.exception)
         )
 
-    async def test_train_step_increments_and_promotes_sampler(self):
-        examples = [
-            Example(
-                chat_completion_id="chatcmpl-123",
-                advantage=1.0,
-                policy_generation="0",
-            )
-        ]
+    def _make_example(
+        self,
+        chat_completion_id: str = "chatcmpl-1",
+        advantage: float = 1.0,
+        policy_generation: str = "0",
+        prompt_len: int = 3,
+        completion_len: int = 4,
+        tokens: list[int] | None = None,
+        logprobs: list[float] | None = None,
+    ) -> Example:
+        """Build an Example with cached tokens/logprobs for training tests."""
+        if tokens is None:
+            tokens = list(range(prompt_len + completion_len))
+        if logprobs is None:
+            logprobs = [-0.5] * completion_len
+        return Example(
+            chat_completion_id=chat_completion_id,
+            advantage=advantage,
+            policy_generation=policy_generation,
+            tokens=tokens,
+            logprobs=logprobs,
+        )
 
-        # First train step (train_step becomes 1, sampler promoted because sampler_promotion_every=1)
+    def _wire_training_mocks(
+        self, new_sampler_path: str = "tinker://test-run/weights/sampler-step-1"
+    ) -> tuple[AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
+        """Stub the training/sampling client async surface used by train_step."""
+        fb_future = FakeAPIFuture(MagicMock())
+        opt_future = FakeAPIFuture(MagicMock())
+        forward_backward = AsyncMock(return_value=fb_future)
+        optim_step = AsyncMock(return_value=opt_future)
+        self.mock_training_client.forward_backward_async = forward_backward
+        self.mock_training_client.optim_step_async = optim_step
+
+        save_response = MagicMock()
+        save_response.path = new_sampler_path
+        save_future = FakeAPIFuture(save_response)
+        save_weights = AsyncMock(return_value=save_future)
+        self.mock_training_client.save_weights_for_sampler_async = save_weights
+
+        new_sampling_client = MagicMock()
+        new_sampling_client.get_tokenizer.return_value = self.mock_tokenizer
+        create_sampling_client = AsyncMock(return_value=new_sampling_client)
+        self.mock_service_client.create_sampling_client_async = create_sampling_client
+
+        return forward_backward, optim_step, save_weights, create_sampling_client
+
+    async def test_train_step_invokes_forward_backward_and_optim_step(self):
+        forward_backward, optim_step, _, _ = self._wire_training_mocks()
+
+        examples = [self._make_example(chat_completion_id="cmpl-1")]
         train_op = await self.trainer.train_step(examples)
         await train_op.wait()
 
+        forward_backward.assert_awaited_once()
+        optim_step.assert_awaited_once()
+        # Datum list arg shape check.
+        fb_args, fb_kwargs = forward_backward.call_args
+        data_arg = fb_args[0]
+        loss_fn_arg = fb_args[1]
+        self.assertEqual(len(data_arg), 1)
+        self.assertEqual(loss_fn_arg, "importance_sampling")
+        self.assertEqual(fb_kwargs["loss_fn_config"], {"kl_penalty_coef": 0.0})
+
+        # Step advanced and sampler promoted (sampler_promotion_every=1).
         self.assertEqual(self.trainer.state.train_step, 1)
         self.assertEqual(self.trainer.state.sampler_step, 1)
 
-        # Second train step with sampler_promotion_every=2
+    async def test_train_step_promotes_sampler_on_cadence(self):
         self.trainer.config.sampler_promotion_every = 2
-        train_op = await self.trainer.train_step(examples)
-        await train_op.wait()
 
+        # Step 1: no promotion (1 % 2 != 0).
+        forward_backward, _, save_weights, _ = self._wire_training_mocks()
+        await (await self.trainer.train_step([self._make_example()])).wait()
+        self.assertEqual(self.trainer.state.train_step, 1)
+        self.assertEqual(self.trainer.state.sampler_step, 0)
+        save_weights.assert_not_awaited()
+
+        # Step 2: promotion (2 % 2 == 0).
+        forward_backward, _, save_weights, _ = self._wire_training_mocks()
+        await (await self.trainer.train_step([self._make_example()])).wait()
         self.assertEqual(self.trainer.state.train_step, 2)
-        self.assertEqual(self.trainer.state.sampler_step, 2)  # 2 % 2 == 0, so promoted
+        self.assertEqual(self.trainer.state.sampler_step, 2)
+        save_weights.assert_awaited_once()
 
-        # Third train step (sampler NOT promoted because 3 % 2 != 0)
-        train_op = await self.trainer.train_step(examples)
-        await train_op.wait()
+    async def test_train_step_filters_stale_examples(self):
+        forward_backward, _, _, _ = self._wire_training_mocks()
 
-        self.assertEqual(self.trainer.state.train_step, 3)
-        self.assertEqual(self.trainer.state.sampler_step, 2)  # Remains 2
+        # Set state.train_step=3, max_steps_off_policy=1.
+        # Cutoff: gen < (3 - 1) = 2 → drop generation 0, keep 2 and 3.
+        # 1 of 5 stale = 20%, below the default 0.4 threshold.
+        self.trainer.state.train_step = 3
+        self.trainer.state.sampler_step = 3
+        self.trainer.config.max_steps_off_policy = 1
+
+        examples = [
+            self._make_example("cmpl-0", policy_generation="0"),  # stale
+            self._make_example("cmpl-1", policy_generation="2"),
+            self._make_example("cmpl-2", policy_generation="2"),
+            self._make_example("cmpl-3", policy_generation="3"),
+            self._make_example("cmpl-4", policy_generation="3"),
+        ]
+        await (await self.trainer.train_step(examples)).wait()
+
+        forward_backward.assert_awaited_once()
+        data_arg = forward_backward.call_args[0][0]
+        self.assertEqual(len(data_arg), 4)
+        # train_step still advances (we ran forward_backward + optim_step).
+        self.assertEqual(self.trainer.state.train_step, 4)
+
+    async def test_train_step_raises_when_too_many_stale(self):
+        forward_backward, optim_step, save_weights, _ = self._wire_training_mocks()
+
+        self.trainer.state.train_step = 10
+        self.trainer.state.sampler_step = 10
+        self.trainer.config.max_steps_off_policy = 0
+        self.trainer.config.max_stale_fraction = 0.4
+
+        # All stale → 100% stale, well above the 0.4 threshold.
+        examples = [
+            self._make_example("cmpl-old", policy_generation="5"),
+            self._make_example("cmpl-old2", policy_generation="7"),
+        ]
+        with self.assertRaises(StaleBatchError):
+            await self.trainer.train_step(examples)
+
+        forward_backward.assert_not_awaited()
+        optim_step.assert_not_awaited()
+        save_weights.assert_not_awaited()
+        # State must NOT advance when train_step rejects the batch.
+        self.assertEqual(self.trainer.state.train_step, 10)
+        self.assertEqual(self.trainer.state.sampler_step, 10)
+
+    async def test_train_step_tolerates_stale_below_threshold(self):
+        forward_backward, _, _, _ = self._wire_training_mocks()
+
+        # 1 of 5 stale → 20% stale, below 0.4 threshold; should proceed.
+        self.trainer.state.train_step = 3
+        self.trainer.state.sampler_step = 3
+        self.trainer.config.max_steps_off_policy = 1
+        self.trainer.config.max_stale_fraction = 0.4
+
+        examples = [
+            self._make_example("cmpl-0", policy_generation="0"),  # stale (cutoff=2)
+            self._make_example("cmpl-1", policy_generation="2"),
+            self._make_example("cmpl-2", policy_generation="3"),
+            self._make_example("cmpl-3", policy_generation="3"),
+            self._make_example("cmpl-4", policy_generation="3"),
+        ]
+        await (await self.trainer.train_step(examples)).wait()
+
+        forward_backward.assert_awaited_once()
+        data_arg = forward_backward.call_args[0][0]
+        self.assertEqual(len(data_arg), 4)
+
+    async def test_train_step_raises_on_empty_batch(self):
+        with self.assertRaises(StaleBatchError):
+            await self.trainer.train_step([])
+
+    async def test_train_step_skips_examples_without_cached_tokens(self):
+        forward_backward, _, _, _ = self._wire_training_mocks()
+
+        # Two examples with cached tokens (fresh), one without (also
+        # fresh — staleness fraction stays at 0, well below threshold).
+        # The cache-less example is silently skipped during Datum
+        # construction; the others train normally.
+        good_a = self._make_example("cmpl-good-a")
+        good_b = self._make_example("cmpl-good-b")
+        bad = Example(
+            chat_completion_id="cmpl-bad",
+            advantage=1.0,
+            policy_generation="0",
+            tokens=None,
+            logprobs=None,
+        )
+        await (await self.trainer.train_step([good_a, good_b, bad])).wait()
+
+        forward_backward.assert_awaited_once()
+        data_arg = forward_backward.call_args[0][0]
+        self.assertEqual(len(data_arg), 2)
+
+    async def test_train_step_raises_when_all_examples_lack_tokens(self):
+        forward_backward, _, _, _ = self._wire_training_mocks()
+
+        bad_a = Example(
+            chat_completion_id="cmpl-bad-a",
+            advantage=1.0,
+            policy_generation="0",
+            tokens=None,
+            logprobs=None,
+        )
+        bad_b = Example(
+            chat_completion_id="cmpl-bad-b",
+            advantage=1.0,
+            policy_generation="0",
+            tokens=None,
+            logprobs=None,
+        )
+        with self.assertRaises(StaleBatchError):
+            await self.trainer.train_step([bad_a, bad_b])
+        forward_backward.assert_not_awaited()
 
     async def test_open_bootstrap_path(self):
         fresh_store = InMemoryStateStore()
