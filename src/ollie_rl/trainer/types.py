@@ -11,6 +11,7 @@ T = TypeVar("T")
 class Example(BaseModel):
     chat_completion_id: str
     advantage: float
+    policy_generation: str
 
 
 class Sample(BaseModel):

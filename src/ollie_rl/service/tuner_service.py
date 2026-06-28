@@ -386,7 +386,11 @@ class TunerService:
 
         # Create Examples for Trainer.train_step
         examples = [
-            Example(chat_completion_id=c.id, advantage=run_advantages[c.run_id])
+            Example(
+                chat_completion_id=c.id,
+                advantage=run_advantages[c.run_id],
+                policy_generation=c.policy_generation,
+            )
             for c in completions
             if c.run_id in run_advantages
         ]
@@ -402,8 +406,6 @@ class TunerService:
             raise TunerNotFoundError(
                 f"Tuner '{tuner_id}' not found or not initialized."
             )
-        if await trainer.is_training():
-            return None
 
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)

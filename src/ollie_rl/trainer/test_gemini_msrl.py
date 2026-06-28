@@ -230,7 +230,13 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         mock_completed_op.get_response_as.return_value = response_payload
         self.mock_client.wait_for_operation.return_value = mock_completed_op
 
-        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+        examples = [
+            Example(
+                chat_completion_id="chatcmpl-1",
+                advantage=1.0,
+                policy_generation="fake-generation",
+            )
+        ]
 
         # Call train_step
         train_op = await self.job.train_step(examples)
@@ -345,7 +351,13 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         mock_op.name = "operation-train-step"
         self.mock_client.train_step.return_value = mock_op
 
-        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+        examples = [
+            Example(
+                chat_completion_id="chatcmpl-1",
+                advantage=1.0,
+                policy_generation="fake-generation",
+            )
+        ]
 
         # Call train_step
         train_op = await self.job.train_step(examples)
@@ -377,7 +389,13 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         mock_op_pending = Operation(name="previous-operation-train-step", done=False)
         self.mock_client.get_operation.return_value = mock_op_pending
 
-        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+        examples = [
+            Example(
+                chat_completion_id="chatcmpl-1",
+                advantage=1.0,
+                policy_generation="fake-generation",
+            )
+        ]
 
         # Call train_step and expect RuntimeError
         with self.assertRaises(RuntimeError) as ctx:
@@ -404,7 +422,13 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         mock_new_op.name = "new-operation-train-step"
         self.mock_client.train_step.return_value = mock_new_op
 
-        examples = [Example(chat_completion_id="chatcmpl-1", advantage=1.0)]
+        examples = [
+            Example(
+                chat_completion_id="chatcmpl-1",
+                advantage=1.0,
+                policy_generation="fake-generation",
+            )
+        ]
 
         # Call train_step and expect success
         train_op = await self.job.train_step(examples)

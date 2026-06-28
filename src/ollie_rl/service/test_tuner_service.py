@@ -246,7 +246,7 @@ class TestDispenseRun(TunerServiceTestCase):
         with self.assertRaises(TunerNotFoundError):
             await self.service.dispense_run("tuner_unknown")
 
-    async def test_returns_none_when_trainer_is_training(self):
+    async def test_dispense_run_when_trainer_is_training(self):
         tuner_id = await self._create_tuner()
         trainer = self.service.active_trainers[tuner_id]
         assert isinstance(trainer, FakeTrainer)
@@ -257,7 +257,9 @@ class TestDispenseRun(TunerServiceTestCase):
         trainer._train_op = op
 
         result = await self.service.dispense_run(tuner_id)
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.datum_id, "datum-1")
 
     async def test_returns_dispense_run_with_valid_fields(self):
         tuner_id = await self._create_tuner(datum_ids=["d1", "d2"])
@@ -491,6 +493,56 @@ class TestMaybeTrain(TunerServiceTestCase):
         trainer.train_step = spy  # type: ignore
         await self.service.maybe_train(tuner_id)
         self.assertEqual(called, [])
+
+    async def test_train_step_receives_policy_generation(self):
+        from ollie_rl.cookbook import RECIPES
+        from ollie_rl.cookbook.recipes import Recipe
+
+        # Register a small test recipe
+        RECIPES["test_2x2"] = Recipe(group_size=2, num_groups_per_batch=2)
+
+        tuner_id = await self.service.create_tuner(
+            recipe="test_2x2",
+            name="test-tuner-small",
+            datum_ids=["d1", "d2"],
+            trainer=_TRAINER_KIND,
+        )
+
+        trainer = self.service.active_trainers[tuner_id]
+        assert isinstance(trainer, FakeTrainer)
+
+        called_examples = []
+        original_train_step = trainer.train_step
+
+        async def spy_train_step(examples):
+            called_examples.extend(examples)
+            return await original_train_step(examples)
+
+        trainer.train_step = spy_train_step  # type: ignore
+
+        # Set up 4 runs (2 groups of size 2)
+        runs = []
+        for datum_id in ["d1", "d2"]:
+            for i in range(2):
+                run = await self._add_run(tuner_id, datum_id=datum_id)
+                runs.append(run)
+                await self.service.record_chat_completion(
+                    completion_id=f"cmpl-{datum_id}-{i}",
+                    tuner_id=tuner_id,
+                    run_id=run.id,
+                    datum_id=datum_id,
+                    policy_generation=f"policy-gen-{datum_id}-{i}",
+                )
+                await self.service.update_reward(tuner_id, run.id, 1.0)
+
+        # Trigger maybe_train
+        await self.service.maybe_train(tuner_id)
+
+        # Verify that train_step was called with the correct policy_generation
+        self.assertEqual(len(called_examples), 4)
+        for example in called_examples:
+            self.assertIsNotNone(example.policy_generation)
+            self.assertTrue(example.policy_generation.startswith("policy-gen-"))
 
 
 if __name__ == "__main__":

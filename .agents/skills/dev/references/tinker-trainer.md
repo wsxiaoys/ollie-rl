@@ -683,7 +683,7 @@ benefits from gate deletion the day Phase 1 lands). Landing it first
 de-risks the protocol shape before any tinker SDK plumbing touches
 the tree.
 
-### Phase 1 — async-RL as the natural mode (1 PR)
+### Phase 1 — async-RL as the natural mode (1 PR) [COMPLETED]
 No tinker code lands in this PR. Pure ollie-rl-side change. Real
 consumers from day one: `fake` (tests) and `gemini_msrl` (production).
 
