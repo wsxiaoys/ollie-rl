@@ -10,8 +10,8 @@ from .types import (
 )
 
 # Import trainer implementations to trigger registration
-from . import gemini_msrl as gemini_msrl
 from . import fake as fake
+from . import gemini_msrl as gemini_msrl
 from . import tinker as tinker
 
 __all__ = [

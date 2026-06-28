@@ -2,7 +2,7 @@ import asyncio
 import logging
 import math
 from datetime import timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select, update
 
@@ -117,9 +117,14 @@ class TunerService:
         name: str,
         datum_ids: List[str],
         trainer: str,
+        bootstrap: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Create and initialize a tuner using the Cookbook and register it.
+
+        `bootstrap` is forwarded as **kwargs to the trainer factory's `open`,
+        letting trainers expose backend-specific options (e.g. adopting an
+        existing tuning job by name).
         """
         assert Cookbook.has(recipe)
         factory = trainer_factory.get(trainer)  # validate now, fail fast
@@ -144,7 +149,7 @@ class TunerService:
 
         tuner_id = tuner_record.id
         state_store = _DbStateStore(tuner_id)
-        trainer_instance = await factory.open(name, state_store)
+        trainer_instance = await factory.open(name, state_store, **(bootstrap or {}))
         self.active_trainers[tuner_id] = trainer_instance
 
         logger.info(f"Successfully created tuner {tuner_id}")

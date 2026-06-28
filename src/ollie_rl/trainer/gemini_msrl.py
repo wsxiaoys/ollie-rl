@@ -59,6 +59,51 @@ from ollie_rl.types import ChatCompletionRequest
 logger = logging.getLogger(__name__)
 
 
+# JSON-Schema keywords that google.genai.types.Schema does NOT accept
+# (its model has extra="forbid"). OpenAI-compatible clients often include
+# these in tool parameter schemas; strip them recursively before handing the
+# schema to Schema.model_validate.
+_UNSUPPORTED_SCHEMA_KEYS = frozenset(
+    [
+        "$schema",
+        "$id",
+        "$ref",
+        "$defs",
+        "definitions",
+        "additionalProperties",
+        "patternProperties",
+        "unevaluatedProperties",
+        "dependentRequired",
+        "dependentSchemas",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "const",
+        "examples",
+        "default",
+        "readOnly",
+        "writeOnly",
+        "deprecated",
+        "title",
+    ]
+)
+
+
+def _sanitize_json_schema(node):
+    """Best-effort recursive strip of JSON-Schema keywords not supported by
+    google.genai.types.Schema. Returns a new structure (does not mutate)."""
+    if isinstance(node, dict):
+        return {
+            k: _sanitize_json_schema(v)
+            for k, v in node.items()
+            if k not in _UNSUPPORTED_SCHEMA_KEYS
+        }
+    if isinstance(node, list):
+        return [_sanitize_json_schema(v) for v in node]
+    return node
+
+
 class GeminiMsrlTrainerConfig(BaseModel):
     auth_token: str
     project_id: str
@@ -67,7 +112,7 @@ class GeminiMsrlTrainerConfig(BaseModel):
     adapter_size: str = "ADAPTER_SIZE_SIXTEEN"
     checkpoint_interval: int = 10
     poll_interval: float = 2.0
-    timeout_seconds: float = 300.0
+    timeout_seconds: float = 3600.0
 
 
 class GeminiMsrlTrainerState(BaseModel):
@@ -182,13 +227,13 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
             model=self.model_name,
             object="chat.completion",
             usage=CompletionUsage(
-                completion_tokens=response.usage_metadata.candidates_token_count
+                completion_tokens=(response.usage_metadata.candidates_token_count or 0)
                 if response.usage_metadata
                 else 0,
-                prompt_tokens=response.usage_metadata.prompt_token_count
+                prompt_tokens=(response.usage_metadata.prompt_token_count or 0)
                 if response.usage_metadata
                 else 0,
-                total_tokens=response.usage_metadata.total_token_count
+                total_tokens=(response.usage_metadata.total_token_count or 0)
                 if response.usage_metadata
                 else 0,
             ),
@@ -271,22 +316,37 @@ class GeminiMsrlTrainer(Trainer):
             for tool in request.tools:
                 if tool.type == "function" and tool.function:
                     func = tool.function
+                    # Strip JSON-Schema meta keywords (e.g. "$schema",
+                    # "additionalProperties") and a handful of unsupported
+                    # constraints that OpenAI-style tool definitions often
+                    # include but google.genai.types.Schema rejects under
+                    # extra='forbid'. Keep the conversion best-effort.
+                    parameters = _sanitize_json_schema(func.parameters)
                     decl = FunctionDeclaration(
                         name=func.name,
                         description=func.description,
-                        parameters=Schema.model_validate(func.parameters),
+                        parameters=Schema.model_validate(parameters),
                     )
                     function_declarations.append(decl)
 
             if function_declarations:
                 gemini_tools = [Tool(function_declarations=function_declarations)]
 
+        # Vertex caps max_output_tokens at 32768 for tuning-scope generations.
+        # OpenAI clients (e.g. cloudcode) often send larger values (64000+);
+        # clamp to the documented max so we don't 400 on perfectly valid
+        # OpenAI-style requests.
+        VERTEX_MAX_OUTPUT_TOKENS = 32768
+        max_tokens = request.max_tokens
+        if max_tokens is None or max_tokens > VERTEX_MAX_OUTPUT_TOKENS:
+            max_tokens = VERTEX_MAX_OUTPUT_TOKENS
+
         tuning_job_id = self.tuning_job_name.split("/")[-1]
         scope_req = GenerateContentTuningScopeRequest(
             content_generation_parameters=ContentGenerationParameters(
                 contents=contents,
                 generation_config=GenerationConfig(
-                    max_output_tokens=request.max_tokens,
+                    max_output_tokens=max_tokens,
                 ),
                 system_instruction=system_instruction,
                 tools=gemini_tools,
@@ -368,14 +428,33 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         }
 
         config = GeminiMsrlTrainerConfig(**config_kwargs)
+        # If GEMINI_MSRL_ENV_FILE is set, the client will re-read the auth
+        # token from that file (by mtime) on every outgoing request. This lets
+        # us refresh tokens externally (e.g. `gcloud auth application-default
+        # print-access-token > .env`) without restarting the server.
         client = GeminiMsrlClient(
             auth_token=config.auth_token,
             project_id=config.project_id,
             location=config.location,
+            token_env_file=os.environ.get("GEMINI_MSRL_ENV_FILE"),
         )
 
         raw_state = await state_store.load()
-        if raw_state is None:
+        adopt_job_name = bootstrap.get("tuning_job_name")
+        if raw_state is None and adopt_job_name:
+            # Adoption path: skip job creation, attach to an existing Vertex
+            # tuning job by full resource name
+            # (projects/*/locations/*/tuningJobs/*). Useful when the DB was
+            # lost or for development against a pre-warmed job.
+            logger.info(f"Adopting existing Gemini MSRL tuning job: {adopt_job_name}")
+            instance = GeminiMsrlTrainer(
+                config=config,
+                client=client,
+                state=GeminiMsrlTrainerState(tuning_job_name=adopt_job_name),
+                state_store=state_store,
+            )
+            await instance._persist_state()
+        elif raw_state is None:
             # Bootstrap path: create a fresh tuning job and persist its name.
             req = CreateTuningJobRequest(
                 tuned_model_display_name=name,
