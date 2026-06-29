@@ -2,7 +2,7 @@ import asyncio
 import logging
 import math
 from datetime import timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from sqlalchemy import select, update
 
@@ -21,6 +21,13 @@ from ollie_rl.types import (
     ChatCompletionRequest,
     GetTunerResponse,
     TunerItem,
+    TrainingProgress,
+    BatchProgress,
+    DatumProgress,
+    DatumCoverage,
+    DatumPool,
+    RunProgress,
+    NextPick,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +86,62 @@ class _DbStateStore(StateStore):
         logger.debug(f"Persisted state for tuner {self._tuner_id}")
 
 
+def _scheduler_scores(
+    datum_pool: List[str],
+    runs: List[RunModel],
+) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """Scheduler-view consumable score per datum (no staleness filter).
+
+    Returns ``(score, trained)`` where ``score[datum]`` counts runs that
+    are still *consumable* by a future train step from the scheduler's
+    point of view (not yet trained, not requeued, and either rewarded or
+    still pending/not expired) and ``trained[datum]`` accumulates prior
+    training exposure for the fresh-tier tie-break.
+
+    Shared by ``_pick_datum`` (dispense decision) and the progress builder
+    (``next_pick`` labeling) so the two never drift.
+    """
+    now = utcnow()
+    score = {d: 0 for d in datum_pool}
+    trained = {d: 0 for d in datum_pool}
+    for r in runs:
+        if r.datum_id not in score:
+            continue
+        if r.trained_count > 0:
+            # Track prior training exposure for the fresh-tier tie-break.
+            trained[r.datum_id] += r.trained_count
+            continue
+        if r.rejected_count > 0:
+            continue
+        has_reward = r.reward is not None
+        is_pending = r.reward is None and r.expires_at > now
+        if has_reward or is_pending:
+            score[r.datum_id] += 1
+    return score, trained
+
+
+def _pick_tier(
+    datum: str, score: Dict[str, int], recipe: Recipe
+) -> Tuple[Literal["incomplete", "fresh", "saturated", "none"], str]:
+    """Label the scheduler tier (+ human reason) for a candidate datum.
+
+    Mirrors the tiers in ``_pick_datum.priority`` so a dispense preview can
+    explain *why* a datum would be chosen next.
+    """
+    count = score.get(datum, 0)
+    group_size = recipe.group_size
+    if 0 < count < group_size:
+        return "incomplete", f"closest-to-complete group ({count}/{group_size})"
+    if count == 0:
+        return "fresh", "starting a new group from a fresh (least-trained) datum"
+    if recipe.max_off_policy_generation > 0:
+        return (
+            "saturated",
+            f"group full ({count}/{group_size}); dispensing off-policy surplus",
+        )
+    return "none", "all groups saturated; on-policy surplus would be requeued"
+
+
 def _pick_datum(
     datum_pool: List[str],
     runs: List[RunModel],
@@ -119,22 +182,7 @@ def _pick_datum(
     group_size = recipe.group_size
     allow_surplus = recipe.max_off_policy_generation > 0
 
-    now = utcnow()
-    score = {d: 0 for d in datum_pool}
-    trained = {d: 0 for d in datum_pool}
-    for r in runs:
-        if r.datum_id not in score:
-            continue
-        if r.trained_count > 0:
-            # Track prior training exposure for the fresh-tier tie-break.
-            trained[r.datum_id] += r.trained_count
-            continue
-        if r.rejected_count > 0:
-            continue
-        has_reward = r.reward is not None
-        is_pending = r.reward is None and r.expires_at > now
-        if has_reward or is_pending:
-            score[r.datum_id] += 1
+    score, trained = _scheduler_scores(datum_pool, runs)
 
     def priority(datum: str) -> Tuple[int, int]:
         count = score[datum]
@@ -196,9 +244,14 @@ class TunerService:
 
             return await self._materialize(tuner_id)
 
-    async def get_tuner_details(self, tuner_id: str) -> GetTunerResponse:
+    async def get_tuner_details(
+        self, tuner_id: str, include_progress: bool = False
+    ) -> GetTunerResponse:
         """
         Retrieve tuner details, including current policy_generation and stored trainer state.
+
+        When `include_progress` is set, a recipe-aware `TrainingProgress`
+        snapshot is computed and attached (extra DB reads).
         """
         import json
 
@@ -221,13 +274,155 @@ class TunerService:
             except json.JSONDecodeError:
                 state_data = record.trainer_state
 
+        progress = None
+        if include_progress:
+            progress = await self.get_progress(tuner_id)
+
         return GetTunerResponse(
             tuner_id=record.id,
             name=record.name,
-            recipe=record.recipe,
+            recipe=Cookbook.get(record.recipe),
             trainer=record.trainer,
             policy_generation=policy_generation,
             trainer_state=state_data,
+            progress=progress,
+        )
+
+    async def get_progress(self, tuner_id: str) -> TrainingProgress:
+        """
+        Build a recipe-aware training-progress snapshot for `tuner_id`.
+
+        Batch readiness and per-datum group coverage use the *trainer view*
+        (mirrors `_collect_consumable_batch`, including the off-policy
+        staleness filter) so it accurately reflects how close the next
+        train step is. `next_pick` uses the *scheduler view* (mirrors
+        `_pick_datum`) since that is what actually drives dispensing.
+        """
+        trainer = await self._get_trainer(tuner_id)
+        recipe = await self._recipe_for(tuner_id)
+        generation = trainer.policy_generation
+
+        async with self.async_session() as session:
+            datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
+
+            completion_by_run_id: Dict[str, ChatCompletionModel] = {}
+            run_ids = [r.id for r in runs]
+            if run_ids:
+                result = await session.execute(
+                    select(ChatCompletionModel).where(
+                        ChatCompletionModel.tuner_id == tuner_id,
+                        ChatCompletionModel.run_id.in_(run_ids),
+                    )
+                )
+                completion_by_run_id = {
+                    c.run_id: c for c in result.scalars().all() if c.run_id
+                }
+
+        now = utcnow()
+        max_off = recipe.max_off_policy_generation
+        group_size = recipe.group_size
+
+        in_flight = expired = rewarded = consumable = trained = rejected = 0
+        consumable_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
+        in_flight_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
+        trained_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
+
+        for r in runs:
+            rewarded_flag = r.reward is not None
+            if rewarded_flag:
+                rewarded += 1
+            elif r.expires_at > now:
+                in_flight += 1
+                if r.datum_id in in_flight_by_datum:
+                    in_flight_by_datum[r.datum_id] += 1
+            else:
+                expired += 1
+
+            if r.trained_count > 0:
+                trained += 1
+                if r.datum_id in trained_by_datum:
+                    trained_by_datum[r.datum_id] += r.trained_count
+            if r.rejected_count > 0:
+                rejected += 1
+
+            # Trainer-view consumable: rewarded, not trained, not rejected,
+            # and within the off-policy window.
+            if rewarded_flag and r.trained_count <= 0 and r.rejected_count <= 0:
+                completion = completion_by_run_id.get(r.id)
+                if completion is None or (
+                    generation - completion.policy_generation <= max_off
+                ):
+                    consumable += 1
+                    if r.datum_id in consumable_by_datum:
+                        consumable_by_datum[r.datum_id] += 1
+
+        items: List[DatumProgress] = []
+        groups_ready = 0
+        groups_in_progress = 0
+        datums_in_progress = 0
+        for datum_id in consumable_by_datum:
+            count = consumable_by_datum[datum_id]
+            pending = in_flight_by_datum.get(datum_id, 0)
+            # Surface any datum with a group forming: rewarded runs counting
+            # toward the batch, or runs still awaiting a reward.
+            if count <= 0 and pending <= 0:
+                continue
+            # A datum is "in progress" when it has any consumable or in-flight run.
+            datums_in_progress += 1
+            ready = count >= group_size
+            if ready:
+                groups_ready += 1
+            else:
+                # Not-yet-ready group with >=1 consumable or in-flight run.
+                groups_in_progress += 1
+            items.append(
+                DatumProgress(
+                    datum_id=datum_id,
+                    consumable=count,
+                    in_flight=pending,
+                    trained=trained_by_datum.get(datum_id, 0),
+                )
+            )
+        items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
+
+        never_trained = sum(
+            1 for d in datum_pool if trained_by_datum.get(d, 0) == 0
+        )
+
+        score, _ = _scheduler_scores(datum_pool, runs)
+        picked = _pick_datum(datum_pool, runs, recipe)
+        if picked is None:
+            next_pick = NextPick(
+                datum_id=None,
+                tier="none",
+                reason="no datum dispensable (pool empty or all groups saturated on-policy)",
+            )
+        else:
+            tier, reason = _pick_tier(picked, score, recipe)
+            next_pick = NextPick(datum_id=picked, tier=tier, reason=reason)
+
+        return TrainingProgress(
+            batch=BatchProgress(
+                groups_ready=groups_ready,
+                groups_in_progress=groups_in_progress,
+            ),
+            runs=RunProgress(
+                total=len(runs),
+                in_flight=in_flight,
+                expired=expired,
+                rewarded=rewarded,
+                consumable=consumable,
+                trained=trained,
+                rejected=rejected,
+            ),
+            data=DatumPool(
+                coverage=DatumCoverage(
+                    in_progress=datums_in_progress,
+                    never_trained=never_trained,
+                ),
+                items=items,
+            ),
+            next_pick=next_pick,
         )
 
     async def list_tuners(self) -> List[TunerItem]:
@@ -248,7 +443,6 @@ class TunerService:
                     TunerItem(
                         tuner_id=record.id,
                         name=record.name,
-                        recipe=record.recipe,
                         trainer=record.trainer,
                         policy_generation=trainer.policy_generation,
                     )

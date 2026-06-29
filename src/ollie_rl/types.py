@@ -1,11 +1,13 @@
 from datetime import datetime
 
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from openai.types.chat import (
     ChatCompletionFunctionTool,
     ChatCompletionMessageParam,
 )
+
+from ollie_rl.cookbook import Recipe
 
 
 class ChatCompletionRequest(BaseModel):
@@ -55,19 +57,78 @@ class Rollout(BaseModel):
     runs: List[RolloutRun]
 
 
+class RunProgress(BaseModel):
+    """Aggregate run counts across all datums for a tuner (dynamic)."""
+
+    total: int
+    in_flight: int  # reward is None, lease not expired
+    expired: int  # reward is None, lease expired (re-dispensable)
+    rewarded: int  # reward set (any trained/rejected state)
+    consumable: int  # rewarded & trained<=0 & rejected<=0 & not stale
+    trained: int  # trained_count > 0
+    rejected: int  # rejected_count > 0
+
+
+class DatumProgress(BaseModel):
+    """Per-datum group ('Rollout') coverage, trainer view (dynamic)."""
+
+    datum_id: str
+    consumable: int  # rewarded runs counting toward this group's group_size
+    in_flight: int  # runs awaiting a reward (reward None, lease not expired)
+    trained: int  # prior training exposure (fresh-tier tie-break)
+
+
+class NextPick(BaseModel):
+    """What _pick_datum would dispense next, with reasoning (dynamic)."""
+
+    datum_id: Optional[str]
+    tier: Literal["incomplete", "fresh", "saturated", "none"]
+    reason: str
+
+
+class BatchProgress(BaseModel):
+    """Readiness toward the next train_step."""
+
+    groups_ready: int  # groups already at group_size
+    groups_in_progress: int  # not-yet-ready groups with >=1 consumable or in-flight run
+
+
+class DatumCoverage(BaseModel):
+    """How the datum pool is being exercised."""
+
+    in_progress: int  # datums with >=1 consumable or in-flight run
+    never_trained: int  # datums with no trained run yet
+
+
+class DatumPool(BaseModel):
+    """Datum-pool coverage summary plus per-datum detail."""
+
+    coverage: DatumCoverage
+    items: List[DatumProgress]  # per-datum detail (non-empty only)
+
+
+class TrainingProgress(BaseModel):
+    """Dynamic snapshot. Thresholds live on the recipe, not here."""
+
+    batch: BatchProgress
+    runs: RunProgress
+    data: DatumPool
+    next_pick: NextPick
+
+
 class GetTunerResponse(BaseModel):
     tuner_id: str
     name: str
-    recipe: str
+    recipe: Recipe
     trainer: str
     policy_generation: int
     trainer_state: Optional[Any] = None
+    progress: Optional[TrainingProgress] = None
 
 
 class TunerItem(BaseModel):
     tuner_id: str
     name: str
-    recipe: str
     trainer: str
     policy_generation: int
 

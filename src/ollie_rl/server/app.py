@@ -109,14 +109,18 @@ async def list_tuners() -> ListTunersResponse:
 
 
 @app.get("/tuners/{tuner_id}")
-async def get_tuner(tuner_id: str) -> GetTunerResponse:
+async def get_tuner(tuner_id: str, progress: bool = False) -> GetTunerResponse:
     """
-    Returns information for a specific tuner, including policy_generation and stored trainer state.
+    Returns information for a specific tuner, including policy_generation and
+    stored trainer state. Pass `?progress=true` to also include a recipe-aware
+    training-progress snapshot (batch readiness, run/group coverage, next pick).
     """
     from ollie_rl.service.tuner_service import TunerNotFoundError
 
     try:
-        return await services.tuner.get_tuner_details(tuner_id)
+        return await services.tuner.get_tuner_details(
+            tuner_id, include_progress=progress
+        )
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
