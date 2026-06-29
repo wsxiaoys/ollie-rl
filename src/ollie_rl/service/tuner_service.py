@@ -1003,7 +1003,7 @@ class TunerService:
                 datum_id=datum_id,
                 reward=None,
                 trained_count=0,
-                expires_at=utcnow() + timedelta(seconds=7200),
+                expires_at=utcnow() + timedelta(seconds=1200),
             )
             async with self.async_session() as session:
                 async with session.begin():

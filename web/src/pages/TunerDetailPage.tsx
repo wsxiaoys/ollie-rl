@@ -139,7 +139,7 @@ export function TunerDetailPage() {
                     <span className="big">
                       {progress.data.coverage.in_progress}
                     </span>
-                    <span className="muted">datums in progress</span>
+                    <span className="muted">data in progress</span>
                   </div>
                   <div>
                     <span className="big">
@@ -172,7 +172,7 @@ export function TunerDetailPage() {
             title="Datum pool"
             right={
               <span className="muted">
-                {progress.data.items.length} active datums
+                {progress.data.items.length} active data
               </span>
             }
           >

@@ -64,7 +64,7 @@ export function DatumTable({
   if (items.length === 0) {
     return (
       <div className="placeholder placeholder--inset">
-        No datums are currently in progress.
+        No data is currently in progress.
       </div>
     );
   }
