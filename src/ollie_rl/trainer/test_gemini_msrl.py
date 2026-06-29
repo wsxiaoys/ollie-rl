@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -239,10 +240,11 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Call train_step
         train_op = await self.job.train_step(examples)
         await train_op.wait()
+        await asyncio.sleep(0)
 
         # Trainer can persist its state on demand through the StateStore.
         await self.job._persist_state()
-        self.assertEqual(self.state_store.save_count, 2)
+        self.assertEqual(self.state_store.save_count, 3)
         assert self.state_store._state is not None
         self.assertIn('"tuning_job_name"', self.state_store._state)
         self.assertIn('"last_train_op"', self.state_store._state)

@@ -173,6 +173,7 @@ class RunModel(BaseModel):
     datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     reward: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     trained_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     expires_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, index=True
     )

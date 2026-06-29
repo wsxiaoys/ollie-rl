@@ -46,10 +46,25 @@ backend deliberately diverges, and where it is genuinely behind.
 - **Cookbook (`AsyncConfig`):** stale trajectories are dropped, and the
   rollout pipeline keeps generating until `groups_per_batch` survive. Lag is
   bounded but training never stalls on a stale batch.
-- **ollie-rl:** client-side `_filter_stale`; if dropped fraction exceeds
-  `max_stale_fraction` (default 0.4), raises `StaleBatchError` and **refuses**
-  the batch. No requeue/top-up loop. `max_stale_fraction` has no analog
-  upstream.
+- **ollie-rl:** Exposes `policy_generation` on the `Trainer` class and handles
+  staleness filtering + requeueing at the orchestrator/service layer (`TunerService`).
+  When `TunerService._collect_consumable_batch` detects runs whose completions
+  are older than `recipe.max_off_policy_generation` relative to the current
+  trainer generation, it increments `rejected_count` on the `RunModel` and
+  filters them out. Stale runs are ignored in `_pick_datum`, allowing them to
+  be re-dispensed and re-sampled (requeued), while keeping the training loop running
+  indefinitely on fresh data.
+
+### Upstream Parity & Equivalence
+
+The two implementations are **functionally equivalent** in their behavior and off-policy guarantees, despite structural differences:
+
+| Aspect | `tinker-cookbook` (Upstream) | `ollie-rl` (Ours) |
+|---|---|---|
+| **Off-Policy Window Bounding** | Discards trajectories whose policy generation is older than the cutoff. | Discards runs whose policy generation is older than `trainer_generation - max_off_policy_generation`. |
+| **Non-Stalling Top-Up / Requeueing** | The inline rollout loop keeps calling env/sampling steps until enough fresh groups survive. | Stale runs are marked with `rejected_count += 1`. This makes `_pick_datum` ignore them, naturally causing `dispense_run` to re-dispense those tasks for fresh sampling. |
+| **Location of Logic** | Inline in the trainer rollout pipeline (`rl/train.py`). | Decoupled at the orchestrator/service layer (`TunerService`). |
+| **State Management** | In-memory filtering of active trajectory collection. | Database-backed filtering using the `rejected_count` column. |
 
 ## KL penalty / reference policy
 
@@ -125,9 +140,10 @@ Our `TinkerTrainer` is a deliberately small slice of what cookbook does in
 - **Same idea, slightly different math** for advantages: cookbook centers
   only; we center *and* divide by std with an eps fallback.
 - **Genuine gaps:** substep pipelining, KL reference / KL metrics, eval
-  pipeline, checkpoint TTL and rolling cadence, observability hooks
-  (wandb/logtree/trace), and the `AsyncConfig` requeue-on-stale behaviour
-  (we currently refuse the batch instead).
+  pipeline, checkpoint TTL and rolling cadence, and observability hooks
+  (wandb/logtree/trace). We have successfully implemented a robust
+  `AsyncConfig`-style requeue-on-stale behavior via `rejected_count` in the database,
+  managed by `TunerService`.
 
 Order in which it is likely worth closing the gap, increasing in scope:
 
@@ -138,8 +154,9 @@ Order in which it is likely worth closing the gap, increasing in scope:
 3. `num_substeps` pipelined `forward_backward`/`optim_step`.
 4. KL reference client + post-KL metric.
 5. Rolling vs periodic checkpoints with TTL.
-6. Replace `StaleBatchError`-on-overflow with a requeue/top-up loop matching
-   `AsyncConfig.groups_per_batch` semantics.
+6. **[Completed]** Replace `StaleBatchError`-on-overflow with a requeue/top-up loop matching
+   `AsyncConfig.groups_per_batch` semantics. Implemented via database-backed
+   `rejected_count` column and `TunerService` orchestrator-level filtering.
 7. **[Completed]** Optional `trajectory_to_data`-style prefix-merge for multi-turn runs to
    avoid redundant forward/backward over shared prefixes (pure compute win,
    no semantic change). Implemented via prefix-graph partitioning in

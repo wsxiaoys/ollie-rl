@@ -13,6 +13,7 @@ class Recipe(BaseModel, frozen=True):
     # ---- Batch formation (GRPO-style grouping) --------------------------
     group_size: int = 16
     num_groups_per_batch: int = 32
+    max_off_policy_generation: int = 4
 
 
 # ---- Named recipe instances --------------------------------------------

@@ -72,6 +72,10 @@ class FakeTrainer(Trainer):
     def __init__(self):
         self._sample_op = _make_sample_op()
 
+    @property
+    def policy_generation(self) -> int:
+        return 0
+
     async def sample(self, request: ChatCompletionRequest):
         return self._sample_op
 

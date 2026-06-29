@@ -4,7 +4,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 from pydantic import BaseModel
 from openai.types.chat import (
@@ -38,13 +38,7 @@ logger = logging.getLogger(__name__)
 
 class StaleBatchError(RuntimeError):
     """
-    Raised when too many examples in a `train_step` batch fail the
-    client-side staleness filter (more than
-    `TinkerTrainerConfig.max_stale_fraction`).
-
-    Signals that the async-RL pipeline is running too off-policy for the
-    configured tolerance — operators should tighten `max_steps_off_policy`,
-    raise `sampler_promotion_every` cadence, or reduce sampler throughput.
+    Raised when too many examples in a `train_step` batch fail or are empty.
     """
 
 
@@ -58,13 +52,7 @@ class TinkerTrainerConfig(BaseModel):
     temperature: Optional[float] = None
     kl_penalty_coef: float = 0.0
     loss_fn: str = "importance_sampling"
-    max_steps_off_policy: int = 4
     sampler_promotion_every: int = 1
-    # Maximum fraction of a `train_step` batch allowed to be filtered out
-    # as stale before `train_step` raises `StaleBatchError`. Default 0.4
-    # mirrors the rule-of-thumb that an off-policy pipeline running more
-    # than ~40% stale is mis-tuned, not just noisy.
-    max_stale_fraction: float = 0.4
 
 
 class TinkerTrainerState(BaseModel):
@@ -266,34 +254,9 @@ class TinkerTrainer(Trainer):
             logprobs=completion_logprobs,
         )
 
-    def _filter_stale(self, examples: List[Example]) -> Tuple[List[Example], int]:
-        """
-        Drop examples whose `policy_generation` is more than
-        `config.max_steps_off_policy` steps behind `state.train_step`.
-
-        This is the client-side analogue of tinker-cookbook's
-        `filter_stale_trajectory_group`. The cutoff is inclusive: an
-        example sampled at generation `g` survives iff
-        `state.train_step - g <= max_steps_off_policy`.
-
-        Returns `(survivors, dropped_count)`.
-        """
-        cutoff = self.state.train_step - self.config.max_steps_off_policy
-        survivors: List[Example] = []
-        dropped = 0
-        for ex in examples:
-            gen = ex.policy_generation
-            if gen < cutoff:
-                dropped += 1
-                continue
-            survivors.append(ex)
-        if dropped:
-            logger.info(
-                f"TinkerTrainer staleness filter dropped {dropped}/{len(examples)} "
-                f"examples (train_step={self.state.train_step}, "
-                f"max_steps_off_policy={self.config.max_steps_off_policy})"
-            )
-        return survivors, dropped
+    @property
+    def policy_generation(self) -> int:
+        return self.state.train_step
 
     def _examples_to_data(self, examples: List[Example]) -> List[tinker.Datum]:
         """
@@ -335,29 +298,14 @@ class TinkerTrainer(Trainer):
             # plan's "too few survive → fail loudly" branch).
             raise StaleBatchError("TinkerTrainer.train_step received an empty batch")
 
-        # 1. Client-side staleness filter. If too large a fraction of
-        # the batch is stale, refuse to advance and surface the problem
-        # to the operator instead of silently no-op'ing.
-        survivors, dropped = self._filter_stale(examples)
-        stale_fraction = dropped / len(examples)
-        if stale_fraction > self.config.max_stale_fraction:
-            raise StaleBatchError(
-                f"TinkerTrainer.train_step rejecting batch: "
-                f"{dropped}/{len(examples)} examples stale "
-                f"(fraction={stale_fraction:.2f} > "
-                f"max_stale_fraction={self.config.max_stale_fraction:.2f}). "
-                f"Tighten max_steps_off_policy, raise sampler_promotion_every "
-                "cadence, or slow sampler throughput."
-            )
-
         # 2. Build Datum list (skipping rows missing cached tokens and grouping into trajectories).
-        data = self._examples_to_data(survivors)
+        data = self._examples_to_data(examples)
 
         if not data:
             raise StaleBatchError(
                 "TinkerTrainer.train_step rejecting batch: no surviving "
-                "examples carry cached tokens/logprobs after staleness "
-                "filter. Verify sample() is writing tokens/logprobs into "
+                "examples carry cached tokens/logprobs. "
+                "Verify sample() is writing tokens/logprobs into "
                 "ChatCompletionModel."
             )
 

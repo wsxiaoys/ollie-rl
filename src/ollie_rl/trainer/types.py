@@ -64,6 +64,10 @@ class Trainer(ABC):
     The Trainer owns its own persistence cadence via its StateStore.
     """
 
+    @property
+    @abstractmethod
+    def policy_generation(self) -> int: ...
+
     @abstractmethod
     async def sample(self, request: ChatCompletionRequest) -> SampleOp: ...
 

@@ -293,7 +293,7 @@ class TunerService:
             async with self.async_session() as session:
                 async with session.begin():
                     batch, run_ids = await self._collect_consumable_batch(
-                        tuner_id, session
+                        tuner_id, session, trainer
                     )
                     if not batch:
                         return
@@ -313,7 +313,7 @@ class TunerService:
                 logger.info(f"Successfully completed train step for tuner {tuner_id}")
 
     async def _collect_consumable_batch(
-        self, tuner_id: str, session
+        self, tuner_id: str, session, trainer: Trainer
     ) -> Tuple[List[Example], List[str]]:
         recipe = await self._recipe_for(tuner_id)
         if recipe is None:
@@ -323,10 +323,55 @@ class TunerService:
             select(RunModel).where(
                 RunModel.tuner_id == tuner_id,
                 RunModel.trained_count <= 0,
+                RunModel.rejected_count <= 0,
                 RunModel.reward != None,  # noqa: E711
             )
         )
-        run_records = result.scalars().all()
+        run_records = list(result.scalars().all())
+
+        if not run_records:
+            return [], []
+
+        # 1. Retrieve ChatCompletions for all candidate runs to check for staleness
+        candidate_run_ids = [r.id for r in run_records]
+        result = await session.execute(
+            select(ChatCompletionModel).where(
+                ChatCompletionModel.tuner_id == tuner_id,
+                ChatCompletionModel.run_id.in_(candidate_run_ids),
+            )
+        )
+        completions = result.scalars().all()
+        completion_by_run_id = {c.run_id: c for c in completions if c.run_id}
+
+        # 2. Filter out stale runs and requeue them (mark them as rejected)
+        trainer_generation = trainer.policy_generation
+        max_off_policy_generation = recipe.max_off_policy_generation
+
+        stale_run_ids = []
+        fresh_run_records = []
+        for run in run_records:
+            completion = completion_by_run_id.get(run.id)
+            if completion is not None:
+                if (
+                    trainer_generation - completion.policy_generation
+                    > max_off_policy_generation
+                ):
+                    stale_run_ids.append(run.id)
+                    continue
+            fresh_run_records.append(run)
+
+        if stale_run_ids:
+            logger.info(
+                f"Requeuing {len(stale_run_ids)} stale runs for tuner {tuner_id} "
+                f"(trainer_generation={trainer_generation}, max_off_policy_generation={max_off_policy_generation})"
+            )
+            await session.execute(
+                update(RunModel)
+                .where(RunModel.tuner_id == tuner_id)
+                .where(RunModel.id.in_(stale_run_ids))
+                .values(rejected_count=RunModel.rejected_count + 1)
+            )
+            run_records = fresh_run_records
 
         # Group rewards by datum_id
         grouped_runs: Dict[str, List[RunModel]] = {}
@@ -381,14 +426,8 @@ class TunerService:
 
         run_ids = list(run_advantages.keys())
 
-        # Retrieve ChatCompletionModel records for these run_ids
-        result = await session.execute(
-            select(ChatCompletionModel).where(
-                ChatCompletionModel.tuner_id == tuner_id,
-                ChatCompletionModel.run_id.in_(run_ids),
-            )
-        )
-        completions = result.scalars().all()
+        # Filter completions to only include those in run_ids
+        completions = [c for c in completions if c.run_id in run_advantages]
 
         if not completions:
             logger.warning(
@@ -478,6 +517,8 @@ class TunerService:
         score = {d: 0 for d in datum_pool}
         for r in runs:
             if r.datum_id not in score:
+                continue
+            if r.rejected_count > 0:
                 continue
             has_reward = r.reward is not None
             is_pending = r.reward is None and r.expires_at > now

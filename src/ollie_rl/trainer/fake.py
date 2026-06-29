@@ -43,6 +43,10 @@ class FakeTrainer(Trainer):
     def __init__(self):
         pass
 
+    @property
+    def policy_generation(self) -> int:
+        return 0
+
     async def sample(self, request: ChatCompletionRequest) -> SampleOp:
         completion_id = f"cmpl-{uuid.uuid4()}"
         completion = ChatCompletion(

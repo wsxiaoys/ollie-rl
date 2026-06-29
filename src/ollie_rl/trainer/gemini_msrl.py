@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import logging
 import time
 import uuid
@@ -115,6 +116,7 @@ class GeminiMsrlTrainerState(BaseModel):
     tuning_job_name: str
     last_train_op: Optional[str] = None
     config: GeminiMsrlTrainerConfig
+    policy_generation: int = 0
 
 
 class GeminiMsrlOp:
@@ -279,6 +281,10 @@ class GeminiMsrlTrainer(Trainer):
         self.state_store = state_store
 
     @property
+    def policy_generation(self) -> int:
+        return self.state.policy_generation
+
+    @property
     def tuning_job_name(self) -> str:
         return self.state.tuning_job_name
 
@@ -392,6 +398,26 @@ class GeminiMsrlTrainer(Trainer):
 
         self.state.last_train_op = op.name
         await self._persist_state()
+
+        # Start a background task to poll the operation and update the policy generation state
+        async def poll_and_update_state():
+            try:
+                completed_op = await self.client.wait_for_operation(
+                    op.name,
+                )
+                response = completed_op.get_response_as(TrainStepResponse)
+                if asyncio.iscoroutine(response):
+                    response = await response
+                if (
+                    isinstance(response, TrainStepResponse)
+                    and response.completed_train_step_id
+                ):
+                    self.state.policy_generation = int(response.completed_train_step_id)
+                    await self._persist_state()
+            except Exception as e:
+                logger.error(f"Error polling train step or updating state: {e}")
+
+        asyncio.create_task(poll_and_update_state())
 
         return GeminiMsrlTrainingOp(
             self.client,
