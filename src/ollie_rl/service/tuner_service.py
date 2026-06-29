@@ -220,6 +220,10 @@ class TunerService:
         self._train_lock = asyncio.Lock()
         # Lock to prevent race conditions during lazy restoration/materialization of trainers.
         self._materialize_lock = asyncio.Lock()
+        # Lock serializing the read-pick-insert critical section of `dispense_run`
+        # so concurrent dispenses observe each other's in-flight runs and don't
+        # all pick the same datum (which would over-dispense past `group_size`).
+        self._dispense_lock = asyncio.Lock()
 
     @property
     def async_session(self):
@@ -809,7 +813,8 @@ class TunerService:
 
         if not completions:
             logger.warning(
-                f"No chat completions found for the ready runs under tuner {tuner_id}"
+                f"No chat completions found for the ready runs under tuner {tuner_id} "
+                f"(run_ids={run_ids})"
             )
             return [], []
 
@@ -836,23 +841,30 @@ class TunerService:
         # Ensure trainer is initialized.
         _trainer = await self._get_trainer(tuner_id)
         recipe = await self._recipe_for(tuner_id)
-        async with self.async_session() as session:
-            datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
-        datum_id = _pick_datum(datum_pool, runs, recipe)
-        if datum_id is None:
-            return None
+        # Serialize the read-pick-insert sequence: the scheduler decision in
+        # `_pick_datum` depends on the current set of in-flight runs, so two
+        # concurrent dispenses that both read the pre-insert snapshot would
+        # otherwise pick the same datum and over-dispense it past
+        # `group_size` (the source of the inflated in_flight counts).
+        async with self._dispense_lock:
+            async with self.async_session() as session:
+                datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
-        run_record = RunModel(
-            tuner_id=tuner_id,
-            datum_id=datum_id,
-            reward=None,
-            trained_count=0,
-            expires_at=utcnow() + timedelta(seconds=7200),
-        )
-        async with self.async_session() as session:
-            async with session.begin():
-                session.add(run_record)
+            datum_id = _pick_datum(datum_pool, runs, recipe)
+            if datum_id is None:
+                return None
+
+            run_record = RunModel(
+                tuner_id=tuner_id,
+                datum_id=datum_id,
+                reward=None,
+                trained_count=0,
+                expires_at=utcnow() + timedelta(seconds=7200),
+            )
+            async with self.async_session() as session:
+                async with session.begin():
+                    session.add(run_record)
 
         return DispenseRun(
             run_id=run_record.id,

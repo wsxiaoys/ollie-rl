@@ -166,7 +166,7 @@ def main() -> int:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=8,
+        default=16,
         help="How many run/score iterations to execute in parallel.",
     )
     parser.add_argument(
