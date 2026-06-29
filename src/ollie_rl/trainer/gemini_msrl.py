@@ -4,9 +4,9 @@ import base64
 import logging
 import time
 import uuid
-from typing import List, Optional, Any, Union, cast
+from typing import List, Optional, Any, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from gemini_msrl.types import (
     ContentGenerationParameters,
@@ -120,15 +120,32 @@ class GeminiMsrlTrainerConfig(BaseModel):
 
 class GeminiMsrlTrainerState(BaseModel):
     tuning_job_name: str
-    last_train_op: Optional[Union[str, TrainStepResponse]] = None
+    # The most recent *completed* train-step response. This is the source of
+    # truth for `policy_generation` and is NEVER overwritten by an in-flight
+    # op name, so the generation can't regress to 0 while a new train step is
+    # running (that is tracked separately by `pending_train_op`).
+    last_train_op: Optional[TrainStepResponse] = None
+    # Op name of an in-flight train-step LRO, if any. Set the moment a train
+    # step is submitted and cleared once its completion poll lands. Used to
+    # detect in-flight training and to re-spawn the completion poll on restart.
+    pending_train_op: Optional[str] = None
     config: GeminiMsrlTrainerConfig
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_last_train_op(cls, data: Any) -> Any:
+        """Backwards-compat: older persisted state stored the in-flight op name
+        in `last_train_op` (a `str`). Migrate that into `pending_train_op` so we
+        don't fail validation against the new `TrainStepResponse`-only type."""
+        if isinstance(data, dict) and isinstance(data.get("last_train_op"), str):
+            data = dict(data)
+            data.setdefault("pending_train_op", data["last_train_op"])
+            data["last_train_op"] = None
+        return data
 
     @property
     def train_step(self) -> int:
-        if (
-            isinstance(self.last_train_op, TrainStepResponse)
-            and self.last_train_op.completed_train_step_id
-        ):
+        if self.last_train_op and self.last_train_op.completed_train_step_id:
             return int(self.last_train_op.completed_train_step_id)
         return 0
 
@@ -351,23 +368,49 @@ class GeminiMsrlTrainer(Trainer):
     async def is_training(self) -> bool:
         """Whether a train-step LRO is currently in flight.
 
-        `train_step` persists the op name (a `str`) the moment it submits the
-        LRO, but the field is only swapped to a `TrainStepResponse` if the
-        in-process background poll observes completion. That poll is lost on a
-        restart, so a lingering `str` `last_train_op` does NOT by itself mean
-        the op is still running. Confirm against the backend via `peek()`
-        before reporting in-flight.
+        `train_step` records the in-flight op name in `pending_train_op` the
+        moment it submits the LRO, and clears it once the completion poll lands.
+        That poll is started by `train_step` and re-spawned by `restore`, so a
+        non-None `pending_train_op` reliably tracks an in-flight op without an
+        extra backend round-trip.
         """
-        op = self.state.last_train_op
-        if not isinstance(op, str):
-            return False
-        # peek() returns True once the op is terminal, so still-training is
-        # the negation.
-        training_op = GeminiMsrlTrainingOp(self.client, op)
-        return not await training_op.peek()
+        return self.state.pending_train_op is not None
 
     async def _persist_state(self) -> None:
         await self.state_store.save(self.state.model_dump_json())
+
+    async def _poll_and_persist_train_op(self, op_name: str) -> None:
+        """Wait for a train-step LRO to terminate, record the completed
+        ``TrainStepResponse`` in ``last_train_op`` and clear ``pending_train_op``.
+
+        This is spawned as a background task by ``train_step`` and re-spawned by
+        ``restore`` so an in-flight op that completes while (or after) the
+        server is down is still reflected in the persisted state.
+        """
+        try:
+            completed_op = await self.client.wait_for_operation(op_name)
+            response = completed_op.get_response_as(TrainStepResponse)
+            if asyncio.iscoroutine(response):
+                response = await response
+            if (
+                isinstance(response, TrainStepResponse)
+                and response.completed_train_step_id
+            ):
+                # Record the completed response monotonically so
+                # `policy_generation` never regresses (guards against an older
+                # op's poll landing after a newer one).
+                completed = int(response.completed_train_step_id)
+                if completed >= self.state.train_step:
+                    self.state.last_train_op = response
+
+            # Clear the in-flight pointer if it still refers to this op; a newer
+            # train_step may have already replaced it.
+            if self.state.pending_train_op == op_name:
+                self.state.pending_train_op = None
+
+            await self._persist_state()
+        except Exception as e:
+            logger.error(f"Error polling train step or updating state: {e}")
 
     async def sample(self, request: ChatCompletionRequest) -> GeminiMsrlSamplingOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
@@ -595,14 +638,14 @@ class GeminiMsrlTrainer(Trainer):
     async def train_step(self, examples: List[Example]) -> GeminiMsrlTrainingOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
 
-        if self.state.last_train_op and isinstance(self.state.last_train_op, str):
+        if self.state.pending_train_op:
             last_op = GeminiMsrlTrainingOp(
                 self.client,
-                self.state.last_train_op,
+                self.state.pending_train_op,
             )
             if not await last_op.peek():
                 raise RuntimeError(
-                    f"Last training step {self.state.last_train_op} is still active"
+                    f"Last training step {self.state.pending_train_op} is still active"
                 )
 
         # 1. Translate examples to TrainStepRequest
@@ -625,28 +668,12 @@ class GeminiMsrlTrainer(Trainer):
         # 2. Trigger TrainStep LRO
         op = await self.client.train_step(tuning_job_id, train_req)
 
-        self.state.last_train_op = op.name
+        self.state.pending_train_op = op.name
         await self._persist_state()
 
-        # Start a background task to poll the operation and update the policy generation state
-        async def poll_and_update_state():
-            try:
-                completed_op = await self.client.wait_for_operation(
-                    op.name,
-                )
-                response = completed_op.get_response_as(TrainStepResponse)
-                if asyncio.iscoroutine(response):
-                    response = await response
-                if (
-                    isinstance(response, TrainStepResponse)
-                    and response.completed_train_step_id
-                ):
-                    self.state.last_train_op = response
-                    await self._persist_state()
-            except Exception as e:
-                logger.error(f"Error polling train step or updating state: {e}")
-
-        asyncio.create_task(poll_and_update_state())
+        # Start a background task to poll the operation and update the policy
+        # generation state. This task is re-spawned on restart by `restore`.
+        asyncio.create_task(self._poll_and_persist_train_op(op.name))
 
         return GeminiMsrlTrainingOp(
             self.client,
@@ -758,6 +785,18 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
             state=state,
             state_store=state_store,
         )
+
+        # The in-process poll spawned by `train_step` is lost on restart, so a
+        # non-None `pending_train_op` means we never observed its completion.
+        # Re-spawn the poll to recover the completed `TrainStepResponse` (which
+        # drives `policy_generation`) even if the op finished while down.
+        if state.pending_train_op:
+            logger.info(
+                f"Resuming poll for in-flight train op: {state.pending_train_op}"
+            )
+            asyncio.create_task(
+                instance._poll_and_persist_train_op(state.pending_train_op)
+            )
 
         # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING).
         logger.info(

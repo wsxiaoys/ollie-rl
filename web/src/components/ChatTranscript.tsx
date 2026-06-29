@@ -1,6 +1,21 @@
 import { Fragment } from "react";
 import type { ChatCompletionItem } from "../api/types";
-import { Mono } from "./ui";
+import { Badge, Mono } from "./ui";
+
+type BadgeTone = "default" | "good" | "warn" | "danger" | "info";
+
+/**
+ * Map an OpenAI finish reason to a badge tone so the outcome of a turn is
+ * legible at a glance: a clean `stop` reads as success, while truncation or
+ * filtering stands out as a problem.
+ */
+const FINISH_REASON_TONE: Record<string, BadgeTone> = {
+  stop: "good",
+  tool_calls: "info",
+  function_call: "info",
+  length: "warn",
+  content_filter: "danger",
+};
 
 type AnyRecord = Record<string, unknown>;
 
@@ -42,6 +57,22 @@ function formatArgs(args: unknown): string {
   return JSON.stringify(args ?? {}, null, 2);
 }
 
+/**
+ * If `text` is a JSON object or array (the common shape of a tool result),
+ * return it pretty-printed; otherwise return null so the caller can fall back
+ * to plain-text rendering. We only treat object/array roots as JSON to avoid
+ * "formatting" ordinary numeric or quoted-string content.
+ */
+function tryFormatJson(text: string): string | null {
+  const trimmed = text.trim();
+  if (!/^[[{]/.test(trimmed)) return null;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return null;
+  }
+}
+
 /** Recursively sort object keys so semantically-equal JSON compares equal. */
 function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortValue);
@@ -81,6 +112,15 @@ function getResponseMessage(completion: ChatCompletionItem): AnyRecord | null {
   const first = asRecordArray(response.choices)[0];
   if (first && typeof first.message === "object" && first.message !== null) {
     return first.message as AnyRecord;
+  }
+  return null;
+}
+
+function getFinishReason(completion: ChatCompletionItem): string | null {
+  const response = completion.response as unknown as AnyRecord;
+  const first = asRecordArray(response.choices)[0];
+  if (first && typeof first.finish_reason === "string") {
+    return first.finish_reason;
   }
   return null;
 }
@@ -217,9 +257,16 @@ function MessageView({ message }: { message: AnyRecord }) {
     </>
   );
 
+  const contentJson = content ? tryFormatJson(content) : null;
+
   const body = (
     <>
-      {content && <div className="msg__content">{content}</div>}
+      {content &&
+        (contentJson !== null ? (
+          <pre className="msg__json">{contentJson}</pre>
+        ) : (
+          <div className="msg__content">{content}</div>
+        ))}
       {toolCalls.map((tc, i) => {
         const fn = (tc.function ?? {}) as AnyRecord;
         return (
@@ -291,9 +338,24 @@ function TrajectoryCard({
             ))}
             <div className="turn-divider">
               <span className="turn-divider__label">turn {ti + 1}</span>
-              <Mono>{turn.completion.id}</Mono>
+              {(() => {
+                const finishReason = getFinishReason(turn.completion);
+                return (
+                  finishReason && (
+                    <Badge tone={FINISH_REASON_TONE[finishReason] ?? "default"}>
+                      {finishReason}
+                    </Badge>
+                  )
+                );
+              })()}
+              <span className="turn-divider__spacer" />
               <span className="turn-divider__meta">
-                gen {turn.completion.policy_generation}
+                <span className="turn-divider__meta-label">id</span>
+                <Mono>{turn.completion.id}</Mono>
+              </span>
+              <span className="turn-divider__meta">
+                <span className="turn-divider__meta-label">gen</span>
+                {turn.completion.policy_generation}
               </span>
               <span className="turn-divider__meta">
                 {new Date(turn.completion.created_at).toLocaleString()}

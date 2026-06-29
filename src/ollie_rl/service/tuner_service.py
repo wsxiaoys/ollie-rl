@@ -405,24 +405,33 @@ class TunerService:
         for datum_id in consumable_by_datum:
             count = consumable_by_datum[datum_id]
             pending = in_flight_by_datum.get(datum_id, 0)
-            # Surface any datum with a group forming: rewarded runs counting
-            # toward the batch, or runs still awaiting a reward.
-            if count <= 0 and pending <= 0:
+            trained_here = trained_by_datum.get(datum_id, 0)
+            # Surface any datum that has activity worth showing: a group
+            # forming (rewarded runs counting toward the batch, or runs still
+            # awaiting a reward) or one that has already contributed a trained
+            # group. Without the trained check a datum whose group was fully
+            # trained (consumable/in-flight back to 0) would silently vanish
+            # from the pool even though it carries training history.
+            if count <= 0 and pending <= 0 and trained_here <= 0:
                 continue
-            # A datum is "in progress" when it has any consumable or in-flight run.
-            datums_in_progress += 1
-            ready = count >= group_size
-            if ready:
-                groups_ready += 1
-            else:
-                # Not-yet-ready group with >=1 consumable or in-flight run.
-                groups_in_progress += 1
+            # "in progress" and batch readiness only reflect datums with an
+            # active (consumable or in-flight) group. A purely trained datum is
+            # listed for visibility but isn't forming a new group, so it must
+            # not inflate these counters.
+            if count > 0 or pending > 0:
+                datums_in_progress += 1
+                ready = count >= group_size
+                if ready:
+                    groups_ready += 1
+                else:
+                    # Not-yet-ready group with >=1 consumable or in-flight run.
+                    groups_in_progress += 1
             items.append(
                 DatumProgress(
                     datum_id=datum_id,
                     consumable=count,
                     in_flight=pending,
-                    trained=trained_by_datum.get(datum_id, 0),
+                    trained=trained_here,
                 )
             )
         items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
@@ -789,6 +798,14 @@ class TunerService:
         """
         async with self._train_lock:
             trainer = await self._get_trainer(tuner_id)
+
+            # Skip if a train step is already in progress for this trainer.
+            if await trainer.is_training():
+                logger.info(
+                    f"Skipping train step for tuner {tuner_id}: already training"
+                )
+                return
+
             train_op = None
             async with self.async_session() as session:
                 async with session.begin():
