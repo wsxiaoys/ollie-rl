@@ -103,9 +103,9 @@ class TunerModel(BaseModel):
     recipe: Mapped[str] = mapped_column(String(255), nullable=False)
     trainer: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
-    # `state` is populated by the Tuner itself via its StateStore. It is
+    # `trainer_state` is populated by the Tuner itself via its StateStore. It is
     # NULL between row creation and the Tuner's first save.
-    state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    trainer_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class ChatCompletionModel(BaseModel):

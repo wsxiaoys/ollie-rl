@@ -27,8 +27,8 @@ class InMemoryStateStore(StateStore):
     async def load(self) -> Optional[str]:
         return self._state
 
-    async def save(self, state: str) -> None:
-        self._state = state
+    async def save(self, trainer_state: str) -> None:
+        self._state = trainer_state
         self.save_count += 1
 
 

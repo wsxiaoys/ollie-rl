@@ -56,7 +56,7 @@ class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(tuner_details["recipe"], "grpo_16x32")
             self.assertEqual(tuner_details["trainer"], "fake")
             self.assertEqual(tuner_details["policy_generation"], 0)
-            self.assertIsNone(tuner_details["state"])
+            self.assertIsNone(tuner_details["trainer_state"])
 
             # Test 404 for non-existent tuner
             res = await client.get("/tuners/non-existent-id")

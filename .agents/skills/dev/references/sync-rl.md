@@ -44,6 +44,7 @@ they all share the same `run_id`, reward, and advantage.
 | Endpoint                                       | Purpose                                   |
 |------------------------------------------------|-------------------------------------------|
 | `POST /tuners`                                 | Create a tuner with a registered datum pool. |
+| `GET /tuners/{tuner_id}`                       | Retrieve tuner details and trainer state. |
 | `POST /tuners/{tuner_id}/runs`                 | Request a new run assignment.             |
 | `POST /openai/v1/chat/completions`             | Sample one LLM response inside a `run_id`.|
 | `PUT /tuners/{tuner_id}/runs/{run_id}/reward`  | Submit the scalar reward for a `run_id`.  |
@@ -52,10 +53,10 @@ Training is applied implicitly by the server as rewards arrive (the
 `PUT /reward` handler schedules `TunerService.maybe_train(tuner_id)` in
 the background); the client does not need to trigger it explicitly.
 
-> Note: there is currently no `GET /tuners/{tuner_id}` observability
-> endpoint. Any unrouted path returns a `307` redirect to `/docs` (the
-> Swagger UI), which is also the easiest way to introspect the live HTTP
-> surface.
+> Note: `GET /tuners/{tuner_id}` provides observability for tuner details,
+> including current policy generation and stored trainer state (`trainer_state`).
+> Any unrouted path returns a `307` redirect to `/docs` (the Swagger UI),
+> which is also the easiest way to introspect the live HTTP surface.
 
 ### `POST /tuners` body
 

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
 from ollie_rl.types import (
     ChatCompletionRequest,
@@ -14,9 +14,9 @@ from ollie_rl.types import (
     PutRewardResponse,
     GetTunerResponse,
 )
-from openai.types.chat import ChatCompletion
 from ollie_rl.db import init_db, shutdown_db
 from ollie_rl.service import TunerService
+from ollie_rl.server.streaming import simulate_stream
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -115,8 +115,13 @@ async def create_chat_completion(
     request: ChatCompletionRequest,
     x_tuner_id: Annotated[str, Header()],
     x_run_id: Annotated[str | None, Header()] = None,
-) -> ChatCompletion:
-    """Generate a chat completion from the active policy of the requested model."""
+):
+    """Generate a chat completion from the active policy of the requested model.
+
+    Real token-by-token streaming is not supported. When ``stream=true`` is
+    requested, the full completion is generated first and then replayed as a
+    simulated SSE stream so that OpenAI-compatible clients keep working.
+    """
     from ollie_rl.service.tuner_service import (
         TunerNotFoundError,
         RunNotFoundError,
@@ -125,7 +130,7 @@ async def create_chat_completion(
     )
 
     try:
-        return await services.tuner.sample(
+        completion = await services.tuner.sample(
             tuner_id=x_tuner_id,
             request=request,
             run_id=x_run_id,
@@ -145,6 +150,13 @@ async def create_chat_completion(
             f"Failed to generate chat completion for model '{request.model}'"
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+    if request.stream:
+        return StreamingResponse(
+            simulate_stream(completion),
+            media_type="text/event-stream",
+        )
+    return completion
 
 
 @app.post("/tuners/{tuner_id}/runs")

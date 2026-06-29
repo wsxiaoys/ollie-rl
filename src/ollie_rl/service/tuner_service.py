@@ -56,18 +56,18 @@ class _DbStateStore(StateStore):
         async_session = get_sessionmaker()
         async with async_session() as session:
             result = await session.execute(
-                select(TunerModel.state).where(TunerModel.id == self._tuner_id)
+                select(TunerModel.trainer_state).where(TunerModel.id == self._tuner_id)
             )
             return result.scalar_one_or_none()
 
-    async def save(self, state: str) -> None:
+    async def save(self, trainer_state: str) -> None:
         async_session = get_sessionmaker()
         async with async_session() as session:
             async with session.begin():
                 await session.execute(
                     update(TunerModel)
                     .where(TunerModel.id == self._tuner_id)
-                    .values(state=state)
+                    .values(trainer_state=trainer_state)
                 )
         logger.debug(f"Persisted state for tuner {self._tuner_id}")
 
@@ -99,7 +99,7 @@ class TunerService:
             )
             record = result.scalar_one_or_none()
 
-        if record is None or record.state is None:
+        if record is None or record.trainer_state is None:
             return None
 
         return await self._materialize(tuner_id, record)
@@ -123,11 +123,11 @@ class TunerService:
         policy_generation = trainer.policy_generation if trainer is not None else 0
 
         state_data = None
-        if record.state:
+        if record.trainer_state:
             try:
-                state_data = json.loads(record.state)
+                state_data = json.loads(record.trainer_state)
             except json.JSONDecodeError:
-                state_data = record.state
+                state_data = record.trainer_state
 
         return GetTunerResponse(
             tuner_id=record.id,
@@ -135,7 +135,7 @@ class TunerService:
             recipe=record.recipe,
             trainer=record.trainer,
             policy_generation=policy_generation,
-            state=state_data,
+            trainer_state=state_data,
         )
 
     async def _materialize(self, tuner_id: str, record: TunerModel) -> Trainer:
@@ -172,7 +172,7 @@ class TunerService:
                     name=name,
                     recipe=recipe,
                     trainer=trainer,
-                    state=None,
+                    trainer_state=None,
                 )
                 session.add(tuner_record)
                 await session.flush()

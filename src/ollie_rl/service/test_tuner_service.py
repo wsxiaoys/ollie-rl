@@ -236,7 +236,7 @@ class TestGetTrainer(TunerServiceTestCase):
         # Evict from in-memory cache.
         del self.service.active_trainers[tuner_id]
 
-        # Tuner record has no state yet (state=None), so it cannot be restored.
+        # Tuner record has no state yet (trainer_state=None), so it cannot be restored.
         trainer = await self.service.get_trainer(tuner_id)
         self.assertIsNone(trainer)
 

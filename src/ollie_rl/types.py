@@ -13,6 +13,7 @@ class ChatCompletionRequest(BaseModel):
     messages: List[ChatCompletionMessageParam]
     max_tokens: Optional[int] = None
     tools: Optional[List[ChatCompletionFunctionTool]] = None
+    stream: Optional[bool] = None
 
 
 class CreateTunerRequest(BaseModel):
@@ -60,4 +61,4 @@ class GetTunerResponse(BaseModel):
     recipe: str
     trainer: str
     policy_generation: int
-    state: Optional[Any] = None
+    trainer_state: Optional[Any] = None
