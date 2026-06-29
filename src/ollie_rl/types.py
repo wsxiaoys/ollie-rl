@@ -62,3 +62,15 @@ class GetTunerResponse(BaseModel):
     trainer: str
     policy_generation: int
     trainer_state: Optional[Any] = None
+
+
+class TunerItem(BaseModel):
+    tuner_id: str
+    name: str
+    recipe: str
+    trainer: str
+    policy_generation: int
+
+
+class ListTunersResponse(BaseModel):
+    tuners: List[TunerItem]

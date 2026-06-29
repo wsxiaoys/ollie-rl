@@ -118,7 +118,7 @@ class TunerServiceTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         # Always use a fresh in-memory database per test.
-        await init_db("sqlite+aiosqlite:///:memory:")
+        await init_db()
 
         # Register our fake trainer factory (idempotent if already registered).
         if _TRAINER_KIND not in trainer_factory._REGISTRY:
@@ -213,32 +213,6 @@ class TestCreateTuner(TunerServiceTestCase):
                 datum_ids=["d1"],
                 trainer="nonexistent_trainer",
             )
-
-
-# ---------------------------------------------------------------------------
-# get_trainer
-# ---------------------------------------------------------------------------
-
-
-class TestGetTrainer(TunerServiceTestCase):
-    async def test_returns_none_for_unknown_tuner(self):
-        result = await self.service.get_trainer("tuner_does_not_exist")
-        self.assertIsNone(result)
-
-    async def test_returns_trainer_after_create(self):
-        tuner_id = await self._create_tuner()
-        trainer = await self.service.get_trainer(tuner_id)
-        self.assertIsNotNone(trainer)
-
-    async def test_lazy_restore_from_db(self):
-        """A trainer evicted from memory is lazily re-hydrated from the DB."""
-        tuner_id = await self._create_tuner()
-        # Evict from in-memory cache.
-        del self.service.active_trainers[tuner_id]
-
-        # Tuner record has no state yet (trainer_state=None), so it cannot be restored.
-        trainer = await self.service.get_trainer(tuner_id)
-        self.assertIsNone(trainer)
 
 
 # ---------------------------------------------------------------------------
@@ -506,9 +480,10 @@ class TestMaybeTrain(TunerServiceTestCase):
     are available. We set up the DB rows directly to exercise this logic.
     """
 
-    async def test_no_op_for_unknown_tuner(self):
-        """Should silently return when the trainer cannot be found."""
-        await self.service.maybe_train("tuner_unknown")
+    async def test_raise_for_unknown_tuner(self):
+        """Should raise when the trainer cannot be found."""
+        with self.assertRaises(TunerNotFoundError):
+            await self.service.maybe_train("tuner_unknown")
 
     async def test_no_op_when_not_enough_groups(self):
         """With too few completed groups, training is not triggered."""

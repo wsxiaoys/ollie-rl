@@ -1,6 +1,5 @@
 import os
 import logging
-from typing import Optional
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from .models import BaseModel
 
@@ -13,11 +12,11 @@ _engine = None
 _sessionmaker = None
 
 
-def get_engine(database_url: Optional[str] = None):
+def get_engine():
     """Create and return an async SQLAlchemy engine singleton."""
     global _engine
     if _engine is None:
-        url = database_url or os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
+        url = os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
         if url == DEFAULT_DATABASE_URL:
             logger.warning(
                 "SQLite in-memory backend is being used. "
@@ -37,9 +36,9 @@ def get_sessionmaker():
     return _sessionmaker
 
 
-async def init_db(database_url: Optional[str] = None) -> None:
+async def init_db() -> None:
     """Create database tables if they do not exist."""
-    engine = get_engine(database_url)
+    engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(BaseModel.metadata.create_all)
 

@@ -20,6 +20,7 @@ from ollie_rl.types import (
     DispenseRun,
     ChatCompletionRequest,
     GetTunerResponse,
+    TunerItem,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,11 +81,14 @@ class TunerService:
 
     def __init__(self):
         self.active_trainers: Dict[str, Trainer] = {}
-        self.async_session = get_sessionmaker()
         # Global lock ensuring `maybe_train` runs serially across all tuners in this process.
         self._train_lock = asyncio.Lock()
 
-    async def get_trainer(self, tuner_id: str) -> Optional[Trainer]:
+    @property
+    def async_session(self):
+        return get_sessionmaker()
+
+    async def _get_trainer(self, tuner_id: str) -> Trainer:
         """
         Retrieve an active trainer instance by tuner_id.
         If the trainer is not in memory but exists in the database, restore it lazily
@@ -100,7 +104,9 @@ class TunerService:
             record = result.scalar_one_or_none()
 
         if record is None or record.trainer_state is None:
-            return None
+            raise TunerNotFoundError(
+                f"Tuner '{tuner_id}' not found or not initialized."
+            )
 
         return await self._materialize(tuner_id, record)
 
@@ -119,8 +125,8 @@ class TunerService:
         if record is None:
             raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
 
-        trainer = await self.get_trainer(tuner_id)
-        policy_generation = trainer.policy_generation if trainer is not None else 0
+        trainer = await self._get_trainer(tuner_id)
+        policy_generation = trainer.policy_generation
 
         state_data = None
         if record.trainer_state:
@@ -137,6 +143,34 @@ class TunerService:
             policy_generation=policy_generation,
             trainer_state=state_data,
         )
+
+    async def list_tuners(self) -> List[TunerItem]:
+        """
+        Retrieve all tuners, including their current policy_generation.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(TunerModel).where(TunerModel.trainer_state.is_not(None))
+            )
+            records = result.scalars().all()
+
+        tuners_list = []
+        for record in records:
+            try:
+                trainer = await self._get_trainer(record.id)
+                tuners_list.append(
+                    TunerItem(
+                        tuner_id=record.id,
+                        name=record.name,
+                        recipe=record.recipe,
+                        trainer=record.trainer,
+                        policy_generation=trainer.policy_generation,
+                    )
+                )
+            except Exception:
+                logger.exception(f"Failed to get trainer for tuner '{record.id}'")
+
+        return tuners_list
 
     async def _materialize(self, tuner_id: str, record: TunerModel) -> Trainer:
         if tuner_id in self.active_trainers:
@@ -204,7 +238,7 @@ class TunerService:
         Generate a chat completion from the active policy of the requested model,
         and optionally record metadata if run_id is provided.
         """
-        trainer = await self.get_trainer(tuner_id)
+        trainer = await self._get_trainer(tuner_id)
         if not trainer:
             raise TunerNotFoundError(
                 f"Tuner '{tuner_id}' not found or not initialized."
@@ -325,10 +359,7 @@ class TunerService:
         runs at a time in this process.
         """
         async with self._train_lock:
-            trainer = await self.get_trainer(tuner_id)
-            if trainer is None:
-                return
-
+            trainer = await self._get_trainer(tuner_id)
             train_op = None
             async with self.async_session() as session:
                 async with session.begin():
@@ -495,12 +526,8 @@ class TunerService:
         """
         Dispense a run for a tuner.
         """
-        trainer = await self.get_trainer(tuner_id)
-        if not trainer:
-            raise TunerNotFoundError(
-                f"Tuner '{tuner_id}' not found or not initialized."
-            )
-
+        # Ensure trainer is initialized.
+        _trainer = await self._get_trainer(tuner_id)
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 

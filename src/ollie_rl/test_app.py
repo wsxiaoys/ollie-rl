@@ -1,4 +1,3 @@
-import os
 import unittest
 import httpx
 from ollie_rl.db import init_db, shutdown_db
@@ -6,16 +5,9 @@ from ollie_rl.server.app import app
 
 
 class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
-    db_file = "data/test_db.db"
-    db_url = f"sqlite+aiosqlite:///{db_file}"
-
     async def asyncSetUp(self):
-        # Clean up any leftover db file
-        if os.path.exists(self.db_file):
-            os.remove(self.db_file)
-
         # Initialize the database with a real SQLite file
-        await init_db(self.db_url)
+        await init_db()
 
     async def asyncTearDown(self):
         # Shutdown database connection

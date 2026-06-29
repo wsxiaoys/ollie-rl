@@ -13,6 +13,7 @@ from ollie_rl.types import (
     PutRewardRequest,
     PutRewardResponse,
     GetTunerResponse,
+    ListTunersResponse,
 )
 from ollie_rl.db import init_db, shutdown_db
 from ollie_rl.service import TunerService
@@ -91,6 +92,19 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
         raise e
     except Exception as e:
         logger.exception(f"Failed to create tuner for name: {request.name}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tuners")
+async def list_tuners() -> ListTunersResponse:
+    """
+    Returns a list of all tuners, including id, name, recipe, trainer, and policy_generation.
+    """
+    try:
+        tuners = await services.tuner.list_tuners()
+        return ListTunersResponse(tuners=tuners)
+    except Exception as e:
+        logger.exception("Failed to list tuners")
         raise HTTPException(status_code=500, detail=str(e))
 
 
