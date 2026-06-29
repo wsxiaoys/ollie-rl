@@ -4,7 +4,7 @@
   "provider": {
     "ollie": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "ollie-rl",
+      "name": "ollie",
       "options": {
         "baseURL": "http://localhost:8000/openai/v1",
         "apiKey": "any-key",
@@ -14,7 +14,7 @@
         }
       },
       "models": {
-        "tinker": {}
+        "gemini_msrl": {}
       }
     }
   }

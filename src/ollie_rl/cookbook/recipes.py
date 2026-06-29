@@ -22,3 +22,8 @@ GRPO_16x32 = Recipe(
     group_size=16,
     num_groups_per_batch=32,
 )
+
+GRPO_4x8 = Recipe(
+    group_size=4,
+    num_groups_per_batch=8,
+)

@@ -86,6 +86,7 @@ _UNSUPPORTED_SCHEMA_KEYS = frozenset(
         "writeOnly",
         "deprecated",
         "title",
+        "exclusiveMinimum"
     ]
 )
 

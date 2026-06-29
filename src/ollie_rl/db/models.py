@@ -1,6 +1,6 @@
 import array
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 from sqlalchemy import (
     Integer,
@@ -9,6 +9,7 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     Float,
+    JSON,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -153,6 +154,8 @@ class ChatCompletionModel(BaseModel):
     logprobs: Mapped[Optional[List[float]]] = mapped_column(
         _PackedFloatList(), nullable=True
     )
+    request: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
+    response: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=utcnow
     )

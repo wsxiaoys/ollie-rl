@@ -42,9 +42,9 @@ REPO_ROOT = EXAMPLE_DIR.parent.parent
 CITIES_PATH = EXAMPLE_DIR / "data" / "cities.json"
 
 DEFAULT_BASE_URL = "http://localhost:8000"
-DEFAULT_RECIPE = "grpo_16x32"
-DEFAULT_TRAINER = "fake"
-DEFAULT_TUNER_NAME = "weather-agent"
+DEFAULT_RECIPE = "grpo_4x8"
+DEFAULT_TRAINER = "gemini_msrl"
+DEFAULT_TUNER_NAME = "tuning-weather-agent"
 
 
 def load_cities() -> dict[str, dict[str, int | str]]:
@@ -111,6 +111,8 @@ def run_opencode(
             "opencode",
             "run",
             "--dangerously-skip-permissions",
+            "--model",
+            "ollie/gemini_msrl",
             prompt,
         ],
         cwd=str(REPO_ROOT),
@@ -138,7 +140,7 @@ def compute_reward(trajectory: str, expected_fahrenheit: int) -> float:
     for pat in patterns:
         if re.search(pat, trajectory, flags=re.IGNORECASE):
             return 1.0
-    return 0.0
+    return -1.0
 
 
 def main() -> int:

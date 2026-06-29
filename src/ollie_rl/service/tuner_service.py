@@ -83,6 +83,8 @@ class TunerService:
         self.active_trainers: Dict[str, Trainer] = {}
         # Global lock ensuring `maybe_train` runs serially across all tuners in this process.
         self._train_lock = asyncio.Lock()
+        # Lock to prevent race conditions during lazy restoration/materialization of trainers.
+        self._materialize_lock = asyncio.Lock()
 
     @property
     def async_session(self):
@@ -94,21 +96,18 @@ class TunerService:
         If the trainer is not in memory but exists in the database, restore it lazily
         by opening it against its DB-backed StateStore.
         """
+        # Fast path: Return immediately if the trainer is already loaded in memory,
+        # avoiding any lock acquisition overhead for subsequent requests.
         if tuner_id in self.active_trainers:
             return self.active_trainers[tuner_id]
 
-        async with self.async_session() as session:
-            result = await session.execute(
-                select(TunerModel).where(TunerModel.id == tuner_id)
-            )
-            record = result.scalar_one_or_none()
+        async with self._materialize_lock:
+            # Double-checked locking pattern: A concurrent request might have
+            # finished materializing the trainer while we were waiting for the lock.
+            if tuner_id in self.active_trainers:
+                return self.active_trainers[tuner_id]
 
-        if record is None or record.trainer_state is None:
-            raise TunerNotFoundError(
-                f"Tuner '{tuner_id}' not found or not initialized."
-            )
-
-        return await self._materialize(tuner_id, record)
+            return await self._materialize(tuner_id)
 
     async def get_tuner_details(self, tuner_id: str) -> GetTunerResponse:
         """
@@ -172,9 +171,17 @@ class TunerService:
 
         return tuners_list
 
-    async def _materialize(self, tuner_id: str, record: TunerModel) -> Trainer:
-        if tuner_id in self.active_trainers:
-            return self.active_trainers[tuner_id]
+    async def _materialize(self, tuner_id: str) -> Trainer:
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(TunerModel).where(TunerModel.id == tuner_id)
+            )
+            record = result.scalar_one_or_none()
+
+        if record is None or record.trainer_state is None:
+            raise TunerNotFoundError(
+                f"Tuner '{tuner_id}' not found or not initialized."
+            )
 
         trainer = record.trainer
 
@@ -285,6 +292,8 @@ class TunerService:
                 policy_generation=policy_generation,
                 tokens=sample.tokens,
                 logprobs=sample.logprobs,
+                request=request,
+                response=sample.completion,
             )
 
         return sample.completion
@@ -296,6 +305,8 @@ class TunerService:
         run_id: str,
         datum_id: str,
         policy_generation: int,
+        request: ChatCompletionRequest,
+        response: ChatCompletion,
         tokens: Optional[List[int]] = None,
         logprobs: Optional[List[float]] = None,
     ) -> None:
@@ -317,6 +328,8 @@ class TunerService:
                     policy_generation=policy_generation,
                     tokens=tokens,
                     logprobs=logprobs,
+                    request=request.model_dump(),
+                    response=response.model_dump(),
                 )
                 session.add(db_completion)
 

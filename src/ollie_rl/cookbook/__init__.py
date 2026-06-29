@@ -4,6 +4,7 @@ from .recipes import Recipe, GRPO_16x32
 
 RECIPES: Dict[str, Recipe] = {
     "grpo_16x32": GRPO_16x32,
+    "grpo_4x8": GRPO_16x32,
 }
 
 

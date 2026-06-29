@@ -373,7 +373,8 @@ class TestSample(TunerServiceTestCase):
         assert isinstance(trainer, FakeTrainer)
         trainer._sample_op = _make_sample_op(completion_id="cmpl-recorded")
 
-        await self.service.sample(tuner_id, self._make_request(), run_id=run.id)
+        req = self._make_request()
+        await self.service.sample(tuner_id, req, run_id=run.id)
 
         async_session = get_sessionmaker()
         async with async_session() as session:
@@ -386,6 +387,10 @@ class TestSample(TunerServiceTestCase):
         assert record is not None
         self.assertEqual(record.id, "cmpl-recorded")
         self.assertEqual(record.tuner_id, tuner_id)
+        self.assertIsNotNone(record.request)
+        self.assertEqual(record.request["model"], "fake-model")
+        self.assertIsNotNone(record.response)
+        self.assertEqual(record.response["id"], "cmpl-recorded")
 
 
 # ---------------------------------------------------------------------------
@@ -403,12 +408,20 @@ class TestRecordChatCompletion(TunerServiceTestCase):
         tuner_id = await self._create_tuner()
         run = await self._add_run(tuner_id)
 
+        request = ChatCompletionRequest(
+            model="fake-model",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        response = _make_chat_completion(completion_id="cmpl-direct")
+
         await self.service.record_chat_completion(
             completion_id="cmpl-direct",
             tuner_id=tuner_id,
             run_id=run.id,
             datum_id=run.datum_id,
             policy_generation=1,
+            request=request,
+            response=response,
         )
 
         async_session = get_sessionmaker()
@@ -439,6 +452,12 @@ class TestRecordChatCompletion(TunerServiceTestCase):
 
         tokens = [10, 11, 12, 13, 14]
         logprobs = [-0.1, -0.2, -0.3]
+        request = ChatCompletionRequest(
+            model="fake-model",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        response = _make_chat_completion(completion_id="cmpl-with-tokens")
+
         await self.service.record_chat_completion(
             completion_id="cmpl-with-tokens",
             tuner_id=tuner_id,
@@ -447,6 +466,8 @@ class TestRecordChatCompletion(TunerServiceTestCase):
             policy_generation=7,
             tokens=tokens,
             logprobs=logprobs,
+            request=request,
+            response=response,
         )
 
         async_session = get_sessionmaker()
@@ -467,6 +488,47 @@ class TestRecordChatCompletion(TunerServiceTestCase):
         self.assertEqual(len(record.logprobs), len(logprobs))
         for got, want in zip(record.logprobs, logprobs):
             self.assertAlmostEqual(got, want, places=5)
+
+    async def test_persists_request_and_response(self):
+        from sqlalchemy import select
+
+        from ollie_rl.db.connection import get_sessionmaker
+        from ollie_rl.db.models import ChatCompletionModel
+
+        tuner_id = await self._create_tuner()
+        run = await self._add_run(tuner_id)
+
+        request = ChatCompletionRequest(
+            model="fake-model",
+            messages=[{"role": "user", "content": "hello world"}],
+        )
+        response = _make_chat_completion(completion_id="cmpl-with-req-resp")
+
+        await self.service.record_chat_completion(
+            completion_id="cmpl-with-req-resp",
+            tuner_id=tuner_id,
+            run_id=run.id,
+            datum_id=run.datum_id,
+            policy_generation=3,
+            request=request,
+            response=response,
+        )
+
+        async_session = get_sessionmaker()
+        async with async_session() as session:
+            result = await session.execute(
+                select(ChatCompletionModel).where(
+                    ChatCompletionModel.id == "cmpl-with-req-resp"
+                )
+            )
+            record = result.scalar_one_or_none()
+
+        assert record is not None
+        self.assertIsNotNone(record.request)
+        self.assertEqual(record.request["model"], "fake-model")
+        self.assertEqual(record.request["messages"][0]["content"], "hello world")
+        self.assertIsNotNone(record.response)
+        self.assertEqual(record.response["id"], "cmpl-with-req-resp")
 
 
 # ---------------------------------------------------------------------------
@@ -541,12 +603,19 @@ class TestMaybeTrain(TunerServiceTestCase):
             for i in range(2):
                 run = await self._add_run(tuner_id, datum_id=datum_id)
                 runs.append(run)
+                request = ChatCompletionRequest(
+                    model="fake-model",
+                    messages=[{"role": "user", "content": "hello"}],
+                )
+                response = _make_chat_completion(completion_id=f"cmpl-{datum_id}-{i}")
                 await self.service.record_chat_completion(
                     completion_id=f"cmpl-{datum_id}-{i}",
                     tuner_id=tuner_id,
                     run_id=run.id,
                     datum_id=datum_id,
                     policy_generation=i,
+                    request=request,
+                    response=response,
                 )
                 await self.service.update_reward(tuner_id, run.id, 1.0)
 
