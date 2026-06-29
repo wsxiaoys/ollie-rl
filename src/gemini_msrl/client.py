@@ -96,7 +96,7 @@ class GeminiMsrlClient:
 
     def __init__(
         self,
-        base_url: str = "https://us-central1-staging-aiplatform.sandbox.googleapis.com",
+        base_url: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
     ):
         project_id = os.environ.get("GEMINI_MSRL_PROJECT_ID")
@@ -105,6 +105,12 @@ class GeminiMsrlClient:
 
         self.project_id = project_id
         self.location = "us-central1"
+
+        if base_url is None:
+            base_url = os.environ.get(
+                "GEMINI_MSRL_BASE_URL",
+                "https://us-central1-staging-aiplatform.sandbox.googleapis.com",
+            )
         self.base_url = base_url.rstrip("/")
 
         # Token source: the client re-reads the token from GEMINI_MSRL_ENV_FILE
@@ -121,6 +127,12 @@ class GeminiMsrlClient:
             "Content-Type": "application/json",
             "x-goog-user-project": self.project_id,
         }
+
+        # X-Forwarder-Mode header (fixture vs real)
+        # Defaults to 'fixture' if not set.
+        forwarder_mode = os.environ.get("GEMINI_MSRL_FORWARDER_MODE", None)
+        if forwarder_mode:
+            self.headers["X-Forwarder-Mode"] = forwarder_mode
 
         # Use provided AsyncClient or manage one internally
         self._client = client
@@ -229,6 +241,18 @@ class GeminiMsrlClient:
         path = name if name.startswith("v1beta1/") else f"v1beta1/{name}"
         response_data = await self._request("GET", path)
         return TuningJob.model_validate(response_data)
+
+    async def cancel_tuning_job(self, name: str) -> None:
+        """
+        Cancels a tuning job.
+
+        Path: POST /v1beta1/{name=projects/*/locations/*/tuningJobs/*}:cancel
+        """
+        # Ensure name is a path relative to v1beta1
+        path = name if name.startswith("v1beta1/") else f"v1beta1/{name}"
+        if not path.endswith(":cancel"):
+            path += ":cancel"
+        await self._request("POST", path)
 
     async def generate_content_tuning_scope(
         self,

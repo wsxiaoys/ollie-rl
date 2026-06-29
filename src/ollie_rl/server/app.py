@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import RedirectResponse
 
 from ollie_rl.types import (
@@ -12,6 +12,7 @@ from ollie_rl.types import (
     DispenseRun,
     PutRewardRequest,
     PutRewardResponse,
+    GetTunerResponse,
 )
 from openai.types.chat import ChatCompletion
 from ollie_rl.db import init_db, shutdown_db
@@ -54,9 +55,9 @@ app = FastAPI(
 )
 
 
-@app.exception_handler(404)
-async def custom_404_handler(request: Request, exc: Exception) -> RedirectResponse:
-    """Redirect 404 Not Found errors to /docs."""
+@app.get("/")
+async def redirect_to_docs() -> RedirectResponse:
+    """Redirect root access to /docs."""
     return RedirectResponse("/docs")
 
 
@@ -90,6 +91,22 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
         raise e
     except Exception as e:
         logger.exception(f"Failed to create tuner for name: {request.name}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tuners/{tuner_id}")
+async def get_tuner(tuner_id: str) -> GetTunerResponse:
+    """
+    Returns information for a specific tuner, including policy_generation and stored trainer state.
+    """
+    from ollie_rl.service.tuner_service import TunerNotFoundError
+
+    try:
+        return await services.tuner.get_tuner_details(tuner_id)
+    except TunerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to fetch details for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))
 
 

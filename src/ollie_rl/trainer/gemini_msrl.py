@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Union
 
 from pydantic import BaseModel
 
@@ -110,13 +110,22 @@ class GeminiMsrlTrainerConfig(BaseModel):
     checkpoint_interval: int = 10
     poll_interval: float = 2.0
     timeout_seconds: float = 3600.0
+    tuning_job_name: Optional[str] = None
 
 
 class GeminiMsrlTrainerState(BaseModel):
     tuning_job_name: str
-    last_train_op: Optional[str] = None
+    last_train_op: Optional[Union[str, TrainStepResponse]] = None
     config: GeminiMsrlTrainerConfig
-    policy_generation: int = 0
+
+    @property
+    def train_step(self) -> int:
+        if (
+            isinstance(self.last_train_op, TrainStepResponse)
+            and self.last_train_op.completed_train_step_id
+        ):
+            return int(self.last_train_op.completed_train_step_id)
+        return 0
 
 
 class GeminiMsrlOp:
@@ -282,7 +291,7 @@ class GeminiMsrlTrainer(Trainer):
 
     @property
     def policy_generation(self) -> int:
-        return self.state.policy_generation
+        return self.state.train_step
 
     @property
     def tuning_job_name(self) -> str:
@@ -366,7 +375,7 @@ class GeminiMsrlTrainer(Trainer):
     async def train_step(self, examples: List[Example]) -> GeminiMsrlTrainingOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
 
-        if self.state.last_train_op:
+        if self.state.last_train_op and isinstance(self.state.last_train_op, str):
             last_op = GeminiMsrlTrainingOp(
                 self.client,
                 self.state.last_train_op,
@@ -412,7 +421,7 @@ class GeminiMsrlTrainer(Trainer):
                     isinstance(response, TrainStepResponse)
                     and response.completed_train_step_id
                 ):
-                    self.state.policy_generation = int(response.completed_train_step_id)
+                    self.state.last_train_op = response
                     await self._persist_state()
             except Exception as e:
                 logger.error(f"Error polling train step or updating state: {e}")
@@ -449,24 +458,36 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         client = GeminiMsrlClient()
 
         # Bootstrap path: create a fresh tuning job and persist its name.
-        req = CreateTuningJobRequest(
-            tuned_model_display_name=name,
-            base_model=config.base_model,
-            multi_step_reinforcement_tuning_spec=MultiStepReinforcementTuningSpec(
-                hyper_parameters=MultiStepReinforcementTuningHyperParameters(
-                    adapter_size=config.adapter_size,
-                    checkpoint_interval=config.checkpoint_interval,
-                )
-            ),
-        )
+        if config.tuning_job_name:
+            tuning_job_name = config.tuning_job_name
+            if "/" not in tuning_job_name:
+                tuning_job_name = f"projects/{client.project_id}/locations/{client.location}/tuningJobs/{tuning_job_name}"
+            logger.info(f"Using pre-created Gemini MSRL tuning job: {tuning_job_name}")
+        else:
+            req = CreateTuningJobRequest(
+                tuned_model_display_name=name,
+                base_model=config.base_model,
+                multi_step_reinforcement_tuning_spec=MultiStepReinforcementTuningSpec(
+                    hyper_parameters=MultiStepReinforcementTuningHyperParameters(
+                        adapter_size=config.adapter_size,
+                        checkpoint_interval=config.checkpoint_interval,
+                    )
+                ),
+            )
 
-        logger.info(f"Creating Gemini MSRL tuning job for model display name: {name}")
-        job = await client.create_tuning_job(req)
+            logger.info(
+                f"Creating Gemini MSRL tuning job for model display name: {name}"
+            )
+            job = await client.create_tuning_job(req)
+            tuning_job_name = job.name
 
         instance = GeminiMsrlTrainer(
             config=config,
             client=client,
-            state=GeminiMsrlTrainerState(tuning_job_name=job.name, config=config),
+            state=GeminiMsrlTrainerState(
+                tuning_job_name=tuning_job_name,
+                config=config,
+            ),
             state_store=state_store,
         )
 

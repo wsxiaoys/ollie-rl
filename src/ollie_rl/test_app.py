@@ -27,6 +27,11 @@ class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"
         ) as client:
+            # 0. Test redirect from / to /docs
+            res = await client.get("/")
+            self.assertEqual(res.status_code, 307)
+            self.assertEqual(res.headers["location"], "/docs")
+
             # 1. Create a tuner
             create_tuner_payload = {
                 "name": "integration-test-policy",
@@ -41,6 +46,21 @@ class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
             tuner_id = tuner_data["tuner_id"]
             self.assertEqual(tuner_data["name"], "integration-test-policy")
             self.assertEqual(tuner_data["recipe"], "grpo_16x32")
+
+            # 1.5 Get tuner details
+            res = await client.get(f"/tuners/{tuner_id}")
+            self.assertEqual(res.status_code, 200)
+            tuner_details = res.json()
+            self.assertEqual(tuner_details["tuner_id"], tuner_id)
+            self.assertEqual(tuner_details["name"], "integration-test-policy")
+            self.assertEqual(tuner_details["recipe"], "grpo_16x32")
+            self.assertEqual(tuner_details["trainer"], "fake")
+            self.assertEqual(tuner_details["policy_generation"], 0)
+            self.assertIsNone(tuner_details["state"])
+
+            # Test 404 for non-existent tuner
+            res = await client.get("/tuners/non-existent-id")
+            self.assertEqual(res.status_code, 404)
 
             # 2. Dispense a run
             res = await client.post(f"/tuners/{tuner_id}/runs")

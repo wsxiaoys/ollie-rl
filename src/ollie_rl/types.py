@@ -52,3 +52,12 @@ class RolloutRun(BaseModel):
 
 class Rollout(BaseModel):
     runs: List[RolloutRun]
+
+
+class GetTunerResponse(BaseModel):
+    tuner_id: str
+    name: str
+    recipe: str
+    trainer: str
+    policy_generation: int
+    state: Optional[Any] = None

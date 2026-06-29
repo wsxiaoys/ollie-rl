@@ -14,7 +14,13 @@ from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
 from openai.types.chat import ChatCompletion
-from ollie_rl.types import Rollout, RolloutRun, DispenseRun, ChatCompletionRequest
+from ollie_rl.types import (
+    Rollout,
+    RolloutRun,
+    DispenseRun,
+    ChatCompletionRequest,
+    GetTunerResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,40 @@ class TunerService:
             return None
 
         return await self._materialize(tuner_id, record)
+
+    async def get_tuner_details(self, tuner_id: str) -> GetTunerResponse:
+        """
+        Retrieve tuner details, including current policy_generation and stored trainer state.
+        """
+        import json
+
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(TunerModel).where(TunerModel.id == tuner_id)
+            )
+            record = result.scalar_one_or_none()
+
+        if record is None:
+            raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+
+        trainer = await self.get_trainer(tuner_id)
+        policy_generation = trainer.policy_generation if trainer is not None else 0
+
+        state_data = None
+        if record.state:
+            try:
+                state_data = json.loads(record.state)
+            except json.JSONDecodeError:
+                state_data = record.state
+
+        return GetTunerResponse(
+            tuner_id=record.id,
+            name=record.name,
+            recipe=record.recipe,
+            trainer=record.trainer,
+            policy_generation=policy_generation,
+            state=state_data,
+        )
 
     async def _materialize(self, tuner_id: str, record: TunerModel) -> Trainer:
         if tuner_id in self.active_trainers:

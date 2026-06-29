@@ -248,7 +248,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         assert self.state_store._state is not None
         self.assertIn('"tuning_job_name"', self.state_store._state)
         self.assertIn('"last_train_op"', self.state_store._state)
-        self.assertIn('"operation-train-step"', self.state_store._state)
+        self.assertIn('"completed_train_step_id"', self.state_store._state)
 
     async def test_open_restore_path(self):
         import json
