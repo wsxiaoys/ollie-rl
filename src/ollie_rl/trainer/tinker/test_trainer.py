@@ -205,7 +205,9 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         sample = await sample_op.wait()
 
         self.assertTrue(sample.malformed)
-        self.assertEqual(sample.completion.choices[0].message.content, "some malformed string")
+        self.assertEqual(
+            sample.completion.choices[0].message.content, "some malformed string"
+        )
 
     def _make_example(
         self,

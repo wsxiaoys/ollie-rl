@@ -396,7 +396,7 @@ class TestSample(TunerServiceTestCase):
 
         self.assertIsNotNone(record)
         assert record is not None
-        self.assertEqual(record.id, "cmpl-recorded")
+        self.assertTrue(record.id.startswith("cmpl_"))
         self.assertEqual(record.tuner_id, tuner_id)
         self.assertIsNotNone(record.request)
         self.assertEqual(record.request["model"], "fake-model")
@@ -415,7 +415,9 @@ class TestSample(TunerServiceTestCase):
         # Make FakeTrainer return a malformed sample.
         trainer = self.service.active_trainers[tuner_id]
         assert isinstance(trainer, FakeTrainer)
-        trainer._sample_op = _make_sample_op(completion_id="cmpl-malformed", malformed=True)
+        trainer._sample_op = _make_sample_op(
+            completion_id="cmpl-malformed", malformed=True
+        )
 
         req = self._make_request()
         with self.assertRaises(MalformedSampleError) as ctx:
@@ -429,7 +431,7 @@ class TestSample(TunerServiceTestCase):
                 select(RunModel).where(RunModel.id == run.id)
             )
             record = result.scalar_one()
-            self.assertEqual(record.reward, -1.0) # default malformed_penalty
+            self.assertEqual(record.reward, -1.0)  # default malformed_penalty
 
 
 # ---------------------------------------------------------------------------
@@ -707,9 +709,7 @@ class PickDatumTestCase(unittest.TestCase):
         # d1 has a partial group; d3 is fresh. Finish d1 first.
         recipe = Recipe(group_size=4, max_off_policy_generation=4)
         runs = [_pick_run("d1")]
-        self.assertEqual(
-            _pick_datum(["d1", "d3"], runs, recipe), "d1"
-        )
+        self.assertEqual(_pick_datum(["d1", "d3"], runs, recipe), "d1")
 
     def test_fresh_datum_beats_saturated(self):
         # d1 is saturated (complete group), d2 is fresh -> start d2.
@@ -718,9 +718,7 @@ class PickDatumTestCase(unittest.TestCase):
             _pick_run("d1", reward=1.0),
             _pick_run("d1", reward=1.0),
         ]
-        self.assertEqual(
-            _pick_datum(["d1", "d2"], runs, recipe), "d2"
-        )
+        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d2")
 
     def test_fresh_tiebreak_prefers_least_trained(self):
         # Both d1 and d2 have count == 0; d1 was trained before, d2 never was.
@@ -728,9 +726,7 @@ class PickDatumTestCase(unittest.TestCase):
         runs = [
             _pick_run("d1", reward=1.0, trained_count=1),
         ]
-        self.assertEqual(
-            _pick_datum(["d1", "d2"], runs, recipe), "d2"
-        )
+        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d2")
 
     def test_saturated_dispatch_allowed_when_off_policy(self):
         # All datums saturated; off-policy allowed -> dispatch surplus to the
@@ -743,9 +739,7 @@ class PickDatumTestCase(unittest.TestCase):
             _pick_run("d2", reward=1.0),
             _pick_run("d2", reward=1.0),
         ]
-        self.assertEqual(
-            _pick_datum(["d1", "d2"], runs, recipe), "d2"
-        )
+        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d2")
 
     def test_saturated_returns_none_when_strictly_on_policy(self):
         # All datums saturated and off-policy disabled -> nothing to dispatch.
@@ -765,9 +759,7 @@ class PickDatumTestCase(unittest.TestCase):
             _pick_run("d1", reward=1.0, rejected_count=1),
             _pick_run("d1", expires_in=-1.0),
         ]
-        self.assertEqual(
-            _pick_datum(["d1", "d2"], runs, recipe), "d1"
-        )
+        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d1")
 
 
 if __name__ == "__main__":

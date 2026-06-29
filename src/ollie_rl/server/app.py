@@ -163,9 +163,7 @@ async def get_run(tuner_id: str, run_id: str) -> RunDetailResponse:
     except RunNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.exception(
-            f"Failed to fetch run '{run_id}' for tuner '{tuner_id}'"
-        )
+        logger.exception(f"Failed to fetch run '{run_id}' for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))
 
 

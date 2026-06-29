@@ -441,9 +441,7 @@ class TunerService:
             )
         items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
 
-        never_trained = sum(
-            1 for d in datum_pool if trained_by_datum.get(d, 0) == 0
-        )
+        never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
 
         score, _ = _scheduler_scores(datum_pool, runs)
         picked = _pick_datum(datum_pool, runs, recipe)
@@ -749,9 +747,7 @@ class TunerService:
             if sample.malformed:
                 recipe = await self._recipe_for(tuner_id)
                 malformed_penalty = recipe.malformed_penalty
-                await self.update_reward(
-                    tuner_id, run_id, reward=malformed_penalty
-                )
+                await self.update_reward(tuner_id, run_id, reward=malformed_penalty)
                 raw_content = None
                 if sample.completion.choices and sample.completion.choices[0].message:
                     raw_content = sample.completion.choices[0].message.content
@@ -797,9 +793,7 @@ class TunerService:
                 )
                 session.add(db_completion)
 
-    async def update_reward(
-        self, tuner_id: str, run_id: str, reward: float
-    ) -> None:
+    async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
         """
         Record or update the reward for a specific run.
         """
@@ -1005,7 +999,9 @@ class TunerService:
         for c in completions:
             if c.run_id not in run_advantages:
                 continue
-            candidate_id = c.response.get("id") if isinstance(c.response, dict) else None
+            candidate_id = (
+                c.response.get("id") if isinstance(c.response, dict) else None
+            )
             examples.append(
                 Example(
                     chat_completion_id=candidate_id or c.id,

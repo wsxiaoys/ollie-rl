@@ -81,9 +81,7 @@ def _mount_dev_proxy(app: FastAPI, target: str) -> None:
             path=f"/app/{path}",
             query=request.url.query.encode("utf-8"),
         )
-        req_headers = [
-            (k, v) for (k, v) in request.headers.raw if k.lower() != b"host"
-        ]
+        req_headers = [(k, v) for (k, v) in request.headers.raw if k.lower() != b"host"]
         upstream_req = client.build_request(
             request.method,
             url,

@@ -90,7 +90,7 @@ _UNSUPPORTED_SCHEMA_KEYS = frozenset(
         "writeOnly",
         "deprecated",
         "title",
-        "exclusiveMinimum"
+        "exclusiveMinimum",
     ]
 )
 
@@ -225,14 +225,16 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
                     if part_sig_str:
                         if tc.model_extra is None:
                             try:
-                                tc.__pydantic_extra__ = {"extra_content": {"google": {"thought_signature": part_sig_str}}}
+                                tc.__pydantic_extra__ = {
+                                    "extra_content": {
+                                        "google": {"thought_signature": part_sig_str}
+                                    }
+                                }
                             except Exception:
                                 pass
                         else:
                             tc.model_extra["extra_content"] = {
-                                "google": {
-                                    "thought_signature": part_sig_str
-                                }
+                                "google": {"thought_signature": part_sig_str}
                             }
                     tool_calls.append(tc)
 
@@ -271,14 +273,16 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         if message_thought_sig:
             if message.model_extra is None:
                 try:
-                    message.__pydantic_extra__ = {"extra_content": {"google": {"thought_signature": message_thought_sig}}}
+                    message.__pydantic_extra__ = {
+                        "extra_content": {
+                            "google": {"thought_signature": message_thought_sig}
+                        }
+                    }
                 except Exception:
                     pass
             else:
                 message.model_extra["extra_content"] = {
-                    "google": {
-                        "thought_signature": message_thought_sig
-                    }
+                    "google": {"thought_signature": message_thought_sig}
                 }
 
         completion = ChatCompletion(
@@ -446,11 +450,23 @@ class GeminiMsrlTrainer(Trainer):
         for msg in other_messages:
             if msg.get("role") == "assistant":
                 for tc in msg.get("tool_calls") or []:
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                    fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                    tc_id = (
+                        tc.get("id")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "id", None)
+                    )
+                    fn = (
+                        tc.get("function")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "function", None)
+                    )
                     if fn is None:
                         continue
-                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+                    fn_name = (
+                        fn.get("name")
+                        if isinstance(fn, dict)
+                        else getattr(fn, "name", None)
+                    )
                     if tc_id and fn_name:
                         tool_call_name_by_id[tc_id] = fn_name
 
@@ -473,7 +489,7 @@ class GeminiMsrlTrainer(Trainer):
                     response_obj = (
                         parsed if isinstance(parsed, dict) else {"result": parsed}
                     )
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     response_obj = {"result": content_str}
                 contents.append(
                     Content(
@@ -516,13 +532,27 @@ class GeminiMsrlTrainer(Trainer):
 
             if role == "assistant":
                 for tc in msg.get("tool_calls") or []:
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                    fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                    tc_id = (
+                        tc.get("id")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "id", None)
+                    )
+                    fn = (
+                        tc.get("function")
+                        if isinstance(tc, dict)
+                        else getattr(tc, "function", None)
+                    )
                     if fn is None:
                         continue
-                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+                    fn_name = (
+                        fn.get("name")
+                        if isinstance(fn, dict)
+                        else getattr(fn, "name", None)
+                    )
                     fn_args = (
-                        fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                        fn.get("arguments")
+                        if isinstance(fn, dict)
+                        else getattr(fn, "arguments", None)
                     )
                     args_obj: dict[str, Any]
                     if isinstance(fn_args, dict):
@@ -535,7 +565,7 @@ class GeminiMsrlTrainer(Trainer):
                                 if isinstance(parsed_args, dict)
                                 else {"value": parsed_args}
                             )
-                        except (ValueError, TypeError):
+                        except ValueError, TypeError:
                             args_obj = {}
                     else:
                         args_obj = {}
@@ -571,7 +601,7 @@ class GeminiMsrlTrainer(Trainer):
                                 name=fn_name or "",
                                 args=args_obj,
                             ),
-                            thought_signature=sig_bytes
+                            thought_signature=sig_bytes,
                         )
                     )
 

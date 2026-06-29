@@ -42,7 +42,6 @@ export function RootLayout() {
           </Link>
         </nav>
         <div className="sidebar-footer">
-          <span>tuner stats</span>
           <button
             type="button"
             className="theme-toggle"
