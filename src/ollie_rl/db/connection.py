@@ -17,7 +17,7 @@ def get_engine():
     global _engine
     if _engine is None:
         url = os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
-        if url == DEFAULT_DATABASE_URL:
+        if url.count(":memory:"):
             logger.warning(
                 "SQLite in-memory backend is being used. "
                 "This should only be used for local development/testing and does not persist data across restarts."

@@ -32,7 +32,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import httpx
@@ -139,8 +141,8 @@ def compute_reward(trajectory: str, expected_fahrenheit: int) -> float:
     ]
     for pat in patterns:
         if re.search(pat, trajectory, flags=re.IGNORECASE):
-            return 1.0
-    return -1.0
+            return 0.5
+    return -0.5
 
 
 def main() -> int:
@@ -162,6 +164,12 @@ def main() -> int:
         help="Hard timeout for a single opencode invocation (seconds).",
     )
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=8,
+        help="How many run/score iterations to execute in parallel.",
+    )
+    parser.add_argument(
         "--tuner-id",
         default=None,
         help="Reuse an existing tuner instead of creating a new one.",
@@ -181,7 +189,9 @@ def main() -> int:
         )
 
         rewards: list[float] = []
-        for step in range(args.steps):
+        lock = threading.Lock()
+
+        def run_step(step: int) -> None:
             # Phase 1: ask for a run assignment, retry on 204.
             assignment: tuple[str, str] | None = None
             while assignment is None:
@@ -204,18 +214,24 @@ def main() -> int:
                 print(f"[driver] step {step}: opencode timed out", file=sys.stderr)
 
             reward = compute_reward(trajectory, expected)
-            rewards.append(reward)
 
             # Phase 3: report the reward.
             submit_reward(client, tuner_id, run_id, reward)
 
-            window = rewards[-32:]
-            avg = sum(window) / len(window)
-            print(
-                f"[driver] step {step:04d} city={datum_id!r:<22} "
-                f"expected={expected:>4}°F reward={reward:.0f} "
-                f"avg32={avg:.3f}"
-            )
+            with lock:
+                rewards.append(reward)
+                window = rewards[-32:]
+                avg = sum(window) / len(window)
+                print(
+                    f"[driver] step {step:04d} city={datum_id!r:<22} "
+                    f"expected={expected:>4}°F reward={reward:.0f} "
+                    f"avg32={avg:.3f}"
+                )
+
+        with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as executor:
+            futures = [executor.submit(run_step, step) for step in range(args.steps)]
+            for future in as_completed(futures):
+                future.result()
 
     return 0
 

@@ -141,6 +141,7 @@ async def create_chat_completion(
         RunNotFoundError,
         RunExpiredError,
         RewardAlreadySetError,
+        MalformedSampleError,
     )
 
     try:
@@ -158,6 +159,15 @@ async def create_chat_completion(
         raise HTTPException(
             status_code=409,
             detail=str(e),
+        )
+    except MalformedSampleError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "malformed_sample",
+                "message": str(e),
+                "raw_content": e.raw_content,
+            },
         )
     except Exception as e:
         logger.exception(

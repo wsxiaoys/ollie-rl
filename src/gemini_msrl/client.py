@@ -268,7 +268,7 @@ class GeminiMsrlClient:
         path = f"v1beta1/projects/{self.project_id}/locations/{self.location}/tuningJobs/{tuning_job_id}:generateContentTuningScope"
 
         if isinstance(request, GenerateContentTuningScopeRequest):
-            json_data = request.model_dump(by_alias=True, exclude_none=True)
+            json_data = request.model_dump(mode="json", by_alias=True, exclude_none=True)
         else:
             json_data = request
 

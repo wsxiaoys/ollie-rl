@@ -14,6 +14,7 @@ class Recipe(BaseModel, frozen=True):
     group_size: int = 16
     num_groups_per_batch: int = 32
     max_off_policy_generation: int = 4
+    malformed_penalty: float = -1.0
 
 
 # ---- Named recipe instances --------------------------------------------

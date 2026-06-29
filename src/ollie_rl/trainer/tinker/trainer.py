@@ -193,8 +193,7 @@ class TinkerTrainer(Trainer):
         )
         full_tokens = prompt_tokens + completion_tokens
         parsed_message, parse_success = self.renderer.parse_response(sequence.tokens)
-        if not parse_success and sequence.stop_reason != "length":
-            raise NotImplementedError("Malformed assistant response or function call")
+        malformed = (not parse_success) and sequence.stop_reason != "length"
         text_content = parsed_message.get("content") or ""
 
         tool_calls: list[Any] = []
@@ -214,7 +213,9 @@ class TinkerTrainer(Trainer):
 
         completion_id = f"cmpl-{uuid.uuid4()}"
         finish_reason = sequence.stop_reason
-        if tool_calls:
+        if malformed:
+            finish_reason = "content_filter"
+        elif tool_calls:
             finish_reason = "tool_calls"
         elif finish_reason == "stop":
             finish_reason = "stop"
@@ -250,6 +251,7 @@ class TinkerTrainer(Trainer):
         return Sample(
             completion=completion,
             policy_generation=self.state.sampler_step,
+            malformed=malformed,
             tokens=full_tokens,
             logprobs=completion_logprobs,
         )

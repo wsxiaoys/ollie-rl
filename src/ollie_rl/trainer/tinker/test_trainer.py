@@ -176,7 +176,7 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tc.function.name, "get_weather")
         self.assertEqual(tc.function.arguments, '{"location": "San Francisco"}')
 
-    async def test_sample_malformed_response_raises_not_implemented_error(self):
+    async def test_sample_malformed_response_sets_malformed_flag(self):
         mock_sequence = MagicMock()
         mock_sequence.tokens = [4, 5, 6]
         mock_sequence.stop_reason = "stop"
@@ -202,12 +202,10 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         )
 
         sample_op = await self.trainer.sample(request)
-        with self.assertRaises(NotImplementedError) as ctx:
-            await sample_op.wait()
+        sample = await sample_op.wait()
 
-        self.assertIn(
-            "Malformed assistant response or function call", str(ctx.exception)
-        )
+        self.assertTrue(sample.malformed)
+        self.assertEqual(sample.completion.choices[0].message.content, "some malformed string")
 
     def _make_example(
         self,

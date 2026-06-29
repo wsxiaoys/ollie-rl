@@ -1,9 +1,10 @@
 from __future__ import annotations
 import asyncio
+import base64
 import logging
 import time
 import uuid
-from typing import List, Optional, Any, Union
+from typing import List, Optional, Any, Union, cast
 
 from pydantic import BaseModel
 
@@ -26,6 +27,8 @@ from gemini_msrl import (
 from google.genai.types import (
     Content,
     Part,
+    FunctionCall,
+    FunctionResponse,
     FunctionDeclaration,
     Schema,
     FinishReason,
@@ -53,6 +56,7 @@ from openai.types.chat import (
 from openai.types.chat.chat_completion_message_tool_call import Function
 from openai.types.chat.chat_completion import Choice
 from openai.types import CompletionUsage
+from openai.types.completion_usage import CompletionTokensDetails
 
 from ollie_rl.types import ChatCompletionRequest
 
@@ -172,28 +176,53 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         tool_calls: list[
             ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
         ] = []
+        message_thought_sig = None
+
         if candidate.content and candidate.content.parts:
             for part in candidate.content.parts:
+                part_sig = getattr(part, "thought_signature", None)
+                part_sig_str = None
+                if part_sig:
+                    if isinstance(part_sig, bytes):
+                        part_sig_str = base64.b64encode(part_sig).decode("utf-8")
+                    elif isinstance(part_sig, str):
+                        part_sig_str = part_sig
+
+                if part_sig_str and not message_thought_sig:
+                    message_thought_sig = part_sig_str
+
                 if part.text:
                     text_parts.append(part.text)
                 if part.function_call:
                     fc = part.function_call
                     call_id = fc.id if fc.id else f"call_{uuid.uuid4().hex}"
                     args_str = json.dumps(fc.args) if fc.args is not None else "{}"
-                    tool_calls.append(
-                        ChatCompletionMessageToolCall(
-                            id=call_id,
-                            type="function",
-                            function=Function(
-                                name=fc.name or "",
-                                arguments=args_str,
-                            ),
-                        )
+                    tc = ChatCompletionMessageToolCall(
+                        id=call_id,
+                        type="function",
+                        function=Function(
+                            name=fc.name or "",
+                            arguments=args_str,
+                        ),
                     )
+                    if part_sig_str:
+                        if tc.model_extra is None:
+                            try:
+                                tc.__pydantic_extra__ = {"extra_content": {"google": {"thought_signature": part_sig_str}}}
+                            except Exception:
+                                pass
+                        else:
+                            tc.model_extra["extra_content"] = {
+                                "google": {
+                                    "thought_signature": part_sig_str
+                                }
+                            }
+                    tool_calls.append(tc)
 
         text_content = "\n".join(text_parts) if text_parts else None
 
         finish_reason = "stop"
+        malformed = False
         if tool_calls:
             finish_reason = "tool_calls"
         elif candidate.finish_reason:
@@ -203,9 +232,8 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
             elif finish_reason == FinishReason.MAX_TOKENS:
                 finish_reason = "length"
             elif finish_reason == FinishReason.MALFORMED_FUNCTION_CALL:
-                raise NotImplementedError(
-                    "Malformed assistant response or function call"
-                )
+                finish_reason = "content_filter"
+                malformed = True
             elif finish_reason in (
                 FinishReason.SAFETY,
                 FinishReason.RECITATION,
@@ -218,17 +246,31 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
             else:
                 finish_reason = "stop"
 
+        message = ChatCompletionMessage(
+            content=text_content,
+            role="assistant",
+            tool_calls=tool_calls if tool_calls else None,
+        )
+        if message_thought_sig:
+            if message.model_extra is None:
+                try:
+                    message.__pydantic_extra__ = {"extra_content": {"google": {"thought_signature": message_thought_sig}}}
+                except Exception:
+                    pass
+            else:
+                message.model_extra["extra_content"] = {
+                    "google": {
+                        "thought_signature": message_thought_sig
+                    }
+                }
+
         completion = ChatCompletion(
             id=candidate_id,
             choices=[
                 Choice(
                     finish_reason=finish_reason,
                     index=0,
-                    message=ChatCompletionMessage(
-                        content=text_content,
-                        role="assistant",
-                        tool_calls=tool_calls if tool_calls else None,
-                    ),
+                    message=message,
                     logprobs=None,
                 )
             ],
@@ -245,11 +287,18 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
                 total_tokens=(response.usage_metadata.total_token_count or 0)
                 if response.usage_metadata
                 else 0,
+                completion_tokens_details=CompletionTokensDetails(
+                    reasoning_tokens=response.usage_metadata.thoughts_token_count,
+                )
+                if response.usage_metadata
+                else None,
             ),
         )
 
         return Sample(
-            completion=completion, policy_generation=int(response.train_step_id)
+            completion=completion,
+            policy_generation=int(response.train_step_id),
+            malformed=malformed,
         )
 
 
@@ -316,12 +365,163 @@ class GeminiMsrlTrainer(Trainer):
             if system_content:
                 system_instruction = Content(parts=[Part(text=system_content)])
 
+        # OpenAI's assistant-message schema declares ``tool_calls`` as
+        # ``Iterable[...]`` which makes pydantic v2 expose it as a lazy
+        # ``ValidatorIterator`` -- safe to consume only once. Materialise it
+        # in place on every message we touch so subsequent passes (and the
+        # lookup we build below) see the same data.
+        for msg in other_messages:
+            if msg.get("role") == "assistant":
+                msg_any = cast(dict[str, Any], msg)
+                if msg_any.get("tool_calls") is not None:
+                    msg_any["tool_calls"] = list(msg_any["tool_calls"])
+
+        # Build a lookup of tool_call_id -> function name from prior
+        # assistant messages so that we can rehydrate `tool` role messages
+        # (which only carry `tool_call_id`) into Gemini FunctionResponse parts
+        # (which require the function name).
+        tool_call_name_by_id: dict[str, str] = {}
+        for msg in other_messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                    fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                    if fn is None:
+                        continue
+                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+                    if tc_id and fn_name:
+                        tool_call_name_by_id[tc_id] = fn_name
+
         contents = []
         for msg in other_messages:
+            role = msg.get("role")
+            if role == "tool":
+                tool_call_id = msg.get("tool_call_id") or ""
+                fn_name = tool_call_name_by_id.get(tool_call_id, "")
+                raw_content = msg.get("content", "")
+                content_str = (
+                    raw_content if isinstance(raw_content, str) else str(raw_content)
+                )
+                # Try to parse as JSON object; fall back to wrapping it in a
+                # {"result": ...} envelope since FunctionResponse.response
+                # must be a dict.
+                response_obj: dict[str, Any]
+                try:
+                    parsed = json.loads(content_str)
+                    response_obj = (
+                        parsed if isinstance(parsed, dict) else {"result": parsed}
+                    )
+                except (ValueError, TypeError):
+                    response_obj = {"result": content_str}
+                contents.append(
+                    Content(
+                        role="user",
+                        parts=[
+                            Part(
+                                function_response=FunctionResponse(
+                                    # Gemini doesn't support id
+                                    # id=tool_call_id or None,
+                                    name=fn_name,
+                                    response=response_obj,
+                                )
+                            )
+                        ],
+                    )
+                )
+                continue
+
+            parts: list[Part] = []
+            content_val = msg.get("content")
+
+            # Extract thought signature from the assistant message if present
+            msg_sig = None
+            if role == "assistant":
+                extra_content = msg.get("extra_content")
+                if isinstance(extra_content, dict):
+                    msg_sig = extra_content.get("google", {}).get("thought_signature")
+
+            if content_val:
+                sig_bytes = None
+                if msg_sig:
+                    if isinstance(msg_sig, str):
+                        try:
+                            sig_bytes = base64.b64decode(msg_sig)
+                        except Exception:
+                            sig_bytes = msg_sig.encode("utf-8")
+                    elif isinstance(msg_sig, bytes):
+                        sig_bytes = msg_sig
+                parts.append(Part(text=str(content_val), thought_signature=sig_bytes))
+
+            if role == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                    fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                    if fn is None:
+                        continue
+                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+                    fn_args = (
+                        fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                    )
+                    args_obj: dict[str, Any]
+                    if isinstance(fn_args, dict):
+                        args_obj = fn_args
+                    elif isinstance(fn_args, str) and fn_args:
+                        try:
+                            parsed_args = json.loads(fn_args)
+                            args_obj = (
+                                parsed_args
+                                if isinstance(parsed_args, dict)
+                                else {"value": parsed_args}
+                            )
+                        except (ValueError, TypeError):
+                            args_obj = {}
+                    else:
+                        args_obj = {}
+
+                    # Extract thought signature from the tool call if present,
+                    # falling back to the message-level signature.
+                    tc_sig = None
+                    if isinstance(tc, dict):
+                        tc_extra = tc.get("extra_content")
+                        if isinstance(tc_extra, dict):
+                            tc_sig = tc_extra.get("google", {}).get("thought_signature")
+                    else:
+                        tc_extra = getattr(tc, "extra_content", None)
+                        if isinstance(tc_extra, dict):
+                            tc_sig = tc_extra.get("google", {}).get("thought_signature")
+
+                    actual_sig = tc_sig or msg_sig or "skip_thought_signature_validator"
+                    sig_bytes = None
+                    if actual_sig:
+                        if isinstance(actual_sig, str):
+                            try:
+                                sig_bytes = base64.b64decode(actual_sig)
+                            except Exception:
+                                sig_bytes = actual_sig.encode("utf-8")
+                        elif isinstance(actual_sig, bytes):
+                            sig_bytes = actual_sig
+
+                    parts.append(
+                        Part(
+                            function_call=FunctionCall(
+                                # Gemini doesn't support id
+                                # id=tc_id or None,
+                                name=fn_name or "",
+                                args=args_obj,
+                            ),
+                            thought_signature=sig_bytes
+                        )
+                    )
+
+            if not parts:
+                # Preserve original behaviour: emit an empty text part rather
+                # than skip the message entirely.
+                parts = [Part(text="")]
+
             contents.append(
                 Content(
-                    role="user" if msg["role"] == "user" else "model",
-                    parts=[Part(text=str(msg.get("content", "")))],
+                    role="model" if role == "assistant" else "user",
+                    parts=parts,
                 )
             )
 

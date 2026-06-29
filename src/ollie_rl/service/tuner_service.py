@@ -42,6 +42,12 @@ class RewardAlreadySetError(Exception):
     pass
 
 
+class MalformedSampleError(Exception):
+    def __init__(self, message: str, raw_content: Optional[str] = None):
+        super().__init__(message)
+        self.raw_content = raw_content
+
+
 class _DbStateStore(StateStore):
     """
     StateStore implementation backed by the `tuners` table.
@@ -71,6 +77,87 @@ class _DbStateStore(StateStore):
                     .values(trainer_state=trainer_state)
                 )
         logger.debug(f"Persisted state for tuner {self._tuner_id}")
+
+
+def _pick_datum(
+    datum_pool: List[str],
+    runs: List[RunModel],
+    recipe: Recipe,
+) -> Optional[str]:
+    """Pick the next datum to dispense a run for.
+
+    Pure scheduling helper (no service/DB state) so it can be reasoned about
+    and unit-tested in isolation.
+
+    Uses a greedy "most-full-first" strategy via tiered priority. Only runs
+    that are still *consumable* by a future train step are counted, i.e.
+    not yet trained (``trained_count <= 0``), not requeued
+    (``rejected_count <= 0``), and either rewarded or pending (not expired).
+    This mirrors ``TunerService._collect_consumable_batch`` so a datum whose
+    group was already trained resets to "fresh" for the next generation.
+
+    1. Started-but-incomplete groups (0 < count < group_size) come first,
+       ordered by highest count, so the closest-to-complete group finishes
+       ASAP. This minimizes the number of in-flight partial groups and gets
+       complete groups ready for training as soon as possible.
+    2. Fresh datums (count == 0) come next, so we start new distinct groups
+       before over-producing existing ones. Among fresh datums the
+       least-trained one wins, so never-trained datums are sampled before
+       re-sampling datums that already contributed a trained group (better
+       dataset coverage).
+    3. Saturated datums (count >= group_size) come last, and only when
+       off-policy samples are allowed (``max_off_policy_generation > 0``):
+       the surplus runs can be consumed by a later train step within the
+       off-policy window. Among saturated datums we prefer the
+       least-saturated to spread the surplus. When off-policy is disabled
+       the surplus would just be requeued, so saturated datums are excluded
+       and ``None`` is returned if nothing else is available.
+    """
+    if not datum_pool:
+        return None
+
+    group_size = recipe.group_size
+    allow_surplus = recipe.max_off_policy_generation > 0
+
+    now = utcnow()
+    score = {d: 0 for d in datum_pool}
+    trained = {d: 0 for d in datum_pool}
+    for r in runs:
+        if r.datum_id not in score:
+            continue
+        if r.trained_count > 0:
+            # Track prior training exposure for the fresh-tier tie-break.
+            trained[r.datum_id] += r.trained_count
+            continue
+        if r.rejected_count > 0:
+            continue
+        has_reward = r.reward is not None
+        is_pending = r.reward is None and r.expires_at > now
+        if has_reward or is_pending:
+            score[r.datum_id] += 1
+
+    def priority(datum: str) -> Tuple[int, int]:
+        count = score[datum]
+        if 0 < count < group_size:
+            # Started but incomplete: finish closest-to-complete first.
+            return (2, count)
+        if count == 0:
+            # Fresh: start new distinct groups before over-producing, and
+            # prefer the least-trained datum so never-trained ones go first.
+            return (1, -trained[datum])
+        # Saturated (count >= group_size): the group is already complete, so
+        # any further runs are surplus. Only dispatchable as off-policy
+        # samples for a later train step; spread across the least-saturated.
+        if allow_surplus:
+            return (0, -count)
+        # Strictly on-policy: surplus would be requeued, so don't dispatch.
+        return (-1, 0)
+
+    best = max(datum_pool, key=priority)
+    if priority(best)[0] < 0:
+        # All datums saturated and off-policy surplus is not allowed.
+        return None
+    return best
 
 
 class TunerService:
@@ -295,6 +382,19 @@ class TunerService:
                 request=request,
                 response=sample.completion,
             )
+            if sample.malformed:
+                recipe = await self._recipe_for(tuner_id)
+                malformed_penalty = recipe.malformed_penalty
+                await self.update_reward(
+                    tuner_id, run_id, reward=malformed_penalty
+                )
+                raw_content = None
+                if sample.completion.choices and sample.completion.choices[0].message:
+                    raw_content = sample.completion.choices[0].message.content
+                raise MalformedSampleError(
+                    f"Malformed sample on run {run_id}; reward set to {malformed_penalty}",
+                    raw_content=raw_content,
+                )
 
         return sample.completion
 
@@ -328,12 +428,14 @@ class TunerService:
                     policy_generation=policy_generation,
                     tokens=tokens,
                     logprobs=logprobs,
-                    request=request.model_dump(),
-                    response=response.model_dump(),
+                    request=request.model_dump(mode="json"),
+                    response=response.model_dump(mode="json"),
                 )
                 session.add(db_completion)
 
-    async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
+    async def update_reward(
+        self, tuner_id: str, run_id: str, reward: float
+    ) -> None:
         """
         Record or update the reward for a specific run.
         """
@@ -400,8 +502,6 @@ class TunerService:
         self, tuner_id: str, session, trainer: Trainer
     ) -> Tuple[List[Example], List[str]]:
         recipe = await self._recipe_for(tuner_id)
-        if recipe is None:
-            return [], []
 
         result = await session.execute(
             select(RunModel).where(
@@ -541,10 +641,11 @@ class TunerService:
         """
         # Ensure trainer is initialized.
         _trainer = await self._get_trainer(tuner_id)
+        recipe = await self._recipe_for(tuner_id)
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
-        datum_id = self._pick_datum(datum_pool, runs)
+        datum_id = _pick_datum(datum_pool, runs, recipe)
         if datum_id is None:
             return None
 
@@ -565,14 +666,17 @@ class TunerService:
             expires_at=run_record.expires_at,
         )
 
-    async def _recipe_for(self, tuner_id: str) -> Optional[Recipe]:
+    async def _recipe_for(self, tuner_id: str) -> Recipe:
         async with self.async_session() as session:
             result = await session.execute(
                 select(TunerModel).where(TunerModel.id == tuner_id)
             )
             record = result.scalar_one_or_none()
-            if record:
-                return Cookbook.get(record.recipe)
+            if not record:
+                raise TunerNotFoundError(
+                    f"Tuner '{tuner_id}' not found or not initialized."
+                )
+            return Cookbook.get(record.recipe)
 
     async def _load_pool_and_runs(
         self, tuner_id: str, session
@@ -587,21 +691,3 @@ class TunerService:
         )
         runs = list(runs_result.scalars().all())
         return datum_pool, runs
-
-    def _pick_datum(
-        self,
-        datum_pool: List[str],
-        runs: List[RunModel],
-    ) -> Optional[str]:
-        now = utcnow()
-        score = {d: 0 for d in datum_pool}
-        for r in runs:
-            if r.datum_id not in score:
-                continue
-            if r.rejected_count > 0:
-                continue
-            has_reward = r.reward is not None
-            is_pending = r.reward is None and r.expires_at > now
-            if has_reward or is_pending:
-                score[r.datum_id] += 1
-        return min(score, key=lambda d: score[d])
