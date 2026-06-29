@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ollie/tinker",
+  "provider": {
+    "ollie": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ollie-rl",
+      "options": {
+        "baseURL": "http://localhost:8000/openai/v1",
+        "apiKey": "any-key",
+        "headers": {
+          "X-Tuner-Id": "{env:TUNER_ID}",
+          "X-Run-Id": "{env:RUN_ID}"
+        }
+      },
+      "models": {
+        "tinker": {}
+      }
+    }
+  }
+}
