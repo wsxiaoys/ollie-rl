@@ -347,6 +347,24 @@ class GeminiMsrlTrainer(Trainer):
     def tuning_job_name(self) -> str:
         return self.state.tuning_job_name
 
+    async def is_training(self) -> bool:
+        """Whether a train-step LRO is currently in flight.
+
+        `train_step` persists the op name (a `str`) the moment it submits the
+        LRO, but the field is only swapped to a `TrainStepResponse` if the
+        in-process background poll observes completion. That poll is lost on a
+        restart, so a lingering `str` `last_train_op` does NOT by itself mean
+        the op is still running. Confirm against the backend via `peek()`
+        before reporting in-flight.
+        """
+        op = self.state.last_train_op
+        if not isinstance(op, str):
+            return False
+        # peek() returns True once the op is terminal, so still-training is
+        # the negation.
+        training_op = GeminiMsrlTrainingOp(self.client, op)
+        return not await training_op.peek()
+
     async def _persist_state(self) -> None:
         await self.state_store.save(self.state.model_dump_json())
 

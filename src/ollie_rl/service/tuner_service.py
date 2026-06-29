@@ -290,6 +290,7 @@ class TunerService:
             policy_generation=policy_generation,
             trainer_state=state_data,
             progress=progress,
+            is_training=await trainer.is_training(),
         )
 
     async def get_progress(self, tuner_id: str) -> TrainingProgress:

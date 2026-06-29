@@ -75,6 +75,17 @@ class Trainer(ABC):
     @abstractmethod
     async def train_step(self, examples: List[Example]) -> TrainOp: ...
 
+    async def is_training(self) -> bool:
+        """Whether an asynchronous train op is currently in flight.
+
+        Default is ``False`` so backends that train inline (e.g. Tinker,
+        Fake) need not implement it. Backends with an asynchronous, pollable
+        train op should override this to surface an in-flight indicator to
+        the dashboard. May poll the backend to confirm the op's terminal
+        state, so callers should treat it as potentially I/O-bound.
+        """
+        return False
+
 
 class TrainerFactory(ABC):
     """

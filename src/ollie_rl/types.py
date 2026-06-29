@@ -124,6 +124,11 @@ class GetTunerResponse(BaseModel):
     policy_generation: int
     trainer_state: Optional[Any] = None
     progress: Optional[TrainingProgress] = None
+    # True while an asynchronous train op is in flight. Backends that train
+    # inline (or don't track ops) always report False. The completed step is
+    # already available via `policy_generation`, so we only expose the
+    # in-flight flag here.
+    is_training: bool = False
 
 
 class TunerItem(BaseModel):

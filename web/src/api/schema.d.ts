@@ -487,6 +487,11 @@ export interface components {
             /** Trainer State */
             trainer_state?: unknown | null;
             progress?: components["schemas"]["TrainingProgress"] | null;
+            /**
+             * Is Training
+             * @default false
+             */
+            is_training: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {

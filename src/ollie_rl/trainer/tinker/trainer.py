@@ -116,6 +116,7 @@ class TinkerTrainer(Trainer):
     state_store: StateStore
     _sampling_client: tinker.SamplingClient
     _training_client: tinker.TrainingClient
+    _is_training: bool
 
     def __init__(
         self,
@@ -132,6 +133,10 @@ class TinkerTrainer(Trainer):
         self.state_store = state_store
         self._sampling_client = sampling_client
         self._training_client = training_client
+        # Tinker drives forward_backward -> optim_step -> sampler promotion
+        # inline inside `train_step` (no pollable remote LRO), so we expose
+        # in-flight status via a simple flag toggled around that work.
+        self._is_training = False
 
         # Set up renderer and tokenizer
         tokenizer = self._sampling_client.get_tokenizer()
@@ -260,6 +265,16 @@ class TinkerTrainer(Trainer):
     def policy_generation(self) -> int:
         return self.state.train_step
 
+    async def is_training(self) -> bool:
+        """Whether a train step is currently running.
+
+        Unlike LRO-style backends, Tinker awaits its entire training
+        pipeline inline inside :meth:`train_step`, so there is no remote
+        op to poll. We simply report the locally-tracked flag, which is
+        set for the duration of the inline work.
+        """
+        return self._is_training
+
     def _examples_to_data(self, examples: List[Example]) -> List[tinker.Datum]:
         """
         Groups examples into trajectory-level tinker.Datums by reconstructing
@@ -311,28 +326,32 @@ class TinkerTrainer(Trainer):
                 "ChatCompletionModel."
             )
 
-        # 3. forward_backward + optim_step.
-        loss_fn_config = {"kl_penalty_coef": self.config.kl_penalty_coef}
-        # `loss_fn` is a tinker Literal type; we hold it as `str` on the
-        # config (lets us accept future loss kinds without bumping the
-        # config schema) and cast at the call boundary.
-        loss_fn: Any = self.config.loss_fn
-        fb_future = await self._training_client.forward_backward_async(
-            data,
-            loss_fn,
-            loss_fn_config=loss_fn_config,
-        )
-        await fb_future
-        opt_future = await self._training_client.optim_step_async(
-            tinker.AdamParams(learning_rate=self.config.learning_rate)
-        )
-        await opt_future
+        self._is_training = True
+        try:
+            # 3. forward_backward + optim_step.
+            loss_fn_config = {"kl_penalty_coef": self.config.kl_penalty_coef}
+            # `loss_fn` is a tinker Literal type; we hold it as `str` on the
+            # config (lets us accept future loss kinds without bumping the
+            # config schema) and cast at the call boundary.
+            loss_fn: Any = self.config.loss_fn
+            fb_future = await self._training_client.forward_backward_async(
+                data,
+                loss_fn,
+                loss_fn_config=loss_fn_config,
+            )
+            await fb_future
+            opt_future = await self._training_client.optim_step_async(
+                tinker.AdamParams(learning_rate=self.config.learning_rate)
+            )
+            await opt_future
 
-        # 4. Advance step counter; promote sampler at cadence.
-        self.state.train_step += 1
-        if self.state.train_step % self.config.sampler_promotion_every == 0:
-            await self._promote_sampler()
-        await self._persist_state()
+            # 4. Advance step counter; promote sampler at cadence.
+            self.state.train_step += 1
+            if self.state.train_step % self.config.sampler_promotion_every == 0:
+                await self._promote_sampler()
+            await self._persist_state()
+        finally:
+            self._is_training = False
 
         return TinkerTrainOp()
 

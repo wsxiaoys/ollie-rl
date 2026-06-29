@@ -34,6 +34,7 @@ export function TunerDetailPage() {
   if (!data) return null;
 
   const { recipe, progress } = data;
+  const isTraining = data.is_training;
 
   return (
     <div className="page">
@@ -46,7 +47,15 @@ export function TunerDetailPage() {
           <div className="detail-header__meta">
             <Mono>{data.tuner_id}</Mono>
             <Badge tone="info">{data.trainer}</Badge>
-            <Badge tone="good">gen {data.policy_generation}</Badge>
+            <Badge tone="good">
+              gen {data.policy_generation}
+              {isTraining && (
+                <span className="badge-training">
+                  <span className="training-now__dot" />
+                  training…
+                </span>
+              )}
+            </Badge>
             {isFetching && <span className="live-dot">● live</span>}
           </div>
         </div>

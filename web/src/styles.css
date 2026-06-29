@@ -159,6 +159,35 @@ body {
   font-size: 12px;
 }
 
+.badge-training {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.training-now__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+  animation: training-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes training-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
 /* ---- Tables ---- */
 .table {
   width: 100%;
