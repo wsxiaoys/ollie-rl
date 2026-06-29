@@ -306,6 +306,7 @@ class GeminiMsrlTrainingOp(GeminiMsrlOp, TrainOp):
     async def wait(self) -> None:
         completed_op = await self.client.wait_for_operation(
             self.op_name,
+            timeout_seconds=600,
         )
 
         response = completed_op.get_response_as(TrainStepResponse)

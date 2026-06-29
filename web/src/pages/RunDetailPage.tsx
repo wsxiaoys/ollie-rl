@@ -1,0 +1,86 @@
+import { useQuery } from "@tanstack/react-query";
+import { Link, useParams } from "@tanstack/react-router";
+import { useState } from "react";
+import { runQuery } from "../api/queries";
+import { ChatTranscript } from "../components/ChatTranscript";
+import { RunStatusBadge } from "../components/RunStatusBadge";
+import { Mono, Panel, StatCard } from "../components/ui";
+
+export function RunDetailPage() {
+  const { tunerId, runId } = useParams({
+    from: "/tuners/$tunerId/runs/$runId",
+  });
+  const { data, isLoading, isError, error, isFetching } = useQuery(
+    runQuery(tunerId, runId),
+  );
+  const [showToolless, setShowToolless] = useState(false);
+
+  if (isLoading) {
+    return <div className="placeholder">Loading run…</div>;
+  }
+  if (isError) {
+    return (
+      <div className="placeholder placeholder--error">
+        Failed to load run: {(error as Error).message}
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const { run, completions } = data;
+
+  return (
+    <div className="page">
+      <header className="page__header">
+        <Link
+          to="/runs"
+          search={{ tuner: tunerId }}
+          className="link link--back"
+        >
+          ← Runs
+        </Link>
+        <h1>Run detail</h1>
+        <div className="detail-header__meta">
+          <Mono>{run.run_id}</Mono>
+          <RunStatusBadge status={run.status} />
+          {isFetching && <span className="live-dot">● live</span>}
+        </div>
+      </header>
+
+      <div className="kpi-strip kpi-strip--runs">
+        <StatCard label="datum" value={<Mono>{run.datum_id}</Mono>} />
+        <StatCard
+          label="reward"
+          value={run.reward === null ? "—" : run.reward.toFixed(3)}
+          tone={run.reward === null ? "muted" : "good"}
+        />
+        <StatCard label="completions" value={run.completion_count} />
+        <StatCard label="trained" value={run.trained_count} />
+        <StatCard
+          label="rejected"
+          value={run.rejected_count}
+          tone={run.rejected_count > 0 ? "warn" : "default"}
+        />
+      </div>
+
+      <Panel
+        title="Chat completions"
+        right={
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={showToolless}
+              onChange={(e) => setShowToolless(e.target.checked)}
+            />
+            Show tool-less trajectories
+          </label>
+        }
+      >
+        <ChatTranscript
+          completions={completions}
+          showToollessTrajectories={showToolless}
+        />
+      </Panel>
+    </div>
+  );
+}

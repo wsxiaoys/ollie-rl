@@ -7,6 +7,8 @@ import {
 import { RootLayout } from "./components/RootLayout";
 import { TunerListPage } from "./pages/TunerListPage";
 import { TunerDetailPage } from "./pages/TunerDetailPage";
+import { RunListPage } from "./pages/RunListPage";
+import { RunDetailPage } from "./pages/RunDetailPage";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -32,10 +34,27 @@ const tunerDetailRoute = createRoute({
   component: TunerDetailPage,
 });
 
+const runListRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/runs",
+  validateSearch: (search: Record<string, unknown>): { tuner?: string } => ({
+    tuner: typeof search.tuner === "string" ? search.tuner : undefined,
+  }),
+  component: RunListPage,
+});
+
+const runDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tuners/$tunerId/runs/$runId",
+  component: RunDetailPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   tunersRoute,
   tunerDetailRoute,
+  runListRoute,
+  runDetailRoute,
 ]);
 
 export const router = createRouter({

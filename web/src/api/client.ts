@@ -1,4 +1,9 @@
-import type { GetTunerResponse, ListTunersResponse } from "./types";
+import type {
+  GetTunerResponse,
+  ListRunsResponse,
+  ListTunersResponse,
+  RunDetailResponse,
+} from "./types";
 
 // The dashboard is always served same-origin as the API: in prod FastAPI serves
 // both the built SPA and the API; in dev FastAPI reverse-proxies /app to the
@@ -38,5 +43,20 @@ export function listTuners(): Promise<ListTunersResponse> {
 export function getTuner(tunerId: string): Promise<GetTunerResponse> {
   return get<GetTunerResponse>(
     `/tuners/${encodeURIComponent(tunerId)}?progress=true`,
+  );
+}
+
+export function listRuns(tunerId: string): Promise<ListRunsResponse> {
+  return get<ListRunsResponse>(
+    `/tuners/${encodeURIComponent(tunerId)}/runs`,
+  );
+}
+
+export function getRun(
+  tunerId: string,
+  runId: string,
+): Promise<RunDetailResponse> {
+  return get<RunDetailResponse>(
+    `/tuners/${encodeURIComponent(tunerId)}/runs/${encodeURIComponent(runId)}`,
   );
 }

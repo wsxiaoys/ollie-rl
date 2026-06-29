@@ -14,6 +14,8 @@ from ollie_rl.types import (
     PutRewardResponse,
     GetTunerResponse,
     ListTunersResponse,
+    ListRunsResponse,
+    RunDetailResponse,
 )
 from ollie_rl.db import init_db, shutdown_db
 from ollie_rl.service import TunerService
@@ -126,6 +128,43 @@ async def get_tuner(tuner_id: str, progress: bool = False) -> GetTunerResponse:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to fetch details for tuner '{tuner_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tuners/{tuner_id}/runs", response_model=ListRunsResponse)
+async def list_runs(tuner_id: str) -> ListRunsResponse:
+    """
+    List all runs for a tuner (newest first) with their derived lifecycle
+    status and recorded chat-completion counts.
+    """
+    from ollie_rl.service.tuner_service import TunerNotFoundError
+
+    try:
+        runs = await services.tuner.list_runs(tuner_id)
+        return ListRunsResponse(runs=runs)
+    except TunerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to list runs for tuner '{tuner_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tuners/{tuner_id}/runs/{run_id}", response_model=RunDetailResponse)
+async def get_run(tuner_id: str, run_id: str) -> RunDetailResponse:
+    """
+    Return a single run and its chat completions (oldest first) so the full
+    request/response transcript can be visualized.
+    """
+    from ollie_rl.service.tuner_service import RunNotFoundError
+
+    try:
+        return await services.tuner.get_run_details(tuner_id, run_id)
+    except RunNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(
+            f"Failed to fetch run '{run_id}' for tuner '{tuner_id}'"
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 

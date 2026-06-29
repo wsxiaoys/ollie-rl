@@ -59,13 +59,24 @@ export function TunerDetailPage() {
             {isFetching && <span className="live-dot">● live</span>}
           </div>
         </div>
-        <div className="recipe-chips">
-          <span className="chip">group_size {recipe.group_size}</span>
-          <span className="chip">groups/batch {recipe.num_groups_per_batch}</span>
-          <span className="chip">
-            off-policy ≤ {recipe.max_off_policy_generation}
-          </span>
-          <span className="chip">malformed {recipe.malformed_penalty}</span>
+        <div className="detail-header__aside">
+          <Link
+            to="/runs"
+            search={{ tuner: data.tuner_id }}
+            className="link"
+          >
+            View runs →
+          </Link>
+          <div className="recipe-chips">
+            <span className="chip">group_size {recipe.group_size}</span>
+            <span className="chip">
+              groups/batch {recipe.num_groups_per_batch}
+            </span>
+            <span className="chip">
+              off-policy ≤ {recipe.max_off_policy_generation}
+            </span>
+            <span className="chip">malformed {recipe.malformed_penalty}</span>
+          </div>
         </div>
       </header>
 

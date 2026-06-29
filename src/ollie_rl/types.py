@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from typing import List, Literal, Optional, Dict, Any
 from openai.types.chat import (
+    ChatCompletion,
     ChatCompletionFunctionTool,
     ChatCompletionMessageParam,
 )
@@ -140,3 +141,42 @@ class TunerItem(BaseModel):
 
 class ListTunersResponse(BaseModel):
     tuners: List[TunerItem]
+
+
+# Lifecycle status of a run, derived from its bookkeeping columns. The labels
+# are mutually exclusive and assigned by priority in `TunerService`:
+# trained > rejected > rewarded > in_flight > expired.
+RunStatus = Literal["in_flight", "expired", "rewarded", "trained", "rejected"]
+
+
+class RunItem(BaseModel):
+    """Summary of a single run (one attempt at a datum) under a tuner."""
+
+    run_id: str
+    datum_id: str
+    status: RunStatus
+    reward: Optional[float]
+    trained_count: int
+    rejected_count: int
+    completion_count: int
+    created_at: datetime
+    expires_at: datetime
+
+
+class ListRunsResponse(BaseModel):
+    runs: List[RunItem]
+
+
+class ChatCompletionItem(BaseModel):
+    """A single recorded LLM request/response inside a run."""
+
+    id: str
+    policy_generation: int
+    created_at: datetime
+    request: ChatCompletionRequest
+    response: ChatCompletion
+
+
+class RunDetailResponse(BaseModel):
+    run: RunItem
+    completions: List[ChatCompletionItem]

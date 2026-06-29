@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import math
-from datetime import timedelta
+import uuid
+from datetime import datetime, timedelta
 from typing import Dict, List, Literal, Optional, Tuple
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from ollie_rl.cookbook import Cookbook, Recipe
 from ollie_rl.trainer import Trainer, StateStore, Example
@@ -19,6 +20,7 @@ from ollie_rl.types import (
     RolloutRun,
     DispenseRun,
     ChatCompletionRequest,
+    ChatCompletionItem,
     GetTunerResponse,
     TunerItem,
     TrainingProgress,
@@ -27,6 +29,9 @@ from ollie_rl.types import (
     DatumCoverage,
     DatumPool,
     RunProgress,
+    RunItem,
+    RunStatus,
+    RunDetailResponse,
     NextPick,
 )
 
@@ -206,6 +211,38 @@ def _pick_datum(
         # All datums saturated and off-policy surplus is not allowed.
         return None
     return best
+
+
+def _run_status(run: RunModel, now: datetime) -> RunStatus:
+    """Derive a single mutually-exclusive lifecycle label for a run.
+
+    Priority mirrors how the bookkeeping columns accumulate: a run that
+    has been trained or requeued (rejected) takes precedence over its
+    reward/lease state.
+    """
+    if run.trained_count > 0:
+        return "trained"
+    if run.rejected_count > 0:
+        return "rejected"
+    if run.reward is not None:
+        return "rewarded"
+    if run.expires_at > now:
+        return "in_flight"
+    return "expired"
+
+
+def _build_run_item(run: RunModel, completion_count: int, now: datetime) -> RunItem:
+    return RunItem(
+        run_id=run.id,
+        datum_id=run.datum_id,
+        status=_run_status(run, now),
+        reward=run.reward,
+        trained_count=run.trained_count,
+        rejected_count=run.rejected_count,
+        completion_count=completion_count,
+        created_at=run.created_at,
+        expires_at=run.expires_at,
+    )
 
 
 class TunerService:
@@ -457,6 +494,83 @@ class TunerService:
 
         return tuners_list
 
+    async def list_runs(self, tuner_id: str) -> List[RunItem]:
+        """
+        List all runs for a tuner (newest first), each with its derived
+        lifecycle status and the number of recorded chat completions.
+        """
+        async with self.async_session() as session:
+            exists = await session.execute(
+                select(TunerModel.id).where(TunerModel.id == tuner_id)
+            )
+            if exists.scalar_one_or_none() is None:
+                raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+
+            runs_result = await session.execute(
+                select(RunModel)
+                .where(RunModel.tuner_id == tuner_id)
+                .order_by(RunModel.created_at.desc())
+            )
+            runs = list(runs_result.scalars().all())
+
+            counts: Dict[str, int] = {}
+            if runs:
+                count_result = await session.execute(
+                    select(ChatCompletionModel.run_id, func.count())
+                    .where(ChatCompletionModel.tuner_id == tuner_id)
+                    .group_by(ChatCompletionModel.run_id)
+                )
+                counts = {
+                    run_id: count
+                    for run_id, count in count_result.all()
+                    if run_id is not None
+                }
+
+        now = utcnow()
+        return [_build_run_item(r, counts.get(r.id, 0), now) for r in runs]
+
+    async def get_run_details(self, tuner_id: str, run_id: str) -> RunDetailResponse:
+        """
+        Return a single run plus its chat completions (oldest first) so the
+        full request/response transcript can be visualized.
+        """
+        async with self.async_session() as session:
+            run_result = await session.execute(
+                select(RunModel).where(
+                    RunModel.tuner_id == tuner_id,
+                    RunModel.id == run_id,
+                )
+            )
+            run = run_result.scalar_one_or_none()
+            if run is None:
+                raise RunNotFoundError(
+                    f"Run '{run_id}' not found under tuner '{tuner_id}'"
+                )
+
+            comp_result = await session.execute(
+                select(ChatCompletionModel)
+                .where(
+                    ChatCompletionModel.tuner_id == tuner_id,
+                    ChatCompletionModel.run_id == run_id,
+                )
+                .order_by(ChatCompletionModel.created_at.asc())
+            )
+            completions = list(comp_result.scalars().all())
+
+        now = utcnow()
+        run_item = _build_run_item(run, len(completions), now)
+        completion_items = [
+            ChatCompletionItem(
+                id=c.id,
+                policy_generation=c.policy_generation,
+                created_at=c.created_at,
+                request=ChatCompletionRequest.model_validate(c.request),
+                response=ChatCompletion.model_validate(c.response),
+            )
+            for c in completions
+        ]
+        return RunDetailResponse(run=run_item, completions=completion_items)
+
     async def _materialize(self, tuner_id: str) -> Trainer:
         async with self.async_session() as session:
             result = await session.execute(
@@ -570,8 +684,9 @@ class TunerService:
         # Record completion metadata
         if run_id is not None:
             assert datum_id is not None
+            completion_id = f"cmpl_{uuid.uuid4()}"
             await self.record_chat_completion(
-                completion_id=sample.completion.id,
+                completion_id=completion_id,
                 tuner_id=tuner_id,
                 run_id=run_id,
                 datum_id=datum_id,
@@ -821,17 +936,27 @@ class TunerService:
 
         # Create Examples for Trainer.train_step. `tokens` / `logprobs`
         # are decoded transparently by the model-layer TypeDecorators.
-        examples = [
-            Example(
-                chat_completion_id=c.id,
-                advantage=run_advantages[c.run_id],
-                policy_generation=c.policy_generation,
-                tokens=c.tokens,
-                logprobs=c.logprobs,
+        #
+        # `chat_completion_id` must be the *backend-issued* candidate id (what
+        # gemini_msrl replays via `candidate_id`), which is the completion's
+        # own id captured at sample time and persisted in the `response`
+        # payload. The row primary key (`c.id`) is a synthetic internal id and
+        # must NOT leak to a training backend; fall back to it only if the
+        # response somehow lacks an id.
+        examples = []
+        for c in completions:
+            if c.run_id not in run_advantages:
+                continue
+            candidate_id = c.response.get("id") if isinstance(c.response, dict) else None
+            examples.append(
+                Example(
+                    chat_completion_id=candidate_id or c.id,
+                    advantage=run_advantages[c.run_id],
+                    policy_generation=c.policy_generation,
+                    tokens=c.tokens,
+                    logprobs=c.logprobs,
+                )
             )
-            for c in completions
-            if c.run_id in run_advantages
-        ]
 
         return examples, run_ids
 

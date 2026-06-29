@@ -50,6 +50,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tuners/{tuner_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runs
+         * @description List all runs for a tuner (newest first) with their derived lifecycle
+         *     status and recorded chat-completion counts.
+         */
+        get: operations["list_runs_tuners__tuner_id__runs_get"];
+        put?: never;
+        /**
+         * Dispense Run
+         * @description Dispense a run assignment for the tuner.
+         *     Returns 200 OK with run_id, datum_id, expires_at.
+         *     Or 204 No Content with Retry-After header if no run can be dispensed.
+         */
+        post: operations["dispense_run_tuners__tuner_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tuners/{tuner_id}/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run
+         * @description Return a single run and its chat completions (oldest first) so the full
+         *     request/response transcript can be visualized.
+         */
+        get: operations["get_run_tuners__tuner_id__runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openai/v1/chat/completions": {
         parameters: {
             query?: never;
@@ -68,28 +116,6 @@ export interface paths {
          *     simulated SSE stream so that OpenAI-compatible clients keep working.
          */
         post: operations["create_chat_completion_openai_v1_chat_completions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tuners/{tuner_id}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Dispense Run
-         * @description Dispense a run assignment for the tuner.
-         *     Returns 200 OK with run_id, datum_id, expires_at.
-         *     Or 204 No Content with Retry-After header if no run can be dispensed.
-         */
-        post: operations["dispense_run_tuners__tuner_id__runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -121,6 +147,36 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * Annotation
+         * @description A URL citation when using web search.
+         */
+        Annotation: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "url_citation";
+            url_citation: components["schemas"]["AnnotationURLCitation"];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AnnotationURLCitation
+         * @description A URL citation when using web search.
+         */
+        AnnotationURLCitation: {
+            /** End Index */
+            end_index: number;
+            /** Start Index */
+            start_index: number;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * Audio
          * @description Data about a previous audio response from the model.
          *     [Learn more](https://platform.openai.com/docs/guides/audio).
@@ -140,10 +196,37 @@ export interface components {
             groups_in_progress: number;
         };
         /**
+         * ChatCompletion
+         * @description Represents a chat completion response returned by model, based on the provided input.
+         */
+        ChatCompletion: {
+            /** Id */
+            id: string;
+            /** Choices */
+            choices: components["schemas"]["Choice"][];
+            /** Created */
+            created: number;
+            /** Model */
+            model: string;
+            /**
+             * Object
+             * @constant
+             */
+            object: "chat.completion";
+            moderation?: components["schemas"]["Moderation"] | null;
+            /** Service Tier */
+            service_tier?: ("auto" | "default" | "flex" | "scale" | "priority") | null;
+            /** System Fingerprint */
+            system_fingerprint?: string | null;
+            usage?: components["schemas"]["CompletionUsage"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * ChatCompletionAssistantMessageParam
          * @description Messages sent by the model in response to user messages.
          */
-        ChatCompletionAssistantMessageParam: {
+        "ChatCompletionAssistantMessageParam-Input": {
             /**
              * Role
              * @constant
@@ -152,13 +235,51 @@ export interface components {
             audio?: components["schemas"]["Audio"] | null;
             /** Content */
             content?: string | (components["schemas"]["ChatCompletionContentPartTextParam"] | components["schemas"]["ChatCompletionContentPartRefusalParam"])[] | null;
-            function_call?: components["schemas"]["FunctionCall"] | null;
+            function_call?: components["schemas"]["FunctionCall-Input"] | null;
             /** Name */
             name?: string;
             /** Refusal */
             refusal?: string | null;
             /** Tool Calls */
-            tool_calls?: (components["schemas"]["ChatCompletionMessageFunctionToolCallParam"] | components["schemas"]["ChatCompletionMessageCustomToolCallParam"])[];
+            tool_calls?: (components["schemas"]["ChatCompletionMessageFunctionToolCallParam-Input"] | components["schemas"]["ChatCompletionMessageCustomToolCallParam-Input"])[];
+        };
+        /**
+         * ChatCompletionAssistantMessageParam
+         * @description Messages sent by the model in response to user messages.
+         */
+        "ChatCompletionAssistantMessageParam-Output": {
+            /**
+             * Role
+             * @constant
+             */
+            role: "assistant";
+            audio?: components["schemas"]["Audio"] | null;
+            /** Content */
+            content?: string | (components["schemas"]["ChatCompletionContentPartTextParam"] | components["schemas"]["ChatCompletionContentPartRefusalParam"])[] | null;
+            function_call?: components["schemas"]["openai__types__chat__chat_completion_assistant_message_param__FunctionCall"] | null;
+            /** Name */
+            name?: string;
+            /** Refusal */
+            refusal?: string | null;
+            /** Tool Calls */
+            tool_calls?: (components["schemas"]["ChatCompletionMessageFunctionToolCallParam-Output"] | components["schemas"]["ChatCompletionMessageCustomToolCallParam-Output"])[];
+        };
+        /**
+         * ChatCompletionAudio
+         * @description If the audio output modality is requested, this object contains data
+         *     about the audio response from the model. [Learn more](https://platform.openai.com/docs/guides/audio).
+         */
+        ChatCompletionAudio: {
+            /** Id */
+            id: string;
+            /** Data */
+            data: string;
+            /** Expires At */
+            expires_at: number;
+            /** Transcript */
+            transcript: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * ChatCompletionContentPartImageParam
@@ -251,13 +372,69 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * ChatCompletionItem
+         * @description A single recorded LLM request/response inside a run.
+         */
+        ChatCompletionItem: {
+            /** Id */
+            id: string;
+            /** Policy Generation */
+            policy_generation: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            request: components["schemas"]["ChatCompletionRequest-Output"];
+            response: components["schemas"]["ChatCompletion"];
+        };
+        /**
+         * ChatCompletionMessage
+         * @description A chat completion message generated by the model.
+         */
+        ChatCompletionMessage: {
+            /** Content */
+            content?: string | null;
+            /** Refusal */
+            refusal?: string | null;
+            /**
+             * Role
+             * @constant
+             */
+            role: "assistant";
+            /** Annotations */
+            annotations?: components["schemas"]["Annotation"][] | null;
+            audio?: components["schemas"]["ChatCompletionAudio"] | null;
+            function_call?: components["schemas"]["openai__types__chat__chat_completion_message__FunctionCall"] | null;
+            /** Tool Calls */
+            tool_calls?: (components["schemas"]["ChatCompletionMessageFunctionToolCall"] | components["schemas"]["ChatCompletionMessageCustomToolCall"])[] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ChatCompletionMessageCustomToolCall
+         * @description A call to a custom tool created by the model.
+         */
+        ChatCompletionMessageCustomToolCall: {
+            /** Id */
+            id: string;
+            custom: components["schemas"]["openai__types__chat__chat_completion_message_custom_tool_call__Custom"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * ChatCompletionMessageCustomToolCallParam
          * @description A call to a custom tool created by the model.
          */
-        ChatCompletionMessageCustomToolCallParam: {
+        "ChatCompletionMessageCustomToolCallParam-Input": {
             /** Id */
             id: string;
-            custom: components["schemas"]["Custom"];
+            custom: components["schemas"]["Custom-Input"];
             /**
              * Type
              * @constant
@@ -265,13 +442,57 @@ export interface components {
             type: "custom";
         };
         /**
+         * ChatCompletionMessageCustomToolCallParam
+         * @description A call to a custom tool created by the model.
+         */
+        "ChatCompletionMessageCustomToolCallParam-Output": {
+            /** Id */
+            id: string;
+            custom: components["schemas"]["openai__types__chat__chat_completion_message_custom_tool_call_param__Custom"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom";
+        };
+        /**
+         * ChatCompletionMessageFunctionToolCall
+         * @description A call to a function tool created by the model.
+         */
+        ChatCompletionMessageFunctionToolCall: {
+            /** Id */
+            id: string;
+            function: components["schemas"]["openai__types__chat__chat_completion_message_function_tool_call__Function"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "function";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * ChatCompletionMessageFunctionToolCallParam
          * @description A call to a function tool created by the model.
          */
-        ChatCompletionMessageFunctionToolCallParam: {
+        "ChatCompletionMessageFunctionToolCallParam-Input": {
             /** Id */
             id: string;
-            function: components["schemas"]["Function"];
+            function: components["schemas"]["Function-Input"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "function";
+        };
+        /**
+         * ChatCompletionMessageFunctionToolCallParam
+         * @description A call to a function tool created by the model.
+         */
+        "ChatCompletionMessageFunctionToolCallParam-Output": {
+            /** Id */
+            id: string;
+            function: components["schemas"]["openai__types__chat__chat_completion_message_function_tool_call_param__Function"];
             /**
              * Type
              * @constant
@@ -279,11 +500,24 @@ export interface components {
             type: "function";
         };
         /** ChatCompletionRequest */
-        ChatCompletionRequest: {
+        "ChatCompletionRequest-Input": {
             /** Model */
             model: string;
             /** Messages */
-            messages: (components["schemas"]["ChatCompletionDeveloperMessageParam"] | components["schemas"]["ChatCompletionSystemMessageParam"] | components["schemas"]["ChatCompletionUserMessageParam"] | components["schemas"]["ChatCompletionAssistantMessageParam"] | components["schemas"]["ChatCompletionToolMessageParam"] | components["schemas"]["ChatCompletionFunctionMessageParam"])[];
+            messages: (components["schemas"]["ChatCompletionDeveloperMessageParam"] | components["schemas"]["ChatCompletionSystemMessageParam"] | components["schemas"]["ChatCompletionUserMessageParam"] | components["schemas"]["ChatCompletionAssistantMessageParam-Input"] | components["schemas"]["ChatCompletionToolMessageParam"] | components["schemas"]["ChatCompletionFunctionMessageParam"])[];
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Tools */
+            tools?: components["schemas"]["ChatCompletionFunctionTool"][] | null;
+            /** Stream */
+            stream?: boolean | null;
+        };
+        /** ChatCompletionRequest */
+        "ChatCompletionRequest-Output": {
+            /** Model */
+            model: string;
+            /** Messages */
+            messages: (components["schemas"]["ChatCompletionDeveloperMessageParam"] | components["schemas"]["ChatCompletionSystemMessageParam"] | components["schemas"]["ChatCompletionUserMessageParam"] | components["schemas"]["ChatCompletionAssistantMessageParam-Output"] | components["schemas"]["ChatCompletionToolMessageParam"] | components["schemas"]["ChatCompletionFunctionMessageParam"])[];
             /** Max Tokens */
             max_tokens?: number | null;
             /** Tools */
@@ -307,6 +541,19 @@ export interface components {
             role: "system";
             /** Name */
             name?: string;
+        };
+        /** ChatCompletionTokenLogprob */
+        ChatCompletionTokenLogprob: {
+            /** Token */
+            token: string;
+            /** Bytes */
+            bytes?: number[] | null;
+            /** Logprob */
+            logprob: number;
+            /** Top Logprobs */
+            top_logprobs: components["schemas"]["TopLogprob"][];
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionToolMessageParam */
         ChatCompletionToolMessageParam: {
@@ -336,6 +583,64 @@ export interface components {
             /** Name */
             name?: string;
         };
+        /** Choice */
+        Choice: {
+            /**
+             * Finish Reason
+             * @enum {string}
+             */
+            finish_reason: "stop" | "length" | "tool_calls" | "content_filter" | "function_call";
+            /** Index */
+            index: number;
+            logprobs?: components["schemas"]["ChoiceLogprobs"] | null;
+            message: components["schemas"]["ChatCompletionMessage"];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ChoiceLogprobs
+         * @description Log probability information for the choice.
+         */
+        ChoiceLogprobs: {
+            /** Content */
+            content?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
+            /** Refusal */
+            refusal?: components["schemas"]["ChatCompletionTokenLogprob"][] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CompletionTokensDetails
+         * @description Breakdown of tokens used in a completion.
+         */
+        CompletionTokensDetails: {
+            /** Accepted Prediction Tokens */
+            accepted_prediction_tokens?: number | null;
+            /** Audio Tokens */
+            audio_tokens?: number | null;
+            /** Reasoning Tokens */
+            reasoning_tokens?: number | null;
+            /** Rejected Prediction Tokens */
+            rejected_prediction_tokens?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CompletionUsage
+         * @description Usage statistics for the completion request.
+         */
+        CompletionUsage: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Total Tokens */
+            total_tokens: number;
+            completion_tokens_details?: components["schemas"]["CompletionTokensDetails"] | null;
+            prompt_tokens_details?: components["schemas"]["PromptTokensDetails"] | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** CreateTunerRequest */
         CreateTunerRequest: {
             /** Name */
@@ -364,7 +669,7 @@ export interface components {
          * Custom
          * @description The custom tool that the model called.
          */
-        Custom: {
+        "Custom-Input": {
             /** Input */
             input: string;
             /** Name */
@@ -440,7 +745,7 @@ export interface components {
          * Function
          * @description The function that the model called.
          */
-        Function: {
+        "Function-Input": {
             /** Arguments */
             arguments: string;
             /** Name */
@@ -452,7 +757,7 @@ export interface components {
          *
          *     The name and arguments of a function that should be called, as generated by the model.
          */
-        FunctionCall: {
+        "FunctionCall-Input": {
             /** Arguments */
             arguments: string;
             /** Name */
@@ -518,10 +823,154 @@ export interface components {
              */
             format: "wav" | "mp3";
         };
+        /** ListRunsResponse */
+        ListRunsResponse: {
+            /** Runs */
+            runs: components["schemas"]["RunItem"][];
+        };
         /** ListTunersResponse */
         ListTunersResponse: {
             /** Tuners */
             tuners: components["schemas"]["TunerItem"][];
+        };
+        /**
+         * Moderation
+         * @description Moderation results for the request input and generated output, if moderated
+         *     completions were requested.
+         */
+        Moderation: {
+            /** Input */
+            input: components["schemas"]["ModerationInputModerationResults"] | components["schemas"]["ModerationInputError"];
+            /** Output */
+            output: components["schemas"]["ModerationOutputModerationResults"] | components["schemas"]["ModerationOutputError"];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModerationInputError
+         * @description An error produced while attempting moderation.
+         */
+        ModerationInputError: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "error";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModerationInputModerationResults
+         * @description Successful moderation results for the request input or generated output.
+         */
+        ModerationInputModerationResults: {
+            /** Model */
+            model: string;
+            /** Results */
+            results: components["schemas"]["ModerationInputModerationResultsResult"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "moderation_results";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModerationInputModerationResultsResult
+         * @description A moderation result produced for the response input or output.
+         */
+        ModerationInputModerationResultsResult: {
+            /** Categories */
+            categories: {
+                [key: string]: boolean;
+            };
+            /** Category Applied Input Types */
+            category_applied_input_types: {
+                [key: string]: ("text" | "image")[];
+            };
+            /** Category Scores */
+            category_scores: {
+                [key: string]: number;
+            };
+            /** Flagged */
+            flagged: boolean;
+            /** Model */
+            model: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "moderation_result";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModerationOutputError
+         * @description An error produced while attempting moderation.
+         */
+        ModerationOutputError: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "error";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModerationOutputModerationResults
+         * @description Successful moderation results for the request input or generated output.
+         */
+        ModerationOutputModerationResults: {
+            /** Model */
+            model: string;
+            /** Results */
+            results: components["schemas"]["ModerationOutputModerationResultsResult"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "moderation_results";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ModerationOutputModerationResultsResult
+         * @description A moderation result produced for the response input or output.
+         */
+        ModerationOutputModerationResultsResult: {
+            /** Categories */
+            categories: {
+                [key: string]: boolean;
+            };
+            /** Category Applied Input Types */
+            category_applied_input_types: {
+                [key: string]: ("text" | "image")[];
+            };
+            /** Category Scores */
+            category_scores: {
+                [key: string]: number;
+            };
+            /** Flagged */
+            flagged: boolean;
+            /** Model */
+            model: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "moderation_result";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * NextPick
@@ -537,6 +986,18 @@ export interface components {
             tier: "incomplete" | "fresh" | "saturated" | "none";
             /** Reason */
             reason: string;
+        };
+        /**
+         * PromptTokensDetails
+         * @description Breakdown of tokens used in the prompt.
+         */
+        PromptTokensDetails: {
+            /** Audio Tokens */
+            audio_tokens?: number | null;
+            /** Cached Tokens */
+            cached_tokens?: number | null;
+        } & {
+            [key: string]: unknown;
         };
         /** PutRewardRequest */
         PutRewardRequest: {
@@ -577,6 +1038,45 @@ export interface components {
              */
             malformed_penalty: number;
         };
+        /** RunDetailResponse */
+        RunDetailResponse: {
+            run: components["schemas"]["RunItem"];
+            /** Completions */
+            completions: components["schemas"]["ChatCompletionItem"][];
+        };
+        /**
+         * RunItem
+         * @description Summary of a single run (one attempt at a datum) under a tuner.
+         */
+        RunItem: {
+            /** Run Id */
+            run_id: string;
+            /** Datum Id */
+            datum_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_flight" | "expired" | "rewarded" | "trained" | "rejected";
+            /** Reward */
+            reward: number | null;
+            /** Trained Count */
+            trained_count: number;
+            /** Rejected Count */
+            rejected_count: number;
+            /** Completion Count */
+            completion_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+        };
         /**
          * RunProgress
          * @description Aggregate run counts across all datums for a tuner (dynamic).
@@ -596,6 +1096,17 @@ export interface components {
             trained: number;
             /** Rejected */
             rejected: number;
+        };
+        /** TopLogprob */
+        TopLogprob: {
+            /** Token */
+            token: string;
+            /** Bytes */
+            bytes?: number[] | null;
+            /** Logprob */
+            logprob: number;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * TrainingProgress
@@ -630,6 +1141,76 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * FunctionCall
+         * @description Deprecated and replaced by `tool_calls`.
+         *
+         *     The name and arguments of a function that should be called, as generated by the model.
+         */
+        openai__types__chat__chat_completion_assistant_message_param__FunctionCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * FunctionCall
+         * @description Deprecated and replaced by `tool_calls`.
+         *
+         *     The name and arguments of a function that should be called, as generated by the model.
+         */
+        openai__types__chat__chat_completion_message__FunctionCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * Custom
+         * @description The custom tool that the model called.
+         */
+        openai__types__chat__chat_completion_message_custom_tool_call__Custom: {
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * Custom
+         * @description The custom tool that the model called.
+         */
+        openai__types__chat__chat_completion_message_custom_tool_call_param__Custom: {
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * Function
+         * @description The function that the model called.
+         */
+        openai__types__chat__chat_completion_message_function_tool_call__Function: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * Function
+         * @description The function that the model called.
+         */
+        openai__types__chat__chat_completion_message_function_tool_call_param__Function: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
         };
     };
     responses: never;
@@ -726,21 +1307,16 @@ export interface operations {
             };
         };
     };
-    create_chat_completion_openai_v1_chat_completions_post: {
+    list_runs_tuners__tuner_id__runs_get: {
         parameters: {
             query?: never;
-            header: {
-                "x-tuner-id": string;
-                "x-run-id"?: string | null;
+            header?: never;
+            path: {
+                tuner_id: string;
             };
-            path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatCompletionRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -748,7 +1324,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ListRunsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -780,6 +1356,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DispenseRun"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_tuners__tuner_id__runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tuner_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_chat_completion_openai_v1_chat_completions_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-tuner-id": string;
+                "x-run-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatCompletionRequest-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
