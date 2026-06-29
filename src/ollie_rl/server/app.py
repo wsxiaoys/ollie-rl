@@ -16,6 +16,7 @@ from ollie_rl.types import (
     ListTunersResponse,
     ListRunsResponse,
     RunDetailResponse,
+    ChatCompletionDetailResponse,
 )
 from ollie_rl.db import init_db, shutdown_db
 from ollie_rl.service import TunerService
@@ -164,6 +165,33 @@ async def get_run(tuner_id: str, run_id: str) -> RunDetailResponse:
     except Exception as e:
         logger.exception(
             f"Failed to fetch run '{run_id}' for tuner '{tuner_id}'"
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/tuners/{tuner_id}/runs/{run_id}/completions/{completion_id}",
+    response_model=ChatCompletionDetailResponse,
+)
+async def get_completion(
+    tuner_id: str, run_id: str, completion_id: str
+) -> ChatCompletionDetailResponse:
+    """
+    Return a single recorded chat completion (request, response, and any
+    sample-time tensors) so it can be inspected in isolation.
+    """
+    from ollie_rl.service.tuner_service import ChatCompletionNotFoundError
+
+    try:
+        return await services.tuner.get_completion_details(
+            tuner_id, run_id, completion_id
+        )
+    except ChatCompletionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(
+            f"Failed to fetch completion '{completion_id}' for run "
+            f"'{run_id}' of tuner '{tuner_id}'"
         )
         raise HTTPException(status_code=500, detail=str(e))
 

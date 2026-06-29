@@ -98,6 +98,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tuners/{tuner_id}/runs/{run_id}/completions/{completion_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Completion
+         * @description Return a single recorded chat completion (request, response, and any
+         *     sample-time tensors) so it can be inspected in isolation.
+         */
+        get: operations["get_completion_tuners__tuner_id__runs__run_id__completions__completion_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openai/v1/chat/completions": {
         parameters: {
             query?: never;
@@ -327,6 +348,38 @@ export interface components {
              * @constant
              */
             type: "text";
+        };
+        /**
+         * ChatCompletionDetailResponse
+         * @description Full detail of a single recorded chat completion for inspection.
+         *
+         *     Extends the summary fields of `ChatCompletionItem` with the owning
+         *     tuner/run/datum identifiers and the optional sample-time tensors
+         *     (`tokens`/`logprobs`) so a single completion can be inspected in
+         *     isolation.
+         */
+        ChatCompletionDetailResponse: {
+            /** Id */
+            id: string;
+            /** Tuner Id */
+            tuner_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Datum Id */
+            datum_id: string;
+            /** Policy Generation */
+            policy_generation: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            request: components["schemas"]["ChatCompletionRequest-Output"];
+            response: components["schemas"]["ChatCompletion"];
+            /** Tokens */
+            tokens?: number[] | null;
+            /** Logprobs */
+            logprobs?: number[] | null;
         };
         /**
          * ChatCompletionDeveloperMessageParam
@@ -1388,6 +1441,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_completion_tuners__tuner_id__runs__run_id__completions__completion_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tuner_id: string;
+                run_id: string;
+                completion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatCompletionDetailResponse"];
                 };
             };
             /** @description Validation Error */

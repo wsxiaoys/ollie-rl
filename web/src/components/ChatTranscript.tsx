@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Fragment } from "react";
 import type { ChatCompletionItem } from "../api/types";
 import { Badge, Mono } from "./ui";
@@ -305,9 +306,13 @@ function MessageView({ message }: { message: AnyRecord }) {
 function TrajectoryCard({
   completions,
   index,
+  tunerId,
+  runId,
 }: {
   completions: ChatCompletionItem[];
   index: number;
+  tunerId?: string;
+  runId?: string;
 }) {
   // Render the trajectory as one continuous conversation: each turn
   // contributes only the messages that are new relative to the previous
@@ -351,7 +356,21 @@ function TrajectoryCard({
               <span className="turn-divider__spacer" />
               <span className="turn-divider__meta">
                 <span className="turn-divider__meta-label">id</span>
-                <Mono>{turn.completion.id}</Mono>
+                {tunerId && runId ? (
+                  <Link
+                    to="/tuners/$tunerId/runs/$runId/completions/$completionId"
+                    params={{
+                      tunerId,
+                      runId,
+                      completionId: turn.completion.id,
+                    }}
+                    className="link"
+                  >
+                    <Mono>{turn.completion.id}</Mono>
+                  </Link>
+                ) : (
+                  <Mono>{turn.completion.id}</Mono>
+                )}
               </span>
               <span className="turn-divider__meta">
                 <span className="turn-divider__meta-label">gen</span>
@@ -378,9 +397,13 @@ function TrajectoryCard({
 export function ChatTranscript({
   completions,
   showToollessTrajectories = false,
+  tunerId,
+  runId,
 }: {
   completions: ChatCompletionItem[];
   showToollessTrajectories?: boolean;
+  tunerId?: string;
+  runId?: string;
 }) {
   if (completions.length === 0) {
     return (
@@ -411,7 +434,13 @@ export function ChatTranscript({
         </div>
       ) : (
         visible.map((traj, i) => (
-          <TrajectoryCard key={traj[0].id} completions={traj} index={i} />
+          <TrajectoryCard
+            key={traj[0].id}
+            completions={traj}
+            index={i}
+            tunerId={tunerId}
+            runId={runId}
+          />
         ))
       )}
     </div>

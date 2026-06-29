@@ -79,6 +79,8 @@ export function RunDetailPage() {
         <ChatTranscript
           completions={completions}
           showToollessTrajectories={showToolless}
+          tunerId={tunerId}
+          runId={runId}
         />
       </Panel>
     </div>

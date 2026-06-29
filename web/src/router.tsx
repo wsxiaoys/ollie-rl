@@ -9,6 +9,7 @@ import { TunerListPage } from "./pages/TunerListPage";
 import { TunerDetailPage } from "./pages/TunerDetailPage";
 import { RunListPage } from "./pages/RunListPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
+import { CompletionDetailPage } from "./pages/CompletionDetailPage";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -49,12 +50,19 @@ const runDetailRoute = createRoute({
   component: RunDetailPage,
 });
 
+const completionDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tuners/$tunerId/runs/$runId/completions/$completionId",
+  component: CompletionDetailPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   tunersRoute,
   tunerDetailRoute,
   runListRoute,
   runDetailRoute,
+  completionDetailRoute,
 ]);
 
 export const router = createRouter({

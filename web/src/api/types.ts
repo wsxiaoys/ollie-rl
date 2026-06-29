@@ -29,3 +29,5 @@ export type RunStatus = RunItem["status"];
 export type ListRunsResponse = Schemas["ListRunsResponse"];
 export type ChatCompletionItem = Schemas["ChatCompletionItem"];
 export type RunDetailResponse = Schemas["RunDetailResponse"];
+export type ChatCompletionDetailResponse =
+  Schemas["ChatCompletionDetailResponse"];

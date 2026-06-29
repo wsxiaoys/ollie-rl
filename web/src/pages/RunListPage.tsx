@@ -76,6 +76,7 @@ export function RunListPage() {
               <th className="num">Reward</th>
               <th className="num">Completions</th>
               <th>Created</th>
+              <th>Expires</th>
             </tr>
           </thead>
           <tbody>
@@ -101,6 +102,7 @@ export function RunListPage() {
                 </td>
                 <td className="num">{r.completion_count}</td>
                 <td>{new Date(r.created_at).toLocaleString()}</td>
+                <td>{new Date(r.expires_at).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>

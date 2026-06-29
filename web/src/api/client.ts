@@ -1,4 +1,5 @@
 import type {
+  ChatCompletionDetailResponse,
   GetTunerResponse,
   ListRunsResponse,
   ListTunersResponse,
@@ -58,5 +59,17 @@ export function getRun(
 ): Promise<RunDetailResponse> {
   return get<RunDetailResponse>(
     `/tuners/${encodeURIComponent(tunerId)}/runs/${encodeURIComponent(runId)}`,
+  );
+}
+
+export function getCompletion(
+  tunerId: string,
+  runId: string,
+  completionId: string,
+): Promise<ChatCompletionDetailResponse> {
+  return get<ChatCompletionDetailResponse>(
+    `/tuners/${encodeURIComponent(tunerId)}/runs/${encodeURIComponent(
+      runId,
+    )}/completions/${encodeURIComponent(completionId)}`,
   );
 }

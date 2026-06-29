@@ -1,5 +1,11 @@
 import { queryOptions } from "@tanstack/react-query";
-import { getRun, getTuner, listRuns, listTuners } from "./client";
+import {
+  getCompletion,
+  getRun,
+  getTuner,
+  listRuns,
+  listTuners,
+} from "./client";
 
 // The server exposes only a live snapshot (no history), so we poll.
 export const tunersQuery = queryOptions({
@@ -27,4 +33,16 @@ export const runQuery = (tunerId: string, runId: string) =>
     queryKey: ["run", tunerId, runId],
     queryFn: () => getRun(tunerId, runId),
     refetchInterval: 5000,
+  });
+
+export const completionQuery = (
+  tunerId: string,
+  runId: string,
+  completionId: string,
+) =>
+  queryOptions({
+    queryKey: ["completion", tunerId, runId, completionId],
+    queryFn: () => getCompletion(tunerId, runId, completionId),
+    // A recorded completion is immutable, so no need to poll.
+    staleTime: Infinity,
   });

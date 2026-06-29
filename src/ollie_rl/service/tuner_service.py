@@ -32,6 +32,7 @@ from ollie_rl.types import (
     RunItem,
     RunStatus,
     RunDetailResponse,
+    ChatCompletionDetailResponse,
     NextPick,
 )
 
@@ -43,6 +44,10 @@ class TunerNotFoundError(Exception):
 
 
 class RunNotFoundError(Exception):
+    pass
+
+
+class ChatCompletionNotFoundError(Exception):
     pass
 
 
@@ -579,6 +584,42 @@ class TunerService:
             for c in completions
         ]
         return RunDetailResponse(run=run_item, completions=completion_items)
+
+    async def get_completion_details(
+        self, tuner_id: str, run_id: str, completion_id: str
+    ) -> ChatCompletionDetailResponse:
+        """
+        Return a single recorded chat completion (request, response, and the
+        optional sample-time tensors) so it can be inspected in isolation.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(ChatCompletionModel).where(
+                    ChatCompletionModel.tuner_id == tuner_id,
+                    ChatCompletionModel.run_id == run_id,
+                    ChatCompletionModel.id == completion_id,
+                )
+            )
+            record = result.scalar_one_or_none()
+
+        if record is None:
+            raise ChatCompletionNotFoundError(
+                f"Chat completion '{completion_id}' not found under run "
+                f"'{run_id}' of tuner '{tuner_id}'"
+            )
+
+        return ChatCompletionDetailResponse(
+            id=record.id,
+            tuner_id=record.tuner_id,
+            run_id=record.run_id or run_id,
+            datum_id=record.datum_id,
+            policy_generation=record.policy_generation,
+            created_at=record.created_at,
+            request=ChatCompletionRequest.model_validate(record.request),
+            response=ChatCompletion.model_validate(record.response),
+            tokens=record.tokens,
+            logprobs=record.logprobs,
+        )
 
     async def _materialize(self, tuner_id: str) -> Trainer:
         async with self.async_session() as session:

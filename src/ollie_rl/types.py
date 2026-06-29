@@ -180,3 +180,24 @@ class ChatCompletionItem(BaseModel):
 class RunDetailResponse(BaseModel):
     run: RunItem
     completions: List[ChatCompletionItem]
+
+
+class ChatCompletionDetailResponse(BaseModel):
+    """Full detail of a single recorded chat completion for inspection.
+
+    Extends the summary fields of `ChatCompletionItem` with the owning
+    tuner/run/datum identifiers and the optional sample-time tensors
+    (`tokens`/`logprobs`) so a single completion can be inspected in
+    isolation.
+    """
+
+    id: str
+    tuner_id: str
+    run_id: str
+    datum_id: str
+    policy_generation: int
+    created_at: datetime
+    request: ChatCompletionRequest
+    response: ChatCompletion
+    tokens: Optional[List[int]] = None
+    logprobs: Optional[List[float]] = None
