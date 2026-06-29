@@ -1,0 +1,72 @@
+import type { ReactNode } from "react";
+
+export function StatCard({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: "default" | "good" | "warn" | "muted";
+}) {
+  return (
+    <div className={`stat-card stat-card--${tone}`}>
+      <div className="stat-card__value">{value}</div>
+      <div className="stat-card__label">{label}</div>
+    </div>
+  );
+}
+
+export function ProgressBar({
+  value,
+  max,
+  tone = "default",
+}: {
+  value: number;
+  max: number;
+  tone?: "default" | "good";
+}) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div className="progress">
+      <div
+        className={`progress__fill progress__fill--${tone}`}
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
+export function Badge({
+  children,
+  tone = "default",
+}: {
+  children: ReactNode;
+  tone?: "default" | "good" | "warn" | "danger" | "info";
+}) {
+  return <span className={`badge badge--${tone}`}>{children}</span>;
+}
+
+export function Panel({
+  title,
+  children,
+  right,
+}: {
+  title: string;
+  children: ReactNode;
+  right?: ReactNode;
+}) {
+  return (
+    <section className="panel">
+      <header className="panel__header">
+        <h2 className="panel__title">{title}</h2>
+        {right}
+      </header>
+      <div className="panel__body">{children}</div>
+    </section>
+  );
+}
+
+export function Mono({ children }: { children: ReactNode }) {
+  return <span className="mono">{children}</span>;
+}

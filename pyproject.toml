@@ -69,8 +69,21 @@ build-backend = "uv_build"
 # ---- Developer task runner (`uv run poe <task>`) ----------------------------
 
 [tool.poe.tasks.dev]
-help = "Run the FastAPI server locally with auto-reload."
-script = "ollie_rl:dev"
+help = "Run the FastAPI backend (auto-reload) and the Vite frontend (HMR) together."
+deps = ["gen-web-types"]
+shell = """
+trap 'kill 0' EXIT
+OLLIE_WEB_DEV_SERVER=http://localhost:5173 \
+  uv run uvicorn ollie_rl.server.app:app --host 127.0.0.1 --port 8000 --reload &
+cd web && bun run dev
+"""
+
+[tool.poe.tasks.gen-web-types]
+help = "Regenerate web/src/api/schema.d.ts from the FastAPI OpenAPI schema."
+shell = """
+uv run python -c "import json; from ollie_rl.server.app import app; print(json.dumps(app.openapi(), indent=2))" > web/openapi.json
+cd web && bun install && bun run gen:types
+"""
 
 [tool.poe.tasks.test]
 help = "Run the pytest suite."

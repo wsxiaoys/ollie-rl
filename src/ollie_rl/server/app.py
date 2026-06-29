@@ -18,6 +18,7 @@ from ollie_rl.types import (
 from ollie_rl.db import init_db, shutdown_db
 from ollie_rl.service import TunerService
 from ollie_rl.server.streaming import simulate_stream
+from ollie_rl.server.webui import mount_webui
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -242,3 +243,8 @@ async def put_reward(
     except Exception as e:
         logger.exception(f"Failed to record reward for run '{run_id}'")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Serve the built web dashboard at /app (no-op until `web/dist` is built).
+# Mounted last so it never shadows the API routes above.
+mount_webui(app)

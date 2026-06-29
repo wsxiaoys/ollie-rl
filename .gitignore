@@ -18,3 +18,11 @@ docs/private/*
 
 # environment
 .env.local*
+
+# Node / web frontend
+node_modules/
+*.tsbuildinfo
+.vite
+
+# Generated OpenAPI schema dump (intermediate; types committed as schema.d.ts)
+web/openapi.json
