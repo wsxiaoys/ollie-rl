@@ -586,7 +586,7 @@ class TestMaybeTrain(TunerServiceTestCase):
     async def test_raise_for_unknown_tuner(self):
         """Should raise when the trainer cannot be found."""
         with self.assertRaises(TunerNotFoundError):
-            await self.service.maybe_train("tuner_unknown")
+            await self.service._maybe_train("tuner_unknown")
 
     async def test_no_op_when_not_enough_groups(self):
         """With too few completed groups, training is not triggered."""
@@ -605,7 +605,7 @@ class TestMaybeTrain(TunerServiceTestCase):
 
         # Add only a single rewarded run (group_size=16, target=32 required).
         await self._add_run(tuner_id, datum_id="d1", reward=1.0)
-        await self.service.maybe_train(tuner_id)
+        await self.service._maybe_train(tuner_id)
 
         self.assertEqual(called, [])
 
@@ -661,7 +661,7 @@ class TestMaybeTrain(TunerServiceTestCase):
                 await self.service.update_reward(tuner_id, run.id, 1.0)
 
         # Trigger maybe_train
-        await self.service.maybe_train(tuner_id)
+        await self.service._maybe_train(tuner_id)
 
         # Verify that train_step was called with the correct policy_generation
         self.assertEqual(len(called_examples), 4)

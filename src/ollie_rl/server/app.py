@@ -44,7 +44,16 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to initialize database during startup")
 
+    # Start the background train loop that periodically triggers train steps.
+    services.tuner.start_train_loop()
+
     yield
+
+    try:
+        logger.info("Stopping train loop...")
+        await services.tuner.stop_train_loop()
+    except Exception:
+        logger.exception("Failed to stop train loop during shutdown")
 
     try:
         logger.info("Shutting down database tables...")
@@ -289,7 +298,6 @@ async def put_reward(
         RunExpiredError,
         RewardAlreadySetError,
     )
-    import asyncio
 
     try:
         await services.tuner.update_reward(
@@ -297,8 +305,8 @@ async def put_reward(
             run_id=run_id,
             reward=request.reward,
         )
-        # Auto-train trigger (fire-and-forget)
-        asyncio.create_task(services.tuner.maybe_train(tuner_id))
+        # Training is driven by the background train loop (see
+        # `TunerService.start_train_loop`), not triggered per reward.
 
         return PutRewardResponse(run_id=run_id, reward=request.reward)
     except RunNotFoundError as e:

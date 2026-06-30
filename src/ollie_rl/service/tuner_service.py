@@ -276,6 +276,77 @@ class TunerService:
         # so concurrent dispenses observe each other's in-flight runs and don't
         # all pick the same datum (which would over-dispense past `group_size`).
         self._dispense_lock = asyncio.Lock()
+        # Background task that periodically polls every tuner and triggers a
+        # train step when a batch is ready, replacing the per-reward
+        # fire-and-forget trigger.
+        self._train_loop_task: Optional[asyncio.Task] = None
+
+    def start_train_loop(self, interval: float = 10.0) -> None:
+        """Start the background train loop (idempotent).
+
+        The loop periodically attempts a train step for every tuner, skipping
+        any tuner whose train lock is currently held (i.e. already training).
+        """
+        if self._train_loop_task is not None and not self._train_loop_task.done():
+            return
+        self._train_loop_task = asyncio.create_task(self._train_loop(interval))
+
+    async def stop_train_loop(self) -> None:
+        """Stop the background train loop and wait for it to unwind."""
+        task = self._train_loop_task
+        if task is None:
+            return
+        self._train_loop_task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _train_loop(self, interval: float) -> None:
+        """Periodically trigger `maybe_train` for every tuner.
+
+        Runs forever until cancelled. Each iteration sleeps for `interval`
+        seconds, then attempts a train step for each tuner that is not already
+        training. Failures for a single tuner never abort the loop.
+        """
+        logger.info(f"Starting train loop (interval={interval}s)")
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                await self._train_all_pending()
+            except asyncio.CancelledError:
+                logger.info("Train loop cancelled")
+                raise
+            except Exception:
+                logger.exception("Unexpected error in train loop")
+
+    async def _train_all_pending(self) -> None:
+        """Trigger `maybe_train` for every tuner not currently training.
+
+        Tuners whose train lock is already held are skipped (don't block on a
+        long in-progress train step); the rest are fired off as independent
+        background tasks so a slow train step never holds up the loop.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(TunerModel.id).where(TunerModel.trainer_state.is_not(None))
+            )
+            tuner_ids = [row[0] for row in result.all()]
+
+        async def _train_one(tuner_id: str) -> None:
+            try:
+                await self._maybe_train(tuner_id)
+            except Exception:
+                logger.exception(f"Scheduled train step failed for tuner {tuner_id}")
+
+        for tuner_id in tuner_ids:
+            lock = self._train_locks.get(tuner_id)
+            if lock is not None and lock.locked():
+                # Already training; don't queue behind the in-progress step.
+                continue
+            # Fire-and-forget: let the train step run independently of the loop.
+            asyncio.create_task(_train_one(tuner_id))
 
     def _train_lock_for(self, tuner_id: str) -> asyncio.Lock:
         """Return the per-tuner train lock, creating it on first use.
@@ -863,7 +934,7 @@ class TunerService:
                 record.updated_at = now
         logger.info(f"Successfully recorded reward {reward} for run {run_id}")
 
-    async def maybe_train(self, tuner_id: str) -> None:
+    async def _maybe_train(self, tuner_id: str) -> None:
         """
         Attempt to start (and wait for) a train step for `tuner_id`.
 
