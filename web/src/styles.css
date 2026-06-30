@@ -753,8 +753,7 @@ details.msg[open] .msg__role--toggle {
   color: var(--info);
 }
 
-.msg__tool-args,
-.msg__json {
+.msg__tool-args {
   margin: 6px 0 0;
   padding: 8px 10px;
   background: var(--bg-elev-2);
@@ -765,9 +764,11 @@ details.msg[open] .msg__role--toggle {
   word-break: break-word;
 }
 
-.msg__json {
-  margin-top: 0;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+pretty-json {
+  zoom: 0.8;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 /* ---- Theme toggle ---- */

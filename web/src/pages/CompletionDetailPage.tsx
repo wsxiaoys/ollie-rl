@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import type { ChatCompletionItem } from "../api/types";
 import { completionQuery } from "../api/queries";
 import { ChatTranscript } from "../components/ChatTranscript";
+import { PrettyJson } from "../components/PrettyJson";
 import { Mono, Panel, StatCard } from "../components/ui";
 
 export function CompletionDetailPage() {
@@ -84,15 +85,11 @@ export function CompletionDetailPage() {
       </Panel>
 
       <Panel title="Raw request">
-        <pre className="msg__json">
-          {JSON.stringify(data.request, null, 2)}
-        </pre>
+        <PrettyJson data={data.request} expand={1} />
       </Panel>
 
       <Panel title="Raw response">
-        <pre className="msg__json">
-          {JSON.stringify(data.response, null, 2)}
-        </pre>
+        <PrettyJson data={data.response} expand={1} />
       </Panel>
     </div>
   );

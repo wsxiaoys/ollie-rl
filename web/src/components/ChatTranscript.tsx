@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { Fragment } from "react";
 import type { ChatCompletionItem } from "../api/types";
 import { Badge, Mono } from "./ui";
+import { PrettyJson } from "./PrettyJson";
 
 type BadgeTone = "default" | "good" | "warn" | "danger" | "info";
 
@@ -46,29 +47,15 @@ function renderContent(content: unknown): string {
   return JSON.stringify(content, null, 2);
 }
 
-/** Pretty-print a tool-call argument blob (usually a JSON string). */
-function formatArgs(args: unknown): string {
-  if (typeof args === "string") {
-    try {
-      return JSON.stringify(JSON.parse(args), null, 2);
-    } catch {
-      return args;
-    }
-  }
-  return JSON.stringify(args ?? {}, null, 2);
-}
-
 /**
- * If `text` is a JSON object or array (the common shape of a tool result),
- * return it pretty-printed; otherwise return null so the caller can fall back
- * to plain-text rendering. We only treat object/array roots as JSON to avoid
- * "formatting" ordinary numeric or quoted-string content.
+ * If `text` is a JSON object or array, parse it and return the object.
+ * Otherwise, return null.
  */
-function tryFormatJson(text: string): string | null {
+function tryParseJson(text: string): unknown | null {
   const trimmed = text.trim();
   if (!/^[[{]/.test(trimmed)) return null;
   try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2);
+    return JSON.parse(trimmed);
   } catch {
     return null;
   }
@@ -258,24 +245,39 @@ function MessageView({ message }: { message: AnyRecord }) {
     </>
   );
 
-  const contentJson = content ? tryFormatJson(content) : null;
+  const parsedContentJson = content ? tryParseJson(content) : null;
 
   const body = (
     <>
       {content &&
-        (contentJson !== null ? (
-          <pre className="msg__json">{contentJson}</pre>
+        (parsedContentJson !== null ? (
+          <PrettyJson data={parsedContentJson} expand={1} />
         ) : (
           <div className="msg__content">{content}</div>
         ))}
       {toolCalls.map((tc, i) => {
         const fn = (tc.function ?? {}) as AnyRecord;
+        let parsedArgs: unknown = null;
+        if (typeof fn.arguments === "string") {
+          try {
+            parsedArgs = JSON.parse(fn.arguments);
+          } catch {
+            parsedArgs = fn.arguments;
+          }
+        } else {
+          parsedArgs = fn.arguments;
+        }
+
         return (
           <div key={i} className="msg__tool-call">
             <span className="msg__tool-name">
               🔧 {String(fn.name ?? "tool")}
             </span>
-            <pre className="msg__tool-args">{formatArgs(fn.arguments)}</pre>
+            {parsedArgs !== null && typeof parsedArgs === "object" ? (
+              <PrettyJson data={parsedArgs} expand={1} />
+            ) : (
+              <pre className="msg__tool-args">{String(parsedArgs ?? "")}</pre>
+            )}
           </div>
         );
       })}
