@@ -216,19 +216,17 @@ function buildTrajectories(
 }
 
 /**
- * Whether a trajectory involves any tool use (a tool call in a response, or a
- * tool message / tool call in a prompt). Tool-less trajectories are usually
- * auxiliary one-shot requests (e.g. title generation) that don't reflect the
- * agent's task quality.
+ * Whether a trajectory was given tools to work with, i.e. any of its requests
+ * declared `ChatCompletionRequest.tools`. This is distinct from whether the
+ * model actually called a tool: an agent turn that declines to call a tool
+ * still counts. Tool-less trajectories are usually auxiliary one-shot requests
+ * (e.g. title generation) that never offer tools and don't reflect the agent's
+ * task quality.
  */
 function trajectoryUsesTools(completions: ChatCompletionItem[]): boolean {
   return completions.some((c) => {
-    const response = getResponseMessage(c);
-    if (response && asRecordArray(response.tool_calls).length > 0) return true;
-    return getPromptMessages(c).some(
-      (m) =>
-        String(m.role) === "tool" || asRecordArray(m.tool_calls).length > 0,
-    );
+    const request = c.request as unknown as AnyRecord;
+    return asRecordArray(request.tools).length > 0;
   });
 }
 
