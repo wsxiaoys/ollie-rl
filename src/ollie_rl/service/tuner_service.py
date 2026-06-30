@@ -258,14 +258,31 @@ class TunerService:
 
     def __init__(self):
         self.active_trainers: Dict[str, Trainer] = {}
-        # Global lock ensuring `maybe_train` runs serially across all tuners in this process.
-        self._train_lock = asyncio.Lock()
+        # Per-tuner train locks: a tuner serializes its own train steps (the
+        # `is_training()` check + batch collection + `trained_count` bump must
+        # be atomic), but distinct tuners are independent trainers with no
+        # shared state, so they train concurrently instead of being head-of-line
+        # blocked behind one another's (potentially long) train step.
+        self._train_locks: Dict[str, asyncio.Lock] = {}
         # Lock to prevent race conditions during lazy restoration/materialization of trainers.
         self._materialize_lock = asyncio.Lock()
         # Lock serializing the read-pick-insert critical section of `dispense_run`
         # so concurrent dispenses observe each other's in-flight runs and don't
         # all pick the same datum (which would over-dispense past `group_size`).
         self._dispense_lock = asyncio.Lock()
+
+    def _train_lock_for(self, tuner_id: str) -> asyncio.Lock:
+        """Return the per-tuner train lock, creating it on first use.
+
+        Race-free under asyncio: there is no ``await`` between the ``get`` and
+        the insert, so the event loop cannot interleave another coroutine and
+        create a competing lock for the same ``tuner_id``.
+        """
+        lock = self._train_locks.get(tuner_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._train_locks[tuner_id] = lock
+        return lock
 
     @property
     def async_session(self):
@@ -828,10 +845,11 @@ class TunerService:
         """
         Attempt to start (and wait for) a train step for `tuner_id`.
 
-        Serialized globally via `self._train_lock` to ensure only one train step
-        runs at a time in this process.
+        Serialized per-tuner via `self._train_lock_for` so only one train step
+        runs at a time for a given tuner, while distinct tuners train
+        concurrently.
         """
-        async with self._train_lock:
+        async with self._train_lock_for(tuner_id):
             trainer = await self._get_trainer(tuner_id)
 
             # Skip if a train step is already in progress for this trainer.
