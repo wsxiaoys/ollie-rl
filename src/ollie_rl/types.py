@@ -156,6 +156,11 @@ class RunItem(BaseModel):
     datum_id: str
     status: RunStatus
     reward: Optional[float]
+    # The run's policy generation, derived as the max `policy_generation`
+    # across its chat completions. `None` when the run has no recorded
+    # completions yet. Lets clients bucket rewards by generation (e.g. a
+    # reward-distribution view) without an extra per-run fetch.
+    policy_generation: Optional[int]
     trained_count: int
     rejected_count: int
     completion_count: int

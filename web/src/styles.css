@@ -508,6 +508,106 @@ td.num {
   white-space: nowrap;
 }
 
+/* ---- Reward distribution ---- */
+.reward-dist__legend {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.reward-dist__scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reward-dist__gradient {
+  width: 88px;
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: linear-gradient(to right, var(--danger), var(--warn), var(--good));
+}
+
+.tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 3px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab--active {
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.reward-curve {
+  height: 320px;
+}
+
+.reward-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  width: 100%;
+  min-width: 200px;
+  height: 16px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.reward-bar__seg {
+  height: 100%;
+  border-radius: 2px;
+  min-width: 3px;
+  transition: filter 0.15s ease;
+}
+
+.reward-bar__seg:first-child {
+  border-radius: 999px 2px 2px 999px;
+}
+
+.reward-bar__seg:last-child {
+  border-radius: 2px 999px 999px 2px;
+}
+
+.reward-bar__seg:only-child {
+  border-radius: 999px;
+}
+
+.reward-bar__seg:hover {
+  filter: brightness(1.18);
+}
+
 /* ---- Placeholders ---- */
 .placeholder {
   padding: 24px;
@@ -803,8 +903,42 @@ pretty-json {
   box-shadow: var(--focus-ring);
 }
 
-.sidebar-footer {
+..sidebar-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* ---- Datum pool scrollable ---- */
+.datum-pool-scrollable {
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  background: var(--bg-elev);
+}
+
+.datum-pool-scrollable .table {
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.datum-pool-scrollable .table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-elev-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.datum-pool-scrollable .table td {
+  border-bottom: 1px solid var(--border);
+}
+
+.datum-pool-scrollable .table tbody tr:last-child td {
+  border-bottom: none;
 }

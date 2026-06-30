@@ -236,12 +236,18 @@ def _run_status(run: RunModel, now: datetime) -> RunStatus:
     return "expired"
 
 
-def _build_run_item(run: RunModel, completion_count: int, now: datetime) -> RunItem:
+def _build_run_item(
+    run: RunModel,
+    completion_count: int,
+    now: datetime,
+    policy_generation: Optional[int] = None,
+) -> RunItem:
     return RunItem(
         run_id=run.id,
         datum_id=run.datum_id,
         status=_run_status(run, now),
         reward=run.reward,
+        policy_generation=policy_generation,
         trained_count=run.trained_count,
         rejected_count=run.rejected_count,
         completion_count=completion_count,
@@ -543,20 +549,33 @@ class TunerService:
             runs = list(runs_result.scalars().all())
 
             counts: Dict[str, int] = {}
+            generations: Dict[str, int] = {}
             if runs:
-                count_result = await session.execute(
-                    select(ChatCompletionModel.run_id, func.count())
+                # One grouped pass yields both the completion count and the
+                # run's policy generation (max across its completions), so the
+                # runs list can bucket rewards by generation without an extra
+                # per-run fetch.
+                agg_result = await session.execute(
+                    select(
+                        ChatCompletionModel.run_id,
+                        func.count(),
+                        func.max(ChatCompletionModel.policy_generation),
+                    )
                     .where(ChatCompletionModel.tuner_id == tuner_id)
                     .group_by(ChatCompletionModel.run_id)
                 )
-                counts = {
-                    run_id: count
-                    for run_id, count in count_result.all()
-                    if run_id is not None
-                }
+                for run_id, count, max_generation in agg_result.all():
+                    if run_id is None:
+                        continue
+                    counts[run_id] = count
+                    if max_generation is not None:
+                        generations[run_id] = max_generation
 
         now = utcnow()
-        return [_build_run_item(r, counts.get(r.id, 0), now) for r in runs]
+        return [
+            _build_run_item(r, counts.get(r.id, 0), now, generations.get(r.id))
+            for r in runs
+        ]
 
     async def get_run_details(self, tuner_id: str, run_id: str) -> RunDetailResponse:
         """
@@ -587,7 +606,10 @@ class TunerService:
             completions = list(comp_result.scalars().all())
 
         now = utcnow()
-        run_item = _build_run_item(run, len(completions), now)
+        policy_generation = (
+            max(c.policy_generation for c in completions) if completions else None
+        )
+        run_item = _build_run_item(run, len(completions), now, policy_generation)
         completion_items = [
             ChatCompletionItem(
                 id=c.id,

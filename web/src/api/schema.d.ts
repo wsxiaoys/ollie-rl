@@ -1113,6 +1113,8 @@ export interface components {
             status: "in_flight" | "expired" | "rewarded" | "trained" | "rejected";
             /** Reward */
             reward: number | null;
+            /** Policy Generation */
+            policy_generation: number | null;
             /** Trained Count */
             trained_count: number;
             /** Rejected Count */

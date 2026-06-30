@@ -44,7 +44,7 @@ REPO_ROOT = EXAMPLE_DIR.parent.parent
 CITIES_PATH = EXAMPLE_DIR / "data" / "cities.json"
 
 DEFAULT_BASE_URL = "http://localhost:8000"
-DEFAULT_RECIPE = "grpo_4x8"
+DEFAULT_RECIPE = "grpo_16x32"
 DEFAULT_TRAINER = "gemini_msrl"
 DEFAULT_TUNER_NAME = "tuning-weather-agent"
 
@@ -104,7 +104,7 @@ def run_opencode(
     timeout: float,
 ) -> str:
     """Invoke ``opencode run`` and return the full stdout trajectory."""
-    prompt = f"What is the current weather in {city}? "
+    prompt = f"What is the current weather in {city}? Prefer fahrenheit for temperature"
     env = os.environ.copy()
     env["TUNER_ID"] = tuner_id
     env["RUN_ID"] = run_id

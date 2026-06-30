@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { tunerQuery } from "../api/queries";
+import { runsQuery, tunerQuery } from "../api/queries";
 import type { NextPickTier } from "../api/types";
 import { DatumTable } from "../components/DatumTable";
+import { RewardDistribution } from "../components/RewardDistribution";
 import { Badge, Mono, Panel, ProgressBar, StatCard } from "../components/ui";
 
 const TIER_TONE: Record<
@@ -20,6 +21,7 @@ export function TunerDetailPage() {
   const { data, isLoading, isError, error, isFetching } = useQuery(
     tunerQuery(tunerId),
   );
+  const runsQ = useQuery(runsQuery(tunerId));
 
   if (isLoading) {
     return <div className="placeholder">Loading tuner…</div>;
@@ -169,6 +171,27 @@ export function TunerDetailPage() {
           </div>
 
           <Panel
+            title="Reward distribution by generation"
+            right={
+              runsQ.isFetching ? (
+                <span className="live-dot">● live</span>
+              ) : undefined
+            }
+          >
+            {runsQ.isError ? (
+              <div className="placeholder placeholder--inset placeholder--error">
+                Failed to load runs: {(runsQ.error as Error).message}
+              </div>
+            ) : !runsQ.data ? (
+              <div className="placeholder placeholder--inset">
+                Loading runs…
+              </div>
+            ) : (
+              <RewardDistribution runs={runsQ.data.runs} />
+            )}
+          </Panel>
+
+          <Panel
             title="Datum pool"
             right={
               <span className="muted">
@@ -176,10 +199,12 @@ export function TunerDetailPage() {
               </span>
             }
           >
-            <DatumTable
-              items={progress.data.items}
-              groupSize={recipe.group_size}
-            />
+            <div className="datum-pool-scrollable">
+              <DatumTable
+                items={progress.data.items}
+                groupSize={recipe.group_size}
+              />
+            </div>
           </Panel>
         </>
       )}
