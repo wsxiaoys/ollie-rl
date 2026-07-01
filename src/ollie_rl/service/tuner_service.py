@@ -446,17 +446,28 @@ class TunerService:
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
-            completion_by_run_id: Dict[str, ChatCompletionModel] = {}
-            run_ids = [r.id for r in runs]
-            if run_ids:
+            # Progress only needs each run's policy generation to apply the
+            # off-policy staleness filter below, so aggregate it in SQL instead
+            # of hydrating full `ChatCompletionModel` rows. The full rows carry
+            # the `request`/`response` JSON and `tokens`/`logprobs` blobs
+            # (tens of KB each); loading them for every completion just to read
+            # one integer dominated this (frequently polled) endpoint. We take
+            # the max generation per run, mirroring how `list_runs` labels a
+            # run's generation.
+            generation_by_run_id: Dict[str, int] = {}
+            if runs:
                 result = await session.execute(
-                    select(ChatCompletionModel).where(
-                        ChatCompletionModel.tuner_id == tuner_id,
-                        ChatCompletionModel.run_id.in_(run_ids),
+                    select(
+                        ChatCompletionModel.run_id,
+                        func.max(ChatCompletionModel.policy_generation),
                     )
+                    .where(ChatCompletionModel.tuner_id == tuner_id)
+                    .group_by(ChatCompletionModel.run_id)
                 )
-                completion_by_run_id = {
-                    c.run_id: c for c in result.scalars().all() if c.run_id
+                generation_by_run_id = {
+                    run_id: max_generation
+                    for run_id, max_generation in result.all()
+                    if run_id is not None
                 }
 
         now = utcnow()
@@ -489,9 +500,9 @@ class TunerService:
             # Trainer-view consumable: rewarded, not trained, not rejected,
             # and within the off-policy window.
             if rewarded_flag and r.trained_count <= 0 and r.rejected_count <= 0:
-                completion = completion_by_run_id.get(r.id)
-                if completion is None or (
-                    generation - completion.policy_generation <= max_off
+                run_generation = generation_by_run_id.get(r.id)
+                if run_generation is None or (
+                    generation - run_generation <= max_off
                 ):
                     consumable += 1
                     if r.datum_id in consumable_by_datum:

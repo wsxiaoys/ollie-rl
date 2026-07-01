@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 import uuid
 from sqlalchemy import (
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -130,6 +131,16 @@ class ChatCompletionModel(BaseModel):
     """
 
     __tablename__ = "chat_completions"
+
+    # Almost every read is tuner-scoped and then narrowed / grouped by run_id
+    # (progress aggregation, list_runs, run + completion detail lookups, and
+    # the training-batch staleness scan). `tuner_id` alone had no index, so
+    # those queries fell back to a full table scan. A composite
+    # (tuner_id, run_id) index serves the equality lookups and the group-by
+    # without scanning the (large, blob-heavy) table.
+    __table_args__ = (
+        Index("ix_chat_completions_tuner_id_run_id", "tuner_id", "run_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
     tuner_id: Mapped[str] = mapped_column(
