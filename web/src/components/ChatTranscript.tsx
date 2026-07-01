@@ -114,6 +114,37 @@ function getFinishReason(completion: ChatCompletionItem): string | null {
 }
 
 /**
+ * Extract the prompt (input) and completion (output) token counts reported in
+ * the response `usage`, when present. These are per-turn — each turn is a
+ * distinct LLM request whose prompt grows as the trajectory accumulates.
+ */
+function getUsage(completion: ChatCompletionItem): {
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number | null;
+} | null {
+  const response = completion.response as unknown as AnyRecord;
+  const usage = response.usage;
+  if (!usage || typeof usage !== "object") return null;
+  const u = usage as AnyRecord;
+  const promptTokens =
+    typeof u.prompt_tokens === "number" ? u.prompt_tokens : null;
+  const completionTokens =
+    typeof u.completion_tokens === "number" ? u.completion_tokens : null;
+  if (promptTokens === null && completionTokens === null) return null;
+  const details = u.completion_tokens_details as AnyRecord | null | undefined;
+  const reasoningTokens =
+    details && typeof details.reasoning_tokens === "number"
+      ? details.reasoning_tokens
+      : null;
+  return {
+    promptTokens: promptTokens ?? 0,
+    completionTokens: completionTokens ?? 0,
+    reasoningTokens,
+  };
+}
+
+/**
  * Canonical, comparison-friendly identity for a message. Two messages are
  * "the same" turn if their role, flattened content, name/tool_call_id, and
  * tool-call name/arguments/id match — robust to incidental fields that differ
@@ -350,6 +381,31 @@ function TrajectoryCard({
                     <Badge tone={FINISH_REASON_TONE[finishReason] ?? "default"}>
                       {finishReason}
                     </Badge>
+                  )
+                );
+              })()}
+              {(() => {
+                const usage = getUsage(turn.completion);
+                return (
+                  usage && (
+                    <span
+                      className="turn-divider__meta turn-divider__meta--tokens"
+                      title={
+                        `${usage.promptTokens} input / ${usage.completionTokens} output tokens` +
+                        (usage.reasoningTokens !== null
+                          ? ` (${usage.reasoningTokens} reasoning)`
+                          : "")
+                      }
+                    >
+                      <span className="turn-divider__meta-label">tokens</span>
+                      <Mono>
+                        {usage.promptTokens.toLocaleString()} in ·{" "}
+                        {usage.completionTokens.toLocaleString()} out
+                        {usage.reasoningTokens !== null && (
+                          <> · {usage.reasoningTokens.toLocaleString()} reason</>
+                        )}
+                      </Mono>
+                    </span>
                   )
                 );
               })()}
