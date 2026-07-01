@@ -141,6 +141,13 @@ export function TunerDetailPage() {
                     / {recipe.num_groups_per_batch} groups ready
                   </span>
                 </div>
+                <div className="batch-readiness__runs muted">
+                  = {progress.batch.groups_ready * recipe.group_size} /{" "}
+                  {recipe.num_groups_per_batch * recipe.group_size} runs
+                  <span className="batch-readiness__hint">
+                    ({recipe.group_size} runs per group)
+                  </span>
+                </div>
                 <ProgressBar
                   value={progress.batch.groups_ready}
                   max={recipe.num_groups_per_batch}
@@ -149,6 +156,10 @@ export function TunerDetailPage() {
                 <div className="batch-readiness__sub">
                   <span>
                     {progress.batch.groups_in_progress} groups in progress
+                    <span className="batch-readiness__hint">
+                      (≈ {progress.batch.groups_in_progress * recipe.group_size}{" "}
+                      runs)
+                    </span>
                   </span>
                 </div>
                 <hr className="divider" />
