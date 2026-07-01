@@ -1,8 +1,8 @@
 import logging
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse, StreamingResponse
 
 from ollie_rl.types import (
@@ -142,18 +142,40 @@ async def get_tuner(tuner_id: str, progress: bool = False) -> GetTunerResponse:
 
 
 @app.get("/tuners/{tuner_id}/runs", response_model=ListRunsResponse)
-async def list_runs(tuner_id: str) -> ListRunsResponse:
+async def list_runs(
+    tuner_id: str,
+    limit: Optional[int] = Query(
+        default=None,
+        ge=1,
+        le=500,
+        description="Max runs to return per page. Omit to return every run.",
+    ),
+    cursor: Optional[str] = Query(
+        default=None,
+        description=(
+            "Opaque forward cursor from a previous response's `next_cursor`. "
+            "Omit to fetch the first page."
+        ),
+    ),
+) -> ListRunsResponse:
     """
-    List all runs for a tuner (newest first) with their derived lifecycle
-    status and recorded chat-completion counts.
+    List runs for a tuner (newest first) with their derived lifecycle status
+    and recorded chat-completion counts.
+
+    Supports cursor-based pagination via `limit`/`cursor`; the response returns
+    a `next_cursor` when more runs are available.
     """
-    from ollie_rl.service.tuner_service import TunerNotFoundError
+    from ollie_rl.service.tuner_service import (
+        InvalidRunCursorError,
+        TunerNotFoundError,
+    )
 
     try:
-        runs = await services.tuner.list_runs(tuner_id)
-        return ListRunsResponse(runs=runs)
+        return await services.tuner.list_runs(tuner_id, limit=limit, cursor=cursor)
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except InvalidRunCursorError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to list runs for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))

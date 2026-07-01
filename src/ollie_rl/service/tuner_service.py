@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import binascii
 import logging
 import math
 import uuid
@@ -31,6 +33,7 @@ from ollie_rl.types import (
     RunProgress,
     RunItem,
     RunStatus,
+    ListRunsResponse,
     RunDetailResponse,
     ChatCompletionDetailResponse,
     NextPick,
@@ -40,6 +43,12 @@ logger = logging.getLogger(__name__)
 
 
 class TunerNotFoundError(Exception):
+    pass
+
+
+class InvalidRunCursorError(Exception):
+    """Raised when a runs pagination cursor cannot be decoded."""
+
     pass
 
 
@@ -263,6 +272,30 @@ def _run_status(run: RunModel, now: datetime) -> RunStatus:
     if run.expires_at > now:
         return "in_flight"
     return "expired"
+
+
+def _encode_run_cursor(created_at: datetime, run_id: str) -> str:
+    """Encode a ``(created_at, id)`` run position into an opaque cursor.
+
+    The two fields form the stable sort key used by ``list_runs``; base64 keeps
+    the token opaque so clients treat it as a handle rather than parsing it.
+    """
+    raw = f"{created_at.isoformat()}|{run_id}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def _decode_run_cursor(cursor: str) -> Tuple[datetime, str]:
+    """Decode a cursor produced by :func:`_encode_run_cursor`.
+
+    Raises ``InvalidRunCursorError`` for malformed tokens so the API layer can
+    surface a 400 rather than a 500.
+    """
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        created_at_str, run_id = raw.rsplit("|", 1)
+        return datetime.fromisoformat(created_at_str), run_id
+    except (ValueError, UnicodeDecodeError, binascii.Error) as e:
+        raise InvalidRunCursorError(f"Invalid runs cursor: {cursor!r}") from e
 
 
 def _build_run_item(
@@ -639,11 +672,27 @@ class TunerService:
 
         return tuners_list
 
-    async def list_runs(self, tuner_id: str) -> List[RunItem]:
+    async def list_runs(
+        self,
+        tuner_id: str,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> ListRunsResponse:
         """
-        List all runs for a tuner (newest first), each with its derived
-        lifecycle status and the number of recorded chat completions.
+        List runs for a tuner (newest first), each with its derived lifecycle
+        status and the number of recorded chat completions.
+
+        Pagination is cursor-based over the stable ``(created_at, id)`` ordering
+        (newest first). Pass ``limit`` to bound the page and ``cursor`` (from a
+        previous response's ``next_cursor``) to fetch the runs immediately after
+        the last item of that page. Leave ``limit`` as ``None`` to return every
+        run in one shot (``next_cursor`` is then always ``None``).
         """
+        if limit is not None and limit < 0:
+            limit = 0
+
+        cursor_key = _decode_run_cursor(cursor) if cursor else None
+
         async with self.async_session() as session:
             exists = await session.execute(
                 select(TunerModel.id).where(TunerModel.id == tuner_id)
@@ -651,12 +700,36 @@ class TunerService:
             if exists.scalar_one_or_none() is None:
                 raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
 
-            runs_result = await session.execute(
+            runs_stmt = (
                 select(RunModel)
                 .where(RunModel.tuner_id == tuner_id)
-                .order_by(RunModel.created_at.desc())
+                .order_by(RunModel.created_at.desc(), RunModel.id.desc())
             )
+            if cursor_key is not None:
+                cursor_created_at, cursor_id = cursor_key
+                # Rows strictly "after" the cursor in (created_at DESC, id DESC)
+                # order: an older timestamp, or the same timestamp with a
+                # smaller id (the tie-breaker keeps paging deterministic when
+                # multiple runs share a created_at).
+                runs_stmt = runs_stmt.where(
+                    (RunModel.created_at < cursor_created_at)
+                    | (
+                        (RunModel.created_at == cursor_created_at)
+                        & (RunModel.id < cursor_id)
+                    )
+                )
+            if limit is not None:
+                # Fetch one extra row to detect whether another page exists
+                # without a separate count query.
+                runs_stmt = runs_stmt.limit(limit + 1)
+
+            runs_result = await session.execute(runs_stmt)
             runs = list(runs_result.scalars().all())
+
+            has_more = False
+            if limit is not None and len(runs) > limit:
+                has_more = True
+                runs = runs[:limit]
 
             counts: Dict[str, int] = {}
             generations: Dict[str, int] = {}
@@ -664,14 +737,19 @@ class TunerService:
                 # One grouped pass yields both the completion count and the
                 # run's policy generation (max across its completions), so the
                 # runs list can bucket rewards by generation without an extra
-                # per-run fetch.
+                # per-run fetch. Scope the aggregate to the page's run ids so a
+                # paginated request doesn't scan every completion.
+                run_ids = [r.id for r in runs]
                 agg_result = await session.execute(
                     select(
                         ChatCompletionModel.run_id,
                         func.count(),
                         func.max(ChatCompletionModel.policy_generation),
                     )
-                    .where(ChatCompletionModel.tuner_id == tuner_id)
+                    .where(
+                        ChatCompletionModel.tuner_id == tuner_id,
+                        ChatCompletionModel.run_id.in_(run_ids),
+                    )
                     .group_by(ChatCompletionModel.run_id)
                 )
                 for run_id, count, max_generation in agg_result.all():
@@ -682,10 +760,16 @@ class TunerService:
                         generations[run_id] = max_generation
 
         now = utcnow()
-        return [
+        items = [
             _build_run_item(r, counts.get(r.id, 0), now, generations.get(r.id))
             for r in runs
         ]
+        next_cursor = (
+            _encode_run_cursor(runs[-1].created_at, runs[-1].id)
+            if has_more and runs
+            else None
+        )
+        return ListRunsResponse(runs=items, next_cursor=next_cursor)
 
     async def get_run_details(self, tuner_id: str, run_id: str) -> RunDetailResponse:
         """

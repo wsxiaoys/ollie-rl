@@ -174,6 +174,11 @@ class RunItem(BaseModel):
 
 class ListRunsResponse(BaseModel):
     runs: List[RunItem]
+    # Opaque forward cursor for the next page (cursor-based pagination). Pass it
+    # back as the `cursor` query param to fetch the runs immediately after the
+    # last item in `runs`. `None` when there are no more runs (or the caller
+    # requested every run unbounded).
+    next_cursor: Optional[str] = None
 
 
 class ChatCompletionItem(BaseModel):

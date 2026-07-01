@@ -674,6 +674,20 @@ td.num {
   box-shadow: var(--focus-ring);
 }
 
+/* ---- Runs pagination (infinite scroll) ---- */
+.runs-sentinel {
+  height: 1px;
+}
+
+.runs-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 0;
+  font-size: 13px;
+}
+
 /* ---- Run detail KPI strip ---- */
 .kpi-strip--runs {
   grid-template-columns: repeat(5, 1fr);

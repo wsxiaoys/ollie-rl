@@ -47,9 +47,16 @@ export function getTuner(tunerId: string): Promise<GetTunerResponse> {
   );
 }
 
-export function listRuns(tunerId: string): Promise<ListRunsResponse> {
+export function listRuns(
+  tunerId: string,
+  opts: { limit?: number; cursor?: string | null } = {},
+): Promise<ListRunsResponse> {
+  const params = new URLSearchParams();
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  const qs = params.toString();
   return get<ListRunsResponse>(
-    `/tuners/${encodeURIComponent(tunerId)}/runs`,
+    `/tuners/${encodeURIComponent(tunerId)}/runs${qs ? `?${qs}` : ""}`,
   );
 }
 

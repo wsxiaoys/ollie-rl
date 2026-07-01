@@ -59,8 +59,11 @@ export interface paths {
         };
         /**
          * List Runs
-         * @description List all runs for a tuner (newest first) with their derived lifecycle
-         *     status and recorded chat-completion counts.
+         * @description List runs for a tuner (newest first) with their derived lifecycle status
+         *     and recorded chat-completion counts.
+         *
+         *     Supports cursor-based pagination via `limit`/`cursor`; the response returns
+         *     a `next_cursor` when more runs are available.
          */
         get: operations["list_runs_tuners__tuner_id__runs_get"];
         put?: never;
@@ -882,6 +885,8 @@ export interface components {
         ListRunsResponse: {
             /** Runs */
             runs: components["schemas"]["RunItem"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
         };
         /** ListTunersResponse */
         ListTunersResponse: {
@@ -1366,7 +1371,12 @@ export interface operations {
     };
     list_runs_tuners__tuner_id__runs_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Max runs to return per page. Omit to return every run. */
+                limit?: number | null;
+                /** @description Opaque forward cursor from a previous response's `next_cursor`. Omit to fetch the first page. */
+                cursor?: string | null;
+            };
             header?: never;
             path: {
                 tuner_id: string;

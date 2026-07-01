@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, type ChangeEvent } from "react";
-import { runsQuery, tunersQuery } from "../api/queries";
+import { useEffect, useMemo, useRef, type ChangeEvent } from "react";
+import { runsPageQuery, tunersQuery } from "../api/queries";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { Mono } from "../components/ui";
 
@@ -10,10 +10,34 @@ export function RunListPage() {
   const navigate = useNavigate();
 
   const tunersQ = useQuery(tunersQuery);
-  const runsQ = useQuery({
-    ...runsQuery(tunerId ?? ""),
+  const runsQ = useInfiniteQuery({
+    ...runsPageQuery(tunerId ?? ""),
     enabled: Boolean(tunerId),
   });
+
+  const runs = useMemo(
+    () => runsQ.data?.pages.flatMap((p) => p.runs) ?? [],
+    [runsQ.data],
+  );
+
+  // Infinite scroll: fetch the next page when the sentinel row near the bottom
+  // of the table scrolls into view.
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = runsQ;
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasNextPage) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   useEffect(() => {
     if (!tunerId && tunersQ.data?.tuners && tunersQ.data.tuners.length > 0) {
@@ -62,11 +86,11 @@ export function RunListPage() {
         </div>
       )}
 
-      {tunerId && runsQ.data && runsQ.data.runs.length === 0 && (
+      {tunerId && runsQ.data && runs.length === 0 && (
         <div className="placeholder">No runs dispensed yet.</div>
       )}
 
-      {tunerId && runsQ.data && runsQ.data.runs.length > 0 && (
+      {tunerId && runsQ.data && runs.length > 0 && (
         <table className="table table--dense">
           <thead>
             <tr>
@@ -80,7 +104,7 @@ export function RunListPage() {
             </tr>
           </thead>
           <tbody>
-            {runsQ.data.runs.map((r) => (
+            {runs.map((r) => (
               <tr key={r.run_id}>
                 <td>
                   <Link
@@ -107,6 +131,22 @@ export function RunListPage() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {tunerId && runs.length > 0 && (
+        <>
+          {/* Sentinel observed to auto-load the next page on scroll. */}
+          <div ref={sentinelRef} aria-hidden className="runs-sentinel" />
+          <div className="runs-pager">
+            {runsQ.isFetchingNextPage ? (
+              <span className="muted">Loading more…</span>
+            ) : runsQ.hasNextPage ? (
+              <span className="muted">Scroll to load more…</span>
+            ) : (
+              <span className="muted">End of runs</span>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
