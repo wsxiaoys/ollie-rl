@@ -376,9 +376,16 @@ function TrajectoryCard({
               <span className="turn-divider__label">turn {ti + 1}</span>
               {(() => {
                 const finishReason = getFinishReason(turn.completion);
+                const title =
+                  finishReason === "content_filter"
+                    ? "Malformed output (e.g. bad function call, bad reasoning block) is also adapted into this stop reason"
+                    : undefined;
                 return (
                   finishReason && (
-                    <Badge tone={FINISH_REASON_TONE[finishReason] ?? "default"}>
+                    <Badge
+                      tone={FINISH_REASON_TONE[finishReason] ?? "default"}
+                      title={title}
+                    >
                       {finishReason}
                     </Badge>
                   )

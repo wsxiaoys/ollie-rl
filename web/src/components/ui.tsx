@@ -40,11 +40,17 @@ export function ProgressBar({
 export function Badge({
   children,
   tone = "default",
+  title,
 }: {
   children: ReactNode;
   tone?: "default" | "good" | "warn" | "danger" | "info";
+  title?: string;
 }) {
-  return <span className={`badge badge--${tone}`}>{children}</span>;
+  return (
+    <span className={`badge badge--${tone}`} title={title}>
+      {children}
+    </span>
+  );
 }
 
 export function Panel({
