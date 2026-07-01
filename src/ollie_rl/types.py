@@ -130,6 +130,10 @@ class GetTunerResponse(BaseModel):
     # already available via `policy_generation`, so we only expose the
     # in-flight flag here.
     is_training: bool = False
+    # Wall-clock execution time (seconds) of the most recent *completed* train
+    # op, derived from its LRO `updateTime - createTime`. None when the backend
+    # doesn't track op timing or no train op has completed yet.
+    last_train_op_duration_seconds: Optional[float] = None
 
 
 class TunerItem(BaseModel):

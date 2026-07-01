@@ -218,6 +218,35 @@ def _pick_datum(
     return best
 
 
+def _last_train_op_duration_seconds(state_data: object) -> Optional[float]:
+    """Derive the most recent completed train op's execution time (seconds).
+
+    Reads the LRO timing captured under
+    ``last_train_op.metadata.{create_time, update_time}`` and returns
+    ``update_time - create_time``. Robust to camelCase serialization and
+    tolerant of missing/partial timing (returns ``None``). Trainers that don't
+    persist a ``last_train_op`` (e.g. inline backends) yield ``None``.
+    """
+    if not isinstance(state_data, dict):
+        return None
+    op = state_data.get("last_train_op")
+    if not isinstance(op, dict):
+        return None
+    meta = op.get("metadata")
+    if not isinstance(meta, dict):
+        return None
+    create = meta.get("create_time") or meta.get("createTime")
+    update = meta.get("update_time") or meta.get("updateTime")
+    if not isinstance(create, str) or not isinstance(update, str):
+        return None
+    try:
+        start = datetime.fromisoformat(create.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(update.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (end - start).total_seconds()
+
+
 def _run_status(run: RunModel, now: datetime) -> RunStatus:
     """Derive a single mutually-exclusive lifecycle label for a run.
 
@@ -427,6 +456,7 @@ class TunerService:
             trainer_state=state_data,
             progress=progress,
             is_training=await trainer.is_training(),
+            last_train_op_duration_seconds=_last_train_op_duration_seconds(state_data),
         )
 
     async def get_progress(self, tuner_id: str) -> TrainingProgress:
@@ -501,9 +531,7 @@ class TunerService:
             # and within the off-policy window.
             if rewarded_flag and r.trained_count <= 0 and r.rejected_count <= 0:
                 run_generation = generation_by_run_id.get(r.id)
-                if run_generation is None or (
-                    generation - run_generation <= max_off
-                ):
+                if run_generation is None or (generation - run_generation <= max_off):
                     consumable += 1
                     if r.datum_id in consumable_by_datum:
                         consumable_by_datum[r.datum_id] += 1

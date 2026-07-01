@@ -226,6 +226,17 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         self.mock_client.train_step.return_value = mock_op
 
         mock_completed_op = MagicMock()
+        mock_completed_op.name = "operation-train-step"
+        mock_completed_op.metadata = {
+            "@type": (
+                "type.googleapis.com/google.cloud.aiplatform.v1beta1"
+                ".TrainStepOperationMetadata"
+            ),
+            "genericMetadata": {
+                "createTime": "2026-07-01T00:00:00Z",
+                "updateTime": "2026-07-01T00:07:00Z",
+            },
+        }
         mock_completed_op.get_response_as.return_value = response_payload
         self.mock_client.wait_for_operation.return_value = mock_completed_op
 
@@ -249,6 +260,20 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"tuning_job_name"', self.state_store._state)
         self.assertIn('"last_train_op"', self.state_store._state)
         self.assertIn('"completed_train_step_id"', self.state_store._state)
+
+        # The completed op's name and timing metadata are persisted for
+        # traceability / execution-time recovery.
+        assert self.job.state.last_train_op is not None
+        self.assertEqual(self.job.state.last_train_op.name, "operation-train-step")
+        assert self.job.state.last_train_op.metadata is not None
+        self.assertEqual(
+            self.job.state.last_train_op.metadata.create_time,
+            "2026-07-01T00:00:00Z",
+        )
+        self.assertEqual(
+            self.job.state.last_train_op.metadata.update_time,
+            "2026-07-01T00:07:00Z",
+        )
 
     async def test_open_restore_path(self):
         import json

@@ -16,6 +16,14 @@ const TIER_TONE: Record<
   none: "default",
 };
 
+/** Human-readable train op duration, e.g. 90.4 → "1m 30s", 7.2 → "7.2s". */
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return `${mins}m ${secs}s`;
+}
+
 export function TunerDetailPage() {
   const { tunerId } = useParams({ from: "/tuners/$tunerId" });
   const { data, isLoading, isError, error, isFetching } = useQuery(
@@ -37,6 +45,7 @@ export function TunerDetailPage() {
 
   const { recipe, progress } = data;
   const isTraining = data.is_training;
+  const lastTrainOpDuration = data.last_train_op_duration_seconds;
 
   return (
     <div className="page">
@@ -91,6 +100,13 @@ export function TunerDetailPage() {
       {progress && (
         <>
           <div className="kpi-strip">
+            {lastTrainOpDuration != null && (
+              <StatCard
+                label={`gen ${data.policy_generation} train time`}
+                value={formatDuration(lastTrainOpDuration)}
+                tone="good"
+              />
+            )}
             <StatCard label="total runs" value={progress.runs.total} />
             <StatCard
               label="in flight"

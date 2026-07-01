@@ -307,14 +307,23 @@ td.num {
 /* ---- KPI strip ---- */
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  /* Fixed column counts that evenly divide the (up to) 8 cards so a row is
+     never left with a single orphaned card. `minmax(0, 1fr)` lets the cards
+     shrink to share the row instead of overflowing/wrapping. */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .kpi-strip {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -903,7 +912,7 @@ pretty-json {
   box-shadow: var(--focus-ring);
 }
 
-..sidebar-footer {
+.sidebar-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;

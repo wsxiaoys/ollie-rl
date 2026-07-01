@@ -850,6 +850,8 @@ export interface components {
              * @default false
              */
             is_training: boolean;
+            /** Last Train Op Duration Seconds */
+            last_train_op_duration_seconds?: number | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {

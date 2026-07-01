@@ -14,6 +14,7 @@ from gemini_msrl.types import (
     GenerateContentTuningScopeRequest,
     GenerateContentTuningScopeResponse,
     GenerationConfig,
+    GenericMetadata,
     MultiStepReinforcementTuningHyperParameters,
     MultiStepReinforcementTuningSpec,
     ReinforcementTuningTrainingData,
@@ -118,13 +119,31 @@ class GeminiMsrlTrainerConfig(BaseModel):
     tuning_job_name: Optional[str] = None
 
 
+class CompletedTrainOp(BaseModel):
+    """The most recent *completed* train-step LRO and its bookkeeping.
+
+    Bundles the train-step response (source of truth for `policy_generation`)
+    together with the operation's resource name and timing metadata so the
+    exact Vertex operation is traceable and its execution time
+    (`metadata.update_time - metadata.create_time`) is recoverable.
+    """
+
+    # The completed train-step response payload.
+    response: TrainStepResponse
+    # Operation resource name of the completed train-step LRO.
+    name: Optional[str] = None
+    # `genericMetadata` (createTime / updateTime) of the completed LRO.
+    # `update_time - create_time` gives the train op's execution time.
+    metadata: Optional[GenericMetadata] = None
+
+
 class GeminiMsrlTrainerState(BaseModel):
     tuning_job_name: str
-    # The most recent *completed* train-step response. This is the source of
-    # truth for `policy_generation` and is NEVER overwritten by an in-flight
-    # op name, so the generation can't regress to 0 while a new train step is
-    # running (that is tracked separately by `pending_train_op`).
-    last_train_op: Optional[TrainStepResponse] = None
+    # The most recent *completed* train-step op. This is the source of truth
+    # for `policy_generation` and is NEVER overwritten by an in-flight op name,
+    # so the generation can't regress to 0 while a new train step is running
+    # (that is tracked separately by `pending_train_op`).
+    last_train_op: Optional[CompletedTrainOp] = None
     # Op name of an in-flight train-step LRO, if any. Set the moment a train
     # step is submitted and cleared once its completion poll lands. Used to
     # detect in-flight training and to re-spawn the completion poll on restart.
@@ -134,19 +153,29 @@ class GeminiMsrlTrainerState(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _migrate_legacy_last_train_op(cls, data: Any) -> Any:
-        """Backwards-compat: older persisted state stored the in-flight op name
-        in `last_train_op` (a `str`). Migrate that into `pending_train_op` so we
-        don't fail validation against the new `TrainStepResponse`-only type."""
-        if isinstance(data, dict) and isinstance(data.get("last_train_op"), str):
+        """Backwards-compat for `last_train_op` shape changes:
+
+        1. Oldest format stored the in-flight op name as a `str`; migrate it
+           into `pending_train_op`.
+        2. Previous format stored the bare `TrainStepResponse` dict; wrap it
+           into the new `CompletedTrainOp` container under `response`.
+        """
+        if not isinstance(data, dict):
+            return data
+        legacy = data.get("last_train_op")
+        if isinstance(legacy, str):
             data = dict(data)
-            data.setdefault("pending_train_op", data["last_train_op"])
+            data.setdefault("pending_train_op", legacy)
             data["last_train_op"] = None
+        elif isinstance(legacy, dict) and "response" not in legacy:
+            data = dict(data)
+            data["last_train_op"] = {"response": legacy}
         return data
 
     @property
     def train_step(self) -> int:
-        if self.last_train_op and self.last_train_op.completed_train_step_id:
-            return int(self.last_train_op.completed_train_step_id)
+        if self.last_train_op and self.last_train_op.response.completed_train_step_id:
+            return int(self.last_train_op.response.completed_train_step_id)
         return 0
 
 
@@ -405,7 +434,22 @@ class GeminiMsrlTrainer(Trainer):
                 # op's poll landing after a newer one).
                 completed = int(response.completed_train_step_id)
                 if completed >= self.state.train_step:
-                    self.state.last_train_op = response
+                    # Persist the response together with the op name + its
+                    # timing metadata so the exact operation is traceable and
+                    # the train-step execution time (updateTime - createTime)
+                    # is recoverable without re-querying Vertex.
+                    generic_metadata = (completed_op.metadata or {}).get(
+                        "genericMetadata"
+                    )
+                    self.state.last_train_op = CompletedTrainOp(
+                        response=response,
+                        name=completed_op.name,
+                        metadata=(
+                            GenericMetadata.model_validate(generic_metadata)
+                            if generic_metadata
+                            else None
+                        ),
+                    )
 
             # Clear the in-flight pointer if it still refers to this op; a newer
             # train_step may have already replaced it.
