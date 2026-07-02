@@ -247,18 +247,34 @@ function buildTrajectories(
 }
 
 /**
- * Whether a trajectory was given tools to work with, i.e. any of its requests
- * declared `ChatCompletionRequest.tools`. This is distinct from whether the
- * model actually called a tool: an agent turn that declines to call a tool
- * still counts. Tool-less trajectories are usually auxiliary one-shot requests
- * (e.g. title generation) that never offer tools and don't reflect the agent's
- * task quality.
+ * Whether the model actually invoked a tool anywhere in the trajectory —
+ * either an assistant response carrying `tool_calls`, or a follow-up request
+ * echoing those tool calls / their `tool` results back into the prompt.
  */
-function trajectoryUsesTools(completions: ChatCompletionItem[]): boolean {
+function trajectoryHasToolCall(completions: ChatCompletionItem[]): boolean {
   return completions.some((c) => {
-    const request = c.request as unknown as AnyRecord;
-    return asRecordArray(request.tools).length > 0;
+    const responseMessage = getResponseMessage(c);
+    if (
+      responseMessage &&
+      asRecordArray(responseMessage.tool_calls).length > 0
+    ) {
+      return true;
+    }
+    return getPromptMessages(c).some(
+      (m) => asRecordArray(m.tool_calls).length > 0 || m.role === "tool",
+    );
   });
+}
+
+/**
+ * A trajectory is only "not interesting" (and hidden by default) when it both
+ * makes no tool call and consists of a single request turn — typically an
+ * auxiliary one-shot request (e.g. title generation) that doesn't reflect the
+ * agent's task quality. Any tool call or multi-turn exchange keeps it visible.
+ */
+function isInterestingTrajectory(completions: ChatCompletionItem[]): boolean {
+  const isSingleTurn = completions.length <= 1;
+  return trajectoryHasToolCall(completions) || !isSingleTurn;
 }
 
 function MessageView({ message }: { message: AnyRecord }) {
@@ -479,7 +495,7 @@ export function ChatTranscript({
   const trajectories = buildTrajectories(completions);
   const visible = showToollessTrajectories
     ? trajectories
-    : trajectories.filter(trajectoryUsesTools);
+    : trajectories.filter(isInterestingTrajectory);
   const hiddenCount = trajectories.length - visible.length;
 
   return (
