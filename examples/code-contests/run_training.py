@@ -4,38 +4,12 @@ Each rollout runs as a containerized **Harbor trial**: a Terminus 2 agent is
 dropped into a sandbox to solve one competitive-programming task, and Harbor's
 verifier runs the task's unit tests to produce the reward. The driver just
 orchestrates the loop — dispense a run from ollie-rl, run the trial, report the
-reward — while ollie-rl handles GRPO grouping and training.
+reward — while ollie-rl handles the training.
 
-How Harbor and ollie-rl concepts line up:
-
-    Harbor                         ollie-rl
-    ------------------------------ ---------------------------------
-    TaskConfig(path=...)           datum_id  (one CodeContests task)
-    one trial -> (reward)          Run       (one attempt at a datum_id)
-    K trials of the same task      Rollout   (a GRPO group)
-    verifier_result.rewards        PUT /reward payload
-    agent base_url (LLM endpoint)  ollie-rl's OpenAI-compatible proxy
-
-Token collection is handled entirely by ollie-rl: Terminus 2 samples through the
-shared endpoint below, tagged with this run's ``X-Run-Id`` header, so every
-result-affecting completion is recorded under the dispensed ``run_id``.
-
-Header-addressed endpoint
--------------------------
-This driver uses ollie-rl's standard OpenAI-compatible endpoint and carries the
-tuner_id / run_id in **HTTP headers**::
-
-    POST /openai/v1/chat/completions
-    X-Tuner-Id: {tuner_id}
-    X-Run-Id:   {run_id}
-
-so every agent shares one static ``base_url``::
-
-    http://<ollie-host>/openai/v1
-
-(An OpenAI-compatible client appends ``/chat/completions`` to that base_url.)
-The per-run attribution comes from the ``X-Run-Id`` header, injected below via
-Terminus 2's ``extra_headers`` LLM kwarg.
+The agent samples through ollie-rl's OpenAI-compatible endpoint, tagged with the
+run's ``X-Tuner-Id`` / ``X-Run-Id`` headers so completions are attributed to the
+dispensed run. Every agent shares one static ``base_url``
+(``http://<ollie-host>/openai/v1``) and the ids travel in the headers.
 
 Prerequisites
 -------------
@@ -79,11 +53,9 @@ DEFAULT_RECIPE = "grpo_16x32"
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-code-contests"
 
-# litellm (used internally by Terminus 2) needs a provider prefix to know how to
-# route the request. ollie-rl exposes an OpenAI-compatible proxy, so the model is
-# addressed as ``openai/<name>`` which tells litellm to treat the per-run
-# ``base_url`` as an OpenAI-compatible server (otherwise it raises "LLM Provider
-# NOT provided").
+# Terminus 2 routes through litellm, which needs a provider prefix. ollie-rl
+# exposes an OpenAI-compatible endpoint, so the model is addressed as
+# ``openai/<name>``.
 AGENT_MODEL_NAME = "openai/ollie"
 
 
@@ -164,12 +136,9 @@ async def run_rollout(
 ) -> float:
     """Execute one containerized Harbor trial and return its reward.
 
-    A Harbor trial maps 1:1 onto one ollie-rl Run: a single agent attempt at a
-    single task under a single ``run_id``. Terminus 2 samples through the shared
-    ``/openai/v1`` endpoint, tagging every request with this run's ``X-Run-Id``
-    header, so ollie-rl records every completion under ``run_id``. Harbor's
-    verifier then runs the task's ``tests/test.sh`` and writes a reward file,
-    surfaced here as a float.
+    The agent samples through the shared ``/openai/v1`` endpoint, tagging every
+    request with this run's headers so ollie-rl records completions under the
+    run. Harbor's verifier then runs the task's tests and produces the reward.
     """
     config = TrialConfig(
         task=TaskConfig(path=TASKS_DIR / datum_id),
@@ -177,12 +146,9 @@ async def run_rollout(
         agent=AgentConfig(
             name=AgentName.TERMINUS_2.value,
             model_name=AGENT_MODEL_NAME,
-            # Terminus 2 forwards these kwargs to its LiteLLM backend:
-            #   api_base    -> the shared OpenAI-compatible endpoint
-            #   api_key     -> required by litellm's openai/ provider
-            #   extra_headers -> X-Tuner-Id / X-Run-Id, attached to each
-            #                    chat-completion request so ollie-rl attributes
-            #                    every completion to this run
+            # Point the agent at the shared OpenAI-compatible endpoint and tag
+            # each request with the tuner/run ids so ollie-rl attributes every
+            # completion to this run.
             kwargs={
                 "api_base": openai_base_url(base),
                 "llm_kwargs": {
@@ -207,10 +173,9 @@ async def run_rollout(
 def extract_reward(trial_result) -> float:
     """Pull the scalar reward out of a single Harbor trial result.
 
-    ``VerifierResult.rewards`` is a ``dict[str, float | int] | None``. Harbor
-    reads ``/logs/verifier/reward.json`` (multi-metric) and falls back to
-    ``reward.txt`` (a single value). We prefer the ``"reward"`` key, then fall
-    back to the sole value when the verifier emitted exactly one metric.
+    ``VerifierResult.rewards`` is a ``dict[str, float | int] | None``. We prefer
+    the ``"reward"`` key, then fall back to the sole value when the verifier
+    emitted exactly one metric.
     """
     verifier_result = getattr(trial_result, "verifier_result", None)
     rewards = getattr(verifier_result, "rewards", None) if verifier_result else None
@@ -332,10 +297,14 @@ async def main() -> int:
                 for t in tuners:
                     if t["name"] == args.name:
                         tuner_id = t["tuner_id"]
-                        print(f"[driver] adapting to existing tuner {tuner_id} (name={args.name!r})")
+                        print(
+                            f"[driver] adapting to existing tuner {tuner_id} (name={args.name!r})"
+                        )
                         break
             except Exception as exc:
-                print(f"[driver] warning: could not list tuners to check for existing name: {exc}")
+                print(
+                    f"[driver] warning: could not list tuners to check for existing name: {exc}"
+                )
 
         if not tuner_id:
             tuner_id = await create_tuner(

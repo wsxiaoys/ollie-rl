@@ -7,9 +7,9 @@ rollout environment and `ollie-rl` (pochi) as the tuner/trainer.
 Each rollout is a full **Harbor trial**: a [Terminus 2](https://www.harborframework.com)
 agent is dropped into a sandboxed container, reads a CodeContests problem,
 writes a solution, and Harbor's verifier runs the task's unit tests to produce
-the reward. `ollie-rl` records the agent's LLM calls, groups them into GRPO
-groups, and trains — exactly like the `weather-agent` example, but with a
-containerized agentic environment instead of a shell-out to `opencode`.
+the reward. `ollie-rl` records the agent's LLM calls and trains on them — like
+the `weather-agent` example, but with a containerized agentic environment
+instead of a shell-out to `opencode`.
 
 ```
 examples/code-contests/
@@ -51,36 +51,24 @@ task, and its `path` (e.g. `code_contests-0000`) is used verbatim as an
 | one trial → reward | **Run** (one attempt at a `datum_id`) | one Terminus 2 solve attempt |
 | K trials of the same task | **Rollout** (a GRPO group) | `group_size` (16) attempts / problem |
 | `verifier_result.rewards["reward"]` | `PUT /reward` payload | pass/fail from `tests/test.sh` |
-| agent `base_url` (LLM endpoint) | ollie-rl OpenAI-compatible proxy | the twin route below |
+| agent `base_url` (LLM endpoint) | ollie-rl OpenAI-compatible endpoint | shared endpoint below |
 
-Because Terminus 2 samples through ollie-rl's proxy, **token collection is
-automatic** — we need neither vLLM interception nor `token_ids`/`mask_ids` in
-agent metadata (Harbor's two documented strategies). Harbor is used purely for
-the sandbox, the agent loop, and the verifier reward.
+Because Terminus 2 samples through ollie-rl's endpoint, **token collection is
+automatic**. Harbor is used purely for the sandbox, the agent loop, and the
+verifier reward.
 
-## The twin `base_url`-addressed endpoint
+## The shared LLM endpoint
 
-Terminus 2's `AgentConfig` only exposes an LLM `base_url` (no per-request
-headers), so instead of ollie-rl's header-based
-`POST /openai/v1/chat/completions` (`X-Tuner-Id` / `X-Run-Id`), this example
-targets a **twin route that carries the ids in the URL path**:
+Every trial shares one static `base_url` pointing at ollie-rl's
+OpenAI-compatible endpoint:
 
 ```
-POST /tuners/{tuner_id}/runs/{run_id}/openai/chat/completions
+http://<ollie-host>/openai/v1
 ```
 
-The driver hands each trial the base_url
-
-```
-http://<ollie-host>/tuners/{tuner_id}/runs/{run_id}/openai
-```
-
-and the OpenAI-compatible client appends `/chat/completions`. Omitting the
-`/runs/{run_id}` segment (a tuner-only variant) would be the equivalent of
-dropping `X-Run-Id` for auxiliary, non-scored calls.
-
-> ℹ️ This route is fully implemented server-side. The server handles this path-parameter
-> twin of the header-based endpoint, routing completions directly to the correct tuner and run.
+The per-run attribution travels in HTTP headers (`X-Tuner-Id` / `X-Run-Id`),
+which the driver injects via Terminus 2's `extra_headers` LLM kwarg, so ollie-rl
+records every completion under the right run.
 
 ## How it fits together
 
@@ -96,14 +84,13 @@ sequenceDiagram
     loop each training step
         D->>API: POST /tuners/{id}/runs
         API-->>D: { run_id, datum_id = "code_contests-0042" }
-        D->>H: Trial.run() with base_url=/tuners/{id}/runs/{run_id}/openai
+        D->>H: Trial.run() with base_url=/openai/v1 (+ run headers)
         H->>A: start agent on instruction.md
-        A->>API: POST /tuners/{id}/runs/{run_id}/openai/chat/completions
+        A->>API: POST /openai/v1/chat/completions (X-Run-Id: run_id)
         API-->>A: assistant turn (recorded under run_id)
-        Note over H,A: agent writes solution; verifier runs tests/test.sh
+        Note over H,A: agent writes solution, verifier runs tests/test.sh
         H-->>D: trial_result.verifier_result.rewards { reward: 1|0 }
         D->>API: PUT /tuners/{id}/runs/{run_id}/reward
-        Note over API: maybe_train() fires implicitly
     end
 ```
 
@@ -133,15 +120,15 @@ sequenceDiagram
 ## Run it
 
 ```bash
-uv run python examples/code-contests/run_training.py --steps 200 --concurrency 8
+uv run python examples/code-contests/run_training.py --runs 200 --concurrency 8
 ```
 
 Expected output:
 
 ```
 [driver] created tuner 4b1e… (64 tasks)
-[driver] step 0000 task=code_contests-0007  reward=+0.0 avg32=0.000
-[driver] step 0001 task=code_contests-0031  reward=+1.0 avg32=0.500
+[driver] run 0000 task=code_contests-0007  reward=+0.0 avg32=0.000
+[driver] run 0001 task=code_contests-0031  reward=+1.0 avg32=0.500
 …
 ```
 
@@ -155,9 +142,9 @@ form a GRPO group and every **32** groups trigger a `train_step`.
 | `--base-url` | `http://localhost:8000` | ollie-rl HTTP base URL. |
 | `--recipe` | `grpo_16x32` | Named recipe in the `Cookbook`. |
 | `--trainer` | `fake` | Trainer factory (`fake`, `tinker`, …). |
-| `--model` | `hosted_vllm/ollie` | Terminus 2 model string (policy chosen by tuner_id in the URL). |
+| `--name` | `tuning-code-contests` | Tuner name (reused if it already exists). |
 | `--environment` | `docker` | Harbor `EnvironmentType` (`docker`, `daytona`, `modal`, …). |
-| `--steps` | `200` | Number of run/score iterations. |
+| `--runs` | `200` | Number of run/score iterations. |
 | `--concurrency` | `8` | Parallel Harbor trials. |
 | `--tuner-id` | *(none)* | Resume against an existing tuner. |
 
