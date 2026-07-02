@@ -475,12 +475,12 @@ function TrajectoryCard({
 
 export function ChatTranscript({
   completions,
-  showToollessTrajectories = false,
+  interestingOnly = false,
   tunerId,
   runId,
 }: {
   completions: ChatCompletionItem[];
-  showToollessTrajectories?: boolean;
+  interestingOnly?: boolean;
   tunerId?: string;
   runId?: string;
 }) {
@@ -493,23 +493,24 @@ export function ChatTranscript({
   }
 
   const trajectories = buildTrajectories(completions);
-  const visible = showToollessTrajectories
-    ? trajectories
-    : trajectories.filter(isInterestingTrajectory);
+  const visible = interestingOnly
+    ? trajectories.filter(isInterestingTrajectory)
+    : trajectories;
   const hiddenCount = trajectories.length - visible.length;
 
   return (
     <div className="transcript-list">
       {hiddenCount > 0 && (
         <div className="transcript-note">
-          {hiddenCount} tool-less trajector{hiddenCount === 1 ? "y" : "ies"}{" "}
+          {hiddenCount} uninteresting trajector{hiddenCount === 1 ? "y" : "ies"}
+          {" "}
           hidden
         </div>
       )}
       {visible.length === 0 ? (
         <div className="placeholder placeholder--inset">
-          All trajectories are tool-less — enable “Show tool-less trajectories”
-          to view them.
+          No interesting trajectories — uncheck “Show interesting trajectories
+          only” to view all.
         </div>
       ) : (
         visible.map((traj, i) => (

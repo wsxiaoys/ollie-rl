@@ -81,7 +81,7 @@ export function CompletionDetailPage() {
       </div>
 
       <Panel title="Transcript">
-        <ChatTranscript completions={[item]} showToollessTrajectories />
+        <ChatTranscript completions={[item]} />
       </Panel>
 
       <Panel title="Raw request">

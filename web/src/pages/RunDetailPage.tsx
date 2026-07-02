@@ -13,7 +13,7 @@ export function RunDetailPage() {
   const { data, isLoading, isError, error, isFetching } = useQuery(
     runQuery(tunerId, runId),
   );
-  const [showToolless, setShowToolless] = useState(false);
+  const [interestingOnly, setInterestingOnly] = useState(true);
 
   if (isLoading) {
     return <div className="placeholder">Loading run…</div>;
@@ -69,16 +69,16 @@ export function RunDetailPage() {
           <label className="toggle">
             <input
               type="checkbox"
-              checked={showToolless}
-              onChange={(e) => setShowToolless(e.target.checked)}
+              checked={interestingOnly}
+              onChange={(e) => setInterestingOnly(e.target.checked)}
             />
-            Show tool-less trajectories
+            Show interesting trajectories only
           </label>
         }
       >
         <ChatTranscript
           completions={completions}
-          showToollessTrajectories={showToolless}
+          interestingOnly={interestingOnly}
           tunerId={tunerId}
           runId={runId}
         />
