@@ -225,18 +225,13 @@ async def get_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/openai/v1/chat/completions")
-async def create_chat_completion(
+async def _sample_and_respond(
     request: ChatCompletionRequest,
-    x_tuner_id: Annotated[str, Header()],
-    x_run_id: Annotated[str | None, Header()] = None,
+    *,
+    tuner_id: str,
+    run_id: str | None,
 ):
-    """Generate a chat completion from the active policy of the requested model.
-
-    Real token-by-token streaming is not supported. When ``stream=true`` is
-    requested, the full completion is generated first and then replayed as a
-    simulated SSE stream so that OpenAI-compatible clients keep working.
-    """
+    """Internal helper to handle sampling from a tuner and generating the response."""
     from ollie_rl.service.tuner_service import (
         TunerNotFoundError,
         RunNotFoundError,
@@ -247,9 +242,9 @@ async def create_chat_completion(
 
     try:
         completion = await services.tuner.sample(
-            tuner_id=x_tuner_id,
+            tuner_id=tuner_id,
             request=request,
-            run_id=x_run_id,
+            run_id=run_id,
         )
     except (TunerNotFoundError, RunNotFoundError) as e:
         raise HTTPException(
@@ -282,6 +277,43 @@ async def create_chat_completion(
             media_type="text/event-stream",
         )
     return completion
+
+
+@app.post("/openai/v1/chat/completions")
+async def create_chat_completion(
+    request: ChatCompletionRequest,
+    x_tuner_id: Annotated[str, Header()],
+    x_run_id: Annotated[str | None, Header()] = None,
+):
+    """Generate a chat completion from the active policy of the requested model.
+
+    Real token-by-token streaming is not supported. When ``stream=true`` is
+    requested, the full completion is generated first and then replayed as a
+    simulated SSE stream so that OpenAI-compatible clients keep working.
+    """
+    return await _sample_and_respond(
+        request,
+        tuner_id=x_tuner_id,
+        run_id=x_run_id,
+    )
+
+
+@app.post("/tuners/{tuner_id}/runs/{run_id}/openai/chat/completions")
+async def create_chat_completion_twin(
+    tuner_id: str,
+    run_id: str,
+    request: ChatCompletionRequest,
+):
+    """Generate a chat completion from the active policy of the requested model.
+
+    This is the base_url-addressed twin of the header-based chat-completions route.
+    It carries tuner_id and run_id in the URL path instead of X-Tuner-Id / X-Run-Id headers.
+    """
+    return await _sample_and_respond(
+        request,
+        tuner_id=tuner_id,
+        run_id=run_id,
+    )
 
 
 @app.post("/tuners/{tuner_id}/runs")
