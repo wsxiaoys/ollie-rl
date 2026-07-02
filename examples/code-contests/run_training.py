@@ -111,11 +111,24 @@ async def dispense_run(
 
 async def submit_reward(
     client: httpx.AsyncClient, tuner_id: str, run_id: str, reward: float
-) -> None:
+) -> bool:
+    """Report a run's reward. Returns ``False`` when the server rejects it.
+
+    A ``409 Conflict`` is expected and non-fatal: it happens when the run has
+    expired or already had its reward set (e.g. a malformed example the server
+    already finalized). We swallow it so the driver can keep going.
+    """
     resp = await client.put(
         f"/tuners/{tuner_id}/runs/{run_id}/reward", json={"reward": reward}
     )
+    if resp.status_code == 409:
+        print(
+            f"[driver] run {run_id} reward rejected (409 Conflict; likely a "
+            f"malformed example): {resp.json().get('detail', resp.text)}"
+        )
+        return False
     resp.raise_for_status()
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -227,7 +240,10 @@ async def worker(
             reward = 0.0
 
         # Phase 3: report the reward; the server groups/advantages/trains.
-        await submit_reward(client, tuner_id, run_id, reward)
+        # A rejected reward (409) is expected for malformed examples the server
+        # already finalized, so skip recording stats for it.
+        if not await submit_reward(client, tuner_id, run_id, reward):
+            continue
 
         stats["rewards"].append(reward)
         window = stats["rewards"][-32:]
