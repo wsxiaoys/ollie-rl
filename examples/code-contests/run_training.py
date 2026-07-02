@@ -307,13 +307,44 @@ async def main() -> int:
     datum_ids = discover_datum_ids()
 
     async with httpx.AsyncClient(base_url=args.base_url, timeout=30.0) as client:
-        tuner_id = args.tuner_id or await create_tuner(
-            client,
-            name=args.name,
-            recipe=args.recipe,
-            trainer=args.trainer,
-            datum_ids=datum_ids,
-        )
+        tuner_id = args.tuner_id
+        if tuner_id:
+            # Confirm the explicitly provided tuner exists and fetch its name.
+            try:
+                resp = await client.get(f"/tuners/{tuner_id}")
+                resp.raise_for_status()
+                details = resp.json()
+                print(
+                    f"[driver] adapting to existing tuner {tuner_id} "
+                    f"(name={details['name']!r}, recipe={details['recipe']['name']!r})"
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    print(f"[driver] error: tuner {tuner_id} not found")
+                    return 1
+                raise
+        else:
+            # Try to find an existing tuner with the matching name.
+            try:
+                resp = await client.get("/tuners")
+                resp.raise_for_status()
+                tuners = resp.json().get("tuners", [])
+                for t in tuners:
+                    if t["name"] == args.name:
+                        tuner_id = t["tuner_id"]
+                        print(f"[driver] adapting to existing tuner {tuner_id} (name={args.name!r})")
+                        break
+            except Exception as exc:
+                print(f"[driver] warning: could not list tuners to check for existing name: {exc}")
+
+        if not tuner_id:
+            tuner_id = await create_tuner(
+                client,
+                name=args.name,
+                recipe=args.recipe,
+                trainer=args.trainer,
+                datum_ids=datum_ids,
+            )
 
         budget: asyncio.Queue[int] = asyncio.Queue()
         for run in range(args.runs):
