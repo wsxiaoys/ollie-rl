@@ -319,6 +319,7 @@ async def put_reward(
         RunNotFoundError,
         RunExpiredError,
         RewardAlreadySetError,
+        EmptyRunError,
     )
 
     try:
@@ -333,7 +334,7 @@ async def put_reward(
         return PutRewardResponse(run_id=run_id, reward=request.reward)
     except RunNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except (RunExpiredError, RewardAlreadySetError) as e:
+    except (RunExpiredError, RewardAlreadySetError, EmptyRunError) as e:
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to record reward for run '{run_id}'")

@@ -68,6 +68,17 @@ class RewardAlreadySetError(Exception):
     pass
 
 
+class EmptyRunError(Exception):
+    """Raised when a reward is submitted for a run with no chat completions.
+
+    A run that produced zero completions carries no training signal, so
+    rewarding it is meaningless. We reject the reward outright; the run's
+    lease simply expires and the datum is re-dispensed for a fresh attempt.
+    """
+
+    pass
+
+
 class MalformedSampleError(Exception):
     def __init__(self, message: str, raw_content: Optional[str] = None):
         super().__init__(message)
@@ -1052,6 +1063,24 @@ class TunerService:
                 now = utcnow()
                 if record.expires_at <= now:
                     raise RunExpiredError(f"Run '{run_id}' has expired")
+
+                # A run with zero recorded completions carries no training
+                # signal, so a reward for it is useless. Reject it instead of
+                # persisting a rewardless-but-scored run that would otherwise
+                # count toward a training group.
+                completion_count = await session.scalar(
+                    select(func.count())
+                    .select_from(ChatCompletionModel)
+                    .where(
+                        ChatCompletionModel.tuner_id == tuner_id,
+                        ChatCompletionModel.run_id == run_id,
+                    )
+                )
+                if not completion_count:
+                    raise EmptyRunError(
+                        f"Run '{run_id}' has no chat completions; refusing to "
+                        f"record a reward for an empty run"
+                    )
 
                 record.reward = reward
                 record.updated_at = now

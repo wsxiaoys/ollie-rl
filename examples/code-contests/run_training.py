@@ -115,8 +115,10 @@ async def submit_reward(
     """Report a run's reward. Returns ``False`` when the server rejects it.
 
     A ``409 Conflict`` is expected and non-fatal: it happens when the run has
-    expired or already had its reward set (e.g. a malformed example the server
-    already finalized). We swallow it so the driver can keep going.
+    expired, already had its reward set (e.g. a malformed example the server
+    already finalized), or produced no chat completions at all (a crashed trial
+    that never sampled — a reward for it carries no training signal, so the
+    server refuses it). We swallow it so the driver can keep going.
     """
     resp = await client.put(
         f"/tuners/{tuner_id}/runs/{run_id}/reward", json={"reward": reward}

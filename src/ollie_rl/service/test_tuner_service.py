@@ -20,6 +20,7 @@ from ollie_rl.db.connection import init_db, shutdown_db
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner_service import (
+    EmptyRunError,
     RewardAlreadySetError,
     RunExpiredError,
     RunNotFoundError,
@@ -187,6 +188,31 @@ class TunerServiceTestCase(unittest.IsolatedAsyncioTestCase):
             )
             return result.scalar_one()
 
+    async def _record_completion(
+        self,
+        tuner_id: str,
+        run_id: str,
+        datum_id: str = "datum-1",
+        completion_id: Optional[str] = None,
+        policy_generation: int = 0,
+    ) -> str:
+        """Persist a single chat completion so a run is no longer 'empty'."""
+        completion_id = completion_id or f"cmpl-{run_id}"
+        request = ChatCompletionRequest(
+            model="fake-model",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+        await self.service.record_chat_completion(
+            completion_id=completion_id,
+            tuner_id=tuner_id,
+            run_id=run_id,
+            datum_id=datum_id,
+            policy_generation=policy_generation,
+            request=request,
+            response=_make_chat_completion(completion_id=completion_id),
+        )
+        return completion_id
+
 
 # ---------------------------------------------------------------------------
 # create_tuner
@@ -304,6 +330,33 @@ class TestUpdateReward(TunerServiceTestCase):
         with self.assertRaises(RewardAlreadySetError):
             await self.service.update_reward(tuner_id, run.id, 0.5)
 
+    async def test_raises_for_run_without_completions(self):
+        # A run with zero recorded chat completions carries no training
+        # signal, so rewarding it is rejected outright.
+        tuner_id = await self._create_tuner()
+        run = await self._add_run(tuner_id)
+        with self.assertRaises(EmptyRunError):
+            await self.service.update_reward(tuner_id, run.id, 0.75)
+
+    async def test_empty_run_reward_not_persisted(self):
+        from sqlalchemy import select
+
+        from ollie_rl.db.connection import get_sessionmaker
+
+        tuner_id = await self._create_tuner()
+        run = await self._add_run(tuner_id)
+        with self.assertRaises(EmptyRunError):
+            await self.service.update_reward(tuner_id, run.id, 0.75)
+
+        async_session = get_sessionmaker()
+        async with async_session() as session:
+            result = await session.execute(
+                select(RunModel).where(RunModel.id == run.id)
+            )
+            updated = result.scalar_one()
+        # The rejected reward must not be persisted.
+        self.assertIsNone(updated.reward)
+
     async def test_sets_reward_successfully(self):
         from sqlalchemy import select
 
@@ -311,6 +364,7 @@ class TestUpdateReward(TunerServiceTestCase):
 
         tuner_id = await self._create_tuner()
         run = await self._add_run(tuner_id)
+        await self._record_completion(tuner_id, run.id, run.datum_id)
         await self.service.update_reward(tuner_id, run.id, 0.75)
 
         async_session = get_sessionmaker()
