@@ -976,7 +976,7 @@ class TunerService:
         # Record completion metadata
         if run_id is not None:
             assert datum_id is not None
-            completion_id = f"cmpl_{uuid.uuid4()}"
+            completion_id = f"cmpl_{uuid.uuid4().hex}"
             await self.record_chat_completion(
                 completion_id=completion_id,
                 tuner_id=tuner_id,

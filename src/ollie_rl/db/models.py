@@ -77,11 +77,11 @@ class _PackedFloatList(TypeDecorator[List[float]]):
 
 
 def generate_tuner_id() -> str:
-    return f"tuner_{uuid.uuid4()}"
+    return f"tuner_{uuid.uuid4().hex}"
 
 
 def generate_run_id() -> str:
-    return f"run_{uuid.uuid4()}"
+    return f"run_{uuid.uuid4().hex}"
 
 
 class BaseModel(DeclarativeBase):

@@ -216,7 +216,7 @@ class TinkerTrainer(Trainer):
                     )
                 )
 
-        completion_id = f"cmpl-{uuid.uuid4()}"
+        completion_id = f"cmpl_{uuid.uuid4().hex}"
         finish_reason = sequence.stop_reason
         if malformed:
             finish_reason = "content_filter"

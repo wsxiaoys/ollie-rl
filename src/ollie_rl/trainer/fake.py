@@ -48,7 +48,7 @@ class FakeTrainer(Trainer):
         return 0
 
     async def sample(self, request: ChatCompletionRequest) -> SampleOp:
-        completion_id = f"cmpl-{uuid.uuid4()}"
+        completion_id = f"cmpl_{uuid.uuid4().hex}"
         completion = ChatCompletion(
             id=completion_id,
             choices=[
