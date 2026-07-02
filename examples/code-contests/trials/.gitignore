@@ -1,0 +1,3 @@
+# Harbor per-trial working directories (TrialConfig.trials_dir) — do not commit.
+*
+!.gitignore
