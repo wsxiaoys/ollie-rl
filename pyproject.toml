@@ -36,6 +36,7 @@ dependencies = [
     "fastapi>=0.138.0",
     "google-genai>=2.10.0",
     "greenlet>=3.5.2",
+    "harbor[daytona]>=0.16.1",
     "httpx>=0.28.1",
     "openai>=2.43.0",
     "pydantic>=2.13.4",
@@ -112,6 +113,13 @@ cmd = "docker compose -f deploy/docker-compose.yaml up -d"
 [tool.poe.tasks.docker-down]
 help = "Stop the Docker compose stack."
 cmd = "docker compose -f deploy/docker-compose.yaml down"
+
+[tool.pytest.ini_options]
+# Only collect the real test suite under src/. The Harbor task fixtures in
+# examples/code-contests/tasks/*/tests/ reuse the same basename (test_state.py)
+# without package markers, which otherwise trips pytest's import-mode collision
+# check ("import file mismatch").
+testpaths = ["src"]
 
 [tool.pytest_env]
 DATABASE_URL = "sqlite+aiosqlite:///:memory:"
