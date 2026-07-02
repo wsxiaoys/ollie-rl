@@ -17,21 +17,25 @@ How Harbor and ollie-rl concepts line up:
     agent base_url (LLM endpoint)  ollie-rl's OpenAI-compatible proxy
 
 Token collection is handled entirely by ollie-rl: Terminus 2 samples through the
-per-run ``base_url`` below, so every result-affecting completion is recorded
-under the dispensed ``run_id`` — no ``token_ids`` / ``mask_ids`` plumbing needed.
+shared endpoint below, tagged with this run's ``X-Run-Id`` header, so every
+result-affecting completion is recorded under the dispensed ``run_id``.
 
-Twin (base_url-addressed) endpoint
-----------------------------------
-This driver uses ollie-rl's *twin* of ``/openai/v1/chat/completions`` that
-carries the tuner_id / run_id **in the URL path** instead of headers::
+Header-addressed endpoint
+-------------------------
+This driver uses ollie-rl's standard OpenAI-compatible endpoint and carries the
+tuner_id / run_id in **HTTP headers**::
 
-    POST /tuners/{tuner_id}/runs/{run_id}/openai/chat/completions
+    POST /openai/v1/chat/completions
+    X-Tuner-Id: {tuner_id}
+    X-Run-Id:   {run_id}
 
-so the agent's ``base_url`` is simply::
+so every agent shares one static ``base_url``::
 
-    http://<ollie-host>/tuners/{tuner_id}/runs/{run_id}/openai
+    http://<ollie-host>/openai/v1
 
 (An OpenAI-compatible client appends ``/chat/completions`` to that base_url.)
+The per-run attribution comes from the ``X-Run-Id`` header, injected below via
+Terminus 2's ``extra_headers`` LLM kwarg.
 
 Prerequisites
 -------------
@@ -44,7 +48,7 @@ Prerequisites
 
 Run it (from the repo root)::
 
-    uv run python examples/code-contests/run_training.py --steps 200
+    uv run python examples/code-contests/run_training.py --runs 200
 """
 
 from __future__ import annotations
@@ -74,7 +78,13 @@ DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_RECIPE = "grpo_16x32"
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-code-contests"
-DEFAULT_MODEL = "hosted_vllm/ollie"  # policy is selected by tuner_id in the URL
+
+# litellm (used internally by Terminus 2) needs a provider prefix to know how to
+# route the request. ollie-rl exposes an OpenAI-compatible proxy, so the model is
+# addressed as ``openai/<name>`` which tells litellm to treat the per-run
+# ``base_url`` as an OpenAI-compatible server (otherwise it raises "LLM Provider
+# NOT provided").
+AGENT_MODEL_NAME = "openai/ollie"
 
 
 # --------------------------------------------------------------------------
@@ -139,9 +149,9 @@ async def submit_reward(
 # --------------------------------------------------------------------------
 # The rollout: one Harbor trial == one ollie-rl Run
 # --------------------------------------------------------------------------
-def run_base_url(base: str, tuner_id: str, run_id: str) -> str:
-    """The base_url-addressed twin endpoint for this specific run."""
-    return f"{base}/tuners/{tuner_id}/runs/{run_id}/openai"
+def openai_base_url(base: str) -> str:
+    """The shared OpenAI-compatible endpoint (ids travel in headers, not URL)."""
+    return f"{base}/openai/v1"
 
 
 async def run_rollout(
@@ -151,19 +161,13 @@ async def run_rollout(
     run_id: str,
     datum_id: str,
     environment: str,
-    model: str,
 ) -> float:
     """Execute one containerized Harbor trial and return its reward.
 
-    In Harbor's own words, "a trial is a rollout that produces a reward", so one
-    trial maps 1:1 onto one ollie-rl Run: a single agent attempt at a single
-    task under a single ``run_id``. (A Harbor Job is just the parallel
-    orchestration of many such trials — unnecessary here since concurrency and
-    dispatch are owned by the driver, and a Job shares one agent ``base_url``
-    across its trials, which our per-run ``run_id`` embedding cannot use.)
-
-    Terminus 2 samples exclusively through ``run_base_url`` (which carries this
-    run's id), so ollie-rl records every completion under ``run_id``. Harbor's
+    A Harbor trial maps 1:1 onto one ollie-rl Run: a single agent attempt at a
+    single task under a single ``run_id``. Terminus 2 samples through the shared
+    ``/openai/v1`` endpoint, tagging every request with this run's ``X-Run-Id``
+    header, so ollie-rl records every completion under ``run_id``. Harbor's
     verifier then runs the task's ``tests/test.sh`` and writes a reward file,
     surfaced here as a float.
     """
@@ -172,8 +176,23 @@ async def run_rollout(
         trials_dir=TRIALS_DIR,
         agent=AgentConfig(
             name=AgentName.TERMINUS_2.value,
-            model_name=model,
-            kwargs={"base_url": run_base_url(base, tuner_id, run_id)},
+            model_name=AGENT_MODEL_NAME,
+            # Terminus 2 forwards these kwargs to its LiteLLM backend:
+            #   api_base    -> the shared OpenAI-compatible endpoint
+            #   api_key     -> required by litellm's openai/ provider
+            #   extra_headers -> X-Tuner-Id / X-Run-Id, attached to each
+            #                    chat-completion request so ollie-rl attributes
+            #                    every completion to this run
+            kwargs={
+                "api_base": openai_base_url(base),
+                "llm_kwargs": {
+                    "api_key": "ollie",
+                    "extra_headers": {
+                        "X-Tuner-Id": tuner_id,
+                        "X-Run-Id": run_id,
+                    },
+                },
+            },
         ),
         environment=EnvironmentConfig(type=EnvironmentType[environment.upper()]),
     )
@@ -217,7 +236,7 @@ async def worker(
 ) -> None:
     while True:
         try:
-            step = budget.get_nowait()
+            run = budget.get_nowait()
         except asyncio.QueueEmpty:
             return
 
@@ -237,10 +256,9 @@ async def worker(
                 run_id=run_id,
                 datum_id=datum_id,
                 environment=args.environment,
-                model=args.model,
             )
         except Exception as exc:  # a crashed trial scores the failure reward.
-            print(f"[driver] step {step:04d} trial error ({datum_id}): {exc}")
+            print(f"[driver] run {run:04d} trial error ({datum_id}): {exc}")
             reward = 0.0
 
         # Phase 3: report the reward; the server groups/advantages/trains.
@@ -250,7 +268,7 @@ async def worker(
         window = stats["rewards"][-32:]
         avg = sum(window) / len(window)
         print(
-            f"[driver] step {step:04d} task={datum_id:<20} "
+            f"[driver] run {run:04d} task={datum_id:<20} "
             f"reward={reward:+.1f} avg32={avg:.3f}"
         )
 
@@ -261,14 +279,13 @@ async def main() -> int:
     parser.add_argument("--recipe", default=DEFAULT_RECIPE)
     parser.add_argument("--trainer", default=DEFAULT_TRAINER)
     parser.add_argument("--name", default=DEFAULT_TUNER_NAME)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument(
         "--environment",
         default="docker",
         help="Harbor EnvironmentType (docker, daytona, modal, ...).",
     )
     parser.add_argument(
-        "--steps",
+        "--runs",
         type=int,
         default=200,
         help="How many run/score iterations to perform.",
@@ -299,8 +316,8 @@ async def main() -> int:
         )
 
         budget: asyncio.Queue[int] = asyncio.Queue()
-        for step in range(args.steps):
-            budget.put_nowait(step)
+        for run in range(args.runs):
+            budget.put_nowait(run)
 
         stats: dict = {"rewards": []}
         await asyncio.gather(
