@@ -195,6 +195,25 @@ class ChatCompletionModel(BaseModel):
 class RunModel(BaseModel):
     __tablename__ = "runs"
 
+    # Two hot, tuner-scoped access patterns that the lone `tuner_id` index left
+    # as filter-then-sort / full scans over a tuner's runs:
+    #   1. `list_runs` keyset pagination orders by (created_at DESC, id DESC)
+    #      within a tuner. A composite (tuner_id, created_at, id) lets the DB
+    #      walk the index in order instead of sorting every matching run.
+    #   2. `_collect_consumable_batch` selects unconsumed runs by
+    #      trained_count/rejected_count within a tuner on every training
+    #      attempt. A composite (tuner_id, trained_count, rejected_count)
+    #      narrows straight to the candidates.
+    __table_args__ = (
+        Index("ix_runs_tuner_id_created_at_id", "tuner_id", "created_at", "id"),
+        Index(
+            "ix_runs_tuner_id_trained_count_rejected_count",
+            "tuner_id",
+            "trained_count",
+            "rejected_count",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(
         String(255), primary_key=True, default=generate_run_id
     )
