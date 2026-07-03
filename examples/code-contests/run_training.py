@@ -53,6 +53,22 @@ DEFAULT_RECIPE = "grpo_16x32"
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-code-contests"
 
+# Per-completion (per-turn) wall-clock cap forwarded to litellm as ``timeout``.
+# NOTE: Harbor wraps each LLM call in a tenacity ``retry(stop_after_attempt(3))``,
+# and a timeout is a retryable exception, so the effective time before a turn
+# gives up is roughly ``3 * timeout`` plus backoff. Set this comfortably above
+# the normal upper body of the latency distribution (observed p95 ~360s) so it
+# only kills genuine hangs rather than slow-but-healthy turns. ``None`` disables.
+DEFAULT_LLM_TIMEOUT_SEC: int | None = 300
+
+# Daytona sandbox lifecycle backstop. Harbor's ``stop(delete=True)`` cleanup is
+# skipped when the driver is killed abruptly, which leaks sandboxes because the
+# defaults (``auto_stop_interval_mins=0``) disable auto-stop entirely. Enabling
+# an inactivity auto-stop plus a post-stop auto-delete lets orphaned sandboxes
+# self-reclaim even after a hard crash. Only applied when ``--environment daytona``.
+DEFAULT_DAYTONA_AUTO_STOP_MINS = 30
+DEFAULT_DAYTONA_AUTO_DELETE_MINS = 5
+
 # Terminus 2 routes through litellm, which needs a provider prefix. ollie-rl
 # exposes an OpenAI-compatible endpoint, so the model is addressed as
 # ``openai/<name>``.
@@ -167,6 +183,29 @@ async def run_rollout(
       than a policy decision to stop, so we deliberately drop it instead of
       training on a spurious ``0.0``.
     """
+    # Per-turn timeout: forwarded to litellm's ``acompletion(timeout=...)`` via
+    # the agent's ``llm_kwargs``. Caps how long a single completion can hang.
+    llm_kwargs: dict = {
+        "api_key": "ollie",
+        "extra_headers": {
+            "X-Tuner-Id": tuner_id,
+            "X-Run-Id": run_id,
+        },
+    }
+    if DEFAULT_LLM_TIMEOUT_SEC is not None:
+        llm_kwargs["timeout"] = DEFAULT_LLM_TIMEOUT_SEC
+
+    # Daytona-only lifecycle backstop so orphaned sandboxes self-reclaim if the
+    # driver dies before Harbor's ``stop(delete=True)`` cleanup runs. These
+    # kwargs are ignored by / invalid for other backends, so only set them for
+    # the daytona environment.
+    env_kwargs: dict = {}
+    if environment.lower() == "daytona":
+        env_kwargs = {
+            "auto_stop_interval_mins": DEFAULT_DAYTONA_AUTO_STOP_MINS,
+            "auto_delete_interval_mins": DEFAULT_DAYTONA_AUTO_DELETE_MINS,
+        }
+
     config = TrialConfig(
         task=TaskConfig(path=TASKS_DIR / datum_id),
         trials_dir=TRIALS_DIR,
@@ -178,16 +217,13 @@ async def run_rollout(
             # completion to this run.
             kwargs={
                 "api_base": openai_base_url(base),
-                "llm_kwargs": {
-                    "api_key": "ollie",
-                    "extra_headers": {
-                        "X-Tuner-Id": tuner_id,
-                        "X-Run-Id": run_id,
-                    },
-                },
+                "llm_kwargs": llm_kwargs,
             },
         ),
-        environment=EnvironmentConfig(type=EnvironmentType[environment.upper()]),
+        environment=EnvironmentConfig(
+            type=EnvironmentType[environment.upper()],
+            kwargs=env_kwargs,
+        ),
         # Scale the agent phase budget. Harbor computes the effective timeout as
         # ``task.agent.timeout_sec * agent_timeout_multiplier`` (falling back to
         # the task default when the multiplier is None), so this stretches the
