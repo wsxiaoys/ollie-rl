@@ -419,9 +419,44 @@ class GeminiMsrlTrainer(Trainer):
         This is spawned as a background task by ``train_step`` and re-spawned by
         ``restore`` so an in-flight op that completes while (or after) the
         server is down is still reflected in the persisted state.
+
+        A train step can legitimately run much longer than a single
+        ``wait_for_operation`` budget, so we keep retrying on timeouts /
+        transient errors rather than giving up. Bailing out early is what
+        previously left ``pending_train_op`` permanently stuck (and
+        ``is_training`` true) even though the underlying Vertex op had finished.
         """
+        # A short backoff between retries after a transient (non-timeout)
+        # failure so we don't spin tightly on a persistent error.
+        _RETRY_BACKOFF_SECONDS = 5.0
+
+        completed_op = None
+        while True:
+            try:
+                completed_op = await self.client.wait_for_operation(op_name)
+                break
+            except TimeoutError:
+                # Op is still running past the poll budget; keep waiting so the
+                # in-flight pointer eventually gets cleared once it completes.
+                logger.warning(
+                    "Train op %s still running; continuing to poll",
+                    op_name,
+                )
+                continue
+            except Exception as e:  # noqa: BLE001
+                # Transient failure (e.g. token refresh / network blip). Back
+                # off and retry rather than abandoning the poll, which would
+                # leave `pending_train_op` stuck.
+                logger.warning(
+                    "Error polling train op %s: %s; retrying in %.0fs",
+                    op_name,
+                    e,
+                    _RETRY_BACKOFF_SECONDS,
+                )
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                continue
+
         try:
-            completed_op = await self.client.wait_for_operation(op_name)
             response = completed_op.get_response_as(TrainStepResponse)
             if asyncio.iscoroutine(response):
                 response = await response
