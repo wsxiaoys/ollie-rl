@@ -98,7 +98,7 @@ class TunerModel(BaseModel):
     __tablename__ = "tuners"
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=generate_tuner_id
+        String(255), primary_key=True, default=generate_tuner_id
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
