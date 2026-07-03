@@ -191,10 +191,7 @@ async def run_rollout(
     trial_result = await trial.run()
     if agent_timed_out(trial_result):
         graded = getattr(trial_result, "verifier_result", None) is not None
-        print(
-            f"[driver] run {run_id} hit the agent timeout "
-            f"(graded={graded})"
-        )
+        print(f"[driver] run {run_id} hit the agent timeout (graded={graded})")
     return extract_reward(trial_result)
 
 
@@ -273,8 +270,10 @@ async def worker(
             # inference endpoint dropped mid-run). There is no graded outcome to
             # attribute to the policy, so DON'T fabricate a 0.0 reward — skip
             # submission and let the run's lease expire for a clean re-dispense.
-            print(f"[driver] run {run:04d} trial crashed ({datum_id}); "
-                  f"skipping reward: {exc}")
+            print(
+                f"[driver] run {run:04d} trial crashed ({datum_id}); "
+                f"skipping reward: {exc}"
+            )
             continue
 
         # A trial that finished but was never graded (verifier didn't run —
@@ -282,8 +281,10 @@ async def worker(
         # Skip it rather than submit a spurious 0.0. Note: an agent *timeout*
         # still grades, so it lands here with a real reward and is submitted.
         if reward is None:
-            print(f"[driver] run {run:04d} task={datum_id} not graded "
-                  f"(no verifier result); skipping reward")
+            print(
+                f"[driver] run {run:04d} task={datum_id} not graded "
+                f"(no verifier result); skipping reward"
+            )
             continue
 
         # Phase 3: report the reward; the server groups/advantages/trains.
