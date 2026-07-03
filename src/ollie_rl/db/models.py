@@ -140,6 +140,15 @@ class ChatCompletionModel(BaseModel):
     # without scanning the (large, blob-heavy) table.
     __table_args__ = (
         Index("ix_chat_completions_tuner_id_run_id", "tuner_id", "run_id"),
+        # Idempotent-sample lookup: find a prior completion for the same turn
+        # (same request prompt) within a run so a retry replays it instead of
+        # recording a duplicate sibling. See `request_hash` below.
+        Index(
+            "ix_chat_completions_tuner_id_run_id_request_hash",
+            "tuner_id",
+            "run_id",
+            "request_hash",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -154,6 +163,14 @@ class ChatCompletionModel(BaseModel):
         String(255), nullable=False, index=True
     )
     datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # SHA-256 hex digest of the request prompt (messages), used to make
+    # sampling idempotent per run. A slow/cancelled request is retried by the
+    # client with the *identical* prompt; since an agent conversation is
+    # linear, a repeat `(tuner_id, run_id, request_hash)` is always such a
+    # retry and must replay the stored completion rather than generate a new
+    # sibling (which would fork the trajectory and pollute training). NULL for
+    # rows written before this column existed.
+    request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # Optional cached sample-time tensors written by trainers that need
     # to replay rollouts at train time (Tinker). Encoding/decoding is
     # handled transparently by the `_PackedIntList` / `_PackedFloatList`

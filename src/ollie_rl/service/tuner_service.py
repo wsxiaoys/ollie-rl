@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import binascii
+import hashlib
+import json
 import logging
 import math
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
 from sqlalchemy import func, select, update
 
@@ -329,6 +332,64 @@ def _build_run_item(
     )
 
 
+def _request_hash(request: "ChatCompletionRequest") -> str:
+    """
+    Stable SHA-256 digest of a request's prompt.
+
+    The prompt is everything the model conditions on: the ``messages`` *and*
+    the available ``tools`` (different tool schemas can yield different
+    responses for the same messages, so they must be part of the key).
+
+    Retries of a stalled request re-send the identical prompt, so this gives a
+    per-turn idempotency key: within a linear agent run, a repeat digest is
+    always a retry of the same turn. Fields are dumped in JSON mode with sorted
+    keys so semantically identical prompts hash the same regardless of dict
+    ordering.
+    """
+    dumped = request.model_dump(mode="json")
+    key = {
+        "messages": dumped.get("messages", []),
+        "tools": dumped.get("tools"),
+    }
+    canonical = json.dumps(key, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class _KeyedLocks:
+    """
+    A manager of per-key ``asyncio.Lock``s with reference-counted cleanup.
+
+    Used to serialize sampling per ``(tuner_id, run_id, request_hash)`` so
+    concurrent retries of the same turn don't both generate + record a
+    duplicate sibling completion. Locks are created lazily and dropped once
+    no coroutine holds or waits on them, so the table doesn't grow unbounded
+    across the many distinct turns of a training run.
+    """
+
+    def __init__(self) -> None:
+        self._locks: Dict[Any, asyncio.Lock] = {}
+        self._refcounts: Dict[Any, int] = {}
+        self._guard = asyncio.Lock()
+
+    @asynccontextmanager
+    async def acquire(self, key: Any) -> AsyncIterator[None]:
+        async with self._guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+            self._refcounts[key] = self._refcounts.get(key, 0) + 1
+        try:
+            async with lock:
+                yield
+        finally:
+            async with self._guard:
+                self._refcounts[key] -= 1
+                if self._refcounts[key] <= 0:
+                    self._refcounts.pop(key, None)
+                    self._locks.pop(key, None)
+
+
 class TunerService:
     """
     Handles both active in-memory trainers and their persistence to a database.
@@ -349,6 +410,12 @@ class TunerService:
         # so concurrent dispenses observe each other's in-flight runs and don't
         # all pick the same datum (which would over-dispense past `group_size`).
         self._dispense_lock = asyncio.Lock()
+        # Per-(tuner_id, run_id, request_hash) locks that make sampling
+        # idempotent: a retry of a stalled request must replay the stored
+        # completion instead of generating a duplicate sibling. Serializing on
+        # this key closes the check-then-record race between concurrent
+        # retries of the same turn.
+        self._sample_locks = _KeyedLocks()
         # Background task that periodically polls every tuner and triggers a
         # train step when a batch is ready, replacing the per-reward
         # fire-and-forget trigger.
@@ -968,14 +1035,40 @@ class TunerService:
                 # Override datum_id from database record to prevent client lying
                 datum_id = run_record.datum_id
 
-        # Generate completion
-        sample_op = await trainer.sample(request)
-        sample = await sample_op.wait()
-        policy_generation = sample.policy_generation
+        # Ad-hoc sampling (no run to record against) never duplicates, so skip
+        # the idempotency machinery entirely.
+        if run_id is None:
+            sample_op = await trainer.sample(request)
+            sample = await sample_op.wait()
+            return sample.completion
 
-        # Record completion metadata
-        if run_id is not None:
-            assert datum_id is not None
+        assert datum_id is not None
+
+        # Make sampling idempotent per turn. A slow/cancelled request is
+        # retried by the client with the identical prompt; because an agent
+        # run is linear, a repeat `(tuner_id, run_id, request_hash)` is always
+        # such a retry. Serialize on that key so concurrent retries can't race
+        # the check-then-record window, and replay any already-recorded
+        # completion instead of generating a duplicate sibling (which would
+        # fork the trajectory and double-count in training).
+        request_hash = _request_hash(request)
+        async with self._sample_locks.acquire((tuner_id, run_id, request_hash)):
+            existing = await self._find_recorded_completion(
+                tuner_id, run_id, request_hash
+            )
+            if existing is not None:
+                logger.info(
+                    f"Replaying recorded completion for run {run_id} "
+                    f"(request_hash={request_hash[:12]}...); skipping resample."
+                )
+                return existing
+
+            # Generate completion
+            sample_op = await trainer.sample(request)
+            sample = await sample_op.wait()
+            policy_generation = sample.policy_generation
+
+            # Record completion metadata
             completion_id = f"cmpl_{uuid.uuid4().hex}"
             await self.record_chat_completion(
                 completion_id=completion_id,
@@ -987,6 +1080,7 @@ class TunerService:
                 logprobs=sample.logprobs,
                 request=request,
                 response=sample.completion,
+                request_hash=request_hash,
             )
             if sample.malformed:
                 recipe = await self._recipe_for(tuner_id)
@@ -1000,7 +1094,34 @@ class TunerService:
                     raw_content=raw_content,
                 )
 
-        return sample.completion
+            return sample.completion
+
+    async def _find_recorded_completion(
+        self, tuner_id: str, run_id: str, request_hash: str
+    ) -> Optional[ChatCompletion]:
+        """
+        Return the completion already recorded for this exact turn, if any.
+
+        Backs `sample()`'s idempotent replay: when a retry re-sends the
+        identical prompt, the stored completion for
+        `(tuner_id, run_id, request_hash)` is returned verbatim instead of
+        resampling. The earliest row wins so replays stay stable.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(ChatCompletionModel)
+                .where(
+                    ChatCompletionModel.tuner_id == tuner_id,
+                    ChatCompletionModel.run_id == run_id,
+                    ChatCompletionModel.request_hash == request_hash,
+                )
+                .order_by(ChatCompletionModel.created_at.asc())
+                .limit(1)
+            )
+            record = result.scalar_one_or_none()
+            if record is None:
+                return None
+            return ChatCompletion.model_validate(record.response)
 
     async def record_chat_completion(
         self,
@@ -1013,6 +1134,7 @@ class TunerService:
         response: ChatCompletion,
         tokens: Optional[List[int]] = None,
         logprobs: Optional[List[float]] = None,
+        request_hash: Optional[str] = None,
     ) -> None:
         """
         Record a chat completion event in the database.
@@ -1021,6 +1143,10 @@ class TunerService:
         by trainers (e.g. Tinker) that train on raw rollouts. They are
         stored as JSON-encoded text and may be NULL for trainers that do
         not provide them.
+
+        `request_hash` is the per-turn idempotency key (SHA-256 of the
+        request messages) used by `sample()` to replay this completion for a
+        retried request. It may be NULL for direct callers that don't dedup.
         """
         async with self.async_session() as session:
             async with session.begin():
@@ -1034,6 +1160,7 @@ class TunerService:
                     logprobs=logprobs,
                     request=request.model_dump(mode="json"),
                     response=response.model_dump(mode="json"),
+                    request_hash=request_hash,
                 )
                 session.add(db_completion)
 
