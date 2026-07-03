@@ -45,7 +45,7 @@ export function TunerListPage() {
                   <Link
                     to="/tuners/$tunerId"
                     params={{ tunerId: t.tuner_id }}
-                    className="link"
+                    className="link-plain"
                   >
                     {t.name}
                   </Link>

@@ -8,6 +8,7 @@ import { RootLayout } from "./components/RootLayout";
 import { TunerListPage } from "./pages/TunerListPage";
 import { TunerDetailPage } from "./pages/TunerDetailPage";
 import { RunListPage } from "./pages/RunListPage";
+import { DataPage } from "./pages/DataPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { CompletionDetailPage } from "./pages/CompletionDetailPage";
 
@@ -47,6 +48,18 @@ const runListRoute = createRoute({
   component: RunListPage,
 });
 
+const dataRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/data",
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tuner?: string; datum?: string } => ({
+    tuner: typeof search.tuner === "string" ? search.tuner : undefined,
+    datum: typeof search.datum === "string" ? search.datum : undefined,
+  }),
+  component: DataPage,
+});
+
 const runDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tuners/$tunerId/runs/$runId",
@@ -64,6 +77,7 @@ const routeTree = rootRoute.addChildren([
   tunersRoute,
   tunerDetailRoute,
   runListRoute,
+  dataRoute,
   runDetailRoute,
   completionDetailRoute,
 ]);

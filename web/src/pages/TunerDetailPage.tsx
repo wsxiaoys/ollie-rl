@@ -230,6 +230,7 @@ export function TunerDetailPage() {
               <DatumTable
                 items={progress.data.items}
                 groupSize={recipe.group_size}
+                tunerId={data.tuner_id}
               />
             </div>
           </Panel>

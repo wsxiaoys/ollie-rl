@@ -122,7 +122,7 @@ export function RunListPage() {
                   <Link
                     to="/tuners/$tunerId/runs/$runId"
                     params={{ tunerId, runId: r.run_id }}
-                    className="link"
+                    className="link-plain"
                   >
                     <Mono>{r.run_id}</Mono>
                   </Link>

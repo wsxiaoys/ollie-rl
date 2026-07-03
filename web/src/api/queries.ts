@@ -43,6 +43,15 @@ export const runsQuery = (tunerId: string) =>
     refetchInterval: 5000,
   });
 
+// Unbounded fetch of every run for a single datum — powers the data-centric
+// view, where a datum is always selected and all of its runs are shown at once.
+export const runsByDatumQuery = (tunerId: string, datumId: string) =>
+  queryOptions({
+    queryKey: ["runs", "by-datum", tunerId, datumId],
+    queryFn: () => listRuns(tunerId, { datumId }),
+    refetchInterval: 5000,
+  });
+
 // Cursor-paginated runs for the runs list page. Each page is `RUNS_PAGE_SIZE`
 // runs; `next_cursor` drives `fetchNextPage`. An optional `datumId` narrows the
 // listing to a single datum and is part of the query key so switching filters

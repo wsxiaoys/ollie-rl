@@ -331,6 +331,17 @@ td.num {
   text-decoration: underline;
 }
 
+/* An unobtrusive link: plain text (inherits color) that only underlines on
+   hover — used for datum ids in tables. */
+.link-plain {
+  color: inherit;
+  text-decoration: none;
+}
+
+.link-plain:hover {
+  text-decoration: underline;
+}
+
 /* A text button that looks like an inline link (e.g. click a datum id in a
    table cell to apply it as the runs filter). */
 .link-button {
@@ -345,7 +356,6 @@ td.num {
 }
 
 .link-button:hover .mono {
-  color: var(--accent);
   text-decoration: underline;
 }
 

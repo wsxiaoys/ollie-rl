@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   createColumnHelper,
   flexRender,
@@ -15,9 +16,11 @@ const columnHelper = createColumnHelper<DatumProgress>();
 export function DatumTable({
   items,
   groupSize,
+  tunerId,
 }: {
   items: DatumProgress[];
   groupSize: number;
+  tunerId: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "consumable", desc: true },
@@ -26,7 +29,15 @@ export function DatumTable({
   const columns = [
     columnHelper.accessor("datum_id", {
       header: "Datum ID",
-      cell: (info) => <span className="mono">{info.getValue()}</span>,
+      cell: (info) => (
+        <Link
+          to="/data"
+          search={{ tuner: tunerId, datum: info.getValue() }}
+          className="mono link-plain"
+        >
+          {info.getValue()}
+        </Link>
+      ),
     }),
     columnHelper.accessor("consumable", {
       header: `Consumable / ${groupSize}`,
