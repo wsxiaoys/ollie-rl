@@ -155,12 +155,16 @@ async def run_rollout(
     request with this run's headers so ollie-rl records completions under the
     run. Harbor's verifier then runs the task's tests and produces the reward.
 
-    Returns the graded scalar reward, or ``None`` when the verifier never ran
-    (e.g. the trial crashed or was cancelled before grading). ``None`` is *not*
-    a zero reward — it means there is no policy signal to attribute to this run,
-    so the caller should skip submission and let the run's lease expire.
-    Note an agent *timeout* still grades (Harbor captures it and runs the
-    verifier), so it yields a real ``0.0``/``1.0`` rather than ``None``.
+    Returns the graded scalar reward, or ``None`` when the run carries no policy
+    signal we want to train on. ``None`` is *not* a zero reward — it means the
+    caller should skip submission and let the run's lease expire. This covers:
+
+    * the verifier never ran (e.g. the trial crashed or was cancelled before
+      grading), and
+    * the agent hit its ``timeout_sec`` budget. Harbor still grades a timed-out
+      agent, but that reward reflects a truncated (often empty) rollout rather
+      than a policy decision to stop, so we deliberately drop it instead of
+      training on a spurious ``0.0``.
     """
     config = TrialConfig(
         task=TaskConfig(path=TASKS_DIR / datum_id),
@@ -190,8 +194,15 @@ async def run_rollout(
     trial = await Trial.create(config)
     trial_result = await trial.run()
     if agent_timed_out(trial_result):
+        # Harbor still grades a timed-out agent, but a timeout means the rollout
+        # was truncated (often before writing any solution), so the graded
+        # reward isn't a real policy signal. Skip it and let the lease expire.
         graded = getattr(trial_result, "verifier_result", None) is not None
-        print(f"[driver] run {run_id} hit the agent timeout (graded={graded})")
+        print(
+            f"[driver] run {run_id} hit the agent timeout "
+            f"(graded={graded}); skipping reward"
+        )
+        return None
     return extract_reward(trial_result)
 
 
@@ -276,14 +287,13 @@ async def worker(
             )
             continue
 
-        # A trial that finished but was never graded (verifier didn't run —
-        # crash/cancel captured inside Harbor) carries no policy signal either.
-        # Skip it rather than submit a spurious 0.0. Note: an agent *timeout*
-        # still grades, so it lands here with a real reward and is submitted.
+        # A run with no policy signal (verifier never ran, or the agent hit its
+        # timeout budget so the rollout was truncated) comes back as None. Skip
+        # it rather than submit a spurious 0.0 and let the lease expire.
         if reward is None:
             print(
-                f"[driver] run {run:04d} task={datum_id} not graded "
-                f"(no verifier result); skipping reward"
+                f"[driver] run {run:04d} task={datum_id} no policy signal "
+                f"(not graded or agent timed out); skipping reward"
             )
             continue
 
