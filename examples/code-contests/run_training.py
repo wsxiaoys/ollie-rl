@@ -148,6 +148,7 @@ async def run_rollout(
     run_id: str,
     datum_id: str,
     environment: str,
+    agent_timeout_multiplier: float | None = None,
 ) -> float | None:
     """Execute one containerized Harbor trial and return its reward.
 
@@ -187,6 +188,11 @@ async def run_rollout(
             },
         ),
         environment=EnvironmentConfig(type=EnvironmentType[environment.upper()]),
+        # Scale the agent phase budget. Harbor computes the effective timeout as
+        # ``task.agent.timeout_sec * agent_timeout_multiplier`` (falling back to
+        # the task default when the multiplier is None), so this stretches the
+        # per-task budget without hardcoding an absolute seconds value.
+        agent_timeout_multiplier=agent_timeout_multiplier,
     )
 
     # `Trial` is abstract; `Trial.create()` loads the task and returns the right
@@ -275,6 +281,7 @@ async def worker(
                 run_id=run_id,
                 datum_id=datum_id,
                 environment=args.environment,
+                agent_timeout_multiplier=args.agent_timeout_multiplier,
             )
         except Exception as exc:
             # The trial crashed before the verifier could grade it (e.g. the
@@ -334,6 +341,16 @@ async def main() -> int:
         type=int,
         default=8,
         help="How many Harbor trials to run in parallel.",
+    )
+    parser.add_argument(
+        "--agent-timeout-multiplier",
+        type=float,
+        default=None,
+        help=(
+            "Scale each task's agent timeout budget. Harbor multiplies the "
+            "task's [agent] timeout_sec by this factor (e.g. 2.0 doubles it). "
+            "Defaults to the task-defined timeout when omitted."
+        ),
     )
     parser.add_argument(
         "--tuner-id",
