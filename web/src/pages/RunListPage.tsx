@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { dataQuery, runsPageQuery, tunersQuery } from "../api/queries";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -51,13 +51,6 @@ export function RunListPage() {
     }
   }, [tunerId, tunersQ.data, navigate]);
 
-  const onSelect = (e: ChangeEvent<HTMLSelectElement>) => {
-    const value = e.target.value;
-    // Switching tuner clears the datum filter: a datum id is only meaningful
-    // within the tuner it was dispensed under.
-    navigate({ to: "/runs", search: { tuner: value || undefined } });
-  };
-
   const onDatumChange = (value: string | null) => {
     navigate({
       to: "/runs",
@@ -70,20 +63,11 @@ export function RunListPage() {
       <header className="page__header">
         <h1>Runs</h1>
         <p className="page__subtitle">
-          Pick a tuner to inspect its runs and their chat completions.
+          Runs for the selected tuner and their chat completions.
         </p>
       </header>
 
       <div className="runs-picker">
-        <label htmlFor="tuner-select">Tuner</label>
-        <select id="tuner-select" value={tunerId ?? ""} onChange={onSelect}>
-          <option value="">— select a tuner —</option>
-          {tunersQ.data?.tuners.map((t) => (
-            <option key={t.tuner_id} value={t.tuner_id}>
-              {t.name} ({t.tuner_id})
-            </option>
-          ))}
-        </select>
         <label htmlFor="datum-filter">Datum ID</label>
         <SearchableSelect
           id="datum-filter"
