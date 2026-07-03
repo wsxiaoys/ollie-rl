@@ -38,8 +38,11 @@ const tunerDetailRoute = createRoute({
 const runListRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/runs",
-  validateSearch: (search: Record<string, unknown>): { tuner?: string } => ({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tuner?: string; datum?: string } => ({
     tuner: typeof search.tuner === "string" ? search.tuner : undefined,
+    datum: typeof search.datum === "string" ? search.datum : undefined,
   }),
   component: RunListPage,
 });

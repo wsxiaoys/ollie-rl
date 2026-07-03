@@ -750,11 +750,33 @@ class TunerService:
 
         return tuners_list
 
+    async def list_datums(self, tuner_id: str) -> List[str]:
+        """Return the full datum-id pool registered for ``tuner_id``.
+
+        Used to populate the runs filter dropdown. The pool is the static set
+        of datums the tuner was created with, returned in a stable
+        (alphabetical) order so the dropdown listing is deterministic.
+        """
+        async with self.async_session() as session:
+            exists = await session.execute(
+                select(TunerModel.id).where(TunerModel.id == tuner_id)
+            )
+            if exists.scalar_one_or_none() is None:
+                raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+
+            result = await session.execute(
+                select(DatumRowModel.datum_id)
+                .where(DatumRowModel.tuner_id == tuner_id)
+                .order_by(DatumRowModel.datum_id.asc())
+            )
+            return list(result.scalars().all())
+
     async def list_runs(
         self,
         tuner_id: str,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
+        datum_id: Optional[str] = None,
     ) -> ListRunsResponse:
         """
         List runs for a tuner (newest first), each with its derived lifecycle
@@ -765,6 +787,9 @@ class TunerService:
         previous response's ``next_cursor``) to fetch the runs immediately after
         the last item of that page. Leave ``limit`` as ``None`` to return every
         run in one shot (``next_cursor`` is then always ``None``).
+
+        Pass ``datum_id`` to restrict the listing to runs dispensed for that
+        datum; the filter composes with cursor-based pagination.
         """
         if limit is not None and limit < 0:
             limit = 0
@@ -783,6 +808,8 @@ class TunerService:
                 .where(RunModel.tuner_id == tuner_id)
                 .order_by(RunModel.created_at.desc(), RunModel.id.desc())
             )
+            if datum_id is not None:
+                runs_stmt = runs_stmt.where(RunModel.datum_id == datum_id)
             if cursor_key is not None:
                 cursor_created_at, cursor_id = cursor_key
                 # Rows strictly "after" the cursor in (created_at DESC, id DESC)

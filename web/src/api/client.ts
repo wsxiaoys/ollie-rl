@@ -1,6 +1,7 @@
 import type {
   ChatCompletionDetailResponse,
   GetTunerResponse,
+  ListDatumsResponse,
   ListRunsResponse,
   ListTunersResponse,
   RunDetailResponse,
@@ -47,13 +48,20 @@ export function getTuner(tunerId: string): Promise<GetTunerResponse> {
   );
 }
 
+export function listData(tunerId: string): Promise<ListDatumsResponse> {
+  return get<ListDatumsResponse>(
+    `/tuners/${encodeURIComponent(tunerId)}/data`,
+  );
+}
+
 export function listRuns(
   tunerId: string,
-  opts: { limit?: number; cursor?: string | null } = {},
+  opts: { limit?: number; cursor?: string | null; datumId?: string | null } = {},
 ): Promise<ListRunsResponse> {
   const params = new URLSearchParams();
   if (opts.limit != null) params.set("limit", String(opts.limit));
   if (opts.cursor) params.set("cursor", opts.cursor);
+  if (opts.datumId) params.set("datum_id", opts.datumId);
   const qs = params.toString();
   return get<ListRunsResponse>(
     `/tuners/${encodeURIComponent(tunerId)}/runs${qs ? `?${qs}` : ""}`,

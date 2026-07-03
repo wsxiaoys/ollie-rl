@@ -50,6 +50,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tuners/{tuner_id}/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Data
+         * @description Return the full datum-id pool registered for a tuner, so clients can build
+         *     a filter dropdown for the runs list.
+         */
+        get: operations["list_data_tuners__tuner_id__data_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tuners/{tuner_id}/runs": {
         parameters: {
             query?: never;
@@ -63,7 +84,8 @@ export interface paths {
          *     and recorded chat-completion counts.
          *
          *     Supports cursor-based pagination via `limit`/`cursor`; the response returns
-         *     a `next_cursor` when more runs are available.
+         *     a `next_cursor` when more runs are available. Pass `datum_id` to filter the
+         *     listing to runs for a single datum.
          */
         get: operations["list_runs_tuners__tuner_id__runs_get"];
         put?: never;
@@ -881,6 +903,14 @@ export interface components {
              */
             format: "wav" | "mp3";
         };
+        /**
+         * ListDatumsResponse
+         * @description The full datum-id pool registered for a tuner (for filter dropdowns).
+         */
+        ListDatumsResponse: {
+            /** Datum Ids */
+            datum_ids: string[];
+        };
         /** ListRunsResponse */
         ListRunsResponse: {
             /** Runs */
@@ -1369,6 +1399,37 @@ export interface operations {
             };
         };
     };
+    list_data_tuners__tuner_id__data_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tuner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListDatumsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_runs_tuners__tuner_id__runs_get: {
         parameters: {
             query?: {
@@ -1376,6 +1437,8 @@ export interface operations {
                 limit?: number | null;
                 /** @description Opaque forward cursor from a previous response's `next_cursor`. Omit to fetch the first page. */
                 cursor?: string | null;
+                /** @description Only return runs dispensed for this datum id. */
+                datum_id?: string | null;
             };
             header?: never;
             path: {

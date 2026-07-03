@@ -14,6 +14,7 @@ type Schemas = components["schemas"];
 
 export type TunerItem = Schemas["TunerItem"];
 export type ListTunersResponse = Schemas["ListTunersResponse"];
+export type ListDatumsResponse = Schemas["ListDatumsResponse"];
 export type Recipe = Schemas["Recipe"];
 export type RunProgress = Schemas["RunProgress"];
 export type DatumProgress = Schemas["DatumProgress"];

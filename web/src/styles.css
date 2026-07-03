@@ -297,6 +297,24 @@ td.num {
   text-decoration: underline;
 }
 
+/* A text button that looks like an inline link (e.g. click a datum id in a
+   table cell to apply it as the runs filter). */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.link-button:hover .mono {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .link--back {
   display: inline-block;
   margin-bottom: 8px;
@@ -687,6 +705,134 @@ td.num {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
+}
+
+/* ---- Searchable dropdown (combobox) ---- */
+.combo {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.combo__control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 240px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.combo__control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.combo__control:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.combo__value {
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.combo__placeholder {
+  color: var(--text-muted);
+}
+
+.combo__chevron {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.combo__clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.combo__clear:hover {
+  color: var(--text);
+}
+
+.combo__popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  width: 280px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  padding: 6px;
+}
+
+.combo__search {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.combo__search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.combo__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.combo__option {
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.combo__option--active {
+  background: var(--bg);
+}
+
+.combo__option--selected {
+  color: var(--accent);
+}
+
+.combo__empty {
+  padding: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 /* ---- Runs pagination (infinite scroll) ---- */

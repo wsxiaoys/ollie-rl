@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
@@ -14,6 +15,7 @@ from ollie_rl.types import (
     PutRewardResponse,
     GetTunerResponse,
     ListTunersResponse,
+    ListDatumsResponse,
     ListRunsResponse,
     RunDetailResponse,
     ChatCompletionDetailResponse,
@@ -35,6 +37,17 @@ class Services:
 services = Services()
 
 
+def _train_loop_disabled() -> bool:
+    """Return True when the background train loop is disabled via env var.
+
+    Set ``OLLIE_DISABLE_TRAIN_LOOP`` to a truthy value (``1``, ``true``,
+    ``yes``, or ``on``) to prevent the server from starting the background
+    train loop.
+    """
+    value = os.environ.get("OLLIE_DISABLE_TRAIN_LOOP", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: initialize database
@@ -44,16 +57,25 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to initialize database during startup")
 
-    # Start the background train loop that periodically triggers train steps.
-    services.tuner.start_train_loop()
+    # Start the background train loop that periodically triggers train steps,
+    # unless it has been disabled via the OLLIE_DISABLE_TRAIN_LOOP env var.
+    train_loop_enabled = not _train_loop_disabled()
+    if train_loop_enabled:
+        services.tuner.start_train_loop()
+    else:
+        logger.info(
+            "Train loop disabled via OLLIE_DISABLE_TRAIN_LOOP; "
+            "skipping background train loop startup"
+        )
 
     yield
 
-    try:
-        logger.info("Stopping train loop...")
-        await services.tuner.stop_train_loop()
-    except Exception:
-        logger.exception("Failed to stop train loop during shutdown")
+    if train_loop_enabled:
+        try:
+            logger.info("Stopping train loop...")
+            await services.tuner.stop_train_loop()
+        except Exception:
+            logger.exception("Failed to stop train loop during shutdown")
 
     try:
         logger.info("Shutting down database tables...")
@@ -141,6 +163,24 @@ async def get_tuner(tuner_id: str, progress: bool = False) -> GetTunerResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/tuners/{tuner_id}/data", response_model=ListDatumsResponse)
+async def list_data(tuner_id: str) -> ListDatumsResponse:
+    """
+    Return the full datum-id pool registered for a tuner, so clients can build
+    a filter dropdown for the runs list.
+    """
+    from ollie_rl.service.tuner_service import TunerNotFoundError
+
+    try:
+        datum_ids = await services.tuner.list_datums(tuner_id)
+        return ListDatumsResponse(datum_ids=datum_ids)
+    except TunerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to list data for tuner '{tuner_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/tuners/{tuner_id}/runs", response_model=ListRunsResponse)
 async def list_runs(
     tuner_id: str,
@@ -157,13 +197,18 @@ async def list_runs(
             "Omit to fetch the first page."
         ),
     ),
+    datum_id: Optional[str] = Query(
+        default=None,
+        description="Only return runs dispensed for this datum id.",
+    ),
 ) -> ListRunsResponse:
     """
     List runs for a tuner (newest first) with their derived lifecycle status
     and recorded chat-completion counts.
 
     Supports cursor-based pagination via `limit`/`cursor`; the response returns
-    a `next_cursor` when more runs are available.
+    a `next_cursor` when more runs are available. Pass `datum_id` to filter the
+    listing to runs for a single datum.
     """
     from ollie_rl.service.tuner_service import (
         InvalidRunCursorError,
@@ -171,7 +216,9 @@ async def list_runs(
     )
 
     try:
-        return await services.tuner.list_runs(tuner_id, limit=limit, cursor=cursor)
+        return await services.tuner.list_runs(
+            tuner_id, limit=limit, cursor=cursor, datum_id=datum_id
+        )
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except InvalidRunCursorError as e:

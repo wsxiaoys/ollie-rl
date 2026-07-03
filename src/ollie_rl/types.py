@@ -147,6 +147,12 @@ class ListTunersResponse(BaseModel):
     tuners: List[TunerItem]
 
 
+class ListDatumsResponse(BaseModel):
+    """The full datum-id pool registered for a tuner (for filter dropdowns)."""
+
+    datum_ids: List[str]
+
+
 # Lifecycle status of a run, derived from its bookkeeping columns. The labels
 # are mutually exclusive and assigned by priority in `TunerService`:
 # trained > rejected > rewarded > in_flight > expired.

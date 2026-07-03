@@ -3,6 +3,7 @@ import {
   getCompletion,
   getRun,
   getTuner,
+  listData,
   listRuns,
   listTuners,
 } from "./client";
@@ -24,6 +25,15 @@ export const tunerQuery = (tunerId: string) =>
     refetchInterval: 2000,
   });
 
+// The datum pool is static for a tuner's lifetime, so fetch it once and cache
+// it — used to populate the runs filter dropdown.
+export const dataQuery = (tunerId: string) =>
+  queryOptions({
+    queryKey: ["data", tunerId],
+    queryFn: () => listData(tunerId),
+    staleTime: Infinity,
+  });
+
 // Unbounded fetch of every run — used by the reward-distribution view, which
 // needs the full history to bucket rewards by generation.
 export const runsQuery = (tunerId: string) =>
@@ -34,12 +44,18 @@ export const runsQuery = (tunerId: string) =>
   });
 
 // Cursor-paginated runs for the runs list page. Each page is `RUNS_PAGE_SIZE`
-// runs; `next_cursor` drives `fetchNextPage`.
-export const runsPageQuery = (tunerId: string) =>
+// runs; `next_cursor` drives `fetchNextPage`. An optional `datumId` narrows the
+// listing to a single datum and is part of the query key so switching filters
+// starts a fresh paginated fetch.
+export const runsPageQuery = (tunerId: string, datumId?: string) =>
   infiniteQueryOptions({
-    queryKey: ["runs", "paged", tunerId],
+    queryKey: ["runs", "paged", tunerId, datumId ?? null],
     queryFn: ({ pageParam }) =>
-      listRuns(tunerId, { limit: RUNS_PAGE_SIZE, cursor: pageParam }),
+      listRuns(tunerId, {
+        limit: RUNS_PAGE_SIZE,
+        cursor: pageParam,
+        datumId,
+      }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     refetchInterval: 5000,

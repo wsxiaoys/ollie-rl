@@ -1,17 +1,22 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, type ChangeEvent } from "react";
-import { runsPageQuery, tunersQuery } from "../api/queries";
+import { dataQuery, runsPageQuery, tunersQuery } from "../api/queries";
 import { RunStatusBadge } from "../components/RunStatusBadge";
+import { SearchableSelect } from "../components/SearchableSelect";
 import { Mono } from "../components/ui";
 
 export function RunListPage() {
-  const { tuner: tunerId } = useSearch({ from: "/runs" });
+  const { tuner: tunerId, datum: datumId } = useSearch({ from: "/runs" });
   const navigate = useNavigate();
 
   const tunersQ = useQuery(tunersQuery);
+  const dataQ = useQuery({
+    ...dataQuery(tunerId ?? ""),
+    enabled: Boolean(tunerId),
+  });
   const runsQ = useInfiniteQuery({
-    ...runsPageQuery(tunerId ?? ""),
+    ...runsPageQuery(tunerId ?? "", datumId),
     enabled: Boolean(tunerId),
   });
 
@@ -48,7 +53,16 @@ export function RunListPage() {
 
   const onSelect = (e: ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
+    // Switching tuner clears the datum filter: a datum id is only meaningful
+    // within the tuner it was dispensed under.
     navigate({ to: "/runs", search: { tuner: value || undefined } });
+  };
+
+  const onDatumChange = (value: string | null) => {
+    navigate({
+      to: "/runs",
+      search: { tuner: tunerId, datum: value ?? undefined },
+    });
   };
 
   return (
@@ -70,6 +84,16 @@ export function RunListPage() {
             </option>
           ))}
         </select>
+        <label htmlFor="datum-filter">Datum ID</label>
+        <SearchableSelect
+          id="datum-filter"
+          value={datumId ?? null}
+          options={dataQ.data?.datum_ids ?? []}
+          onChange={onDatumChange}
+          placeholder="All data"
+          searchPlaceholder="Search datum id…"
+          disabled={!tunerId}
+        />
         {runsQ.isFetching && <span className="live-dot">● live</span>}
       </div>
 
@@ -87,7 +111,11 @@ export function RunListPage() {
       )}
 
       {tunerId && runsQ.data && runs.length === 0 && (
-        <div className="placeholder">No runs dispensed yet.</div>
+        <div className="placeholder">
+          {datumId
+            ? `No runs found for datum "${datumId}".`
+            : "No runs dispensed yet."}
+        </div>
       )}
 
       {tunerId && runsQ.data && runs.length > 0 && (
@@ -116,7 +144,18 @@ export function RunListPage() {
                   </Link>
                 </td>
                 <td>
-                  <Mono>{r.datum_id}</Mono>
+                  {r.datum_id === datumId ? (
+                    <Mono>{r.datum_id}</Mono>
+                  ) : (
+                    <button
+                      type="button"
+                      className="link-button"
+                      title={`Filter runs by datum "${r.datum_id}"`}
+                      onClick={() => onDatumChange(r.datum_id)}
+                    >
+                      <Mono>{r.datum_id}</Mono>
+                    </button>
+                  )}
                 </td>
                 <td>
                   <RunStatusBadge status={r.status} />
