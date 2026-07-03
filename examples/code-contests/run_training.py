@@ -189,7 +189,25 @@ async def run_rollout(
     # concrete trial (single- vs multi-step). `run()` returns a `TrialResult`.
     trial = await Trial.create(config)
     trial_result = await trial.run()
+    if agent_timed_out(trial_result):
+        graded = getattr(trial_result, "verifier_result", None) is not None
+        print(
+            f"[driver] run {run_id} hit the agent timeout "
+            f"(graded={graded})"
+        )
     return extract_reward(trial_result)
+
+
+def agent_timed_out(trial_result) -> bool:
+    """Whether Harbor aborted the agent phase on its ``timeout_sec`` budget.
+
+    Read straight off the structured ``TrialResult`` — ``exception_info.
+    exception_type`` is ``"AgentTimeoutError"`` — so there's no need to scrape
+    the ``exception.txt`` artifact. Note Harbor still runs the verifier after a
+    timeout, so this can be ``True`` alongside a real ``verifier_result``.
+    """
+    info = getattr(trial_result, "exception_info", None)
+    return bool(info and info.exception_type == "AgentTimeoutError")
 
 
 def extract_reward(trial_result) -> float | None:
