@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Protocol, Union
 
 import httpx
 
@@ -51,6 +52,86 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
     except FileNotFoundError:
         pass
     return out
+
+
+class _TokenSource(Protocol):
+    """Anything that can hand out the current bearer token on demand."""
+
+    def get(self) -> Optional[str]: ...
+
+
+class _HttpTokenSource:
+    """Token source that fetches a bearer token from an HTTP endpoint and
+    refreshes it on a fixed interval.
+
+    The endpoint is expected to return JSON of the form::
+
+        {"token": "<bearer-token>"}
+
+    The token is refreshed lazily on ``get()`` (which is called per outgoing
+    request) once ``refresh_interval`` seconds have elapsed since the last
+    successful fetch, so there is no background thread to manage. If a refresh
+    fails while a cached token is still available, the cached token is kept and
+    the error is logged rather than raised.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        refresh_interval: float = 60.0,
+        timeout: float = 10.0,
+    ):
+        self._url = url
+        self._refresh_interval = refresh_interval
+        self._timeout = timeout
+        self._cached_token: Optional[str] = None
+        self._fetched_at: float = 0.0  # unix seconds; 0 => must fetch
+
+    def _is_stale(self) -> bool:
+        if self._cached_token is None:
+            return True
+        return time.time() >= (self._fetched_at + self._refresh_interval)
+
+    def _fetch(self) -> None:
+        try:
+            resp = httpx.get(self._url, timeout=self._timeout)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            if self._cached_token is not None:
+                logger.warning(
+                    "GeminiMsrlClient: failed to refresh token from %s: %s; "
+                    "keeping cached token",
+                    self._url,
+                    exc,
+                )
+                return
+            raise ValueError(
+                f"Failed to fetch auth token from {self._url}: {exc}"
+            ) from exc
+
+        token = data.get("token") if isinstance(data, dict) else None
+        if not token:
+            if self._cached_token is not None:
+                logger.warning(
+                    "GeminiMsrlClient: token endpoint %s returned no 'token'; "
+                    "keeping cached token",
+                    self._url,
+                )
+                return
+            raise ValueError(
+                f"Token endpoint {self._url} response missing 'token' field"
+            )
+
+        self._cached_token = token
+        self._fetched_at = time.time()
+        logger.info("GeminiMsrlClient: refreshed token from %s", self._url)
+
+    def get(self) -> Optional[str]:
+        if self._is_stale():
+            self._fetch()
+        return self._cached_token
 
 
 class _EnvFileTokenSource:
@@ -113,13 +194,29 @@ class GeminiMsrlClient:
             )
         self.base_url = base_url.rstrip("/")
 
-        # Token source: the client re-reads the token from GEMINI_MSRL_ENV_FILE
-        # when its mtime changes, so external `gcloud auth ...` refreshes
-        # propagate without a server restart.
-        env_file = os.environ.get("GEMINI_MSRL_ENV_FILE")
-        if not env_file:
-            raise ValueError("GEMINI_MSRL_ENV_FILE environment variable must be set")
-        self._token_source = _EnvFileTokenSource(env_file, "GEMINI_MSRL_AUTH_TOKEN")
+        # Token source. Two mechanisms are supported (URL takes precedence):
+        #
+        # 1. GEMINI_MSRL_TOKEN_URL: fetch the token directly from an HTTP
+        #    endpoint and refresh lazily just before it expires. This is the
+        #    standard mechanism.
+        # 2. GEMINI_MSRL_ENV_FILE: re-read the token from an env file when its
+        #    mtime changes, so an external refresher (e.g. `gcloud auth ...`)
+        #    can propagate updates without a server restart.
+        #
+        # In both cases the token is pulled per-request, so refreshes take
+        # effect without restarting the server.
+        token_url = os.environ.get("GEMINI_MSRL_TOKEN_URL")
+        self._token_source: _TokenSource
+        if token_url:
+            self._token_source = _HttpTokenSource(token_url)
+        else:
+            env_file = os.environ.get("GEMINI_MSRL_ENV_FILE")
+            if not env_file:
+                raise ValueError(
+                    "GEMINI_MSRL_ENV_FILE environment variable must be set "
+                    "(or set GEMINI_MSRL_TOKEN_URL to fetch tokens over HTTP)"
+                )
+            self._token_source = _EnvFileTokenSource(env_file, "GEMINI_MSRL_AUTH_TOKEN")
 
         # Static headers (Authorization is injected per-request from the
         # current token, so it's intentionally NOT pinned here).
