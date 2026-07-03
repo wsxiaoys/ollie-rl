@@ -7,7 +7,7 @@ WORKDIR /web
 
 # Install dependencies first to leverage Docker layer caching.
 COPY web/package.json web/bun.lock ./
-RUN --mount=type=cache,target=/root/.bun/install/cache \
+RUN --mount=type=cache,id=bun-cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile
 
 # Copy the rest of the web sources and build the production bundle into web/dist.
@@ -27,13 +27,13 @@ WORKDIR /app
 
 # Install dependencies first to leverage Docker layer caching.
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
 # Copy the project source and install it.
 COPY src ./src
 COPY README.md LICENSE ./
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # Bundle the built web dashboard so the server can serve it at /app.
