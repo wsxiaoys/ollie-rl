@@ -175,6 +175,10 @@ class RunItem(BaseModel):
     trained_count: int
     rejected_count: int
     completion_count: int
+    # Sum of generation latency (milliseconds) across the run's chat
+    # completions. `None` when the run has no recorded completions (or none
+    # carry a duration, e.g. only legacy rows).
+    duration_ms_total: Optional[int] = None
     created_at: datetime
     expires_at: datetime
 
@@ -194,6 +198,9 @@ class ChatCompletionItem(BaseModel):
     id: str
     policy_generation: int
     created_at: datetime
+    # Wall-clock generation latency in milliseconds. `None` only for legacy
+    # rows written before this column existed.
+    duration_ms: Optional[int] = None
     request: ChatCompletionRequest
     response: ChatCompletion
 
@@ -218,6 +225,9 @@ class ChatCompletionDetailResponse(BaseModel):
     datum_id: str
     policy_generation: int
     created_at: datetime
+    # Wall-clock generation latency in milliseconds. `None` only for legacy
+    # rows written before this column existed.
+    duration_ms: Optional[int] = None
     request: ChatCompletionRequest
     response: ChatCompletion
     tokens: Optional[List[int]] = None

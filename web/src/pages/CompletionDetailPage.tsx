@@ -33,6 +33,7 @@ export function CompletionDetailPage() {
     id: data.id,
     policy_generation: data.policy_generation,
     created_at: data.created_at,
+    duration_ms: data.duration_ms,
     request: data.request,
     response: data.response,
   };
@@ -68,6 +69,15 @@ export function CompletionDetailPage() {
         />
         <StatCard label="datum" value={<Mono>{data.datum_id}</Mono>} />
         <StatCard label="policy gen" value={data.policy_generation} />
+        <StatCard
+          label="duration"
+          value={
+            typeof data.duration_ms === "number"
+              ? `${data.duration_ms.toLocaleString()} ms`
+              : "—"
+          }
+          tone={typeof data.duration_ms === "number" ? "default" : "muted"}
+        />
         <StatCard
           label="tokens"
           value={data.tokens ? data.tokens.length : "—"}

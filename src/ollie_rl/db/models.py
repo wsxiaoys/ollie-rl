@@ -184,6 +184,13 @@ class ChatCompletionModel(BaseModel):
     )
     request: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
     response: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
+    # Wall-clock time (in milliseconds) spent generating this completion,
+    # measured around the trainer's sample/wait span. Every newly recorded
+    # completion carries it (`record_chat_completion` requires it); NULL only
+    # for legacy rows written before this column existed. (The idempotent
+    # replay path records no new row; it returns the original completion,
+    # which retains its own duration.)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=utcnow
     )

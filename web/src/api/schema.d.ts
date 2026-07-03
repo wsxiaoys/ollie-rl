@@ -399,6 +399,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
             request: components["schemas"]["ChatCompletionRequest-Output"];
             response: components["schemas"]["ChatCompletion"];
             /** Tokens */
@@ -463,6 +465,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
             request: components["schemas"]["ChatCompletionRequest-Output"];
             response: components["schemas"]["ChatCompletion"];
         };
@@ -1160,6 +1164,8 @@ export interface components {
             rejected_count: number;
             /** Completion Count */
             completion_count: number;
+            /** Duration Ms Total */
+            duration_ms_total?: number | null;
             /**
              * Created At
              * Format: date-time

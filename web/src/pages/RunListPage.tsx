@@ -6,6 +6,15 @@ import { RunStatusBadge } from "../components/RunStatusBadge";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { Mono } from "../components/ui";
 
+/**
+ * Format a millisecond duration into a compact, human-readable string:
+ * sub-second stays in `ms`, anything longer rolls up to seconds.
+ */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
+}
+
 export function RunListPage() {
   const { tuner: tunerId, datum: datumId } = useSearch({ from: "/runs" });
   const navigate = useNavigate();
@@ -111,8 +120,8 @@ export function RunListPage() {
               <th>Status</th>
               <th className="num">Reward</th>
               <th className="num">Completions</th>
+              <th className="num">Duration</th>
               <th>Created</th>
-              <th>Expires</th>
             </tr>
           </thead>
           <tbody>
@@ -148,8 +157,23 @@ export function RunListPage() {
                   {r.reward === null ? "—" : r.reward.toFixed(3)}
                 </td>
                 <td className="num">{r.completion_count}</td>
-                <td>{new Date(r.created_at).toLocaleString()}</td>
-                <td>{new Date(r.expires_at).toLocaleString()}</td>
+                <td
+                  className="num"
+                  title={
+                    typeof r.duration_ms_total === "number"
+                      ? `${r.duration_ms_total.toLocaleString()} ms — sum of chat completion generation latencies, not the run's wall-clock duration.`
+                      : undefined
+                  }
+                >
+                  {typeof r.duration_ms_total === "number"
+                    ? formatDuration(r.duration_ms_total)
+                    : "—"}
+                </td>
+                <td
+                  title={`Expires ${new Date(r.expires_at).toLocaleString()}`}
+                >
+                  {new Date(r.created_at).toLocaleString()}
+                </td>
               </tr>
             ))}
           </tbody>

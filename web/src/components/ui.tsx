@@ -4,13 +4,15 @@ export function StatCard({
   label,
   value,
   tone = "default",
+  title,
 }: {
   label: string;
   value: ReactNode;
   tone?: "default" | "good" | "warn" | "muted";
+  title?: string;
 }) {
   return (
-    <div className={`stat-card stat-card--${tone}`}>
+    <div className={`stat-card stat-card--${tone}`} title={title}>
       <div className="stat-card__value">{value}</div>
       <div className="stat-card__label">{label}</div>
     </div>

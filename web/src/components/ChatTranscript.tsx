@@ -145,6 +145,15 @@ function getUsage(completion: ChatCompletionItem): {
 }
 
 /**
+ * Format a millisecond duration into a compact, human-readable string:
+ * sub-second stays in `ms`, anything longer rolls up to seconds.
+ */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
+}
+
+/**
  * Canonical, comparison-friendly identity for a message. Two messages are
  * "the same" turn if their role, flattened content, name/tool_call_id, and
  * tool-call name/arguments/id match — robust to incidental fields that differ
@@ -432,6 +441,15 @@ function TrajectoryCard({
                   )
                 );
               })()}
+              {typeof turn.completion.duration_ms === "number" && (
+                <span
+                  className="turn-divider__meta"
+                  title={`Generation latency: ${turn.completion.duration_ms.toLocaleString()} ms`}
+                >
+                  <span className="turn-divider__meta-label">took</span>
+                  <Mono>{formatDuration(turn.completion.duration_ms)}</Mono>
+                </span>
+              )}
               <span className="turn-divider__spacer" />
               <span className="turn-divider__meta">
                 <span className="turn-divider__meta-label">id</span>

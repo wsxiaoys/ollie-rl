@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -324,6 +325,7 @@ def _build_run_item(
     completion_count: int,
     now: datetime,
     policy_generation: Optional[int] = None,
+    duration_ms_total: Optional[int] = None,
 ) -> RunItem:
     return RunItem(
         run_id=run.id,
@@ -334,6 +336,7 @@ def _build_run_item(
         trained_count=run.trained_count,
         rejected_count=run.rejected_count,
         completion_count=completion_count,
+        duration_ms_total=duration_ms_total,
         created_at=run.created_at,
         expires_at=run.expires_at,
     )
@@ -852,10 +855,12 @@ class TunerService:
 
             counts: Dict[str, int] = {}
             generations: Dict[str, int] = {}
+            durations: Dict[str, int] = {}
             if runs:
-                # One grouped pass yields both the completion count and the
-                # run's policy generation (max across its completions), so the
-                # runs list can bucket rewards by generation without an extra
+                # One grouped pass yields the completion count, the run's
+                # policy generation (max across its completions), and the total
+                # generation latency (sum of durations), so the runs list can
+                # bucket rewards by generation and show timing without an extra
                 # per-run fetch. Scope the aggregate to the page's run ids so a
                 # paginated request doesn't scan every completion.
                 run_ids = [r.id for r in runs]
@@ -864,6 +869,7 @@ class TunerService:
                         ChatCompletionModel.run_id,
                         func.count(),
                         func.max(ChatCompletionModel.policy_generation),
+                        func.sum(ChatCompletionModel.duration_ms),
                     )
                     .where(
                         ChatCompletionModel.tuner_id == tuner_id,
@@ -871,16 +877,24 @@ class TunerService:
                     )
                     .group_by(ChatCompletionModel.run_id)
                 )
-                for run_id, count, max_generation in agg_result.all():
+                for run_id, count, max_generation, total_duration in agg_result.all():
                     if run_id is None:
                         continue
                     counts[run_id] = count
                     if max_generation is not None:
                         generations[run_id] = max_generation
+                    if total_duration is not None:
+                        durations[run_id] = int(total_duration)
 
         now = utcnow()
         items = [
-            _build_run_item(r, counts.get(r.id, 0), now, generations.get(r.id))
+            _build_run_item(
+                r,
+                counts.get(r.id, 0),
+                now,
+                generations.get(r.id),
+                durations.get(r.id),
+            )
             for r in runs
         ]
         next_cursor = (
@@ -922,12 +936,17 @@ class TunerService:
         policy_generation = (
             max(c.policy_generation for c in completions) if completions else None
         )
-        run_item = _build_run_item(run, len(completions), now, policy_generation)
+        durations = [c.duration_ms for c in completions if c.duration_ms is not None]
+        duration_ms_total = sum(durations) if durations else None
+        run_item = _build_run_item(
+            run, len(completions), now, policy_generation, duration_ms_total
+        )
         completion_items = [
             ChatCompletionItem(
                 id=c.id,
                 policy_generation=c.policy_generation,
                 created_at=c.created_at,
+                duration_ms=c.duration_ms,
                 request=ChatCompletionRequest.model_validate(c.request),
                 response=ChatCompletion.model_validate(c.response),
             )
@@ -965,6 +984,7 @@ class TunerService:
             datum_id=record.datum_id,
             policy_generation=record.policy_generation,
             created_at=record.created_at,
+            duration_ms=record.duration_ms,
             request=ChatCompletionRequest.model_validate(record.request),
             response=ChatCompletion.model_validate(record.response),
             tokens=record.tokens,
@@ -1104,9 +1124,14 @@ class TunerService:
                 )
                 return existing
 
-            # Generate completion
+            # Generate completion, timing just the generation span so the
+            # recorded duration reflects model latency (not lock acquisition,
+            # dedup lookup, or DB writes). Monotonic clock is immune to
+            # wall-clock adjustments.
+            start = time.monotonic()
             sample_op = await trainer.sample(request)
             sample = await sample_op.wait()
+            duration_ms = int((time.monotonic() - start) * 1000)
             policy_generation = sample.policy_generation
 
             # Record completion metadata
@@ -1122,6 +1147,7 @@ class TunerService:
                 request=request,
                 response=sample.completion,
                 request_hash=request_hash,
+                duration_ms=duration_ms,
             )
             if sample.malformed:
                 recipe = await self._recipe_for(tuner_id)
@@ -1173,12 +1199,16 @@ class TunerService:
         policy_generation: int,
         request: ChatCompletionRequest,
         response: ChatCompletion,
+        duration_ms: int,
         tokens: Optional[List[int]] = None,
         logprobs: Optional[List[float]] = None,
         request_hash: Optional[str] = None,
     ) -> None:
         """
         Record a chat completion event in the database.
+
+        `duration_ms` is the wall-clock generation latency in milliseconds,
+        required so every recorded completion carries timing.
 
         `tokens` and `logprobs` are optional sample-time tensors required
         by trainers (e.g. Tinker) that train on raw rollouts. They are
@@ -1202,6 +1232,7 @@ class TunerService:
                     request=request.model_dump(mode="json"),
                     response=response.model_dump(mode="json"),
                     request_hash=request_hash,
+                    duration_ms=duration_ms,
                 )
                 session.add(db_completion)
 

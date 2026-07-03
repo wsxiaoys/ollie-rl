@@ -210,6 +210,7 @@ class TunerServiceTestCase(unittest.IsolatedAsyncioTestCase):
             policy_generation=policy_generation,
             request=request,
             response=_make_chat_completion(completion_id=completion_id),
+            duration_ms=0,
         )
         return completion_id
 
@@ -517,6 +518,7 @@ class TestRecordChatCompletion(TunerServiceTestCase):
             policy_generation=1,
             request=request,
             response=response,
+            duration_ms=123,
         )
 
         async_session = get_sessionmaker()
@@ -563,6 +565,7 @@ class TestRecordChatCompletion(TunerServiceTestCase):
             logprobs=logprobs,
             request=request,
             response=response,
+            duration_ms=456,
         )
 
         async_session = get_sessionmaker()
@@ -607,6 +610,7 @@ class TestRecordChatCompletion(TunerServiceTestCase):
             policy_generation=3,
             request=request,
             response=response,
+            duration_ms=789,
         )
 
         async_session = get_sessionmaker()
@@ -711,6 +715,7 @@ class TestMaybeTrain(TunerServiceTestCase):
                     policy_generation=i,
                     request=request,
                     response=response,
+                    duration_ms=0,
                 )
                 await self.service.update_reward(tuner_id, run.id, 1.0)
 

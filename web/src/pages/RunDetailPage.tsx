@@ -55,6 +55,16 @@ export function RunDetailPage() {
           tone={run.reward === null ? "muted" : "good"}
         />
         <StatCard label="completions" value={run.completion_count} />
+        <StatCard
+          label="duration"
+          value={
+            typeof run.duration_ms_total === "number"
+              ? `${(run.duration_ms_total / 1000).toFixed(2)}s`
+              : "—"
+          }
+          tone={typeof run.duration_ms_total === "number" ? "default" : "muted"}
+          title="Sum of individual chat completion generation latencies — not the run's wall-clock duration."
+        />
         <StatCard label="trained" value={run.trained_count} />
         <StatCard
           label="rejected"
