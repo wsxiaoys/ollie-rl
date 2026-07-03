@@ -30,9 +30,11 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
-# Copy the project source and install it.
+# Copy the project source and install it. alembic.ini ships so the `alembic`
+# CLI is usable inside the container (migrations are also applied automatically
+# on startup via init_db()).
 COPY src ./src
-COPY README.md LICENSE ./
+COPY README.md LICENSE alembic.ini ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 

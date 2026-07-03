@@ -32,6 +32,7 @@ classifiers = [
 ]
 dependencies = [
     "aiosqlite>=0.22.1",
+    "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "fastapi>=0.138.0",
     "google-genai>=2.10.0",
@@ -93,6 +94,14 @@ cmd = "uv run pytest"
 [tool.poe.tasks.check]
 help = "Run the ty type checker."
 cmd = "uv run ty check"
+
+[tool.poe.tasks.migrate]
+help = "Apply database migrations up to the latest revision (alembic upgrade head)."
+cmd = "uv run alembic upgrade head"
+
+[tool.poe.tasks.makemigration]
+help = "Autogenerate a new migration from model changes. Usage: uv run poe makemigration -- -m \"message\"."
+cmd = "uv run alembic revision --autogenerate"
 
 [tool.poe.tasks.lint]
 help = "Lint with ruff (no autofix)."
