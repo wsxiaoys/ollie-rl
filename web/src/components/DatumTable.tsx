@@ -57,6 +57,10 @@ export function DatumTable({
       header: "In flight",
       cell: (info) => <span className="num">{info.getValue()}</span>,
     }),
+    columnHelper.accessor("expired", {
+      header: "Expired",
+      cell: (info) => <span className="num">{info.getValue()}</span>,
+    }),
     columnHelper.accessor("trained", {
       header: "Trained",
       cell: (info) => <span className="num">{info.getValue()}</span>,

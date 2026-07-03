@@ -783,6 +783,8 @@ export interface components {
             consumable: number;
             /** In Flight */
             in_flight: number;
+            /** Expired */
+            expired: number;
             /** Trained */
             trained: number;
         };

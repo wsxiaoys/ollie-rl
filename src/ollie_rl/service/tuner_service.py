@@ -618,6 +618,7 @@ class TunerService:
         in_flight = expired = rewarded = consumable = trained = rejected = 0
         consumable_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         in_flight_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
+        expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         trained_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
 
         for r in runs:
@@ -630,6 +631,8 @@ class TunerService:
                     in_flight_by_datum[r.datum_id] += 1
             else:
                 expired += 1
+                if r.datum_id in expired_by_datum:
+                    expired_by_datum[r.datum_id] += 1
 
             if r.trained_count > 0:
                 trained += 1
@@ -654,14 +657,17 @@ class TunerService:
         for datum_id in consumable_by_datum:
             count = consumable_by_datum[datum_id]
             pending = in_flight_by_datum.get(datum_id, 0)
+            expired_here = expired_by_datum.get(datum_id, 0)
             trained_here = trained_by_datum.get(datum_id, 0)
             # Surface any datum that has activity worth showing: a group
             # forming (rewarded runs counting toward the batch, or runs still
             # awaiting a reward) or one that has already contributed a trained
             # group. Without the trained check a datum whose group was fully
             # trained (consumable/in-flight back to 0) would silently vanish
-            # from the pool even though it carries training history.
-            if count <= 0 and pending <= 0 and trained_here <= 0:
+            # from the pool even though it carries training history. Expired
+            # runs also count as activity worth surfacing: a datum that keeps
+            # expiring signals it is hard to finish in time.
+            if count <= 0 and pending <= 0 and trained_here <= 0 and expired_here <= 0:
                 continue
             # "in progress" and batch readiness only reflect datums with an
             # active (consumable or in-flight) group. A purely trained datum is
@@ -680,6 +686,7 @@ class TunerService:
                     datum_id=datum_id,
                     consumable=count,
                     in_flight=pending,
+                    expired=expired_here,
                     trained=trained_here,
                 )
             )

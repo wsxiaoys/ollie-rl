@@ -76,6 +76,7 @@ class DatumProgress(BaseModel):
     datum_id: str
     consumable: int  # rewarded runs counting toward this group's group_size
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
+    expired: int  # runs that expired without a reward (re-dispensable)
     trained: int  # prior training exposure (fresh-tier tie-break)
 
 
