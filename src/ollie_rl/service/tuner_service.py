@@ -44,6 +44,13 @@ from ollie_rl.types import (
 
 logger = logging.getLogger(__name__)
 
+# Time budget granted to a run to make progress. A run is created with
+# `expires_at = now + RUN_EXPIRE_SECONDS`, and each recorded chat completion
+# pushes `expires_at` out to `now + RUN_EXPIRE_SECONDS` again. Effectively every
+# step (turn) gets this much time to complete before the run is considered
+# expired.
+RUN_EXPIRE_SECONDS = 1200
+
 
 class TunerNotFoundError(Exception):
     pass
@@ -1198,6 +1205,19 @@ class TunerService:
                 )
                 session.add(db_completion)
 
+                # Grant the run a fresh time budget for its next step. Every
+                # recorded completion pushes `expires_at` out so a run only
+                # expires when a single step takes longer than
+                # RUN_EXPIRE_SECONDS.
+                await session.execute(
+                    update(RunModel)
+                    .where(
+                        RunModel.id == run_id,
+                        RunModel.tuner_id == tuner_id,
+                    )
+                    .values(expires_at=utcnow() + timedelta(seconds=RUN_EXPIRE_SECONDS))
+                )
+
     async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
         """
         Record or update the reward for a specific run.
@@ -1464,7 +1484,7 @@ class TunerService:
                 datum_id=datum_id,
                 reward=None,
                 trained_count=0,
-                expires_at=utcnow() + timedelta(seconds=1200),
+                expires_at=utcnow() + timedelta(seconds=RUN_EXPIRE_SECONDS),
             )
             async with self.async_session() as session:
                 async with session.begin():
