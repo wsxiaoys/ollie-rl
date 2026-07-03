@@ -148,12 +148,19 @@ async def run_rollout(
     run_id: str,
     datum_id: str,
     environment: str,
-) -> float:
+) -> float | None:
     """Execute one containerized Harbor trial and return its reward.
 
     The agent samples through the shared ``/openai/v1`` endpoint, tagging every
     request with this run's headers so ollie-rl records completions under the
     run. Harbor's verifier then runs the task's tests and produces the reward.
+
+    Returns the graded scalar reward, or ``None`` when the verifier never ran
+    (e.g. the trial crashed or was cancelled before grading). ``None`` is *not*
+    a zero reward — it means there is no policy signal to attribute to this run,
+    so the caller should skip submission and let the run's lease expire.
+    Note an agent *timeout* still grades (Harbor captures it and runs the
+    verifier), so it yields a real ``0.0``/``1.0`` rather than ``None``.
     """
     config = TrialConfig(
         task=TaskConfig(path=TASKS_DIR / datum_id),
@@ -185,22 +192,28 @@ async def run_rollout(
     return extract_reward(trial_result)
 
 
-def extract_reward(trial_result) -> float:
+def extract_reward(trial_result) -> float | None:
     """Pull the scalar reward out of a single Harbor trial result.
 
     ``VerifierResult.rewards`` is a ``dict[str, float | int] | None``. We prefer
     the ``"reward"`` key, then fall back to the sole value when the verifier
     emitted exactly one metric.
+
+    Returns ``None`` when the verifier produced no graded reward (no
+    ``verifier_result``/``rewards``, or an ambiguous multi-metric result we
+    can't interpret). A ``None`` means "not graded" and is deliberately
+    distinct from a genuine ``0.0`` so the driver can skip submitting a
+    fabricated reward for un-graded runs.
     """
     verifier_result = getattr(trial_result, "verifier_result", None)
     rewards = getattr(verifier_result, "rewards", None) if verifier_result else None
     if not rewards:
-        return 0.0
+        return None
     if "reward" in rewards:
         return float(rewards["reward"])
     if len(rewards) == 1:
         return float(next(iter(rewards.values())))
-    return 0.0
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -237,9 +250,23 @@ async def worker(
                 datum_id=datum_id,
                 environment=args.environment,
             )
-        except Exception as exc:  # a crashed trial scores the failure reward.
-            print(f"[driver] run {run:04d} trial error ({datum_id}): {exc}")
-            reward = 0.0
+        except Exception as exc:
+            # The trial crashed before the verifier could grade it (e.g. the
+            # inference endpoint dropped mid-run). There is no graded outcome to
+            # attribute to the policy, so DON'T fabricate a 0.0 reward — skip
+            # submission and let the run's lease expire for a clean re-dispense.
+            print(f"[driver] run {run:04d} trial crashed ({datum_id}); "
+                  f"skipping reward: {exc}")
+            continue
+
+        # A trial that finished but was never graded (verifier didn't run —
+        # crash/cancel captured inside Harbor) carries no policy signal either.
+        # Skip it rather than submit a spurious 0.0. Note: an agent *timeout*
+        # still grades, so it lands here with a real reward and is submitted.
+        if reward is None:
+            print(f"[driver] run {run:04d} task={datum_id} not graded "
+                  f"(no verifier result); skipping reward")
+            continue
 
         # Phase 3: report the reward; the server groups/advantages/trains.
         # A rejected reward (409) is expected for malformed examples the server
