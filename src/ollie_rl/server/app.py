@@ -87,6 +87,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Ollie RL Server",
     version="0.1.0",
+    description="📊 [Web dashboard](/app)",
     lifespan=lifespan,
 )
 
