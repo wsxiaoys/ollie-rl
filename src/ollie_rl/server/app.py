@@ -273,13 +273,13 @@ async def get_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/openai/v1/chat/completions")
-async def create_chat_completion(
+async def _generate_chat_completion(
+    *,
+    tuner_id: str,
     request: ChatCompletionRequest,
-    x_tuner_id: Annotated[str, Header()],
-    x_run_id: Annotated[str | None, Header()] = None,
+    run_id: str | None,
 ):
-    """Generate a chat completion from the active policy of the requested model.
+    """Shared handler for the header- and path-addressed completion endpoints.
 
     Real token-by-token streaming is not supported. When ``stream=true`` is
     requested, the full completion is generated first and then replayed as a
@@ -295,9 +295,9 @@ async def create_chat_completion(
 
     try:
         completion = await services.tuner.sample(
-            tuner_id=x_tuner_id,
+            tuner_id=tuner_id,
             request=request,
-            run_id=x_run_id,
+            run_id=run_id,
         )
     except (TunerNotFoundError, RunNotFoundError) as e:
         raise HTTPException(
@@ -330,6 +330,46 @@ async def create_chat_completion(
             media_type="text/event-stream",
         )
     return completion
+
+
+@app.post("/openai/v1/chat/completions")
+async def create_chat_completion(
+    request: ChatCompletionRequest,
+    x_tuner_id: Annotated[str, Header()],
+    x_run_id: Annotated[str | None, Header()] = None,
+):
+    """Generate a chat completion from the active policy of the requested model.
+
+    The tuner/run this completion is attributed to travel in the ``X-Tuner-Id``
+    / ``X-Run-Id`` headers. See the path-addressed twin
+    (``/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions``) for a
+    variant that carries the ids in the URL instead.
+    """
+    return await _generate_chat_completion(
+        tuner_id=x_tuner_id,
+        request=request,
+        run_id=x_run_id,
+    )
+
+
+@app.post("/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions")
+async def create_run_chat_completion(
+    tuner_id: str,
+    run_id: str,
+    request: ChatCompletionRequest,
+):
+    """Path-addressed twin of ``/openai/v1/chat/completions``.
+
+    Behaves identically to the header-based endpoint but carries the tuner and
+    run ids in the URL instead of the ``X-Tuner-Id`` / ``X-Run-Id`` headers.
+    Encoding the ids in the path keeps them in the request line, which makes
+    per-run completions easy to search in log aggregators (e.g. Railway).
+    """
+    return await _generate_chat_completion(
+        tuner_id=tuner_id,
+        request=request,
+        run_id=run_id,
+    )
 
 
 @app.post("/tuners/{tuner_id}/runs")

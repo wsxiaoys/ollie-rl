@@ -6,10 +6,12 @@ verifier runs the task's unit tests to produce the reward. The driver just
 orchestrates the loop — dispense a run from ollie-rl, run the trial, report the
 reward — while ollie-rl handles the training.
 
-The agent samples through ollie-rl's OpenAI-compatible endpoint, tagged with the
-run's ``X-Tuner-Id`` / ``X-Run-Id`` headers so completions are attributed to the
-dispensed run. Every agent shares one static ``base_url``
-(``http://<ollie-host>/openai/v1``) and the ids travel in the headers.
+The agent samples through ollie-rl's OpenAI-compatible endpoint. Completions are
+attributed to the dispensed run via a path-addressed ``base_url``
+(``http://<ollie-host>/tuners/<tuner-id>/runs/<run-id>/openai/v1``) so the ids
+show up in the request line — which keeps per-run completions searchable in log
+aggregators (e.g. Railway) — instead of travelling in ``X-Tuner-Id`` /
+``X-Run-Id`` headers.
 
 Prerequisites
 -------------
@@ -152,9 +154,14 @@ async def submit_reward(
 # --------------------------------------------------------------------------
 # The rollout: one Harbor trial == one ollie-rl Run
 # --------------------------------------------------------------------------
-def openai_base_url(base: str) -> str:
-    """The shared OpenAI-compatible endpoint (ids travel in headers, not URL)."""
-    return f"{base}/openai/v1"
+def run_openai_base_url(base: str, tuner_id: str, run_id: str) -> str:
+    """The per-run OpenAI-compatible endpoint (ids travel in the URL path).
+
+    Encoding the tuner/run ids in the path (rather than ``X-Tuner-Id`` /
+    ``X-Run-Id`` headers) keeps them in the request line, which makes each run's
+    completions easy to search in log aggregators (e.g. Railway).
+    """
+    return f"{base}/tuners/{tuner_id}/runs/{run_id}/openai/v1"
 
 
 async def run_rollout(
@@ -168,9 +175,10 @@ async def run_rollout(
 ) -> float | None:
     """Execute one containerized Harbor trial and return its reward.
 
-    The agent samples through the shared ``/openai/v1`` endpoint, tagging every
-    request with this run's headers so ollie-rl records completions under the
-    run. Harbor's verifier then runs the task's tests and produces the reward.
+    The agent samples through this run's path-addressed ``/openai/v1`` endpoint
+    so ollie-rl records completions under the run without needing per-request
+    headers. Harbor's verifier then runs the task's tests and produces the
+    reward.
 
     Returns the graded scalar reward, or ``None`` when the run carries no policy
     signal we want to train on. ``None`` is *not* a zero reward — it means the
@@ -185,12 +193,10 @@ async def run_rollout(
     """
     # Per-turn timeout: forwarded to litellm's ``acompletion(timeout=...)`` via
     # the agent's ``llm_kwargs``. Caps how long a single completion can hang.
+    # The tuner/run ids travel in the path-addressed ``api_base`` below, so no
+    # ``X-Tuner-Id`` / ``X-Run-Id`` headers are needed.
     llm_kwargs: dict = {
         "api_key": "ollie",
-        "extra_headers": {
-            "X-Tuner-Id": tuner_id,
-            "X-Run-Id": run_id,
-        },
     }
     if DEFAULT_LLM_TIMEOUT_SEC is not None:
         llm_kwargs["timeout"] = DEFAULT_LLM_TIMEOUT_SEC
@@ -212,11 +218,11 @@ async def run_rollout(
         agent=AgentConfig(
             name=AgentName.TERMINUS_2.value,
             model_name=AGENT_MODEL_NAME,
-            # Point the agent at the shared OpenAI-compatible endpoint and tag
-            # each request with the tuner/run ids so ollie-rl attributes every
-            # completion to this run.
+            # Point the agent at this run's path-addressed OpenAI-compatible
+            # endpoint so ollie-rl attributes every completion to this run
+            # (the tuner/run ids are baked into the URL, not sent as headers).
             kwargs={
-                "api_base": openai_base_url(base),
+                "api_base": run_openai_base_url(base, tuner_id, run_id),
                 "llm_kwargs": llm_kwargs,
             },
         ),
