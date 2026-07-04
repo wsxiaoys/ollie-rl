@@ -325,9 +325,11 @@ async def _generate_chat_completion(
         # attempts never reach the DB, so this log is the only server-side
         # record of them.
         logger.exception(
-            "Failed to generate chat completion (model=%s tuner=%s run=%s)",
+            "Failed to generate chat completion (model=%s tuner=%s run=%s): %s",
+            request.model,
             tuner_id,
             run_id,
+            e,
         )
         raise HTTPException(status_code=500, detail=str(e))
 
