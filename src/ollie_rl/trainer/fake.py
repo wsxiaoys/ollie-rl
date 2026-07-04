@@ -47,7 +47,14 @@ class FakeTrainer(Trainer):
     def policy_generation(self) -> int:
         return 0
 
-    async def sample(self, request: ChatCompletionRequest) -> SampleOp:
+    async def sample(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        restore_state: Optional[str] = None,
+    ) -> SampleOp:
+        # FakeTrainer has no long-running op to re-attach to, so
+        # `restore_state` is accepted (for interface parity) and ignored.
         completion_id = f"cmpl_{uuid.uuid4().hex}"
         completion = ChatCompletion(
             id=completion_id,

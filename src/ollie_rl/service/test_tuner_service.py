@@ -71,6 +71,9 @@ def _make_sample_op(
     op = AsyncMock()
     op.wait = AsyncMock(return_value=sample)
     op.peek = AsyncMock(return_value=True)
+    # `save_state()` is a synchronous accessor; a non-resumable op returns None
+    # so the service never persists an in-flight row for it.
+    op.save_state = lambda: None
     return op
 
 
@@ -84,7 +87,12 @@ class FakeTrainer(Trainer):
     def policy_generation(self) -> int:
         return 0
 
-    async def sample(self, request: ChatCompletionRequest):
+    async def sample(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        restore_state: Optional[str] = None,
+    ):
         return self._sample_op
 
     async def train_step(self, examples):

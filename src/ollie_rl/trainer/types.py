@@ -49,6 +49,17 @@ class Op(ABC, Generic[T]):
     @abstractmethod
     async def peek(self) -> bool: ...
 
+    def save_state(self) -> Optional[str]:
+        """Serialize this op's resume state (e.g. an LRO op_name).
+
+        Persist the returned string and later pass it back to the *same public
+        entry point* that produced the op (e.g.
+        ``Trainer.sample(request, restore_state=...)``) to reconstruct an
+        equivalent op that keeps waiting on the same backend operation.
+        ``None`` = this op is not resumable and must always be produced fresh.
+        """
+        return None
+
 
 class TrainOp(Op[None]):
     pass
@@ -70,7 +81,16 @@ class Trainer(ABC):
     def policy_generation(self) -> int: ...
 
     @abstractmethod
-    async def sample(self, request: ChatCompletionRequest) -> SampleOp: ...
+    async def sample(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        restore_state: Optional[str] = None,
+    ) -> SampleOp:
+        """Submit a fresh sample op, or -- when ``restore_state`` is given --
+        re-attach to that already-submitted backend op instead of submitting a
+        new one. Backends that don't support resumption ignore it."""
+        ...
 
     @abstractmethod
     async def train_step(self, examples: List[Example]) -> TrainOp: ...

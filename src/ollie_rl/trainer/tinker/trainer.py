@@ -149,7 +149,14 @@ class TinkerTrainer(Trainer):
     async def _persist_state(self) -> None:
         await self.state_store.save(self.state.model_dump_json())
 
-    async def sample(self, request: ChatCompletionRequest) -> SampleOp:
+    async def sample(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        restore_state: Optional[str] = None,
+    ) -> SampleOp:
+        # Tinker samples inline via a local task; there is no durable backend
+        # op to re-attach to, so `restore_state` is accepted and ignored.
         task = asyncio.create_task(self._run_sample(request))
         return TinkerSampleOp(task)
 

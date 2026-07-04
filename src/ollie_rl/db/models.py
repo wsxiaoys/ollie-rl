@@ -199,6 +199,46 @@ class ChatCompletionModel(BaseModel):
     )
 
 
+class InFlightChatCompletionModel(BaseModel):
+    """
+    Durable resume state for a chat completion whose backend op is still
+    in flight for a given turn.
+
+    Keyed by the exact turn identity we already dedup on
+    (``(tuner_id, run_id, request_hash)``), it stores the op's serializable
+    resume state (``op.save_state()`` -- e.g. a Gemini LRO ``op_name``) the
+    moment the op is submitted. A later retry of the *same* turn re-attaches to
+    that already-running op instead of spawning a fresh one, so a generation
+    longer than the poll budget can complete across retries on a single op
+    (no orphaned ops, no lease burn).
+
+    Rows are short-lived: created at first submit, and deleted on recorded
+    success or on terminal op failure. They are intentionally NOT cleared on
+    cancel/timeout, since those mean the backend op is still progressing and the
+    next retry must re-attach.
+    """
+
+    __tablename__ = "in_flight_chat_completions"
+
+    # Natural key = the turn identity. At most one in-flight op per turn.
+    tuner_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tuners.id"), primary_key=True
+    )
+    run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    # `op.save_state()` (the op resource name for gemini_msrl).
+    state: Mapped[str] = mapped_column(String(512), nullable=False)
+    # First-submit time, used as the start for end-to-end duration across any
+    # re-attach cycles.
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+
 class RunModel(BaseModel):
     __tablename__ = "runs"
 

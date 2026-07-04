@@ -193,6 +193,15 @@ class GeminiMsrlOp:
         operation = await self.client.get_operation(self.op_name)
         return bool(operation.done)
 
+    def save_state(self) -> Optional[str]:
+        """Serialize this op's resume state: the LRO operation resource name.
+
+        Persisting this the moment the op is submitted lets a later retry
+        re-attach to the *same* in-flight Gemini operation (via
+        ``sample(request, restore_state=...)``) instead of spawning a fresh op.
+        """
+        return self.op_name
+
 
 class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
     def __init__(
@@ -495,8 +504,20 @@ class GeminiMsrlTrainer(Trainer):
         except Exception as e:
             logger.error(f"Error polling train step or updating state: {e}")
 
-    async def sample(self, request: ChatCompletionRequest) -> GeminiMsrlSamplingOp:
+    async def sample(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        restore_state: Optional[str] = None,
+    ) -> GeminiMsrlSamplingOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
+
+        if restore_state is not None:
+            # Re-attach to the already-submitted op instead of submitting a new
+            # one. This is the exact inline reconstruction that `train_step` /
+            # `restore` already do for the train op. `model_name` only shapes
+            # the returned ChatCompletion envelope and comes from the request.
+            return GeminiMsrlSamplingOp(self.client, restore_state, request.model)
 
         # 1. Translate ChatCompletionRequest to GenerateContentTuningScopeRequest
         system_messages = [msg for msg in request.messages if msg["role"] == "system"]

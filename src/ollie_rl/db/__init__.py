@@ -1,5 +1,12 @@
 from .connection import get_engine, get_sessionmaker, init_db, shutdown_db
-from .models import BaseModel, TunerModel, ChatCompletionModel, RunModel, DatumRowModel
+from .models import (
+    BaseModel,
+    TunerModel,
+    ChatCompletionModel,
+    InFlightChatCompletionModel,
+    RunModel,
+    DatumRowModel,
+)
 
 __all__ = [
     "get_engine",
@@ -9,6 +16,7 @@ __all__ = [
     "BaseModel",
     "TunerModel",
     "ChatCompletionModel",
+    "InFlightChatCompletionModel",
     "RunModel",
     "DatumRowModel",
 ]

@@ -5,18 +5,22 @@ import hashlib
 import json
 import logging
 import math
-import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from ollie_rl.cookbook import Cookbook, Recipe
 from ollie_rl.trainer import Trainer, StateStore, Example
 from ollie_rl.trainer import factory as trainer_factory
-from ollie_rl.db import TunerModel, ChatCompletionModel, DatumRowModel
+from ollie_rl.db import (
+    TunerModel,
+    ChatCompletionModel,
+    InFlightChatCompletionModel,
+    DatumRowModel,
+)
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
@@ -1124,14 +1128,53 @@ class TunerService:
                 )
                 return existing
 
-            # Generate completion, timing just the generation span so the
-            # recorded duration reflects model latency (not lock acquisition,
-            # dedup lookup, or DB writes). Monotonic clock is immune to
-            # wall-clock adjustments.
-            start = time.monotonic()
-            sample_op = await trainer.sample(request)
-            sample = await sample_op.wait()
-            duration_ms = int((time.monotonic() - start) * 1000)
+            # Middle state: an op may already be in flight for this exact turn
+            # from a previous (cancelled/timed-out) attempt. A Gemini LRO keeps
+            # progressing on the backend regardless of whether we are polling,
+            # so re-attach to it via `restore_state` instead of submitting a
+            # fresh op (which would orphan the old one and burn the lease).
+            in_flight = await self._find_in_flight_completion(
+                tuner_id, run_id, request_hash
+            )
+            if in_flight is not None:
+                logger.info(
+                    f"Re-attaching to in-flight op for run {run_id} "
+                    f"(request_hash={request_hash[:12]}...); "
+                    "continuing to wait rather than resubmitting."
+                )
+                sample_op = await trainer.sample(request, restore_state=in_flight.state)
+                # End-to-end start is the original first-submit time so the
+                # recorded latency spans all re-attach cycles.
+                first_submit = in_flight.created_at
+            else:
+                sample_op = await trainer.sample(request)
+                first_submit = utcnow()
+                state = sample_op.save_state()
+                if state is not None:
+                    # Resumable backend: persist resume state the moment the op
+                    # is submitted so the next retry can re-attach.
+                    await self._record_in_flight_completion(
+                        tuner_id, run_id, request_hash, state, first_submit
+                    )
+
+            try:
+                sample = await sample_op.wait()
+            except asyncio.CancelledError, TimeoutError:
+                # The op is still running on the backend. KEEP the in-flight row
+                # so the next retry re-attaches, and re-raise so the client sees
+                # the timeout/cancel.
+                raise
+            except Exception:
+                # Terminal op failure (op done but failed / no candidates). The
+                # saved state is now useless -- delete it so the next retry
+                # submits fresh.
+                await self._clear_in_flight_completion(tuner_id, run_id, request_hash)
+                raise
+
+            # End-to-end generation latency from first submit, so re-attach
+            # cycles are counted. For a turn that never re-attaches (the common
+            # fast path) `first_submit ~= now` at submit, matching prior timing.
+            duration_ms = int((utcnow() - first_submit).total_seconds() * 1000)
             policy_generation = sample.policy_generation
 
             # Record completion metadata
@@ -1149,6 +1192,8 @@ class TunerService:
                 request_hash=request_hash,
                 duration_ms=duration_ms,
             )
+            # The recorded 200 supersedes the in-flight row; drop it.
+            await self._clear_in_flight_completion(tuner_id, run_id, request_hash)
             if sample.malformed:
                 recipe = await self._recipe_for(tuner_id)
                 malformed_penalty = recipe.malformed_penalty
@@ -1189,6 +1234,70 @@ class TunerService:
             if record is None:
                 return None
             return ChatCompletion.model_validate(record.response)
+
+    async def _find_in_flight_completion(
+        self, tuner_id: str, run_id: str, request_hash: str
+    ) -> Optional[InFlightChatCompletionModel]:
+        """Return the durable resume state for an in-flight op for this turn.
+
+        Consulted only when there is no recorded 200 yet; the returned row's
+        `state` re-attaches to the same backend op via
+        `trainer.sample(request, restore_state=...)`.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(InFlightChatCompletionModel).where(
+                    InFlightChatCompletionModel.tuner_id == tuner_id,
+                    InFlightChatCompletionModel.run_id == run_id,
+                    InFlightChatCompletionModel.request_hash == request_hash,
+                )
+            )
+            return result.scalar_one_or_none()
+
+    async def _record_in_flight_completion(
+        self,
+        tuner_id: str,
+        run_id: str,
+        request_hash: str,
+        state: str,
+        created_at: datetime,
+    ) -> None:
+        """Persist an op's resume state the moment it is submitted.
+
+        Keyed by the turn identity so at most one in-flight op exists per turn;
+        the composite PK plus the per-turn sample lock guarantee no duplicate
+        rows race in.
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                session.add(
+                    InFlightChatCompletionModel(
+                        tuner_id=tuner_id,
+                        run_id=run_id,
+                        request_hash=request_hash,
+                        state=state,
+                        created_at=created_at,
+                    )
+                )
+
+    async def _clear_in_flight_completion(
+        self, tuner_id: str, run_id: str, request_hash: str
+    ) -> None:
+        """Delete the in-flight resume state for a turn.
+
+        Called only on (a) recorded success or (b) terminal op failure -- never
+        on cancel/timeout, since those mean the backend op is still progressing
+        and the next retry must re-attach.
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(InFlightChatCompletionModel).where(
+                        InFlightChatCompletionModel.tuner_id == tuner_id,
+                        InFlightChatCompletionModel.run_id == run_id,
+                        InFlightChatCompletionModel.request_hash == request_hash,
+                    )
+                )
 
     async def record_chat_completion(
         self,
