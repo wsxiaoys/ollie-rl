@@ -319,8 +319,15 @@ async def _generate_chat_completion(
             },
         )
     except Exception as e:
+        # Include tuner/run ids and the exception string so failures (e.g. a
+        # Gemini sampling operation timing out, whose message carries the
+        # operation name) are correlatable to a run in the deploy logs. These
+        # attempts never reach the DB, so this log is the only server-side
+        # record of them.
         logger.exception(
-            f"Failed to generate chat completion for model '{request.model}'"
+            "Failed to generate chat completion (model=%s tuner=%s run=%s)",
+            tuner_id,
+            run_id,
         )
         raise HTTPException(status_code=500, detail=str(e))
 
