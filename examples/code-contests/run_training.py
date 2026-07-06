@@ -116,10 +116,20 @@ async def create_tuner(
 
 
 async def dispense_run(
-    client: httpx.AsyncClient, tuner_id: str
+    client: httpx.AsyncClient,
+    tuner_id: str,
+    max_expire_rate: float | None = None,
 ) -> tuple[str, str] | None:
-    """Return ``(run_id, datum_id)`` or ``None`` when the trainer is busy (204)."""
-    resp = await client.post(f"/tuners/{tuner_id}/runs")
+    """Return ``(run_id, datum_id)`` or ``None`` when the trainer is busy (204).
+
+    ``max_expire_rate`` (when set) is forwarded as the ``POST /runs`` query
+    param that quarantines datums which genuinely keep expiring, so the server
+    stops handing out runs for hopeless tasks.
+    """
+    params = {}
+    if max_expire_rate is not None:
+        params["max_expire_rate"] = max_expire_rate
+    resp = await client.post(f"/tuners/{tuner_id}/runs", params=params)
     if resp.status_code == 204:
         return None
     resp.raise_for_status()
@@ -310,7 +320,9 @@ async def worker(
         # Phase 1: dispense a run assignment (204 => training barrier, back off).
         assignment: tuple[str, str] | None = None
         while assignment is None:
-            assignment = await dispense_run(client, tuner_id)
+            assignment = await dispense_run(
+                client, tuner_id, max_expire_rate=args.max_expire_rate
+            )
             if assignment is None:
                 await asyncio.sleep(1.0)
         run_id, datum_id = assignment
@@ -392,6 +404,17 @@ async def main() -> int:
             "Scale each task's agent timeout budget. Harbor multiplies the "
             "task's [agent] timeout_sec by this factor (e.g. 2.0 doubles it). "
             "Defaults to the task-defined timeout when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--max-expire-rate",
+        type=float,
+        default=None,
+        help=(
+            "Forwarded to POST /runs to quarantine datums that keep expiring. "
+            "A datum is skipped once it has at least half a group's worth of "
+            "terminal attempts and an expiration rate >= this value (0.0-1.0). "
+            "Omit to disable."
         ),
     )
     parser.add_argument(
