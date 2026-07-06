@@ -500,7 +500,6 @@ class TunerService:
         generation = trainer.policy_generation
         now = utcnow()
         max_off = recipe.max_off_policy_generation
-        min_generation = generation - max_off
 
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
@@ -530,8 +529,8 @@ class TunerService:
                 }
 
             # Expiration-quarantine inputs. Reuse the dispenser's own helpers so
-            # the dashboard's expired/rewarded window counts match exactly what
-            # the dispenser would quarantine on: rewarded runs (denominator's
+            # the dashboard's expired/rewarded counts match exactly what the
+            # dispenser would quarantine on: rewarded runs (denominator's
             # rewarded side) and expired, unrewarded runs (the numerator -- a
             # run with a lingering in-flight op or total duration past the
             # expiration threshold).
@@ -540,18 +539,11 @@ class TunerService:
             # unaffected.
             rewarded_datum_by_run: Dict[str, str] = {}
             expired_datum_by_run: Dict[str, str] = {}
-            # All-time expirations, *not* clipped to the recency window -- this is
-            # the headline per-datum count the dashboard shows, distinct from the
-            # windowed rate below.
-            all_expired_datum_by_run: Dict[str, str] = {}
             if runs:
-                rewarded_datum_by_run = await self._recent_rewarded_datums(
-                    tuner_id, min_generation, session
+                rewarded_datum_by_run = await self._rewarded_datums(
+                    tuner_id, session
                 )
                 expired_datum_by_run = await self._expired_datums(
-                    tuner_id, now, session, min_generation=min_generation
-                )
-                all_expired_datum_by_run = await self._expired_datums(
                     tuner_id, now, session
                 )
 
@@ -570,7 +562,7 @@ class TunerService:
                 in_flight += 1
                 if r.datum_id in in_flight_by_datum:
                     in_flight_by_datum[r.datum_id] += 1
-            elif r.id in all_expired_datum_by_run:
+            elif r.id in expired_datum_by_run:
                 # Expired: generation stalled (lingering in-flight op) or the
                 # run's total duration crossed the expiration threshold.
                 expired += 1
@@ -594,21 +586,19 @@ class TunerService:
                     if r.datum_id in consumable_by_datum:
                         consumable_by_datum[r.datum_id] += 1
 
-        # Recent expiration stats per datum, computed from the same two
-        # maps the dispenser feeds `expiration_stats`, so the dashboard's
-        # expired/rewarded window counts match what `max_expire_rate`
-        # quarantines on.
+        # Expiration stats per datum, computed from the same two maps the
+        # dispenser feeds `expiration_stats`, so the dashboard's
+        # expired/rewarded counts match what `max_expire_rate` quarantines on.
         expire_stats = expiration_stats(
             datum_pool,
             rewarded_datum_by_run,
             expired_datum_by_run,
         )
 
-        # All-time expired count per datum (not clipped to the recency
-        # window): the headline "how flaky is this datum" number surfaced as
-        # `DatumProgress.expired`.
+        # Expired count per datum: the headline "how flaky is this datum"
+        # number surfaced as `DatumProgress.expired`.
         expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
-        for datum_id in all_expired_datum_by_run.values():
+        for datum_id in expired_datum_by_run.values():
             if datum_id in expired_by_datum:
                 expired_by_datum[datum_id] += 1
 
@@ -644,11 +634,10 @@ class TunerService:
                     # Not-yet-ready group with >=1 consumable or in-flight run.
                     groups_in_progress += 1
             # `expiration_stats` returns (expired, terminal) where
-            # terminal = expired + rewarded. Pass the two windowed
-            # components directly; the client derives the rate and sample size
-            # from them. `expired` (all-time, not windowed) is the headline
-            # expired count shown in the Expired column.
-            windowed_expired, terminal = expire_stats.get(datum_id, (0, 0))
+            # terminal = expired + rewarded. Pass the two components directly;
+            # the client derives the rate and sample size from them. `expired`
+            # is the headline expired count shown in the Expired column.
+            total_expired, terminal = expire_stats.get(datum_id, (0, 0))
             items.append(
                 DatumProgress(
                     datum_id=datum_id,
@@ -656,9 +645,8 @@ class TunerService:
                     in_flight=pending,
                     expired=expired_here,
                     trained=trained_here,
-                    expired_within_policy_generation_cutoff=windowed_expired,
-                    rewarded_within_policy_generation_cutoff=terminal
-                    - windowed_expired,
+                    expired_terminal_count=total_expired,
+                    rewarded_terminal_count=terminal - total_expired,
                 )
             )
         items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
@@ -1611,18 +1599,16 @@ class TunerService:
 
         When ``max_expire_rate`` is provided, datums that genuinely keep
         expiring are quarantined and excluded from the candidate pool. The rate
-        is measured over only *recent* terminal attempts -- those within
-        ``recipe.max_off_policy_generation`` of the current policy generation --
-        and a datum is skipped once that window holds at least
+        is measured over *all* of the datum's terminal attempts (no recency
+        window) and a datum is skipped once it has accumulated at least
         ``0.5 * recipe.group_size`` attempts (half a group's worth) with an
         expiration rate ``>= max_expire_rate``. Only `expired` runs count --
         those that still have a lingering in-flight op (the generation itself
-        stalled past the lease); `lost` runs (crashed/abandoned worker, or runs
-        abandoned after their ops completed) are ignored, so neither poisons a
-        datum (see ``expiring_datums``). Anchoring recency to the policy
-        generation lets a quarantined datum recover on its own: the generation
-        clock advances as other datums train, aging its stale expirations out of
-        the window. When ``max_expire_rate`` is ``None`` the feature is disabled.
+        stalled past the lease) or ran past the total-duration budget; `lost`
+        runs (crashed/abandoned worker, or runs abandoned after their ops
+        completed) are ignored, so neither poisons a datum (see
+        ``expiring_datums``). When ``max_expire_rate`` is ``None`` the feature
+        is disabled.
         """
         # Ensure trainer is initialized.
         _trainer = await self._get_trainer(tuner_id)
@@ -1639,31 +1625,21 @@ class TunerService:
 
                 if max_expire_rate is not None and datum_pool:
                     now = utcnow()
-                    # Recency for the expiration rate is anchored to the policy
-                    # generation. Both queries scan only rows within the
-                    # off-policy window (bounded by recent throughput) rather
-                    # than every terminal run ever, which keeps this hot,
-                    # lock-held path cheap.
-                    generation = _trainer.policy_generation
-                    min_generation = generation - recipe.max_off_policy_generation
                     # An `expired` run is an expired, unrewarded run that either
                     # kept a lingering in-flight op (the generation stalled past
                     # the lease) or ran past the total-duration expiration
                     # threshold -- that is the numerator. The denominator's
-                    # rewarded side comes from
-                    # `rewarded_datum_by_run`, since a rewarded run has no
-                    # in-flight row (deleted on success) and needs its
-                    # completions to locate it on the generation timeline. The
-                    # in-flight-op signal is pre-filtered in SQL to the recency
-                    # window (`policy_generation >= min_generation`); the
-                    # duration signal is all-time. Each map carries each run's
-                    # datum_id, so the pure helper just tallies -- it needs
-                    # neither `runs`, `now`, nor the generation window.
-                    rewarded_datum_by_run = await self._recent_rewarded_datums(
-                        tuner_id, min_generation, session
+                    # rewarded side comes from `rewarded_datum_by_run`, since a
+                    # rewarded run has no in-flight row (deleted on success).
+                    # Both maps are counted over the datum's entire history (no
+                    # recency window). Each map carries each run's datum_id, so
+                    # the pure helper just tallies -- it needs neither `runs`
+                    # nor `now`.
+                    rewarded_datum_by_run = await self._rewarded_datums(
+                        tuner_id, session
                     )
                     expired_datum_by_run = await self._expired_datums(
-                        tuner_id, now, session, min_generation=min_generation
+                        tuner_id, now, session
                     )
                     flaky = expiring_datums(
                         datum_pool,
@@ -1723,37 +1699,26 @@ class TunerService:
         runs = list(runs_result.scalars().all())
         return datum_pool, runs
 
-    async def _recent_rewarded_datums(
-        self, tuner_id: str, min_generation: int, session
+    async def _rewarded_datums(
+        self, tuner_id: str, session
     ) -> Dict[str, str]:
-        """Per *rewarded* run within the recency window, its ``datum_id``.
+        """Per *rewarded* run, its ``datum_id``.
 
         Returns a ``run_id -> datum_id`` map used by the dispenser's
         expiration-quarantine logic for the denominator's rewarded side. A
         rewarded run has no lingering in-flight row -- it is deleted on success
-        -- so its recency can only come from its completions. The join to
-        ``RunModel`` keeps the map to exactly the rewarded runs the quarantine
-        algorithm consults (and carries each run's ``datum_id``, so
-        ``expiration_stats`` can aggregate per datum without the full run list),
-        mirroring how :meth:`_expired_datums` covers the
-        numerator.
-
-        Only runs with a completion at ``policy_generation >= min_generation``
-        are included, so the result holds just runs active within the caller's
-        recency window -- this is where the window is enforced (``expiration_stats``
-        no longer re-filters). Bounding by generation keeps this cheap and,
-        crucially, avoids an unbounded ``run_id IN (...)`` list that would
-        otherwise grow with the tuner's whole lifetime (and could blow past
-        SQLite's host-parameter limit). Rewarded runs whose newest completion
-        predates ``min_generation`` are absent -- exactly the "aged out of the
-        window" case the quarantine logic treats as recoverable.
+        -- so it is located via its completions. The join to ``RunModel`` keeps
+        the map to exactly the rewarded runs the quarantine algorithm consults
+        (and carries each run's ``datum_id``, so ``expiration_stats`` can
+        aggregate per datum without the full run list), mirroring how
+        :meth:`_expired_datums` covers the numerator. Every rewarded run for the
+        tuner is counted (no recency window).
         """
         result = await session.execute(
             select(ChatCompletionModel.run_id, RunModel.datum_id)
             .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
             .where(
                 ChatCompletionModel.tuner_id == tuner_id,
-                ChatCompletionModel.policy_generation >= min_generation,
                 RunModel.reward.is_not(None),
             )
             .distinct()
@@ -1767,7 +1732,6 @@ class TunerService:
         tuner_id: str,
         now: datetime,
         session,
-        min_generation: Optional[int] = None,
         run_ids: Optional[List[str]] = None,
     ) -> Dict[str, str]:
         """Per *expired, unrewarded* run, its ``datum_id``.
@@ -1793,28 +1757,19 @@ class TunerService:
         `lost`) definition shared by two consumers:
 
         * the dispenser's quarantine numerator (aggregated per datum via
-          ``.values()``, optionally windowed with ``min_generation``), and
+          ``.values()``), and
         * ``list_runs``/``get_run``'s ``expired`` vs ``lost`` run-status split
           (scoped to a page via ``run_ids``, then read as ``set(...)`` for the
           run-id keys).
 
-        ``min_generation`` windows *both* signals: when given, only runs whose
-        lingering op is at ``policy_generation >= min_generation`` contribute via
-        signal 1, and only completions at ``policy_generation >= min_generation``
-        are summed for signal 2. This is how the dispenser's quarantine
-        *numerator* enforces its recency window (the ``policy_generation`` is
-        stamped from the trainer at first submit for in-flight rows, and each
-        completion carries its own, placing runs on the same timeline; NULL rows
-        predating the column are then excluded). Leave it ``None`` for the
-        all-time count (e.g. the dashboard's headline expired number), which
-        includes NULL-generation rows too. Complements
-        :meth:`_recent_rewarded_datums`, which covers the rewarded side of the
-        denominator.
+        Every expired, unrewarded run for the tuner is counted (no recency
+        window). Complements :meth:`_rewarded_datums`, which covers the rewarded
+        side of the denominator.
 
         When ``run_ids`` is given, both scans are restricted to those runs (used
         by the paginated run listing so it doesn't scan every row).
         """
-        # Signal 1: lingering in-flight op (windowed by ``min_generation``).
+        # Signal 1: lingering in-flight op.
         in_flight_stmt = (
             select(InFlightChatCompletionModel.run_id, RunModel.datum_id)
             .join(RunModel, RunModel.id == InFlightChatCompletionModel.run_id)
@@ -1825,18 +1780,13 @@ class TunerService:
             )
             .distinct()
         )
-        if min_generation is not None:
-            in_flight_stmt = in_flight_stmt.where(
-                InFlightChatCompletionModel.policy_generation >= min_generation
-            )
         if run_ids is not None:
             in_flight_stmt = in_flight_stmt.where(
                 InFlightChatCompletionModel.run_id.in_(run_ids)
             )
 
-        # Signal 2: total recorded generation time past the expiration threshold
-        # (windowed by ``min_generation`` -- only in-window completions are
-        # summed).
+        # Signal 2: total recorded generation time past the expiration
+        # threshold.
         duration_stmt = (
             select(ChatCompletionModel.run_id, RunModel.datum_id)
             .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
@@ -1851,10 +1801,6 @@ class TunerService:
                 >= RUN_EXPIRE_GENERATION_BUDGET_MS
             )
         )
-        if min_generation is not None:
-            duration_stmt = duration_stmt.where(
-                ChatCompletionModel.policy_generation >= min_generation
-            )
         if run_ids is not None:
             duration_stmt = duration_stmt.where(ChatCompletionModel.run_id.in_(run_ids))
 

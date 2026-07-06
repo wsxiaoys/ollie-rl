@@ -94,14 +94,14 @@ class DatumProgress(BaseModel):
     # are excluded), matching the aggregate `RunProgress.expired`.
     expired: int
     trained: int  # prior training exposure (fresh-tier tie-break)
-    # Recent expiration signal, matching the dispenser's quarantine logic:
-    # the raw per-datum terminal-attempt counts within `max_off_policy_generation`
-    # of the current generation. We pass the two components directly (rather than a
+    # Expiration signal, matching the dispenser's quarantine logic: the raw
+    # per-datum terminal-attempt counts over the datum's entire history (no
+    # recency window). We pass the two components directly (rather than a
     # pre-computed rate) since together they are equivalent: the expire rate is
     # `expired / (expired + rewarded)` and the sample size is their sum. Use these
     # to pick a sensible `max_expire_rate` threshold for POST /runs.
-    expired_within_policy_generation_cutoff: int  # expirations (numerator)
-    rewarded_within_policy_generation_cutoff: int  # rewarded terminal attempts
+    expired_terminal_count: int  # expirations (numerator)
+    rewarded_terminal_count: int  # rewarded terminal attempts
 
 
 class NextPick(BaseModel):

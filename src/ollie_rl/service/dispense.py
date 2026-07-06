@@ -70,18 +70,15 @@ def scheduler_scores(
 # datums that genuinely keep expiring, so compute isn't wasted on datums that
 # never finish in time. The moving parts:
 #
-#   * `_recent_rewarded_datums` (DB, in tuner_service): per *rewarded* run
-#     whose newest completion is within the recent generation window, its datum
+#   * `_rewarded_datums` (DB, in tuner_service): per *rewarded* run, its datum
 #     id (a `run_id -> datum_id` map). Drives the *rewarded* side of the
-#     denominator. The recency window is applied in SQL there
-#     (`policy_generation >= min_generation`), so this map is already scoped to
-#     the window (see the performance note there).
+#     denominator. Every rewarded run for the tuner is counted (no recency
+#     window).
 #   * `_expired_datums` (DB, in tuner_service): per *expired, unrewarded* run,
 #     its datum id. A run is `expired` when it either still has a lingering
 #     `InFlightChatCompletionModel` row (generation stalled) or its summed
 #     completion `duration_ms` is at/past the expiration threshold
-#     (`RUN_EXPIRE_GENERATION_BUDGET_MS`). Both
-#     signals honor the recency window, and the "expired and unrewarded" filter
+#     (`RUN_EXPIRE_GENERATION_BUDGET_MS`). The "expired and unrewarded" filter
 #     lives in SQL, so ongoing runs (still within their lease) never appear.
 #     Drives the *expiration* numerator.
 #   * `expiration_stats` (pure): per-datum (expired, terminal) counts,
@@ -110,30 +107,21 @@ def scheduler_scores(
 #     lingering in-flight row since it is deleted on success).
 #   * Rate = expired / terminal, where terminal = expired + rewarded.
 #     In-flight runs are excluded (outcome unknown).
-#   * Recency window == recovery mechanism. Only attempts within
-#     `max_off_policy_generation` of the current policy generation are counted --
-#     this applies to both expiration signals (in-flight op and duration past
-#     the expiration threshold) as well as the rewarded denominator. That window is applied
-#     upstream in SQL (the maps are built with `policy_generation >=
-#     min_generation`, where `min_generation = generation -
-#     max_off_policy_generation`), so by the time `expiration_stats` sees them
-#     every entry is already in-window.
-#     A quarantined datum receives no new runs, so a fixed all-time or
-#     run-count window would trap it forever. Anchoring recency to the policy
-#     generation fixes this: the generation clock advances as *other* datums
-#     train, so a starved datum's stale expirations age out of the window, its
-#     terminal count drops below `min_samples`, and it becomes dispensable
-#     again (a "probe"). A successful probe lowers the rate; another expiry
-#     re-quarantines it.
+#   * All-time counting. Every terminal attempt for a datum is counted -- there
+#     is no recency window, so both expiration signals (in-flight op and
+#     duration past the expiration threshold) and the rewarded denominator span
+#     the datum's entire history. A quarantined datum receives no new runs, so
+#     once its rate crosses `max_expire_rate` (with enough samples) it stays
+#     quarantined; the rate only moves when new terminal attempts are recorded.
 #   * Quarantine condition: terminal >= min_samples (dispense passes
 #     `0.5 * recipe.group_size`, i.e. half a group's worth of terminal
 #     attempts) AND rate >= max_expire_rate.
 #
 # Observability: `get_progress` reuses `expiration_stats` to populate
-# `DatumProgress.expired_within_policy_generation_cutoff` /
-# `rewarded_within_policy_generation_cutoff` (the raw numerator/denominator
-# components, equivalent to the rate) so an operator can watch the numbers and
-# pick a sensible `max_expire_rate`. It builds the same two maps
+# `DatumProgress.expired_terminal_count` / `rewarded_terminal_count` (the raw
+# numerator/denominator components, equivalent to the rate) so an operator can
+# watch the numbers and pick a sensible `max_expire_rate`. It builds the same
+# two maps
 # (rewarded runs; expired-unrewarded runs -- lingering in-flight op or
 # total duration past the expiration threshold) so the dashboard number matches
 # what the dispenser would quarantine on.
@@ -145,9 +133,8 @@ def expiration_stats(
 ) -> Dict[str, Tuple[int, int]]:
     """Per-datum ``(expired, terminal)`` counts.
 
-    Computed straight from two ``run_id -> datum_id`` maps, each already scoped
-    to the recent-generation window when it was built (see the block comment
-    above):
+    Computed straight from two ``run_id -> datum_id`` maps, each spanning the
+    datum's entire history (no recency window; see the block comment above):
 
     * ``rewarded_datum_by_run`` -- one entry per rewarded run (its datum id).
       Drives the rewarded side of the denominator.
@@ -161,10 +148,9 @@ def expiration_stats(
       (still within their lease) and lost/abandoned runs never appear. Drives
       both the numerator and its share of the denominator.
 
-    The recency window is enforced upstream for both expiration signals (the map
-    holds only runs within ``max_off_policy_generation`` of the current
-    generation), so this function just tallies. ``terminal`` is the denominator
-    (expired + rewarded); the caller derives the rate as ``expired / terminal``.
+    Both maps span the datum's entire history (no recency window), so this
+    function just tallies. ``terminal`` is the denominator (expired + rewarded);
+    the caller derives the rate as ``expired / terminal``.
     """
     expired: Dict[str, int] = {d: 0 for d in datum_pool}
     terminal: Dict[str, int] = {d: 0 for d in datum_pool}
@@ -193,15 +179,14 @@ def expiring_datums(
 ) -> Set[str]:
     """Datums to quarantine because they genuinely keep expiring.
 
-    Built on :func:`expiration_stats`: a datum is quarantined when its recent
-    window holds at least ``min_samples`` terminal attempts and the
-    expiration rate within it is ``>= max_expire_rate``.
+    Built on :func:`expiration_stats`: a datum is quarantined when it has
+    accumulated at least ``min_samples`` terminal attempts and the expiration
+    rate across them is ``>= max_expire_rate``.
 
-    Anchoring recency to the policy generation (the window applied upstream when
-    the two maps are built) is what lets a quarantined datum recover: the global
-    generation clock keeps advancing as *other* datums train, so a starved
-    datum's stale expirations eventually age out of the window and it becomes
-    dispensable again.
+    Counts span the datum's entire history (no recency window): once a datum's
+    rate crosses ``max_expire_rate`` with at least ``min_samples`` terminal
+    attempts it stays quarantined, since it receives no new runs to move the
+    rate.
     """
     stats = expiration_stats(
         datum_pool,

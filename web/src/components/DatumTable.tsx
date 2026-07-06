@@ -61,18 +61,18 @@ export function DatumTable({
       header: "Expired",
       cell: (info) => {
         const expired = info.getValue();
-        const expiredWindow =
-          info.row.original.expired_within_policy_generation_cutoff;
-        const rewardedWindow =
-          info.row.original.rewarded_within_policy_generation_cutoff;
-        const samples = expiredWindow + rewardedWindow;
-        const rate = samples > 0 ? expiredWindow / samples : null;
+        const expiredCount =
+          info.row.original.expired_terminal_count;
+        const rewardedCount =
+          info.row.original.rewarded_terminal_count;
+        const samples = expiredCount + rewardedCount;
+        const rate = samples > 0 ? expiredCount / samples : null;
         const definition =
           'An "expired" run is an expired, unrewarded run whose generation op is still in flight — i.e. the generation itself stalled past the lease, rather than a "lost" (crashed/abandoned) worker.';
         const tooltip =
           rate == null
-            ? `${expired} all-time expired run(s) for this datum.\n${definition}\nExpire rate: no recent terminal attempts within the policy-generation cutoff to compute a rate.`
-            : `${expired} all-time expired run(s) for this datum.\n${definition}\nExpire rate ${(rate * 100).toFixed(0)}% counts ONLY expired runs within the recent policy-generation cutoff: ${expiredWindow} expired / ${samples} terminal attempts (expired + rewarded).`;
+            ? `${expired} all-time expired run(s) for this datum.\n${definition}\nExpire rate: no terminal attempts yet to compute a rate.`
+            : `${expired} all-time expired run(s) for this datum.\n${definition}\nExpire rate ${(rate * 100).toFixed(0)}%: ${expiredCount} expired / ${samples} terminal attempts (expired + rewarded).`;
         return (
           <span className="num" title={tooltip}>
             {expired}

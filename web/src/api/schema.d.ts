@@ -817,10 +817,10 @@ export interface components {
             expired: number;
             /** Trained */
             trained: number;
-            /** Expired Within Policy Generation Cutoff */
-            expired_within_policy_generation_cutoff: number;
-            /** Rewarded Within Policy Generation Cutoff */
-            rewarded_within_policy_generation_cutoff: number;
+            /** Expired Terminal Count */
+            expired_terminal_count: number;
+            /** Rewarded Terminal Count */
+            rewarded_terminal_count: number;
         };
         /** DispenseRun */
         DispenseRun: {
@@ -1163,6 +1163,11 @@ export interface components {
              * @default -1
              */
             malformed_penalty: number;
+            /**
+             * Run Expire Seconds
+             * @default 7200
+             */
+            run_expire_seconds: number;
         };
         /** RunDetailResponse */
         RunDetailResponse: {
@@ -1511,7 +1516,7 @@ export interface operations {
     dispense_run_tuners__tuner_id__runs_post: {
         parameters: {
             query?: {
-                /** @description When set, quarantine datums that genuinely keep expiring: a datum is skipped once it has at least half a group's worth of terminal attempts (0.5 * recipe.group_size) and an expiration rate >= this value. Only `expired` runs count -- those that still have a lingering in-flight op (the generation itself stalled past the lease) or that exceeded the total-duration budget; `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are ignored. Omit to disable. */
+                /** @description When set, quarantine datums that genuinely keep expiring: a datum is skipped once it has at least half a group's worth of terminal attempts (0.5 * recipe.group_size) and an expiration rate >= this value. Only `expired` runs count -- those that still have a lingering in-flight op (the generation itself stalled past the lease) or whose total duration crossed the expiration threshold; `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are ignored. Omit to disable. */
                 max_expire_rate?: number | null;
             };
             header?: never;
