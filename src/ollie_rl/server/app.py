@@ -426,51 +426,19 @@ async def create_run_chat_completion(
 @app.post("/tuners/{tuner_id}/runs")
 async def dispense_run(
     tuner_id: str,
-    max_length_ratio: Annotated[
-        Optional[float],
-        Query(
-            ge=0.0,
-            le=1.0,
-            description=(
-                "When set, quarantine datums that repeatedly produce length-"
-                "limited completions: a datum is skipped once it has at least "
-                "half a group's worth of rewarded attempts (0.5 * "
-                "recipe.group_size) and a length rate >= this value. Length "
-                "runs are rewarded runs with at least one completion whose "
-                "finish_reason is 'length'. Omit to disable."
-            ),
-        ),
-    ] = None,
-    max_succeed_ratio: Annotated[
-        Optional[float],
-        Query(
-            ge=0.0,
-            le=1.0,
-            description=(
-                "When set, quarantine datums that are solved too reliably: a "
-                "datum is skipped once it has at least half a group's worth of "
-                "rewarded attempts (0.5 * recipe.group_size) and a success "
-                "ratio > this value. A run counts as a success when its reward "
-                "is exactly 1.0; the ratio is succeeded runs over rewarded "
-                "attempts. Such datums are considered too easy to yield a "
-                "useful learning signal. Omit to disable."
-            ),
-        ),
-    ] = None,
 ) -> DispenseRun:
     """
     Dispense a run assignment for the tuner.
     Returns 200 OK with run_id, datum_id, expires_at.
     Or 204 No Content with Retry-After header if no run can be dispensed.
+
+    Datum quarantine (length-rate / success-rate filtering plus the two-phase
+    probe gate) is configured on the tuner's recipe, not per request.
     """
     from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
-        run_response = await services.tuner.dispense_run(
-            tuner_id,
-            max_length_ratio=max_length_ratio,
-            max_succeed_ratio=max_succeed_ratio,
-        )
+        run_response = await services.tuner.dispense_run(tuner_id)
         if run_response is None:
             raise HTTPException(204, headers={"Retry-After": "1"})
 

@@ -118,25 +118,14 @@ async def create_tuner(
 async def dispense_run(
     client: httpx.AsyncClient,
     tuner_id: str,
-    max_length_ratio: float | None = None,
-    max_succeed_ratio: float | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(run_id, datum_id)`` or ``None`` when the trainer is busy (204).
 
-    ``max_length_ratio`` (when set) is forwarded as the ``POST /runs`` query
-    param that quarantines datums whose rewarded attempts too often produce
-    length-limited completions.
-
-    ``max_succeed_ratio`` (when set) is forwarded as the ``POST /runs`` query
-    param that quarantines datums solved too reliably (a success ratio above
-    this value) since they yield little learning signal.
+    Datum quarantine (length-rate / success-rate filtering) is now configured
+    on the tuner's recipe (``max_length_ratio`` / ``max_succeed_ratio``), not
+    per request, so this call takes no quarantine params.
     """
-    params = {}
-    if max_length_ratio is not None:
-        params["max_length_ratio"] = max_length_ratio
-    if max_succeed_ratio is not None:
-        params["max_succeed_ratio"] = max_succeed_ratio
-    resp = await client.post(f"/tuners/{tuner_id}/runs", params=params)
+    resp = await client.post(f"/tuners/{tuner_id}/runs")
     if resp.status_code == 204:
         return None
     resp.raise_for_status()
@@ -327,12 +316,7 @@ async def worker(
         # Phase 1: dispense a run assignment (204 => training barrier, back off).
         assignment: tuple[str, str] | None = None
         while assignment is None:
-            assignment = await dispense_run(
-                client,
-                tuner_id,
-                max_length_ratio=args.max_length_ratio,
-                max_succeed_ratio=args.max_succeed_ratio,
-            )
+            assignment = await dispense_run(client, tuner_id)
             if assignment is None:
                 await asyncio.sleep(1.0)
         run_id, datum_id = assignment
@@ -416,29 +400,8 @@ async def main() -> int:
             "Defaults to the task-defined timeout when omitted."
         ),
     )
-    parser.add_argument(
-        "--max-length-ratio",
-        type=float,
-        default=1.0,
-        help=(
-            "Forwarded to POST /runs to quarantine datums that too often "
-            "produce length-limited completions. A datum is skipped once it has at "
-            "least half a group's worth of rewarded attempts and a length rate "
-            ">= this value (0.0-1.0). Omit to disable."
-        ),
-    )
-    parser.add_argument(
-        "--max-succeed-ratio",
-        type=float,
-        default=1.0,
-        help=(
-            "Forwarded to POST /runs to quarantine datums that are solved too "
-            "reliably. A datum is skipped once it has at least half a group's "
-            "worth of rewarded attempts and a success ratio > this value "
-            "(0.0-1.0). A run counts as a success when its reward is exactly "
-            "1.0. Defaults to 1.0."
-        ),
-    )
+    # Datum quarantine (length-rate / success-rate filtering) is configured on
+    # the tuner's recipe now, not via CLI flags / query params.
     parser.add_argument(
         "--tuner-id",
         default=None,

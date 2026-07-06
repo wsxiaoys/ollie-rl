@@ -15,6 +15,7 @@ from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.dispensing import (
     pick_datum,
     pick_tier,
+    quarantined_datums,
     scheduler_scores,
     terminal_stats,
 )
@@ -383,7 +384,19 @@ class QueryMixin(TunerServiceBase):
         never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
 
         scores = scheduler_scores(datum_pool, runs)
-        picked = pick_datum(datum_pool, runs, recipe)
+        # Mirror the dispenser: quarantine is configured on the recipe, so the
+        # `next_pick` preview filters the same problematic datums out of the
+        # candidate pool and `pick_datum` applies the matching probe gate.
+        excluded = quarantined_datums(
+            datum_pool,
+            rewarded_by_run,
+            length_datum_by_run,
+            min_samples=recipe.quarantine_min_samples,
+            max_length_ratio=recipe.max_length_ratio,
+            max_succeed_ratio=recipe.max_succeed_ratio,
+        )
+        picked_pool = [d for d in datum_pool if d not in excluded]
+        picked = pick_datum(picked_pool, runs, recipe)
         if picked is None:
             next_pick = NextPick(
                 datum_id=None,

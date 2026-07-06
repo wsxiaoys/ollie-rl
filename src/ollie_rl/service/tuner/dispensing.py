@@ -23,7 +23,6 @@ Two concerns live in the pure layer:
 the quarantine maps) and then feeds them to those helpers.
 """
 
-import math
 from datetime import timedelta
 from typing import Dict, List, Literal, Optional, Set, Tuple
 
@@ -249,8 +248,6 @@ def pick_datum(
     datum_pool: List[str],
     runs: List[RunModel],
     recipe: Recipe,
-    *,
-    probe_gate: bool = False,
 ) -> Optional[str]:
     """Pick the next datum to dispense a run for.
 
@@ -264,10 +261,11 @@ def pick_datum(
     This mirrors ``TunerService._collect_consumable_batch`` so a datum whose
     group was already trained resets to "fresh" for the next generation.
 
-    1. Started-but-incomplete groups (0 < count < group_size) come first,
-       ordered by highest count, so the closest-to-complete group finishes
-       ASAP. This minimizes the number of in-flight partial groups and gets
-       complete groups ready for training as soon as possible.
+    Tiers, highest priority first:
+
+    1. Started groups (0 < count < group_size) are filled via the two-phase
+       probe gate below, so the closest-to-complete (already-probed) group
+       finishes ASAP -- getting complete groups ready for training soonest.
     2. Fresh datums (count == 0) come next, so we start new distinct groups
        before over-producing existing ones. Among fresh datums the
        least-trained one wins, so never-trained datums are sampled before
@@ -281,35 +279,30 @@ def pick_datum(
        the surplus would just be requeued, so saturated datums are excluded
        and ``None`` is returned if nothing else is available.
 
-    **Two-phase probe gate** (``probe_gate=True``, set by the dispenser only
-    when quarantine is enabled). The quarantine filters decide a datum is
-    problematic after just ``0.5 * group_size`` rewarded attempts, so filling a
-    whole group before that verdict wastes up to half a group of rollouts on
-    datums that will be quarantined anyway. Under the gate a started group is
+    **Two-phase probe gate** (always active). The quarantine filters decide a
+    datum is problematic after just ``recipe.quarantine_min_samples`` rewarded
+    attempts, so filling a whole group before that verdict wastes rollouts on
+    datums that will be quarantined anyway. A started group is therefore
     dispensed in two phases:
 
-    * **Probe** -- dispense at most ``probe = ceil(0.5 * group_size)`` runs,
-      then *hold*: while the group has reached ``probe`` dispensed runs but
-      fewer than ``probe`` rewards have returned, the datum is not dispensed
+    * **Probe** -- dispense at most ``probe = recipe.quarantine_min_samples``
+      runs, then *hold*: while the group has reached ``probe`` dispensed runs
+      but fewer than ``probe`` rewards have returned, the datum is not dispensed
       again (the scheduler moves on to fresh datums / other probes). ``None`` is
       returned only if every datum is held or saturated.
     * **Fill** -- once ``probe`` rewards are back (and the datum was not
-      quarantined out of the pool upstream), the second half is dispensed to
-      complete the group, taking top priority so ready-to-train groups finish
-      fast.
-
-    With ``probe_gate=False`` the classic single-phase greedy fill above is
-    used unchanged.
+      quarantined out of the pool upstream), the rest of the group is dispensed,
+      taking top priority so ready-to-train groups finish fast.
     """
     if not datum_pool:
         return None
 
     group_size = recipe.group_size
     allow_surplus = recipe.max_off_policy_generation > 0
-    # Half a group's rewarded attempts is enough to run the quarantine check
-    # (matches the dispenser's ``min_samples = 0.5 * group_size``), so the probe
-    # phase caps dispensing at this many runs and holds for their rewards.
-    probe = math.ceil(0.5 * group_size)
+    # `quarantine_min_samples` rewarded attempts is enough to run the quarantine
+    # check (matches the dispenser's `min_samples`), so the probe phase caps
+    # dispensing at this many runs and holds for their rewards.
+    probe = recipe.quarantine_min_samples
 
     scores = scheduler_scores(datum_pool, runs)
 
@@ -327,14 +320,11 @@ def pick_datum(
             # Fresh: start new distinct groups before over-producing, and
             # prefer the least-trained datum so never-trained ones go first.
             return (1, -scores.trained[datum])
-        if not probe_gate:
-            # Single-phase greedy: finish closest-to-complete first.
-            return (3, count)
-        # Two-phase probe gate (quarantine enabled).
+        # Two-phase probe gate.
         if scores.rewarded[datum] >= probe:
             # Probe cleared quarantine (problematic datums are already filtered
-            # out of the pool upstream): fill the second half to complete the
-            # group, ahead of starting fresh ones.
+            # out of the pool upstream): fill the rest of the group, ahead of
+            # starting fresh ones.
             return (3, count)
         if count < probe:
             # Still probing: keep dispensing up to `probe` runs.
@@ -354,34 +344,28 @@ def pick_datum(
 class DispenseMixin(TunerServiceBase):
     """Serialized read-pick-insert dispensing of runs for a tuner."""
 
-    async def dispense_run(
-        self,
-        tuner_id: str,
-        *,
-        max_length_ratio: Optional[float] = None,
-        max_succeed_ratio: Optional[float] = None,
-    ) -> Optional[DispenseRun]:
+    async def dispense_run(self, tuner_id: str) -> Optional[DispenseRun]:
         """
         Dispense a run for a tuner.
 
-        When ``max_length_ratio`` is provided, datums that repeatedly produce
-        length-limited completions are quarantined and excluded from the
-        candidate pool. The rate is measured over *all* of the datum's rewarded
-        attempts (no recency window) and a datum is skipped once it has
-        accumulated at least ``0.5 * recipe.group_size`` rewarded attempts (half
-        a group's worth) with a length rate ``>= max_length_ratio``. Length runs
-        are rewarded runs with at least one completion whose finish reason is
-        ``"length"`` and that received ``recipe.length_penalty``.
-        When ``max_length_ratio`` is ``None`` this feature is disabled.
+        Quarantine is configured on the tuner's ``Recipe`` (all-time counts, no
+        recency window; each filter only takes effect once a datum has
+        accumulated at least ``recipe.quarantine_min_samples`` rewarded
+        attempts):
 
-        When ``max_succeed_ratio`` is provided, datums that are solved too
-        reliably are quarantined too: a datum is skipped once it has at least
-        ``0.5 * recipe.group_size`` rewarded attempts and a success ratio (runs
-        with reward ``== 1.0`` over rewarded attempts) that is
-        ``> max_succeed_ratio``. Such datums are considered too easy and no
-        longer produce a useful learning signal (see ``quarantined_datums``).
-        When ``max_succeed_ratio`` is ``None`` this feature is disabled. Both
-        filters may be combined; a datum caught by either is excluded.
+        * ``recipe.max_length_ratio`` -- skip datums that repeatedly produce
+          length-limited completions (length rate ``>= max_length_ratio``).
+          Length runs are rewarded runs with at least one completion whose
+          finish reason is ``"length"``.
+        * ``recipe.max_succeed_ratio`` -- skip datums solved too reliably
+          (success ratio, reward ``== 1.0`` over rewarded attempts,
+          ``> max_succeed_ratio``); considered too easy to yield a useful
+          learning signal (see ``quarantined_datums``).
+
+        The default ratios (1.0/1.0) are permissive -- succeed never fires and
+        length fires only when every rewarded attempt is length-limited -- and a
+        datum caught by either is excluded. The scheduler always uses the
+        two-phase probe gate (see ``pick_datum``).
         """
         # Ensure trainer is initialized.
         _trainer = await self._get_trainer(tuner_id)
@@ -396,10 +380,7 @@ class DispenseMixin(TunerServiceBase):
             async with self.async_session() as session:
                 datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
-                quarantine_enabled = (
-                    max_length_ratio is not None or max_succeed_ratio is not None
-                )
-                if quarantine_enabled and datum_pool:
+                if datum_pool:
                     # Both filters share the rewarded denominator: a rewarded
                     # run has no in-flight row (deleted on success). Each
                     # `RewardedRun` carries its datum_id + reward, so the success
@@ -407,34 +388,27 @@ class DispenseMixin(TunerServiceBase):
                     # no separate query. Counted over the datum's entire history
                     # (no recency window), so the pure helper just tallies.
                     rewarded_by_run = await self._rewarded_datums(tuner_id, session)
-                    # The length numerator is only needed for the length filter.
-                    # It is intersected with `rewarded_by_run` in the pure helper
-                    # so length rate is length-limited rewarded attempts divided
-                    # by all rewarded attempts.
-                    length_datum_by_run: Dict[str, str] = {}
-                    if max_length_ratio is not None:
-                        length_datum_by_run = await self._length_datums(
-                            tuner_id, session
-                        )
+                    # The length numerator is intersected with `rewarded_by_run`
+                    # in the pure helper so length rate is length-limited rewarded
+                    # attempts divided by all rewarded attempts.
+                    length_datum_by_run = await self._length_datums(tuner_id, session)
                     excluded = quarantined_datums(
                         datum_pool,
                         rewarded_by_run,
                         length_datum_by_run,
-                        min_samples=0.5 * recipe.group_size,
-                        max_length_ratio=max_length_ratio,
-                        max_succeed_ratio=max_succeed_ratio,
+                        min_samples=recipe.quarantine_min_samples,
+                        max_length_ratio=recipe.max_length_ratio,
+                        max_succeed_ratio=recipe.max_succeed_ratio,
                     )
                     if excluded:
                         datum_pool = [d for d in datum_pool if d not in excluded]
 
-            # When quarantine is enabled, dispense started groups in two phases
-            # (probe up to 0.5 * group_size, hold for their rewards, then fill)
-            # so a datum that will be quarantined wastes at most half a group of
-            # rollouts instead of a full group. With quarantine off the classic
-            # single-phase greedy fill is used.
-            datum_id = pick_datum(
-                datum_pool, runs, recipe, probe_gate=quarantine_enabled
-            )
+            # `pick_datum` reads the same quarantine config off the recipe and
+            # dispenses started groups in two phases (probe up to
+            # `quarantine_min_samples`, hold for their rewards, then fill) so a
+            # datum that will be quarantined wastes at most that many rollouts
+            # instead of a full group.
+            datum_id = pick_datum(datum_pool, runs, recipe)
             if datum_id is None:
                 return None
 
