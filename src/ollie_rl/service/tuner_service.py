@@ -64,9 +64,7 @@ logger = logging.getLogger(__name__)
 # `duration_ms` across its recorded completions) without ever earning a reward
 # is treated as `expired` even if no in-flight op lingers. It burned real
 # compute yet never finished -- the same waste the `expired` label flags -- so it
-# should not be dismissed as merely `lost`. Measured in milliseconds. Like the
-# in-flight-op signal, it honors the dispenser's recency (policy-generation)
-# window when one is supplied.
+# should not be dismissed as merely `lost`. Measured in milliseconds.
 RUN_EXPIRE_GENERATION_BUDGET_MS = 15 * 60 * 1000
 
 # Fixed time budget (seconds) granted to a run at creation. The whole run (all
@@ -312,6 +310,11 @@ def _completion_exceeded_context_window(
     if max_context_window is None:
         return False
     return _completion_context_tokens(completion) > max_context_window
+
+
+def _completion_has_length_finish(completion: ChatCompletion) -> bool:
+    """Whether any choice in the completion finished due to length."""
+    return any(choice.finish_reason == "length" for choice in completion.choices)
 
 
 def _clear_completion_as_length(completion: ChatCompletion) -> ChatCompletion:
@@ -600,22 +603,23 @@ class TunerService:
                     if run_id is not None
                 }
 
-            # Quarantine inputs. Reuse the dispenser's own helpers so the
-            # dashboard's expired/rewarded counts match exactly what the
-            # dispenser would quarantine on: rewarded runs (denominator's
-            # rewarded side, each carrying its reward) and expired, unrewarded
-            # runs (the expiration numerator -- a run with a lingering in-flight
-            # op or total duration past the expiration threshold).
+            # Quarantine/progress inputs. Reuse the dispenser's own helpers so
+            # the dashboard's length/rewarded counts match exactly what the
+            # dispenser quarantines on. Expired, unrewarded runs are still loaded
+            # for progress/status observability, but expiration is no longer a
+            # quarantine metric.
             # Kept separate from `generation_by_run_id` so the trainer-view
             # consumable calc (which only cares about recorded completions) is
             # unaffected.
             rewarded_by_run: Dict[str, RewardedRun] = {}
             expired_datum_by_run: Dict[str, str] = {}
+            length_datum_by_run: Dict[str, str] = {}
             if runs:
                 rewarded_by_run = await self._rewarded_datums(tuner_id, session)
                 expired_datum_by_run = await self._expired_datums(
                     tuner_id, now, session
                 )
+                length_datum_by_run = await self._length_datums(tuner_id, session)
 
         group_size = recipe.group_size
 
@@ -656,14 +660,18 @@ class TunerService:
                     if r.datum_id in consumable_by_datum:
                         consumable_by_datum[r.datum_id] += 1
 
-        # Terminal stats per datum, computed from the same two maps the
-        # dispenser feeds `terminal_stats`, so the dashboard's expired/rewarded
-        # counts match what the quarantine filters act on.
+        # Terminal stats per datum, computed from the same rewarded/length maps
+        # the dispenser feeds `terminal_stats`, so the dashboard's length and
+        # rewarded counts match what the quarantine filters act on.
         stats_by_datum = terminal_stats(
             datum_pool,
             rewarded_by_run,
-            expired_datum_by_run,
+            length_datum_by_run,
         )
+        expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
+        for datum_id in expired_datum_by_run.values():
+            if datum_id in expired_by_datum:
+                expired_by_datum[datum_id] += 1
 
         items: List[DatumProgress] = []
         groups_ready = 0
@@ -673,22 +681,26 @@ class TunerService:
             count = consumable_by_datum[datum_id]
             pending = in_flight_by_datum.get(datum_id, 0)
             trained_here = trained_by_datum.get(datum_id, 0)
-            # `terminal_stats` gives per-datum (expired, rewarded, succeeded),
-            # the same all-time tallies the dispenser quarantines on. `expired`
-            # is the headline "how flaky is this datum" count; rewarded and
-            # succeeded let a client derive the expire/success ratios.
-            stats = stats_by_datum.get(
-                datum_id, TerminalStats(expired=0, rewarded=0, succeeded=0)
-            )
+            # `terminal_stats` gives per-datum (rewarded, length, succeeded).
+            # `length`, `rewarded`, and `succeeded` let a client derive the
+            # active length/success quarantine ratios. Expired is counted
+            # separately for run-status observability only.
+            stats = stats_by_datum.get(datum_id, TerminalStats())
+            expired_here = expired_by_datum.get(datum_id, 0)
             # Surface any datum that has activity worth showing: a group
             # forming (rewarded runs counting toward the batch, or runs still
             # awaiting a reward) or one that has already contributed a trained
             # group. Without the trained check a datum whose group was fully
             # trained (consumable/in-flight back to 0) would silently vanish
-            # from the pool even though it carries training history. Expired
-            # runs also count as activity worth surfacing: a datum that keeps
-            # expiring signals it is hard to finish in time.
-            if count <= 0 and pending <= 0 and trained_here <= 0 and stats.expired <= 0:
+            # from the pool even though it carries training history. Expired and
+            # length-limited runs also count as activity worth surfacing.
+            if (
+                count <= 0
+                and pending <= 0
+                and trained_here <= 0
+                and expired_here <= 0
+                and stats.length <= 0
+            ):
                 continue
             # "in progress" and batch readiness only reflect datums with an
             # active (consumable or in-flight) group. A purely trained datum is
@@ -707,7 +719,8 @@ class TunerService:
                     datum_id=datum_id,
                     consumable=count,
                     in_flight=pending,
-                    expired=stats.expired,
+                    expired=expired_here,
+                    length=stats.length,
                     rewarded=stats.rewarded,
                     succeeded=stats.succeeded,
                     trained=trained_here,
@@ -834,7 +847,6 @@ class TunerService:
             tuner = tuner_result.scalar_one_or_none()
             if tuner is None:
                 raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
-            recipe = Cookbook.get(tuner.recipe)
 
             runs_stmt = (
                 select(RunModel)
@@ -904,15 +916,14 @@ class TunerService:
                         durations[run_id] = int(total_duration)
 
                 length_datum_by_run = await self._length_datums(
-                    tuner_id, recipe.max_context_window, session, run_ids=run_ids
+                    tuner_id, session, run_ids=run_ids
                 )
 
             # Runs on this page that count as `expired` (unrewarded, past lease,
             # with either a lingering in-flight op or total duration past the
-            # expiration threshold) -- the same definition the dispenser uses --
-            # so a past-lease
-            # unrewarded run can be split into `expired` vs `lost`. Scoped to the
-            # page's run ids.
+            # expiration threshold), so a past-lease unrewarded run can be split
+            # into `expired` vs `lost`. Scoped to the page's run ids. Expiration
+            # is observability-only and no longer drives dispenser quarantine.
             now = utcnow()
             expired_run_ids = set(
                 await self._expired_datums(
@@ -946,20 +957,16 @@ class TunerService:
         """
         async with self.async_session() as session:
             run_result = await session.execute(
-                select(RunModel, TunerModel.recipe)
-                .join(TunerModel, TunerModel.id == RunModel.tuner_id)
-                .where(
+                select(RunModel).where(
                     RunModel.tuner_id == tuner_id,
                     RunModel.id == run_id,
                 )
             )
-            row = run_result.one_or_none()
-            if row is None:
+            run = run_result.scalar_one_or_none()
+            if run is None:
                 raise RunNotFoundError(
                     f"Run '{run_id}' not found under tuner '{tuner_id}'"
                 )
-            run, recipe_name = row
-            recipe = Cookbook.get(recipe_name)
 
             comp_result = await session.execute(
                 select(ChatCompletionModel)
@@ -976,7 +983,7 @@ class TunerService:
                 await self._expired_datums(tuner_id, now, session, run_ids=[run_id])
             )
             length_datum_by_run = await self._length_datums(
-                tuner_id, recipe.max_context_window, session, run_ids=[run_id]
+                tuner_id, session, run_ids=[run_id]
             )
 
         policy_generation = (
@@ -1694,30 +1701,26 @@ class TunerService:
         self,
         tuner_id: str,
         *,
-        max_expire_rate: Optional[float] = None,
+        max_length_rate: Optional[float] = None,
         max_succeed_ratio: Optional[float] = None,
     ) -> Optional[DispenseRun]:
         """
         Dispense a run for a tuner.
 
-        When ``max_expire_rate`` is provided, datums that genuinely keep
-        expiring are quarantined and excluded from the candidate pool. The rate
-        is measured over *all* of the datum's terminal attempts (no recency
-        window) and a datum is skipped once it has accumulated at least
-        ``0.5 * recipe.group_size`` attempts (half a group's worth) with an
-        expiration rate ``>= max_expire_rate``. Only `expired` runs count --
-        those that still have a lingering in-flight op (the generation itself
-        stalled past the lease) or ran past the total-duration budget; `lost`
-        runs (crashed/abandoned worker, or runs abandoned after their ops
-        completed) are ignored, so neither poisons a datum (see
-        ``expiring_datums``). When ``max_expire_rate`` is ``None`` the feature
-        is disabled.
+        When ``max_length_rate`` is provided, datums that repeatedly produce
+        length-limited completions are quarantined and excluded from the
+        candidate pool. The rate is measured over *all* of the datum's rewarded
+        attempts (no recency window) and a datum is skipped once it has
+        accumulated at least ``0.5 * recipe.group_size`` rewarded attempts (half
+        a group's worth) with a length rate ``>= max_length_rate``. Length runs
+        are rewarded runs with at least one completion whose finish reason is
+        ``"length"`` and that received ``recipe.length_penalty``.
+        When ``max_length_rate`` is ``None`` this feature is disabled.
 
         When ``max_succeed_ratio`` is provided, datums that are solved too
         reliably are quarantined too: a datum is skipped once it has at least
-        ``0.5 * recipe.group_size`` terminal attempts and a success ratio
-        (runs with reward ``== 1.0`` over all terminal attempts, i.e. the same
-        ``expired + rewarded`` denominator the expire rate uses) that is
+        ``0.5 * recipe.group_size`` rewarded attempts and a success ratio (runs
+        with reward ``== 1.0`` over rewarded attempts) that is
         ``> max_succeed_ratio``. Such datums are considered too easy and no
         longer produce a useful learning signal (see ``quarantined_datums``).
         When ``max_succeed_ratio`` is ``None`` this feature is disabled. Both
@@ -1737,7 +1740,7 @@ class TunerService:
                 datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
                 quarantine_enabled = (
-                    max_expire_rate is not None or max_succeed_ratio is not None
+                    max_length_rate is not None or max_succeed_ratio is not None
                 )
                 if quarantine_enabled and datum_pool:
                     # Both filters share the rewarded denominator: a rewarded
@@ -1747,22 +1750,21 @@ class TunerService:
                     # no separate query. Counted over the datum's entire history
                     # (no recency window), so the pure helper just tallies.
                     rewarded_by_run = await self._rewarded_datums(tuner_id, session)
-                    # The expired numerator is only needed for the expire filter.
-                    # An `expired` run is an expired, unrewarded run that either
-                    # kept a lingering in-flight op (the generation stalled past
-                    # the lease) or ran past the total-duration expiration
-                    # threshold.
-                    expired_datum_by_run: Dict[str, str] = {}
-                    if max_expire_rate is not None:
-                        expired_datum_by_run = await self._expired_datums(
-                            tuner_id, utcnow(), session
+                    # The length numerator is only needed for the length filter.
+                    # It is intersected with `rewarded_by_run` in the pure helper
+                    # so length rate is length-limited rewarded attempts divided
+                    # by all rewarded attempts.
+                    length_datum_by_run: Dict[str, str] = {}
+                    if max_length_rate is not None:
+                        length_datum_by_run = await self._length_datums(
+                            tuner_id, session
                         )
                     excluded = quarantined_datums(
                         datum_pool,
                         rewarded_by_run,
-                        expired_datum_by_run,
+                        length_datum_by_run,
                         min_samples=0.5 * recipe.group_size,
-                        max_expire_rate=max_expire_rate,
+                        max_length_rate=max_length_rate,
                         max_succeed_ratio=max_succeed_ratio,
                     )
                     if excluded:
@@ -1819,15 +1821,14 @@ class TunerService:
         """Per *rewarded* run, a :class:`RewardedRun` (datum id + reward).
 
         Returns a ``run_id -> RewardedRun`` map used by the dispenser's
-        quarantine logic for the denominator's rewarded side. A rewarded run has
-        no lingering in-flight row -- it is deleted on success -- so it is
-        located via its completions. The join to ``RunModel`` keeps the map to
-        exactly the rewarded runs the quarantine algorithm consults (and carries
-        each run's ``datum_id`` + ``reward``, so ``terminal_stats`` can tally
-        both the rewarded denominator and the ``reward == 1.0`` success
-        numerator without the full run list or a second query), mirroring how
-        :meth:`_expired_datums` covers the expiration numerator. Every rewarded
-        run for the tuner is counted (no recency window).
+        quarantine logic for the rewarded denominator. A rewarded run has no
+        lingering in-flight row -- it is deleted on success -- so it is located
+        via its completions. The join to ``RunModel`` keeps the map to exactly
+        the rewarded runs the quarantine algorithm consults (and carries each
+        run's ``datum_id`` + ``reward``, so ``terminal_stats`` can tally both the
+        rewarded denominator and the ``reward == 1.0`` success numerator without
+        the full run list or a second query). Every rewarded run for the tuner is
+        counted (no recency window).
         """
         result = await session.execute(
             select(ChatCompletionModel.run_id, RunModel.datum_id, RunModel.reward)
@@ -1847,28 +1848,29 @@ class TunerService:
     async def _length_datums(
         self,
         tuner_id: str,
-        max_context_window: Optional[int],
         session,
         run_ids: Optional[List[str]] = None,
     ) -> Dict[str, str]:
         """Per *length-limited* run, its ``datum_id``.
 
-        Returns a ``run_id -> datum_id`` map for runs with at least one
-        completion over ``max_context_window``. This backs the presentation-only
-        ``RunStatus == "length"`` split for ``list_runs``/``get_run``. The
-        source of truth is the persisted completion usage: if prompt +
-        completion + reasoning tokens exceeds the recipe's context-window cap,
-        the sampling path rewrites the completion to a cleared
-        ``finish_reason == "length"`` response and assigns the length penalty.
-        Length runs remain ordinary rewarded runs for terminal-stat accounting.
+        Returns a ``run_id -> datum_id`` map for runs with at least one recorded
+        completion whose finish reason is ``"length"``. This backs the
+        ``RunStatus == "length"`` split for ``list_runs``/``get_run`` and the
+        dispenser's length-rate quarantine numerator. The source of truth is the
+        persisted response: either the backend returned a length-limited sample,
+        or the context-window guard rewrote an oversized completion to a cleared
+        ``finish_reason == "length"`` response before recording it. Length runs
+        remain ordinary rewarded runs for terminal-stat denominator accounting.
         """
-        if max_context_window is None:
-            return {}
         if run_ids is not None and not run_ids:
             return {}
 
         stmt = (
-            select(ChatCompletionModel.run_id, RunModel.datum_id, ChatCompletionModel.response)
+            select(
+                ChatCompletionModel.run_id,
+                RunModel.datum_id,
+                ChatCompletionModel.response,
+            )
             .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
             .where(ChatCompletionModel.tuner_id == tuner_id)
         )
@@ -1881,7 +1883,7 @@ class TunerService:
             if run_id is None:
                 continue
             completion = ChatCompletion.model_validate(response)
-            if _completion_exceeded_context_window(completion, max_context_window):
+            if _completion_has_length_finish(completion):
                 length_datum_by_run[run_id] = datum_id
         return length_datum_by_run
 
@@ -1912,17 +1914,12 @@ class TunerService:
         A run matching either signal is `expired`; the rest are `lost` (a
         crashed/abandoned worker, or ops that all finished but no reward was ever
         posted). This is the single source of truth for the `expired` (vs
-        `lost`) definition shared by two consumers:
-
-        * the dispenser's quarantine numerator (aggregated per datum via
-          ``.values()``), and
-        * ``list_runs``/``get_run``'s ``expired`` vs ``lost`` run-status split
-          (scoped to a page via ``run_ids``, then read as ``set(...)`` for the
-          run-id keys).
+        `lost`) definition used by ``list_runs``/``get_run``'s run-status split
+        and by progress observability. Expiration is no longer a dispenser
+        quarantine metric.
 
         Every expired, unrewarded run for the tuner is counted (no recency
-        window). Complements :meth:`_rewarded_datums`, which covers the rewarded
-        side of the denominator.
+        window).
 
         When ``run_ids`` is given, both scans are restricted to those runs (used
         by the paginated run listing so it doesn't scan every row).

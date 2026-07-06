@@ -85,22 +85,22 @@ class DatumProgress(BaseModel):
     consumable: int  # rewarded runs counting toward this group's group_size
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
     # Per-datum terminal-attempt tallies over the datum's entire history (no
-    # recency window), matching the dispenser's quarantine logic. Together they
-    # let a client compute the two quarantine metrics and pick sensible
-    # thresholds for POST /runs (`max_expire_rate` / `max_succeed_ratio`), where
-    # `terminal = expired + rewarded` is the shared denominator:
-    #   * expire rate   = expired   / terminal
-    #   * success ratio = succeeded / terminal
+    # recency window). `rewarded` is the quarantine denominator for POST /runs
+    # (`max_length_rate` / `max_succeed_ratio`):
+    #   * length rate   = length    / rewarded
+    #   * success ratio = succeeded / rewarded
     #
     # `expired`: all-time count of `expired` runs -- expired, unrewarded runs
     # that either still have a lingering in-flight op (the generation itself
     # stalled past the lease) or crossed the total-duration expiration
     # threshold. The `lost` runs are excluded, matching the aggregate
-    # `RunProgress.expired`.
+    # `RunProgress.expired`. This is observability-only and is not used for
+    # quarantine.
     expired: int
-    # `rewarded`: runs that earned a reward (the rest of the terminal
-    # denominator). `succeeded`: the `reward == 1.0` subset of `rewarded` (the
-    # success numerator).
+    # `rewarded`: runs that earned a reward (the quarantine denominator).
+    # `length`: the subset of rewarded runs with a length finish reason.
+    # `succeeded`: the `reward == 1.0` subset of `rewarded`.
+    length: int
     rewarded: int
     succeeded: int
     trained: int  # prior training exposure (fresh-tier tie-break)
@@ -192,11 +192,11 @@ class ListDatumsResponse(BaseModel):
 # the lease has passed"; they differ on *why*. `expired` means a compute-waste
 # signal fired: the run either still has a lingering `InFlightChatCompletionModel`
 # row (the generation itself stalled past the lease) or its summed completion
-# duration crossed the expiration threshold (the same cases the dispenser
-# quarantines on). `lost` is the residual case (crashed/abandoned worker, or ops
-# all finished but no reward was ever posted). Both are surfaced as their own
-# aggregate counts (`RunProgress.expired` / `RunProgress.lost`) and per-datum
-# (`DatumProgress.expired`).
+# duration crossed the expiration threshold. `lost` is the residual case
+# (crashed/abandoned worker, or ops all finished but no reward was ever posted).
+# Both are surfaced as their own aggregate counts (`RunProgress.expired` /
+# `RunProgress.lost`) and per-datum (`DatumProgress.expired`). Quarantine uses
+# rewarded length samples instead of expired runs.
 RunStatus = Literal[
     "in_flight", "expired", "lost", "length", "rewarded", "trained", "rejected"
 ]
