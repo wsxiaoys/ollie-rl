@@ -22,8 +22,8 @@ function formatTokens(tokens: number): string {
   return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
 }
 
-export function DataPage() {
-  const { tuner: tunerId, datum: datumId } = useSearch({ from: "/data" });
+export function DatumsPage() {
+  const { tuner: tunerId, datum: datumId } = useSearch({ from: "/datums" });
   const navigate = useNavigate();
 
   const tunersQ = useQuery(tunersQuery);
@@ -43,7 +43,7 @@ export function DataPage() {
   useEffect(() => {
     if (!tunerId && tunersQ.data?.tuners && tunersQ.data.tuners.length > 0) {
       navigate({
-        to: "/data",
+        to: "/datums",
         search: { tuner: tunersQ.data.tuners[0].tuner_id },
       });
     }
@@ -53,14 +53,17 @@ export function DataPage() {
   // pool as soon as the pool loads.
   useEffect(() => {
     if (tunerId && !datumId && datumIds.length > 0) {
-      navigate({ to: "/data", search: { tuner: tunerId, datum: datumIds[0] } });
+      navigate({
+        to: "/datums",
+        search: { tuner: tunerId, datum: datumIds[0] },
+      });
     }
   }, [tunerId, datumId, datumIds, navigate]);
 
   const onDatumChange = (value: string | null) => {
     // The datum is always selected; ignore clears.
     if (!value) return;
-    navigate({ to: "/data", search: { tuner: tunerId, datum: value } });
+    navigate({ to: "/datums", search: { tuner: tunerId, datum: value } });
   };
 
   const runs = runsQ.data?.runs ?? [];
@@ -68,7 +71,7 @@ export function DataPage() {
   return (
     <div className="page">
       <header className="page__header">
-        <h1>Data</h1>
+        <h1>Datums</h1>
         <p className="page__subtitle">
           Inspect a single datum and every run dispensed for it.
         </p>
