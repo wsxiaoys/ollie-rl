@@ -150,10 +150,11 @@ class ChatCompletionModel(BaseModel):
             "request_hash",
         ),
         # Recent-generation scan for the dispenser's expiration-quarantine
-        # logic: the rewarded-run lookup filters
-        # `tuner_id = ? AND policy_generation >= ?` (then DISTINCT run_id). This
-        # composite lets the DB range-scan just the recent window instead of the
-        # whole tuner history.
+        # logic: both the rewarded-run lookup (DISTINCT run_id) and the
+        # over-budget-duration numerator (GROUP BY run_id, SUM(duration_ms))
+        # filter `tuner_id = ? AND policy_generation >= ?`. This composite lets
+        # the DB range-scan just the recent window instead of the whole tuner
+        # history.
         Index(
             "ix_chat_completions_tuner_id_policy_generation",
             "tuner_id",

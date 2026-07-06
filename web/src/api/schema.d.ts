@@ -1100,7 +1100,7 @@ export interface components {
         };
         /**
          * NextPick
-         * @description What _pick_datum would dispense next, with reasoning (dynamic).
+         * @description What pick_datum would dispense next, with reasoning (dynamic).
          */
         NextPick: {
             /** Datum Id */
@@ -1511,7 +1511,7 @@ export interface operations {
     dispense_run_tuners__tuner_id__runs_post: {
         parameters: {
             query?: {
-                /** @description When set, quarantine datums that genuinely keep expiring: a datum is skipped once it has at least half a group's worth of terminal attempts (0.5 * recipe.group_size) and an expiration rate >= this value. Only `expired` runs that still have a lingering in-flight op (the generation itself stalled past the lease) count; `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are ignored. Omit to disable. */
+                /** @description When set, quarantine datums that genuinely keep expiring: a datum is skipped once it has at least half a group's worth of terminal attempts (0.5 * recipe.group_size) and an expiration rate >= this value. Only `expired` runs count -- those that still have a lingering in-flight op (the generation itself stalled past the lease) or that exceeded the total-duration budget; `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are ignored. Omit to disable. */
                 max_expire_rate?: number | null;
             };
             header?: never;

@@ -64,6 +64,16 @@ logger = logging.getLogger(__name__)
 # expired.
 RUN_EXPIRE_SECONDS = 1200
 
+# Second, compute-based signal for the `expired` (vs `lost`) classification: a
+# run that has accumulated at least this much total generation time (the summed
+# `duration_ms` across its recorded completions) without ever earning a reward
+# is treated as `expired` even if no in-flight op lingers. It burned real
+# compute yet never finished -- the same waste the `expired` label flags -- so it
+# should not be dismissed as merely `lost`. Measured in milliseconds. Like the
+# in-flight-op signal, it honors the dispenser's recency (policy-generation)
+# window when one is supplied.
+RUN_EXPIRE_DURATION_MS = 15 * 60 * 1000
+
 
 class TunerNotFoundError(Exception):
     pass
@@ -168,18 +178,20 @@ def _last_train_op_duration_seconds(state_data: object) -> Optional[float]:
     return (end - start).total_seconds()
 
 
-def _run_status(run: RunModel, now: datetime, has_in_flight_op: bool) -> RunStatus:
+def _run_status(run: RunModel, now: datetime, is_expired: bool) -> RunStatus:
     """Derive a single mutually-exclusive lifecycle label for a run.
 
     Priority mirrors how the bookkeeping columns accumulate: a run that
     has been trained or requeued (rejected) takes precedence over its
     reward/lease state.
 
-    Once a run is past its lease with no reward, ``has_in_flight_op`` splits it:
-    a lingering ``InFlightChatCompletionModel`` row means the generation itself
-    stalled past the lease (-> ``expired``); otherwise the run was lost
-    (crashed/abandoned worker, or ops finished but no reward was ever posted ->
-    ``lost``).
+    Once a run is past its lease with no reward, ``is_expired`` splits it into
+    ``expired`` vs ``lost``. ``is_expired`` is true when the run either still
+    has a lingering ``InFlightChatCompletionModel`` row (the generation itself
+    stalled past the lease) or has burned at least ``RUN_EXPIRE_DURATION_MS`` of
+    total generation time without a reward -- both signal wasted compute on a run
+    that never finished. Otherwise the run is ``lost`` (crashed/abandoned
+    worker, or ops finished but no reward was ever posted).
     """
     if run.trained_count > 0:
         return "trained"
@@ -189,7 +201,7 @@ def _run_status(run: RunModel, now: datetime, has_in_flight_op: bool) -> RunStat
         return "rewarded"
     if run.expires_at > now:
         return "in_flight"
-    return "expired" if has_in_flight_op else "lost"
+    return "expired" if is_expired else "lost"
 
 
 def _encode_run_cursor(created_at: datetime, run_id: str) -> str:
@@ -222,12 +234,12 @@ def _build_run_item(
     now: datetime,
     policy_generation: Optional[int] = None,
     duration_ms_total: Optional[int] = None,
-    has_in_flight_op: bool = False,
+    is_expired: bool = False,
 ) -> RunItem:
     return RunItem(
         run_id=run.id,
         datum_id=run.datum_id,
-        status=_run_status(run, now, has_in_flight_op),
+        status=_run_status(run, now, is_expired),
         reward=run.reward,
         policy_generation=policy_generation,
         trained_count=run.trained_count,
@@ -527,26 +539,26 @@ class TunerService:
             # Expiration-quarantine inputs. Reuse the dispenser's own helpers so
             # the dashboard's expired/rewarded window counts match exactly what
             # the dispenser would quarantine on: rewarded runs (denominator's
-            # rewarded side) and expired, unrewarded runs with a lingering
-            # in-flight op (the numerator). Kept separate from
-            # `generation_by_run_id` so the trainer-view consumable calc (which
-            # only cares about recorded completions) is unaffected.
+            # rewarded side) and expired, unrewarded runs (the numerator -- a
+            # run with a lingering in-flight op or over-budget total duration).
+            # Kept separate from `generation_by_run_id` so the trainer-view
+            # consumable calc (which only cares about recorded completions) is
+            # unaffected.
             rewarded_datum_by_run: Dict[str, str] = {}
-            expired_in_flight_datum_by_run: Dict[str, str] = {}
-            # All-time expirations (expired, unrewarded runs with a lingering
-            # in-flight op), *not* clipped to the recency window -- this is the
-            # headline per-datum count the dashboard shows, distinct from the
+            expired_datum_by_run: Dict[str, str] = {}
+            # All-time expirations, *not* clipped to the recency window -- this is
+            # the headline per-datum count the dashboard shows, distinct from the
             # windowed rate below.
-            all_expired_in_flight_datum_by_run: Dict[str, str] = {}
+            all_expired_datum_by_run: Dict[str, str] = {}
             if runs:
                 rewarded_datum_by_run = await self._recent_rewarded_datums(
                     tuner_id, min_generation, session
                 )
-                expired_in_flight_datum_by_run = await self._expired_in_flight_datums(
+                expired_datum_by_run = await self._expired_datums(
                     tuner_id, now, session, min_generation=min_generation
                 )
-                all_expired_in_flight_datum_by_run = (
-                    await self._expired_in_flight_datums(tuner_id, now, session)
+                all_expired_datum_by_run = await self._expired_datums(
+                    tuner_id, now, session
                 )
 
         group_size = recipe.group_size
@@ -564,11 +576,12 @@ class TunerService:
                 in_flight += 1
                 if r.datum_id in in_flight_by_datum:
                     in_flight_by_datum[r.datum_id] += 1
-            elif r.id in all_expired_in_flight_datum_by_run:
-                # Expired with a lingering in-flight op (generation stalled).
+            elif r.id in all_expired_datum_by_run:
+                # Expired: generation stalled (lingering in-flight op) or the
+                # run's total duration exceeded the budget.
                 expired += 1
             else:
-                # Expired with no lingering op: lost/abandoned.
+                # Neither expiration signal fired: lost/abandoned.
                 lost += 1
 
             if r.trained_count > 0:
@@ -594,14 +607,14 @@ class TunerService:
         expire_stats = expiration_stats(
             datum_pool,
             rewarded_datum_by_run,
-            expired_in_flight_datum_by_run,
+            expired_datum_by_run,
         )
 
         # All-time expired count per datum (not clipped to the recency
         # window): the headline "how flaky is this datum" number surfaced as
         # `DatumProgress.expired`.
         expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
-        for datum_id in all_expired_in_flight_datum_by_run.values():
+        for datum_id in all_expired_datum_by_run.values():
             if datum_id in expired_by_datum:
                 expired_by_datum[datum_id] += 1
 
@@ -842,12 +855,13 @@ class TunerService:
                         durations[run_id] = int(total_duration)
 
             # Runs on this page that count as `expired` (unrewarded, past lease,
-            # with a lingering in-flight op) -- the same definition the dispenser
-            # uses -- so a past-lease unrewarded run can be split into `expired`
-            # vs `lost`. Scoped to the page's run ids.
+            # with either a lingering in-flight op or over-budget total duration)
+            # -- the same definition the dispenser uses -- so a past-lease
+            # unrewarded run can be split into `expired` vs `lost`. Scoped to the
+            # page's run ids.
             now = utcnow()
             expired_run_ids = set(
-                await self._expired_in_flight_datums(
+                await self._expired_datums(
                     tuner_id, now, session, run_ids=[r.id for r in runs]
                 )
             )
@@ -900,7 +914,7 @@ class TunerService:
 
             now = utcnow()
             expired_run_ids = set(
-                await self._expired_in_flight_datums(
+                await self._expired_datums(
                     tuner_id, now, session, run_ids=[run_id]
                 )
             )
@@ -1647,27 +1661,28 @@ class TunerService:
                     # lock-held path cheap.
                     generation = _trainer.policy_generation
                     min_generation = generation - recipe.max_off_policy_generation
-                    # An `expired` run is an expired, unrewarded run with a
-                    # lingering in-flight op (the generation itself stalled past
-                    # the lease) -- that is the numerator. The denominator's
-                    # rewarded side comes from `rewarded_datum_by_run`, since a
-                    # rewarded run has no in-flight row (deleted on success) and
-                    # needs its completions to locate it on the generation
-                    # timeline. Both maps are pre-filtered in SQL to the right
-                    # run category *and* to the recency window
-                    # (`policy_generation >= min_generation`) and carry each
-                    # run's datum_id, so the pure helper just tallies -- it needs
+                    # An `expired` run is an expired, unrewarded run that either
+                    # kept a lingering in-flight op (the generation stalled past
+                    # the lease) or burned over-budget total duration -- that is
+                    # the numerator. The denominator's rewarded side comes from
+                    # `rewarded_datum_by_run`, since a rewarded run has no
+                    # in-flight row (deleted on success) and needs its
+                    # completions to locate it on the generation timeline. The
+                    # in-flight-op signal is pre-filtered in SQL to the recency
+                    # window (`policy_generation >= min_generation`); the
+                    # duration signal is all-time. Each map carries each run's
+                    # datum_id, so the pure helper just tallies -- it needs
                     # neither `runs`, `now`, nor the generation window.
                     rewarded_datum_by_run = await self._recent_rewarded_datums(
                         tuner_id, min_generation, session
                     )
-                    in_flight_datum_by_run = await self._expired_in_flight_datums(
+                    expired_datum_by_run = await self._expired_datums(
                         tuner_id, now, session, min_generation=min_generation
                     )
                     flaky = expiring_datums(
                         datum_pool,
                         rewarded_datum_by_run,
-                        in_flight_datum_by_run,
+                        expired_datum_by_run,
                         max_expire_rate,
                         min_samples=0.5 * recipe.group_size,
                     )
@@ -1733,7 +1748,7 @@ class TunerService:
         ``RunModel`` keeps the map to exactly the rewarded runs the quarantine
         algorithm consults (and carries each run's ``datum_id``, so
         ``expiration_stats`` can aggregate per datum without the full run list),
-        mirroring how :meth:`_expired_in_flight_datums` covers the
+        mirroring how :meth:`_expired_datums` covers the
         numerator.
 
         Only runs with a completion at ``policy_generation >= min_generation``
@@ -1760,7 +1775,7 @@ class TunerService:
             run_id: datum_id for run_id, datum_id in result.all() if run_id is not None
         }
 
-    async def _expired_in_flight_datums(
+    async def _expired_datums(
         self,
         tuner_id: str,
         now: datetime,
@@ -1768,20 +1783,26 @@ class TunerService:
         min_generation: Optional[int] = None,
         run_ids: Optional[List[str]] = None,
     ) -> Dict[str, str]:
-        """Per *expired, unrewarded* run with a lingering op, its ``datum_id``.
+        """Per *expired, unrewarded* run, its ``datum_id``.
 
         Returns a ``run_id -> datum_id`` map of `expired` runs (as opposed to
-        `lost`): an expired, unrewarded run with a lingering
-        ``InFlightChatCompletionModel`` row (an op that timed out or was
-        cancelled and is still progressing on the backend) is the signal that the
-        generation itself stalled past the lease. The "expired and unrewarded"
-        filter (``reward IS NULL AND expires_at <= now``) is applied here in SQL
-        via the join to ``RunModel``, so every row is an `expired` run -- ongoing
-        runs still within their lease are excluded -- and each carries its
-        ``datum_id`` so callers can aggregate per datum without the full run list.
+        `lost`). Among unrewarded, past-lease runs
+        (``reward IS NULL AND expires_at <= now``, enforced here in SQL via the
+        join to ``RunModel``), a run is `expired` when *either* of two
+        compute-waste signals holds:
 
-        This is the single source of truth for the `expired` (vs `lost`)
-        definition shared by two consumers:
+        1. **Lingering in-flight op.** The run still has an
+           ``InFlightChatCompletionModel`` row (an op that timed out or was
+           cancelled and is still progressing on the backend) -- the signal that
+           the generation itself stalled past the lease.
+        2. **Duration over budget.** The summed ``duration_ms`` across the run's
+           recorded completions is ``>= RUN_EXPIRE_DURATION_MS`` -- the run
+           burned real generation time yet never earned a reward.
+
+        A run matching either signal is `expired`; the rest are `lost` (a
+        crashed/abandoned worker, or ops that all finished but no reward was ever
+        posted). This is the single source of truth for the `expired` (vs
+        `lost`) definition shared by two consumers:
 
         * the dispenser's quarantine numerator (aggregated per datum via
           ``.values()``, optionally windowed with ``min_generation``), and
@@ -1789,21 +1810,24 @@ class TunerService:
           (scoped to a page via ``run_ids``, then read as ``set(...)`` for the
           run-id keys).
 
-        When ``min_generation`` is given, only runs whose lingering op is at
-        ``policy_generation >= min_generation`` are included -- this is how the
-        dispenser's quarantine *numerator* enforces its recency window (the
-        ``policy_generation`` is stamped from the trainer at first submit,
-        placing the run on the same timeline the completions use, and NULL rows
+        ``min_generation`` windows *both* signals: when given, only runs whose
+        lingering op is at ``policy_generation >= min_generation`` contribute via
+        signal 1, and only completions at ``policy_generation >= min_generation``
+        are summed for signal 2. This is how the dispenser's quarantine
+        *numerator* enforces its recency window (the ``policy_generation`` is
+        stamped from the trainer at first submit for in-flight rows, and each
+        completion carries its own, placing runs on the same timeline; NULL rows
         predating the column are then excluded). Leave it ``None`` for the
-        all-time count (e.g. the dashboard's headline expired number),
-        which includes NULL-generation rows too. Complements
+        all-time count (e.g. the dashboard's headline expired number), which
+        includes NULL-generation rows too. Complements
         :meth:`_recent_rewarded_datums`, which covers the rewarded side of the
         denominator.
 
-        When ``run_ids`` is given, the scan is restricted to those runs (used by
-        the paginated run listing so it doesn't scan every in-flight row).
+        When ``run_ids`` is given, both scans are restricted to those runs (used
+        by the paginated run listing so it doesn't scan every row).
         """
-        stmt = (
+        # Signal 1: lingering in-flight op (windowed by ``min_generation``).
+        in_flight_stmt = (
             select(InFlightChatCompletionModel.run_id, RunModel.datum_id)
             .join(RunModel, RunModel.id == InFlightChatCompletionModel.run_id)
             .where(
@@ -1814,12 +1838,43 @@ class TunerService:
             .distinct()
         )
         if min_generation is not None:
-            stmt = stmt.where(
+            in_flight_stmt = in_flight_stmt.where(
                 InFlightChatCompletionModel.policy_generation >= min_generation
             )
         if run_ids is not None:
-            stmt = stmt.where(InFlightChatCompletionModel.run_id.in_(run_ids))
-        result = await session.execute(stmt)
-        return {
-            run_id: datum_id for run_id, datum_id in result.all() if run_id is not None
-        }
+            in_flight_stmt = in_flight_stmt.where(
+                InFlightChatCompletionModel.run_id.in_(run_ids)
+            )
+
+        # Signal 2: total recorded generation time over budget (windowed by
+        # ``min_generation`` -- only in-window completions are summed).
+        duration_stmt = (
+            select(ChatCompletionModel.run_id, RunModel.datum_id)
+            .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
+            .where(
+                ChatCompletionModel.tuner_id == tuner_id,
+                RunModel.reward.is_(None),
+                RunModel.expires_at <= now,
+            )
+            .group_by(ChatCompletionModel.run_id, RunModel.datum_id)
+            .having(
+                func.coalesce(func.sum(ChatCompletionModel.duration_ms), 0)
+                >= RUN_EXPIRE_DURATION_MS
+            )
+        )
+        if min_generation is not None:
+            duration_stmt = duration_stmt.where(
+                ChatCompletionModel.policy_generation >= min_generation
+            )
+        if run_ids is not None:
+            duration_stmt = duration_stmt.where(
+                ChatCompletionModel.run_id.in_(run_ids)
+            )
+
+        expired: Dict[str, str] = {}
+        for stmt in (in_flight_stmt, duration_stmt):
+            result = await session.execute(stmt)
+            for run_id, datum_id in result.all():
+                if run_id is not None:
+                    expired[run_id] = datum_id
+        return expired
