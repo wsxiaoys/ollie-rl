@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, func, select, update
 
+from ollie_rl.background import BackgroundJob
 from ollie_rl.cookbook import Cookbook, Recipe
 from ollie_rl.service.dispense import (
     expiration_stats,
@@ -326,6 +327,9 @@ class TunerService:
         # train step when a batch is ready, replacing the per-reward
         # fire-and-forget trigger.
         self._train_loop_task: Optional[asyncio.Task] = None
+        # Holds strong references to fire-and-forget train-step tasks so they
+        # aren't garbage-collected mid-flight (see BackgroundJob).
+        self._background_jobs = BackgroundJob()
 
     def start_train_loop(self, interval: float = 10.0) -> None:
         """Start the background train loop (idempotent).
@@ -392,7 +396,7 @@ class TunerService:
                 # Already training; don't queue behind the in-progress step.
                 continue
             # Fire-and-forget: let the train step run independently of the loop.
-            asyncio.create_task(_train_one(tuner_id))
+            self._background_jobs.spawn(_train_one(tuner_id))
 
     def _train_lock_for(self, tuner_id: str) -> asyncio.Lock:
         """Return the per-tuner train lock, creating it on first use.
@@ -1000,6 +1004,13 @@ class TunerService:
         assert Cookbook.has(recipe)
         factory = trainer_factory.get(trainer)  # validate now, fail fast
 
+        # Accepted limitation (non-atomic creation): the tuner row is committed
+        # with `trainer_state=None` here, then `factory.create(...)` below
+        # provisions the backend and persists the real state. A crash/reboot in
+        # that window leaves a `trainer_state IS NULL` zombie row that is
+        # filtered out of listings but can never materialize. It's harmless
+        # (the client just re-creates); tolerated rather than adding a startup
+        # sweep or a lifecycle status column.
         async with self.async_session() as session:
             async with session.begin():
                 tuner_record = TunerModel(
@@ -1402,7 +1413,7 @@ class TunerService:
 
             # Skip if a train step is already in progress for this trainer.
             if await trainer.is_training():
-                logger.info(
+                logger.debug(
                     f"Skipping train step for tuner {tuner_id}: already training"
                 )
                 return
@@ -1416,6 +1427,16 @@ class TunerService:
                     if not batch:
                         return
 
+                    # Accepted limitation (dual-write, not fully atomic):
+                    # `train_step` submits the backend LRO and persists
+                    # `pending_train_op` in its *own* transaction, before the
+                    # `trained_count` bump below commits. If the process crashes
+                    # in between, on restart the LRO still completes (advancing
+                    # policy_generation) but these runs keep `trained_count = 0`
+                    # and get collected into a later batch -- i.e. the batch may
+                    # be trained twice. Bounded (and dampened by the off-policy
+                    # staleness filter); tolerated for now rather than adding a
+                    # cross-backend 2-phase commit.
                     train_op = await trainer.train_step(
                         batch,
                     )  # submits LRO + state_store.save
@@ -1525,7 +1546,7 @@ class TunerService:
             rollouts.append(Rollout(runs=rollout_runs))
 
         if len(rollouts) < recipe.num_groups_per_batch:
-            logger.info(
+            logger.debug(
                 f"Not enough groups ready for training under tuner {tuner_id} "
                 f"(got {len(rollouts)}, need at least {recipe.num_groups_per_batch})"
             )

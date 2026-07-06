@@ -36,6 +36,7 @@ from google.genai.types import (
     Tool,
 )
 
+from ollie_rl.background import BackgroundJob
 from ollie_rl.trainer.types import (
     Trainer,
     TrainerFactory,
@@ -398,6 +399,10 @@ class GeminiMsrlTrainer(Trainer):
         self.client = client
         self.state = state
         self.state_store = state_store
+        # Holds strong references to the in-flight train-op poll tasks so they
+        # aren't garbage-collected before they clear `pending_train_op` (which
+        # would otherwise leave the trainer stuck as `is_training()` forever).
+        self._background_jobs = BackgroundJob()
 
     @property
     def policy_generation(self) -> int:
@@ -803,7 +808,7 @@ class GeminiMsrlTrainer(Trainer):
 
         # Start a background task to poll the operation and update the policy
         # generation state. This task is re-spawned on restart by `restore`.
-        asyncio.create_task(self._poll_and_persist_train_op(op.name))
+        self._background_jobs.spawn(self._poll_and_persist_train_op(op.name))
 
         return GeminiMsrlTrainingOp(
             self.client,
@@ -924,7 +929,7 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
             logger.info(
                 f"Resuming poll for in-flight train op: {state.pending_train_op}"
             )
-            asyncio.create_task(
+            instance._background_jobs.spawn(
                 instance._poll_and_persist_train_op(state.pending_train_op)
             )
 
