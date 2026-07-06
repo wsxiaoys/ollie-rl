@@ -18,21 +18,21 @@ class DispenseMixin(TunerServiceBase):
         self,
         tuner_id: str,
         *,
-        max_length_rate: Optional[float] = None,
+        max_length_ratio: Optional[float] = None,
         max_succeed_ratio: Optional[float] = None,
     ) -> Optional[DispenseRun]:
         """
         Dispense a run for a tuner.
 
-        When ``max_length_rate`` is provided, datums that repeatedly produce
+        When ``max_length_ratio`` is provided, datums that repeatedly produce
         length-limited completions are quarantined and excluded from the
         candidate pool. The rate is measured over *all* of the datum's rewarded
         attempts (no recency window) and a datum is skipped once it has
         accumulated at least ``0.5 * recipe.group_size`` rewarded attempts (half
-        a group's worth) with a length rate ``>= max_length_rate``. Length runs
+        a group's worth) with a length rate ``>= max_length_ratio``. Length runs
         are rewarded runs with at least one completion whose finish reason is
         ``"length"`` and that received ``recipe.length_penalty``.
-        When ``max_length_rate`` is ``None`` this feature is disabled.
+        When ``max_length_ratio`` is ``None`` this feature is disabled.
 
         When ``max_succeed_ratio`` is provided, datums that are solved too
         reliably are quarantined too: a datum is skipped once it has at least
@@ -57,7 +57,7 @@ class DispenseMixin(TunerServiceBase):
                 datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
                 quarantine_enabled = (
-                    max_length_rate is not None or max_succeed_ratio is not None
+                    max_length_ratio is not None or max_succeed_ratio is not None
                 )
                 if quarantine_enabled and datum_pool:
                     # Both filters share the rewarded denominator: a rewarded
@@ -72,7 +72,7 @@ class DispenseMixin(TunerServiceBase):
                     # so length rate is length-limited rewarded attempts divided
                     # by all rewarded attempts.
                     length_datum_by_run: Dict[str, str] = {}
-                    if max_length_rate is not None:
+                    if max_length_ratio is not None:
                         length_datum_by_run = await self._length_datums(
                             tuner_id, session
                         )
@@ -81,7 +81,7 @@ class DispenseMixin(TunerServiceBase):
                         rewarded_by_run,
                         length_datum_by_run,
                         min_samples=0.5 * recipe.group_size,
-                        max_length_rate=max_length_rate,
+                        max_length_ratio=max_length_ratio,
                         max_succeed_ratio=max_succeed_ratio,
                     )
                     if excluded:

@@ -68,7 +68,7 @@ DEFAULT_LLM_TIMEOUT_SEC: int | None = 300
 # defaults (``auto_stop_interval_mins=0``) disable auto-stop entirely. Enabling
 # an inactivity auto-stop plus a post-stop auto-delete lets orphaned sandboxes
 # self-reclaim even after a hard crash. Only applied when ``--environment daytona``.
-DEFAULT_DAYTONA_AUTO_STOP_MINS = 30
+DEFAULT_DAYTONA_AUTO_STOP_MINS = 10
 DEFAULT_DAYTONA_AUTO_DELETE_MINS = 5
 
 # Terminus 2 routes through litellm, which needs a provider prefix. ollie-rl
@@ -118,17 +118,24 @@ async def create_tuner(
 async def dispense_run(
     client: httpx.AsyncClient,
     tuner_id: str,
-    max_length_rate: float | None = None,
+    max_length_ratio: float | None = None,
+    max_succeed_ratio: float | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(run_id, datum_id)`` or ``None`` when the trainer is busy (204).
 
-    ``max_length_rate`` (when set) is forwarded as the ``POST /runs`` query
+    ``max_length_ratio`` (when set) is forwarded as the ``POST /runs`` query
     param that quarantines datums whose rewarded attempts too often produce
     length-limited completions.
+
+    ``max_succeed_ratio`` (when set) is forwarded as the ``POST /runs`` query
+    param that quarantines datums solved too reliably (a success ratio above
+    this value) since they yield little learning signal.
     """
     params = {}
-    if max_length_rate is not None:
-        params["max_length_rate"] = max_length_rate
+    if max_length_ratio is not None:
+        params["max_length_ratio"] = max_length_ratio
+    if max_succeed_ratio is not None:
+        params["max_succeed_ratio"] = max_succeed_ratio
     resp = await client.post(f"/tuners/{tuner_id}/runs", params=params)
     if resp.status_code == 204:
         return None
@@ -321,7 +328,10 @@ async def worker(
         assignment: tuple[str, str] | None = None
         while assignment is None:
             assignment = await dispense_run(
-                client, tuner_id, max_length_rate=args.max_length_rate
+                client,
+                tuner_id,
+                max_length_ratio=args.max_length_ratio,
+                max_succeed_ratio=args.max_succeed_ratio,
             )
             if assignment is None:
                 await asyncio.sleep(1.0)
@@ -407,14 +417,26 @@ async def main() -> int:
         ),
     )
     parser.add_argument(
-        "--max-length-rate",
+        "--max-length-ratio",
         type=float,
-        default=None,
+        default=1.0,
         help=(
             "Forwarded to POST /runs to quarantine datums that too often "
             "produce length-limited completions. A datum is skipped once it has at "
             "least half a group's worth of rewarded attempts and a length rate "
             ">= this value (0.0-1.0). Omit to disable."
+        ),
+    )
+    parser.add_argument(
+        "--max-succeed-ratio",
+        type=float,
+        default=1.0,
+        help=(
+            "Forwarded to POST /runs to quarantine datums that are solved too "
+            "reliably. A datum is skipped once it has at least half a group's "
+            "worth of rewarded attempts and a success ratio > this value "
+            "(0.0-1.0). A run counts as a success when its reward is exactly "
+            "1.0. Defaults to 1.0."
         ),
     )
     parser.add_argument(

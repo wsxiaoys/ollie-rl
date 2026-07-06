@@ -84,7 +84,7 @@ export function DatumTable({
               (belowMinSamples
                 ? `Below the ${minSamples} min-sample gate — ratios shown but not yet actionable for quarantine.\n`
                 : "") +
-              `Length ratio ${pct(lengthRate)}: ${length} length / ${rewarded} — drives max_length_rate.\n` +
+              `Length ratio ${pct(lengthRate)}: ${length} length / ${rewarded} — drives max_length_ratio.\n` +
               `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${rewarded} — drives max_succeed_ratio.\n` +
               definition;
         if (lengthRate == null || succeedRate == null) {

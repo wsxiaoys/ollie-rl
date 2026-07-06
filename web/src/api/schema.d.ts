@@ -1629,7 +1629,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description When set, quarantine datums that repeatedly produce length-limited completions: a datum is skipped once it has at least half a group's worth of rewarded attempts (0.5 * recipe.group_size) and a length rate >= this value. Length runs are rewarded runs with at least one completion whose finish_reason is 'length'. Omit to disable. */
-                max_length_rate?: number | null;
+                max_length_ratio?: number | null;
                 /** @description When set, quarantine datums that are solved too reliably: a datum is skipped once it has at least half a group's worth of rewarded attempts (0.5 * recipe.group_size) and a success ratio > this value. A run counts as a success when its reward is exactly 1.0; the ratio is succeeded runs over rewarded attempts. Such datums are considered too easy to yield a useful learning signal. Omit to disable. */
                 max_succeed_ratio?: number | null;
             };

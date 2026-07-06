@@ -184,7 +184,7 @@ class QuarantinedDatumsLengthTestCase(unittest.TestCase):
     def test_no_datums_when_maps_empty(self):
         self.assertEqual(
             quarantined_datums(
-                ["d1", "d2"], {}, {}, min_samples=2, max_length_rate=0.5
+                ["d1", "d2"], {}, {}, min_samples=2, max_length_ratio=0.5
             ),
             set(),
         )
@@ -196,7 +196,7 @@ class QuarantinedDatumsLengthTestCase(unittest.TestCase):
             _rewarded(r1=("d1", 0.0), r2=("d1", 0.0), r3=("d1", 1.0)),
             {"r1": "d1", "r2": "d1"},
             min_samples=2,
-            max_length_rate=0.5,
+            max_length_ratio=0.5,
         )
         self.assertEqual(excluded, {"d1"})
 
@@ -207,7 +207,7 @@ class QuarantinedDatumsLengthTestCase(unittest.TestCase):
             _rewarded(r1=("d1", 0.0)),
             {"r1": "d1"},
             min_samples=2,
-            max_length_rate=0.5,
+            max_length_ratio=0.5,
         )
         self.assertEqual(excluded, set())
 
@@ -223,7 +223,7 @@ class QuarantinedDatumsLengthTestCase(unittest.TestCase):
             ),
             {"r4": "d1"},
             min_samples=2,
-            max_length_rate=0.5,
+            max_length_ratio=0.5,
         )
         self.assertEqual(excluded, set())
 
@@ -239,7 +239,7 @@ class QuarantinedDatumsLengthTestCase(unittest.TestCase):
             ),
             {"r3": "d1", "r4": "d1"},
             min_samples=4,
-            max_length_rate=0.5,
+            max_length_ratio=0.5,
         )
         self.assertEqual(excluded, {"d1"})
 
@@ -331,7 +331,7 @@ class QuarantinedDatumsCombinedTestCase(unittest.TestCase):
             ),
             {"l1": "d1", "l2": "d1"},
             min_samples=2,
-            max_length_rate=0.5,
+            max_length_ratio=0.5,
             max_succeed_ratio=0.9,
         )
         self.assertEqual(excluded, {"d1", "d2"})

@@ -99,7 +99,7 @@ def scheduler_scores(
 # `dispense_run` accepts two optional thresholds (both from `POST /runs` query
 # params; omit/None to disable each):
 #
-#   * `max_length_rate` -- quarantine datums whose rewarded attempts too often
+#   * `max_length_ratio` -- quarantine datums whose rewarded attempts too often
 #     produce length-limited completions.
 #   * `max_succeed_ratio` -- quarantine datums that are solved too reliably, so
 #     compute isn't wasted on datums the policy has already mastered (they no
@@ -148,7 +148,7 @@ def scheduler_scores(
 #   * Quarantine conditions (dispense passes `min_samples = 0.5 *
 #     recipe.group_size`, i.e. half a group's worth of rewarded attempts).
 #     Both gate on rewarded >= min_samples, then:
-#       - length:  rate  >= max_length_rate.
+#       - length:  rate  >= max_length_ratio.
 #       - succeed: ratio >  max_succeed_ratio.
 #
 # Observability: `get_progress` reuses `terminal_stats` to populate
@@ -210,7 +210,7 @@ def quarantined_datums(
     length_datum_by_run: Dict[str, str],
     *,
     min_samples: float,
-    max_length_rate: Optional[float] = None,
+    max_length_ratio: Optional[float] = None,
     max_succeed_ratio: Optional[float] = None,
 ) -> Set[str]:
     """Datums to exclude from dispense, per the enabled quarantine filters.
@@ -220,8 +220,8 @@ def quarantined_datums(
     quarantined when it has at least ``min_samples`` rewarded attempts and
     *either* enabled filter fires:
 
-    * length (``max_length_rate``): length rate ``length / rewarded >=
-      max_length_rate`` -- it repeatedly produces length-limited completions.
+    * length (``max_length_ratio``): length rate ``length / rewarded >=
+      max_length_ratio`` -- it repeatedly produces length-limited completions.
     * too-easy (``max_succeed_ratio``): success ratio ``succeeded / rewarded >
       max_succeed_ratio`` -- it is solved too reliably.
 
@@ -235,7 +235,7 @@ def quarantined_datums(
     for d, s in stats.items():
         if s.rewarded < min_samples:
             continue
-        if max_length_rate is not None and s.length / s.rewarded >= max_length_rate:
+        if max_length_ratio is not None and s.length / s.rewarded >= max_length_ratio:
             excluded.add(d)
             continue
         if (

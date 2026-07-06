@@ -86,7 +86,7 @@ class DatumProgress(BaseModel):
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
     # Per-datum terminal-attempt tallies over the datum's entire history (no
     # recency window). `rewarded` is the quarantine denominator for POST /runs
-    # (`max_length_rate` / `max_succeed_ratio`):
+    # (`max_length_ratio` / `max_succeed_ratio`):
     #   * length rate   = length    / rewarded
     #   * success ratio = succeeded / rewarded
     #

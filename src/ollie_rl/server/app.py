@@ -426,7 +426,7 @@ async def create_run_chat_completion(
 @app.post("/tuners/{tuner_id}/runs")
 async def dispense_run(
     tuner_id: str,
-    max_length_rate: Annotated[
+    max_length_ratio: Annotated[
         Optional[float],
         Query(
             ge=0.0,
@@ -468,7 +468,7 @@ async def dispense_run(
     try:
         run_response = await services.tuner.dispense_run(
             tuner_id,
-            max_length_rate=max_length_rate,
+            max_length_ratio=max_length_ratio,
             max_succeed_ratio=max_succeed_ratio,
         )
         if run_response is None:
