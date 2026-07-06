@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # should not be dismissed as merely `lost`. Measured in milliseconds. Like the
 # in-flight-op signal, it honors the dispenser's recency (policy-generation)
 # window when one is supplied.
-RUN_EXPIRE_DURATION_MS = 15 * 60 * 1000
+RUN_EXPIRE_GENERATION_BUDGET_MS = 15 * 60 * 1000
 
 
 class TunerNotFoundError(Exception):
@@ -181,7 +181,7 @@ def _run_status(run: RunModel, now: datetime, is_expired: bool) -> RunStatus:
     Once a run is past its lease with no reward, ``is_expired`` splits it into
     ``expired`` vs ``lost``. ``is_expired`` is true when the run either still
     has a lingering ``InFlightChatCompletionModel`` row (the generation itself
-    stalled past the lease) or has burned at least ``RUN_EXPIRE_DURATION_MS`` of
+    stalled past the lease) or has burned at least ``RUN_EXPIRE_GENERATION_BUDGET_MS`` of
     total generation time without a reward -- both signal wasted compute on a run
     that never finished. Otherwise the run is ``lost`` (crashed/abandoned
     worker, or ops finished but no reward was ever posted).
@@ -1784,7 +1784,7 @@ class TunerService:
            the generation itself stalled past the lease.
         2. **Duration past the expiration threshold.** The summed
            ``duration_ms`` across the run's recorded completions is
-           ``>= RUN_EXPIRE_DURATION_MS`` -- the run burned real generation time
+           ``>= RUN_EXPIRE_GENERATION_BUDGET_MS`` -- the run burned real generation time
            yet never earned a reward.
 
         A run matching either signal is `expired`; the rest are `lost` (a
@@ -1848,7 +1848,7 @@ class TunerService:
             .group_by(ChatCompletionModel.run_id, RunModel.datum_id)
             .having(
                 func.coalesce(func.sum(ChatCompletionModel.duration_ms), 0)
-                >= RUN_EXPIRE_DURATION_MS
+                >= RUN_EXPIRE_GENERATION_BUDGET_MS
             )
         )
         if min_generation is not None:
