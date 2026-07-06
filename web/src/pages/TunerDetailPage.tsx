@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
+import { useState } from "react";
 import { rewardDistributionQuery, tunerQuery } from "../api/queries";
 import type { NextPickTier } from "../api/types";
-import { DatumTable } from "../components/DatumTable";
+import { computeQuarantine, DatumTable } from "../components/DatumTable";
 import { RewardDistribution } from "../components/RewardDistribution";
 import { Badge, Mono, Panel, ProgressBar, StatCard } from "../components/ui";
 
@@ -26,6 +27,7 @@ function formatDuration(seconds: number): string {
 
 export function TunerDetailPage() {
   const { tunerId } = useParams({ from: "/tuners/$tunerId" });
+  const [hideExcluded, setHideExcluded] = useState(true);
   const { data, isLoading, isError, error, isFetching } = useQuery(
     tunerQuery(tunerId),
   );
@@ -46,6 +48,17 @@ export function TunerDetailPage() {
   const { recipe, progress } = data;
   const isTraining = data.is_training;
   const lastTrainOpDuration = data.last_train_op_duration_seconds;
+
+  const datumItems = progress?.data.items ?? [];
+  const excludedCount = datumItems.filter(
+    (item) =>
+      computeQuarantine(item, {
+        quarantineMinSamples: recipe.quarantine_min_samples,
+        maxLengthRatio: recipe.max_length_ratio,
+        maxSucceedRatio: recipe.max_succeed_ratio,
+      }).quarantined,
+  ).length;
+  const activeCount = datumItems.length - excludedCount;
 
   return (
     <div className="page">
@@ -230,9 +243,25 @@ export function TunerDetailPage() {
           <Panel
             title="Datum pool"
             right={
-              <span className="muted">
-                {progress.data.items.length} active data
-              </span>
+              <div className="datum-pool-header">
+                <span className="muted">
+                  {excludedCount > 0 ? (
+                    <>
+                      {activeCount} active · {excludedCount} excluded
+                    </>
+                  ) : (
+                    <>{activeCount} active data</>
+                  )}
+                </span>
+                <label className="datum-pool-toggle">
+                  <input
+                    type="checkbox"
+                    checked={hideExcluded}
+                    onChange={(e) => setHideExcluded(e.target.checked)}
+                  />
+                  Hide excluded
+                </label>
+              </div>
             }
           >
             <div className="datum-pool-scrollable">
@@ -242,6 +271,7 @@ export function TunerDetailPage() {
                 quarantineMinSamples={recipe.quarantine_min_samples}
                 maxLengthRatio={recipe.max_length_ratio}
                 maxSucceedRatio={recipe.max_succeed_ratio}
+                hideExcluded={hideExcluded}
                 tunerId={data.tuner_id}
               />
             </div>

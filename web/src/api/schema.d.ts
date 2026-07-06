@@ -1214,7 +1214,7 @@ export interface components {
             content_filter_penalty: number;
             /**
              * Length Penalty
-             * @default -1
+             * @default -10
              */
             length_penalty: number;
             /**

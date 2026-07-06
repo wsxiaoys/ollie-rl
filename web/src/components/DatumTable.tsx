@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   createColumnHelper,
@@ -13,12 +13,56 @@ import { Badge, ProgressBar } from "./ui";
 
 const columnHelper = createColumnHelper<DatumProgress>();
 
+export type QuarantineConfig = {
+  quarantineMinSamples: number;
+  maxLengthRatio: number;
+  maxSucceedRatio: number;
+};
+
+export type QuarantineState = {
+  lengthRate: number | null;
+  succeedRate: number | null;
+  belowMinSamples: boolean;
+  lengthHit: boolean;
+  succeedHit: boolean;
+  quarantined: boolean;
+};
+
+/**
+ * Mirror the dispenser's quarantine logic for a single datum. Both quarantine
+ * metrics share the rewarded-attempt denominator; expired/lost runs are status
+ * observability only and do not affect quarantine rates. Below the min-sample
+ * gate neither filter can fire, so the ratios are not yet actionable.
+ */
+export function computeQuarantine(
+  item: Pick<DatumProgress, "length" | "rewarded" | "succeeded">,
+  { quarantineMinSamples, maxLengthRatio, maxSucceedRatio }: QuarantineConfig,
+): QuarantineState {
+  const { length, rewarded, succeeded } = item;
+  const lengthRate = rewarded > 0 ? length / rewarded : null;
+  const succeedRate = rewarded > 0 ? succeeded / rewarded : null;
+  const belowMinSamples = rewarded < quarantineMinSamples;
+  const lengthHit =
+    !belowMinSamples && lengthRate != null && lengthRate >= maxLengthRatio;
+  const succeedHit =
+    !belowMinSamples && succeedRate != null && succeedRate >= maxSucceedRatio;
+  return {
+    lengthRate,
+    succeedRate,
+    belowMinSamples,
+    lengthHit,
+    succeedHit,
+    quarantined: lengthHit || succeedHit,
+  };
+}
+
 export function DatumTable({
   items,
   groupSize,
   quarantineMinSamples,
   maxLengthRatio,
   maxSucceedRatio,
+  hideExcluded = false,
   tunerId,
 }: {
   items: DatumProgress[];
@@ -26,13 +70,20 @@ export function DatumTable({
   quarantineMinSamples: number;
   maxLengthRatio: number;
   maxSucceedRatio: number;
+  hideExcluded?: boolean;
   tunerId: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "consumable", desc: true },
   ]);
 
-  const columns = [
+  // react-table requires `data` and `columns` to be referentially stable
+  // between renders. This component re-renders every couple of seconds (the
+  // tuner query polls on an interval), so recreating the filtered array/columns
+  // inline would hand react-table a fresh reference each time and thrash the
+  // row model — which manifests as the table locking up when excluded rows are
+  // hidden. Memoize both so the references only change when their inputs do.
+  const columns = useMemo(() => [
     columnHelper.accessor("datum_id", {
       header: "Datum ID",
       cell: (info) => (
@@ -70,28 +121,20 @@ export function DatumTable({
         const length = info.row.original.length;
         const rewarded = info.row.original.rewarded;
         const succeeded = info.row.original.succeeded;
-        // Both quarantine metrics share the rewarded-attempt denominator.
-        // Expired/lost runs are status observability only and do not affect
-        // quarantine rates.
-        const lengthRate = rewarded > 0 ? length / rewarded : null;
-        const succeedRate = rewarded > 0 ? succeeded / rewarded : null;
-        // Mirror the dispenser's `min_samples = recipe.quarantine_min_samples`
-        // gate: below it neither quarantine filter can fire, so the ratios are
-        // not yet actionable — render them muted to signal "not enough samples".
         const minSamples = quarantineMinSamples;
-        const belowMinSamples = rewarded < minSamples;
         const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
-        // Mirror `quarantined_datums`: past the min-sample gate a datum is
-        // quarantined (and so receives no new runs) when the length rate
-        // reaches `max_length_ratio` (>=) or the success ratio reaches
-        // `max_succeed_ratio` (>=).
-        const lengthHit =
-          !belowMinSamples && lengthRate != null && lengthRate >= maxLengthRatio;
-        const succeedHit =
-          !belowMinSamples &&
-          succeedRate != null &&
-          succeedRate >= maxSucceedRatio;
-        const quarantined = lengthHit || succeedHit;
+        const {
+          lengthRate,
+          succeedRate,
+          belowMinSamples,
+          lengthHit,
+          succeedHit,
+          quarantined,
+        } = computeQuarantine(info.row.original, {
+          quarantineMinSamples,
+          maxLengthRatio,
+          maxSucceedRatio,
+        });
         const definition =
           'A "length" run is a rewarded run with at least one completion whose finish_reason is "length". A "succeeded" run earned reward == 1.0.';
         const quarantineReason = lengthHit
@@ -162,10 +205,25 @@ export function DatumTable({
       header: "Trained",
       cell: (info) => <span className="num">{info.getValue()}</span>,
     }),
-  ];
+  ], [groupSize, tunerId, quarantineMinSamples, maxLengthRatio, maxSucceedRatio]);
+
+  const visibleItems = useMemo(
+    () =>
+      hideExcluded
+        ? items.filter(
+            (item) =>
+              !computeQuarantine(item, {
+                quarantineMinSamples,
+                maxLengthRatio,
+                maxSucceedRatio,
+              }).quarantined,
+          )
+        : items,
+    [items, hideExcluded, quarantineMinSamples, maxLengthRatio, maxSucceedRatio],
+  );
 
   const table = useReactTable({
-    data: items,
+    data: visibleItems,
     columns,
     state: { sorting },
     onSortingChange: setSorting,
@@ -177,6 +235,14 @@ export function DatumTable({
     return (
       <div className="placeholder placeholder--inset">
         No data is currently in progress.
+      </div>
+    );
+  }
+
+  if (visibleItems.length === 0) {
+    return (
+      <div className="placeholder placeholder--inset">
+        All data is currently excluded. Toggle “Hide excluded” to view it.
       </div>
     );
   }
