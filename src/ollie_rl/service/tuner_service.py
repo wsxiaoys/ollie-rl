@@ -8,7 +8,7 @@ import math
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, func, select, update
 
@@ -68,6 +68,11 @@ logger = logging.getLogger(__name__)
 # in-flight-op signal, it honors the dispenser's recency (policy-generation)
 # window when one is supplied.
 RUN_EXPIRE_GENERATION_BUDGET_MS = 15 * 60 * 1000
+
+# Fixed time budget (seconds) granted to a run at creation. The whole run (all
+# turns combined) must finish within this window before it is considered expired;
+# the deadline never moves once set.
+RUN_LEASE_SECONDS = 3600
 
 
 class TunerNotFoundError(Exception):
@@ -286,7 +291,9 @@ def _completion_context_tokens(completion: ChatCompletion) -> int:
     if details is not None:
         reasoning_tokens = details.reasoning_tokens or 0
 
-    return (usage.prompt_tokens or 0) + (usage.completion_tokens or 0) + reasoning_tokens
+    return (
+        (usage.prompt_tokens or 0) + (usage.completion_tokens or 0) + reasoning_tokens
+    )
 
 
 def _clear_completion_as_length(completion: ChatCompletion) -> ChatCompletion:
@@ -1397,9 +1404,9 @@ class TunerService:
                 session.add(db_completion)
 
                 # The run's `expires_at` is a fixed lease set at creation
-                # (`now + recipe.run_expire_seconds`) and is intentionally left
-                # untouched here: the whole run shares one time slot rather than
-                # each completion granting a fresh budget.
+                # (`now + RUN_LEASE_SECONDS`) and is intentionally left untouched
+                # here: the whole run shares one time slot rather than each
+                # completion granting a fresh budget.
 
     async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
         """
@@ -1738,8 +1745,7 @@ class TunerService:
                 datum_id=datum_id,
                 reward=None,
                 trained_count=0,
-                expires_at=utcnow()
-                + timedelta(seconds=recipe.run_expire_seconds),
+                expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS),
             )
             async with self.async_session() as session:
                 async with session.begin():
@@ -1777,9 +1783,7 @@ class TunerService:
         runs = list(runs_result.scalars().all())
         return datum_pool, runs
 
-    async def _rewarded_datums(
-        self, tuner_id: str, session
-    ) -> Dict[str, RewardedRun]:
+    async def _rewarded_datums(self, tuner_id: str, session) -> Dict[str, RewardedRun]:
         """Per *rewarded* run, a :class:`RewardedRun` (datum id + reward).
 
         Returns a ``run_id -> RewardedRun`` map used by the dispenser's

@@ -159,6 +159,5 @@ form a GRPO group and every **32** groups trigger a `train_step`.
   (`Trial.create()` → `await trial.run()`, `TrialConfig(task=…, agent=…,
   environment=…, trials_dir=…)`). If you bump Harbor, re-check those symbols.
 - **Trial duration vs. run lease.** Harbor trials can take minutes; ollie-rl
-  leases each run for 2h by default (`expires_at`), which comfortably covers a
-  single trial. Submit the reward before the lease expires or the `PUT` returns
-  `409`.
+  leases each run for 1h (`expires_at`), which comfortably covers a single
+  trial. Submit the reward before the lease expires or the `PUT` returns `409`.
