@@ -63,7 +63,14 @@ class RunProgress(BaseModel):
 
     total: int
     in_flight: int  # reward is None, lease not expired
-    expired: int  # reward is None, lease expired (re-dispensable)
+    # reward is None, lease expired, and a lingering in-flight op remains (the
+    # generation itself stalled past the lease). Matches the `expired` run
+    # status; re-dispensable.
+    expired: int
+    # reward is None, lease expired, and *no* lingering in-flight op (a
+    # crashed/abandoned worker, or ops finished but no reward was ever posted).
+    # Matches the `lost` run status; re-dispensable.
+    lost: int
     rewarded: int  # reward set (any trained/rejected state)
     consumable: int  # rewarded & trained<=0 & rejected<=0 & not stale
     trained: int  # trained_count > 0
@@ -76,12 +83,27 @@ class DatumProgress(BaseModel):
     datum_id: str
     consumable: int  # rewarded runs counting toward this group's group_size
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
-    expired: int  # runs that expired without a reward (re-dispensable)
+    # All-time count of `expired` runs for this datum: expired, unrewarded
+    # runs that still have a lingering in-flight op (the generation itself
+    # stalled past the lease), regardless of policy generation. The headline
+    # "how flaky is this datum" number, not clipped by the recency window the
+    # quarantine rate uses. This is the per-datum tally of runs the run-status
+    # `expired` label counts (`lost` runs are excluded), matching the aggregate
+    # `RunProgress.expired`.
+    expired: int
     trained: int  # prior training exposure (fresh-tier tie-break)
+    # Recent expiration signal, matching the dispenser's quarantine logic:
+    # the raw per-datum terminal-attempt counts within `max_off_policy_generation`
+    # of the current generation. We pass the two components directly (rather than a
+    # pre-computed rate) since together they are equivalent: the expire rate is
+    # `expired / (expired + rewarded)` and the sample size is their sum. Use these
+    # to pick a sensible `max_expire_rate` threshold for POST /runs.
+    expired_within_policy_generation_cutoff: int  # expirations (numerator)
+    rewarded_within_policy_generation_cutoff: int  # rewarded terminal attempts
 
 
 class NextPick(BaseModel):
-    """What _pick_datum would dispense next, with reasoning (dynamic)."""
+    """What pick_datum would dispense next, with reasoning (dynamic)."""
 
     datum_id: Optional[str]
     tier: Literal["incomplete", "fresh", "saturated", "none"]
@@ -154,10 +176,19 @@ class ListDatumsResponse(BaseModel):
     datum_ids: List[str]
 
 
-# Lifecycle status of a run, derived from its bookkeeping columns. The labels
+# Lifecycle status of a run, derived from its bookkeeping columns (plus, for
+# the expired/lost split, whether a lingering in-flight op remains). The labels
 # are mutually exclusive and assigned by priority in `TunerService`:
-# trained > rejected > rewarded > in_flight > expired.
-RunStatus = Literal["in_flight", "expired", "rewarded", "trained", "rejected"]
+# trained > rejected > rewarded > in_flight > expired > lost.
+#
+# `expired` and `lost` both mean "reward is None and the lease has passed"; they
+# differ on *why*. `expired` means the run still has a lingering
+# `InFlightChatCompletionModel` row, i.e. the generation itself stalled past the
+# lease (the same case the dispenser quarantines on). `lost` is the residual
+# case (crashed/abandoned worker, or ops all finished but no reward was ever
+# posted). Both are surfaced as their own aggregate counts (`RunProgress.expired`
+# / `RunProgress.lost`) and per-datum (`DatumProgress.expired`).
+RunStatus = Literal["in_flight", "expired", "lost", "rewarded", "trained", "rejected"]
 
 
 class RunItem(BaseModel):

@@ -157,11 +157,37 @@ export interface paths {
          * Create Chat Completion
          * @description Generate a chat completion from the active policy of the requested model.
          *
-         *     Real token-by-token streaming is not supported. When ``stream=true`` is
-         *     requested, the full completion is generated first and then replayed as a
-         *     simulated SSE stream so that OpenAI-compatible clients keep working.
+         *     The tuner/run this completion is attributed to travel in the ``X-Tuner-Id``
+         *     / ``X-Run-Id`` headers. See the path-addressed twin
+         *     (``/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions``) for a
+         *     variant that carries the ids in the URL instead.
          */
         post: operations["create_chat_completion_openai_v1_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Run Chat Completion
+         * @description Path-addressed twin of ``/openai/v1/chat/completions``.
+         *
+         *     Behaves identically to the header-based endpoint but carries the tuner and
+         *     run ids in the URL instead of the ``X-Tuner-Id`` / ``X-Run-Id`` headers.
+         *     Encoding the ids in the path keeps them in the request line, which makes
+         *     per-run completions easy to search in log aggregators (e.g. Railway).
+         */
+        post: operations["create_run_chat_completion_tuners__tuner_id__runs__run_id__openai_v1_chat_completions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -791,6 +817,10 @@ export interface components {
             expired: number;
             /** Trained */
             trained: number;
+            /** Expired Within Policy Generation Cutoff */
+            expired_within_policy_generation_cutoff: number;
+            /** Rewarded Within Policy Generation Cutoff */
+            rewarded_within_policy_generation_cutoff: number;
         };
         /** DispenseRun */
         DispenseRun: {
@@ -1153,7 +1183,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "in_flight" | "expired" | "rewarded" | "trained" | "rejected";
+            status: "in_flight" | "expired" | "lost" | "rewarded" | "trained" | "rejected";
             /** Reward */
             reward: number | null;
             /** Policy Generation */
@@ -1188,6 +1218,8 @@ export interface components {
             in_flight: number;
             /** Expired */
             expired: number;
+            /** Lost */
+            lost: number;
             /** Rewarded */
             rewarded: number;
             /** Consumable */
@@ -1478,7 +1510,10 @@ export interface operations {
     };
     dispense_run_tuners__tuner_id__runs_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description When set, quarantine datums that genuinely keep expiring: a datum is skipped once it has at least half a group's worth of terminal attempts (0.5 * recipe.group_size) and an expiration rate >= this value. Only `expired` runs that still have a lingering in-flight op (the generation itself stalled past the lease) count; `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are ignored. Omit to disable. */
+                max_expire_rate?: number | null;
+            };
             header?: never;
             path: {
                 tuner_id: string;
@@ -1580,6 +1615,42 @@ export interface operations {
                 "x-run-id"?: string | null;
             };
             path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatCompletionRequest-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_run_chat_completion_tuners__tuner_id__runs__run_id__openai_v1_chat_completions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tuner_id: string;
+                run_id: string;
+            };
             cookie?: never;
         };
         requestBody: {

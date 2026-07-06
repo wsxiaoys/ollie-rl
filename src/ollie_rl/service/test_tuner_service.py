@@ -15,7 +15,6 @@ from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 
-from ollie_rl.cookbook import Recipe
 from ollie_rl.db.connection import init_db, shutdown_db
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
@@ -26,7 +25,6 @@ from ollie_rl.service.tuner_service import (
     RunNotFoundError,
     TunerNotFoundError,
     TunerService,
-    _pick_datum,
 )
 from ollie_rl.trainer import Sample, StateStore, Trainer, TrainerFactory
 from ollie_rl.trainer import factory as trainer_factory
@@ -735,98 +733,6 @@ class TestMaybeTrain(TunerServiceTestCase):
         for example in called_examples:
             self.assertIsNotNone(example.policy_generation)
             self.assertIn(example.policy_generation, [0, 1])
-
-
-def _pick_run(
-    datum_id: str,
-    *,
-    reward: Optional[float] = None,
-    trained_count: int = 0,
-    rejected_count: int = 0,
-    expires_in: float = 3600.0,
-) -> RunModel:
-    """Build an in-memory (unpersisted) RunModel for _pick_datum tests."""
-    return RunModel(
-        datum_id=datum_id,
-        reward=reward,
-        trained_count=trained_count,
-        rejected_count=rejected_count,
-        expires_at=utcnow() + timedelta(seconds=expires_in),
-    )
-
-
-class PickDatumTestCase(unittest.TestCase):
-    """Unit tests for the pure, free-function _pick_datum scheduler."""
-
-    def test_empty_pool_returns_none(self):
-        recipe = Recipe(group_size=4, max_off_policy_generation=4)
-        self.assertIsNone(_pick_datum([], [], recipe))
-
-    def test_prefers_closest_to_complete_group(self):
-        # d2 has more in-flight runs, so it is closer to completing its group.
-        recipe = Recipe(group_size=4, max_off_policy_generation=4)
-        runs = [
-            _pick_run("d1"),
-            _pick_run("d2"),
-            _pick_run("d2"),
-        ]
-        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d2")
-
-    def test_started_group_beats_fresh_datum(self):
-        # d1 has a partial group; d3 is fresh. Finish d1 first.
-        recipe = Recipe(group_size=4, max_off_policy_generation=4)
-        runs = [_pick_run("d1")]
-        self.assertEqual(_pick_datum(["d1", "d3"], runs, recipe), "d1")
-
-    def test_fresh_datum_beats_saturated(self):
-        # d1 is saturated (complete group), d2 is fresh -> start d2.
-        recipe = Recipe(group_size=2, max_off_policy_generation=4)
-        runs = [
-            _pick_run("d1", reward=1.0),
-            _pick_run("d1", reward=1.0),
-        ]
-        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d2")
-
-    def test_fresh_tiebreak_prefers_least_trained(self):
-        # Both d1 and d2 have count == 0; d1 was trained before, d2 never was.
-        recipe = Recipe(group_size=2, max_off_policy_generation=4)
-        runs = [
-            _pick_run("d1", reward=1.0, trained_count=1),
-        ]
-        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d2")
-
-    def test_saturated_dispatch_allowed_when_off_policy(self):
-        # All datums saturated; off-policy allowed -> dispatch surplus to the
-        # least-saturated datum (d2 has fewer runs than d1).
-        recipe = Recipe(group_size=2, max_off_policy_generation=4)
-        runs = [
-            _pick_run("d1", reward=1.0),
-            _pick_run("d1", reward=1.0),
-            _pick_run("d1", reward=1.0),
-            _pick_run("d2", reward=1.0),
-            _pick_run("d2", reward=1.0),
-        ]
-        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d2")
-
-    def test_saturated_returns_none_when_strictly_on_policy(self):
-        # All datums saturated and off-policy disabled -> nothing to dispatch.
-        recipe = Recipe(group_size=2, max_off_policy_generation=0)
-        runs = [
-            _pick_run("d1", reward=1.0),
-            _pick_run("d1", reward=1.0),
-        ]
-        self.assertIsNone(_pick_datum(["d1"], runs, recipe))
-
-    def test_rejected_and_expired_runs_not_counted(self):
-        # d1 has 1 rewarded + 1 rejected + 1 expired-pending -> count == 1
-        # (incomplete), so it still wins over the fresh d2.
-        recipe = Recipe(group_size=2, max_off_policy_generation=4)
-        runs = [
-            _pick_run("d1", reward=1.0),
-            _pick_run("d1", reward=1.0, rejected_count=1),
-            _pick_run("d1", expires_in=-1.0),
-        ]
-        self.assertEqual(_pick_datum(["d1", "d2"], runs, recipe), "d1")
 
 
 if __name__ == "__main__":

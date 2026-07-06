@@ -19,7 +19,7 @@ sequenceDiagram
             C->>API: POST /tuners/{id}/runs
             alt trainer is idle
                 API->>API: dispense_run() picks least-attempted datum
-                API->>DB: INSERT runs (expires_at = now + 2h)
+                API->>DB: INSERT runs (expires_at = now + 20m)
                 API-->>C: 200 { run_id, datum_id, expires_at }
                 C->>API: POST /openai/v1/chat/completions { x_tuner_id, x_run_id, ... }
                 API->>DB: INSERT chat_completions (policy_generation)
@@ -92,6 +92,8 @@ Workers request work by calling `POST /tuners/{tuner_id}/runs` with an empty bod
 - **200 OK**: Returns `{ run_id, datum_id, expires_at }`. The worker should execute the run.
 - **204 No Content**: The trainer is currently in the middle of a train step. The response includes a `Retry-After: 1` header. The worker should back off and retry.
 
+Optional query param `max_expire_rate` (float in `[0, 1]`, omit to disable): when set, the dispenser skips ("quarantines") datums that genuinely keep expiring — those whose recent expiration rate is `>= max_expire_rate`. The rate counts only `expired` runs: unrewarded runs whose lease passed while a lingering in-flight op remained (an `InFlightChatCompletionModel` row — the generation itself stalled past the lease). `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are *not* counted. The rate is measured over a recent policy-generation window so quarantined datums can recover automatically. See the "Expiration quarantine" section in `tuner_service.py` for the full mechanism.
+
 ### Phase 2 — execute run and submit reward
 
 For every dispensed `(datum_id, run_id)`, the client drives an agent run that may issue **multiple** chat completion calls (multi-turn dialogue, tool use, sub-agent calls, etc.), all sharing the same `run_id`. Once the run terminates, the client submits one scalar reward for it via `PUT /tuners/{tuner_id}/runs/{run_id}/reward`.
@@ -122,7 +124,7 @@ The client simply continues the loop, requesting the next run assignment. The se
 
 - **Never reuse a `run_id`.** The server allocates the `run_id` dynamically; always use the `run_id` dispensed by the server.
 - **Send `X-Run-Id` on result-affecting completions.** Without it, the completion is not recorded and the run cannot contribute to training. Conversely, omit it on auxiliary calls so they are not picked up as training examples.
-- **Submit rewards before the run expires.** Every run is leased with an expiration deadline (`expires_at`, default **2 hours / 7200 s** — see `dispense_run` in `tuner_service.py`). If a reward is posted after the lease expires, the server returns `409 Conflict` because the dispenser may have already re-issued that datum to another worker.
+- **Submit rewards before the run expires.** Every run is leased with an expiration deadline (`expires_at`, default **20 minutes / 1200 s**, and each recorded chat completion pushes the deadline out by that much again — see `RUN_EXPIRE_SECONDS` / `dispense_run` in `tuner_service.py`). If a reward is posted after the lease expires, the server returns `409 Conflict` because the dispenser may have already re-issued that datum to another worker.
 - **Rewards are write-once.** Once a reward has been submitted for a `run_id`, it cannot be changed. Subsequent `PUT /reward` calls on the same `run_id` return `409 Conflict`.
 - **Chat completions inside a run also respect the lease.** `POST /openai/v1/chat/completions` will return `409` if the run has already been rewarded or its lease has expired, and `400` if the `X-Run-Id` is unknown.
 - **Pace yourself.** The server does not limit concurrent completions or rewards. A sync-RL driver should bound its own fan-out so the server is not overwhelmed by a flood of HTTP work.

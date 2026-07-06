@@ -8,11 +8,18 @@ import math
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, AsyncIterator, Dict, List, Literal, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from sqlalchemy import delete, func, select, update
 
 from ollie_rl.cookbook import Cookbook, Recipe
+from ollie_rl.service.dispense import (
+    expiration_stats,
+    expiring_datums,
+    pick_datum,
+    pick_tier,
+    scheduler_scores,
+)
 from ollie_rl.trainer import Trainer, StateStore, Example
 from ollie_rl.trainer import factory as trainer_factory
 from ollie_rl.db import (
@@ -131,128 +138,6 @@ class _DbStateStore(StateStore):
         logger.debug(f"Persisted state for tuner {self._tuner_id}")
 
 
-def _scheduler_scores(
-    datum_pool: List[str],
-    runs: List[RunModel],
-) -> Tuple[Dict[str, int], Dict[str, int]]:
-    """Scheduler-view consumable score per datum (no staleness filter).
-
-    Returns ``(score, trained)`` where ``score[datum]`` counts runs that
-    are still *consumable* by a future train step from the scheduler's
-    point of view (not yet trained, not requeued, and either rewarded or
-    still pending/not expired) and ``trained[datum]`` accumulates prior
-    training exposure for the fresh-tier tie-break.
-
-    Shared by ``_pick_datum`` (dispense decision) and the progress builder
-    (``next_pick`` labeling) so the two never drift.
-    """
-    now = utcnow()
-    score = {d: 0 for d in datum_pool}
-    trained = {d: 0 for d in datum_pool}
-    for r in runs:
-        if r.datum_id not in score:
-            continue
-        if r.trained_count > 0:
-            # Track prior training exposure for the fresh-tier tie-break.
-            trained[r.datum_id] += r.trained_count
-            continue
-        if r.rejected_count > 0:
-            continue
-        has_reward = r.reward is not None
-        is_pending = r.reward is None and r.expires_at > now
-        if has_reward or is_pending:
-            score[r.datum_id] += 1
-    return score, trained
-
-
-def _pick_tier(
-    datum: str, score: Dict[str, int], recipe: Recipe
-) -> Tuple[Literal["incomplete", "fresh", "saturated", "none"], str]:
-    """Label the scheduler tier (+ human reason) for a candidate datum.
-
-    Mirrors the tiers in ``_pick_datum.priority`` so a dispense preview can
-    explain *why* a datum would be chosen next.
-    """
-    count = score.get(datum, 0)
-    group_size = recipe.group_size
-    if 0 < count < group_size:
-        return "incomplete", f"closest-to-complete group ({count}/{group_size})"
-    if count == 0:
-        return "fresh", "starting a new group from a fresh (least-trained) datum"
-    if recipe.max_off_policy_generation > 0:
-        return (
-            "saturated",
-            f"group full ({count}/{group_size}); dispensing off-policy surplus",
-        )
-    return "none", "all groups saturated; on-policy surplus would be requeued"
-
-
-def _pick_datum(
-    datum_pool: List[str],
-    runs: List[RunModel],
-    recipe: Recipe,
-) -> Optional[str]:
-    """Pick the next datum to dispense a run for.
-
-    Pure scheduling helper (no service/DB state) so it can be reasoned about
-    and unit-tested in isolation.
-
-    Uses a greedy "most-full-first" strategy via tiered priority. Only runs
-    that are still *consumable* by a future train step are counted, i.e.
-    not yet trained (``trained_count <= 0``), not requeued
-    (``rejected_count <= 0``), and either rewarded or pending (not expired).
-    This mirrors ``TunerService._collect_consumable_batch`` so a datum whose
-    group was already trained resets to "fresh" for the next generation.
-
-    1. Started-but-incomplete groups (0 < count < group_size) come first,
-       ordered by highest count, so the closest-to-complete group finishes
-       ASAP. This minimizes the number of in-flight partial groups and gets
-       complete groups ready for training as soon as possible.
-    2. Fresh datums (count == 0) come next, so we start new distinct groups
-       before over-producing existing ones. Among fresh datums the
-       least-trained one wins, so never-trained datums are sampled before
-       re-sampling datums that already contributed a trained group (better
-       dataset coverage).
-    3. Saturated datums (count >= group_size) come last, and only when
-       off-policy samples are allowed (``max_off_policy_generation > 0``):
-       the surplus runs can be consumed by a later train step within the
-       off-policy window. Among saturated datums we prefer the
-       least-saturated to spread the surplus. When off-policy is disabled
-       the surplus would just be requeued, so saturated datums are excluded
-       and ``None`` is returned if nothing else is available.
-    """
-    if not datum_pool:
-        return None
-
-    group_size = recipe.group_size
-    allow_surplus = recipe.max_off_policy_generation > 0
-
-    score, trained = _scheduler_scores(datum_pool, runs)
-
-    def priority(datum: str) -> Tuple[int, int]:
-        count = score[datum]
-        if 0 < count < group_size:
-            # Started but incomplete: finish closest-to-complete first.
-            return (2, count)
-        if count == 0:
-            # Fresh: start new distinct groups before over-producing, and
-            # prefer the least-trained datum so never-trained ones go first.
-            return (1, -trained[datum])
-        # Saturated (count >= group_size): the group is already complete, so
-        # any further runs are surplus. Only dispatchable as off-policy
-        # samples for a later train step; spread across the least-saturated.
-        if allow_surplus:
-            return (0, -count)
-        # Strictly on-policy: surplus would be requeued, so don't dispatch.
-        return (-1, 0)
-
-    best = max(datum_pool, key=priority)
-    if priority(best)[0] < 0:
-        # All datums saturated and off-policy surplus is not allowed.
-        return None
-    return best
-
-
 def _last_train_op_duration_seconds(state_data: object) -> Optional[float]:
     """Derive the most recent completed train op's execution time (seconds).
 
@@ -282,12 +167,18 @@ def _last_train_op_duration_seconds(state_data: object) -> Optional[float]:
     return (end - start).total_seconds()
 
 
-def _run_status(run: RunModel, now: datetime) -> RunStatus:
+def _run_status(run: RunModel, now: datetime, has_in_flight_op: bool) -> RunStatus:
     """Derive a single mutually-exclusive lifecycle label for a run.
 
     Priority mirrors how the bookkeeping columns accumulate: a run that
     has been trained or requeued (rejected) takes precedence over its
     reward/lease state.
+
+    Once a run is past its lease with no reward, ``has_in_flight_op`` splits it:
+    a lingering ``InFlightChatCompletionModel`` row means the generation itself
+    stalled past the lease (-> ``expired``); otherwise the run was lost
+    (crashed/abandoned worker, or ops finished but no reward was ever posted ->
+    ``lost``).
     """
     if run.trained_count > 0:
         return "trained"
@@ -297,7 +188,7 @@ def _run_status(run: RunModel, now: datetime) -> RunStatus:
         return "rewarded"
     if run.expires_at > now:
         return "in_flight"
-    return "expired"
+    return "expired" if has_in_flight_op else "lost"
 
 
 def _encode_run_cursor(created_at: datetime, run_id: str) -> str:
@@ -330,11 +221,12 @@ def _build_run_item(
     now: datetime,
     policy_generation: Optional[int] = None,
     duration_ms_total: Optional[int] = None,
+    has_in_flight_op: bool = False,
 ) -> RunItem:
     return RunItem(
         run_id=run.id,
         datum_id=run.datum_id,
-        status=_run_status(run, now),
+        status=_run_status(run, now, has_in_flight_op),
         reward=run.reward,
         policy_generation=policy_generation,
         trained_count=run.trained_count,
@@ -592,11 +484,14 @@ class TunerService:
         (mirrors `_collect_consumable_batch`, including the off-policy
         staleness filter) so it accurately reflects how close the next
         train step is. `next_pick` uses the *scheduler view* (mirrors
-        `_pick_datum`) since that is what actually drives dispensing.
+        `pick_datum`) since that is what actually drives dispensing.
         """
         trainer = await self._get_trainer(tuner_id)
         recipe = await self._recipe_for(tuner_id)
         generation = trainer.policy_generation
+        now = utcnow()
+        max_off = recipe.max_off_policy_generation
+        min_generation = generation - max_off
 
         async with self.async_session() as session:
             datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
@@ -625,14 +520,36 @@ class TunerService:
                     if run_id is not None
                 }
 
-        now = utcnow()
-        max_off = recipe.max_off_policy_generation
+            # Expiration-quarantine inputs. Reuse the dispenser's own helpers so
+            # the dashboard's expired/rewarded window counts match exactly what
+            # the dispenser would quarantine on: rewarded runs (denominator's
+            # rewarded side) and expired, unrewarded runs with a lingering
+            # in-flight op (the numerator). Kept separate from
+            # `generation_by_run_id` so the trainer-view consumable calc (which
+            # only cares about recorded completions) is unaffected.
+            rewarded_datum_by_run: Dict[str, str] = {}
+            expired_in_flight_datum_by_run: Dict[str, str] = {}
+            # All-time expirations (expired, unrewarded runs with a lingering
+            # in-flight op), *not* clipped to the recency window -- this is the
+            # headline per-datum count the dashboard shows, distinct from the
+            # windowed rate below.
+            all_expired_in_flight_datum_by_run: Dict[str, str] = {}
+            if runs:
+                rewarded_datum_by_run = await self._recent_rewarded_datums(
+                    tuner_id, min_generation, session
+                )
+                expired_in_flight_datum_by_run = await self._expired_in_flight_datums(
+                    tuner_id, now, session, min_generation=min_generation
+                )
+                all_expired_in_flight_datum_by_run = (
+                    await self._expired_in_flight_datums(tuner_id, now, session)
+                )
+
         group_size = recipe.group_size
 
-        in_flight = expired = rewarded = consumable = trained = rejected = 0
+        in_flight = expired = lost = rewarded = consumable = trained = rejected = 0
         consumable_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         in_flight_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
-        expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         trained_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
 
         for r in runs:
@@ -643,10 +560,12 @@ class TunerService:
                 in_flight += 1
                 if r.datum_id in in_flight_by_datum:
                     in_flight_by_datum[r.datum_id] += 1
-            else:
+            elif r.id in all_expired_in_flight_datum_by_run:
+                # Expired with a lingering in-flight op (generation stalled).
                 expired += 1
-                if r.datum_id in expired_by_datum:
-                    expired_by_datum[r.datum_id] += 1
+            else:
+                # Expired with no lingering op: lost/abandoned.
+                lost += 1
 
             if r.trained_count > 0:
                 trained += 1
@@ -663,6 +582,24 @@ class TunerService:
                     consumable += 1
                     if r.datum_id in consumable_by_datum:
                         consumable_by_datum[r.datum_id] += 1
+
+        # Recent expiration stats per datum, computed from the same two
+        # maps the dispenser feeds `expiration_stats`, so the dashboard's
+        # expired/rewarded window counts match what `max_expire_rate`
+        # quarantines on.
+        expire_stats = expiration_stats(
+            datum_pool,
+            rewarded_datum_by_run,
+            expired_in_flight_datum_by_run,
+        )
+
+        # All-time expired count per datum (not clipped to the recency
+        # window): the headline "how flaky is this datum" number surfaced as
+        # `DatumProgress.expired`.
+        expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
+        for datum_id in all_expired_in_flight_datum_by_run.values():
+            if datum_id in expired_by_datum:
+                expired_by_datum[datum_id] += 1
 
         items: List[DatumProgress] = []
         groups_ready = 0
@@ -695,6 +632,12 @@ class TunerService:
                 else:
                     # Not-yet-ready group with >=1 consumable or in-flight run.
                     groups_in_progress += 1
+            # `expiration_stats` returns (expired, terminal) where
+            # terminal = expired + rewarded. Pass the two windowed
+            # components directly; the client derives the rate and sample size
+            # from them. `expired` (all-time, not windowed) is the headline
+            # expired count shown in the Expired column.
+            windowed_expired, terminal = expire_stats.get(datum_id, (0, 0))
             items.append(
                 DatumProgress(
                     datum_id=datum_id,
@@ -702,14 +645,17 @@ class TunerService:
                     in_flight=pending,
                     expired=expired_here,
                     trained=trained_here,
+                    expired_within_policy_generation_cutoff=windowed_expired,
+                    rewarded_within_policy_generation_cutoff=terminal
+                    - windowed_expired,
                 )
             )
         items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
 
         never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
 
-        score, _ = _scheduler_scores(datum_pool, runs)
-        picked = _pick_datum(datum_pool, runs, recipe)
+        score, _ = scheduler_scores(datum_pool, runs)
+        picked = pick_datum(datum_pool, runs, recipe)
         if picked is None:
             next_pick = NextPick(
                 datum_id=None,
@@ -717,7 +663,7 @@ class TunerService:
                 reason="no datum dispensable (pool empty or all groups saturated on-policy)",
             )
         else:
-            tier, reason = _pick_tier(picked, score, recipe)
+            tier, reason = pick_tier(picked, score, recipe)
             next_pick = NextPick(datum_id=picked, tier=tier, reason=reason)
 
         return TrainingProgress(
@@ -729,6 +675,7 @@ class TunerService:
                 total=len(runs),
                 in_flight=in_flight,
                 expired=expired,
+                lost=lost,
                 rewarded=rewarded,
                 consumable=consumable,
                 trained=trained,
@@ -890,7 +837,17 @@ class TunerService:
                     if total_duration is not None:
                         durations[run_id] = int(total_duration)
 
-        now = utcnow()
+            # Runs on this page that count as `expired` (unrewarded, past lease,
+            # with a lingering in-flight op) -- the same definition the dispenser
+            # uses -- so a past-lease unrewarded run can be split into `expired`
+            # vs `lost`. Scoped to the page's run ids.
+            now = utcnow()
+            expired_run_ids = set(
+                await self._expired_in_flight_datums(
+                    tuner_id, now, session, run_ids=[r.id for r in runs]
+                )
+            )
+
         items = [
             _build_run_item(
                 r,
@@ -898,6 +855,7 @@ class TunerService:
                 now,
                 generations.get(r.id),
                 durations.get(r.id),
+                r.id in expired_run_ids,
             )
             for r in runs
         ]
@@ -936,14 +894,25 @@ class TunerService:
             )
             completions = list(comp_result.scalars().all())
 
-        now = utcnow()
+            now = utcnow()
+            expired_run_ids = set(
+                await self._expired_in_flight_datums(
+                    tuner_id, now, session, run_ids=[run_id]
+                )
+            )
+
         policy_generation = (
             max(c.policy_generation for c in completions) if completions else None
         )
         durations = [c.duration_ms for c in completions if c.duration_ms is not None]
         duration_ms_total = sum(durations) if durations else None
         run_item = _build_run_item(
-            run, len(completions), now, policy_generation, duration_ms_total
+            run,
+            len(completions),
+            now,
+            policy_generation,
+            duration_ms_total,
+            run_id in expired_run_ids,
         )
         completion_items = [
             ChatCompletionItem(
@@ -1152,9 +1121,17 @@ class TunerService:
                 state = sample_op.save_state()
                 if state is not None:
                     # Resumable backend: persist resume state the moment the op
-                    # is submitted so the next retry can re-attach.
+                    # is submitted so the next retry can re-attach. Stamp the
+                    # trainer's current generation so a still-churning run can be
+                    # placed on the policy-generation timeline before it records
+                    # any completion.
                     await self._record_in_flight_completion(
-                        tuner_id, run_id, request_hash, state, first_submit
+                        tuner_id,
+                        run_id,
+                        request_hash,
+                        state,
+                        first_submit,
+                        trainer.policy_generation,
                     )
 
             try:
@@ -1261,12 +1238,16 @@ class TunerService:
         request_hash: str,
         state: str,
         created_at: datetime,
+        policy_generation: int,
     ) -> None:
         """Persist an op's resume state the moment it is submitted.
 
         Keyed by the turn identity so at most one in-flight op exists per turn;
         the composite PK plus the per-turn sample lock guarantee no duplicate
-        rows race in.
+        rows race in. ``policy_generation`` is the trainer's current generation
+        at submit time, stamped so the expiration-quarantine window can locate a
+        still-churning run on the policy-generation timeline before it records
+        any completion.
         """
         async with self.async_session() as session:
             async with session.begin():
@@ -1277,6 +1258,7 @@ class TunerService:
                         request_hash=request_hash,
                         state=state,
                         created_at=created_at,
+                        policy_generation=policy_generation,
                     )
                 )
 
@@ -1598,16 +1580,36 @@ class TunerService:
 
         return examples, run_ids
 
-    async def dispense_run(self, tuner_id: str) -> Optional[DispenseRun]:
+    async def dispense_run(
+        self,
+        tuner_id: str,
+        *,
+        max_expire_rate: Optional[float] = None,
+    ) -> Optional[DispenseRun]:
         """
         Dispense a run for a tuner.
+
+        When ``max_expire_rate`` is provided, datums that genuinely keep
+        expiring are quarantined and excluded from the candidate pool. The rate
+        is measured over only *recent* terminal attempts -- those within
+        ``recipe.max_off_policy_generation`` of the current policy generation --
+        and a datum is skipped once that window holds at least
+        ``0.5 * recipe.group_size`` attempts (half a group's worth) with an
+        expiration rate ``>= max_expire_rate``. Only `expired` runs count --
+        those that still have a lingering in-flight op (the generation itself
+        stalled past the lease); `lost` runs (crashed/abandoned worker, or runs
+        abandoned after their ops completed) are ignored, so neither poisons a
+        datum (see ``expiring_datums``). Anchoring recency to the policy
+        generation lets a quarantined datum recover on its own: the generation
+        clock advances as other datums train, aging its stale expirations out of
+        the window. When ``max_expire_rate`` is ``None`` the feature is disabled.
         """
         # Ensure trainer is initialized.
         _trainer = await self._get_trainer(tuner_id)
         recipe = await self._recipe_for(tuner_id)
 
         # Serialize the read-pick-insert sequence: the scheduler decision in
-        # `_pick_datum` depends on the current set of in-flight runs, so two
+        # `pick_datum` depends on the current set of in-flight runs, so two
         # concurrent dispenses that both read the pre-insert snapshot would
         # otherwise pick the same datum and over-dispense it past
         # `group_size` (the source of the inflated in_flight counts).
@@ -1615,7 +1617,43 @@ class TunerService:
             async with self.async_session() as session:
                 datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
-            datum_id = _pick_datum(datum_pool, runs, recipe)
+                if max_expire_rate is not None and datum_pool:
+                    now = utcnow()
+                    # Recency for the expiration rate is anchored to the policy
+                    # generation. Both queries scan only rows within the
+                    # off-policy window (bounded by recent throughput) rather
+                    # than every terminal run ever, which keeps this hot,
+                    # lock-held path cheap.
+                    generation = _trainer.policy_generation
+                    min_generation = generation - recipe.max_off_policy_generation
+                    # An `expired` run is an expired, unrewarded run with a
+                    # lingering in-flight op (the generation itself stalled past
+                    # the lease) -- that is the numerator. The denominator's
+                    # rewarded side comes from `rewarded_datum_by_run`, since a
+                    # rewarded run has no in-flight row (deleted on success) and
+                    # needs its completions to locate it on the generation
+                    # timeline. Both maps are pre-filtered in SQL to the right
+                    # run category *and* to the recency window
+                    # (`policy_generation >= min_generation`) and carry each
+                    # run's datum_id, so the pure helper just tallies -- it needs
+                    # neither `runs`, `now`, nor the generation window.
+                    rewarded_datum_by_run = await self._recent_rewarded_datums(
+                        tuner_id, min_generation, session
+                    )
+                    in_flight_datum_by_run = await self._expired_in_flight_datums(
+                        tuner_id, now, session, min_generation=min_generation
+                    )
+                    flaky = expiring_datums(
+                        datum_pool,
+                        rewarded_datum_by_run,
+                        in_flight_datum_by_run,
+                        max_expire_rate,
+                        min_samples=0.5 * recipe.group_size,
+                    )
+                    if flaky:
+                        datum_pool = [d for d in datum_pool if d not in flaky]
+
+            datum_id = pick_datum(datum_pool, runs, recipe)
             if datum_id is None:
                 return None
 
@@ -1661,3 +1699,106 @@ class TunerService:
         )
         runs = list(runs_result.scalars().all())
         return datum_pool, runs
+
+    async def _recent_rewarded_datums(
+        self, tuner_id: str, min_generation: int, session
+    ) -> Dict[str, str]:
+        """Per *rewarded* run within the recency window, its ``datum_id``.
+
+        Returns a ``run_id -> datum_id`` map used by the dispenser's
+        expiration-quarantine logic for the denominator's rewarded side. A
+        rewarded run has no lingering in-flight row -- it is deleted on success
+        -- so its recency can only come from its completions. The join to
+        ``RunModel`` keeps the map to exactly the rewarded runs the quarantine
+        algorithm consults (and carries each run's ``datum_id``, so
+        ``expiration_stats`` can aggregate per datum without the full run list),
+        mirroring how :meth:`_expired_in_flight_datums` covers the
+        numerator.
+
+        Only runs with a completion at ``policy_generation >= min_generation``
+        are included, so the result holds just runs active within the caller's
+        recency window -- this is where the window is enforced (``expiration_stats``
+        no longer re-filters). Bounding by generation keeps this cheap and,
+        crucially, avoids an unbounded ``run_id IN (...)`` list that would
+        otherwise grow with the tuner's whole lifetime (and could blow past
+        SQLite's host-parameter limit). Rewarded runs whose newest completion
+        predates ``min_generation`` are absent -- exactly the "aged out of the
+        window" case the quarantine logic treats as recoverable.
+        """
+        result = await session.execute(
+            select(ChatCompletionModel.run_id, RunModel.datum_id)
+            .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
+            .where(
+                ChatCompletionModel.tuner_id == tuner_id,
+                ChatCompletionModel.policy_generation >= min_generation,
+                RunModel.reward.is_not(None),
+            )
+            .distinct()
+        )
+        return {
+            run_id: datum_id for run_id, datum_id in result.all() if run_id is not None
+        }
+
+    async def _expired_in_flight_datums(
+        self,
+        tuner_id: str,
+        now: datetime,
+        session,
+        min_generation: Optional[int] = None,
+        run_ids: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Per *expired, unrewarded* run with a lingering op, its ``datum_id``.
+
+        Returns a ``run_id -> datum_id`` map of `expired` runs (as opposed to
+        `lost`): an expired, unrewarded run with a lingering
+        ``InFlightChatCompletionModel`` row (an op that timed out or was
+        cancelled and is still progressing on the backend) is the signal that the
+        generation itself stalled past the lease. The "expired and unrewarded"
+        filter (``reward IS NULL AND expires_at <= now``) is applied here in SQL
+        via the join to ``RunModel``, so every row is an `expired` run -- ongoing
+        runs still within their lease are excluded -- and each carries its
+        ``datum_id`` so callers can aggregate per datum without the full run list.
+
+        This is the single source of truth for the `expired` (vs `lost`)
+        definition shared by two consumers:
+
+        * the dispenser's quarantine numerator (aggregated per datum via
+          ``.values()``, optionally windowed with ``min_generation``), and
+        * ``list_runs``/``get_run``'s ``expired`` vs ``lost`` run-status split
+          (scoped to a page via ``run_ids``, then read as ``set(...)`` for the
+          run-id keys).
+
+        When ``min_generation`` is given, only runs whose lingering op is at
+        ``policy_generation >= min_generation`` are included -- this is how the
+        dispenser's quarantine *numerator* enforces its recency window (the
+        ``policy_generation`` is stamped from the trainer at first submit,
+        placing the run on the same timeline the completions use, and NULL rows
+        predating the column are then excluded). Leave it ``None`` for the
+        all-time count (e.g. the dashboard's headline expired number),
+        which includes NULL-generation rows too. Complements
+        :meth:`_recent_rewarded_datums`, which covers the rewarded side of the
+        denominator.
+
+        When ``run_ids`` is given, the scan is restricted to those runs (used by
+        the paginated run listing so it doesn't scan every in-flight row).
+        """
+        stmt = (
+            select(InFlightChatCompletionModel.run_id, RunModel.datum_id)
+            .join(RunModel, RunModel.id == InFlightChatCompletionModel.run_id)
+            .where(
+                InFlightChatCompletionModel.tuner_id == tuner_id,
+                RunModel.reward.is_(None),
+                RunModel.expires_at <= now,
+            )
+            .distinct()
+        )
+        if min_generation is not None:
+            stmt = stmt.where(
+                InFlightChatCompletionModel.policy_generation >= min_generation
+            )
+        if run_ids is not None:
+            stmt = stmt.where(InFlightChatCompletionModel.run_id.in_(run_ids))
+        result = await session.execute(stmt)
+        return {
+            run_id: datum_id for run_id, datum_id in result.all() if run_id is not None
+        }

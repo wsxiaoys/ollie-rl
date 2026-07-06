@@ -417,6 +417,9 @@ td.num {
 .stat-card--warn .stat-card__value {
   color: var(--warn);
 }
+.stat-card--danger .stat-card__value {
+  color: var(--danger);
+}
 .stat-card--muted .stat-card__value {
   color: var(--text-muted);
 }

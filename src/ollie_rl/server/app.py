@@ -382,7 +382,25 @@ async def create_run_chat_completion(
 
 
 @app.post("/tuners/{tuner_id}/runs")
-async def dispense_run(tuner_id: str) -> DispenseRun:
+async def dispense_run(
+    tuner_id: str,
+    max_expire_rate: Annotated[
+        Optional[float],
+        Query(
+            ge=0.0,
+            le=1.0,
+            description=(
+                "When set, quarantine datums that genuinely keep expiring: a "
+                "datum is skipped once it has at least half a group's worth of "
+                "terminal attempts (0.5 * recipe.group_size) and an expiration "
+                "rate >= this value. Only `expired` runs that still have a "
+                "lingering in-flight op (the generation itself stalled past the "
+                "lease) count; `lost` runs (crashed/abandoned worker, or runs "
+                "abandoned after their ops completed) are ignored. Omit to disable."
+            ),
+        ),
+    ] = None,
+) -> DispenseRun:
     """
     Dispense a run assignment for the tuner.
     Returns 200 OK with run_id, datum_id, expires_at.
@@ -391,7 +409,10 @@ async def dispense_run(tuner_id: str) -> DispenseRun:
     from ollie_rl.service.tuner_service import TunerNotFoundError
 
     try:
-        run_response = await services.tuner.dispense_run(tuner_id)
+        run_response = await services.tuner.dispense_run(
+            tuner_id,
+            max_expire_rate=max_expire_rate,
+        )
         if run_response is None:
             raise HTTPException(204, headers={"Retry-After": "1"})
 
