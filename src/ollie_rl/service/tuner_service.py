@@ -57,14 +57,7 @@ from ollie_rl.types import (
 
 logger = logging.getLogger(__name__)
 
-# Time budget granted to a run to make progress. A run is created with
-# `expires_at = now + RUN_EXPIRE_SECONDS`, and each recorded chat completion
-# pushes `expires_at` out to `now + RUN_EXPIRE_SECONDS` again. Effectively every
-# step (turn) gets this much time to complete before the run is considered
-# expired.
-RUN_EXPIRE_SECONDS = 1200
-
-# Second, compute-based signal for the `expired` (vs `lost`) classification: a
+# Compute-based signal for the `expired` (vs `lost`) classification: a
 # run that has accumulated at least this much total generation time (the summed
 # `duration_ms` across its recorded completions) without ever earning a reward
 # is treated as `expired` even if no in-flight op lingers. It burned real
@@ -1352,18 +1345,10 @@ class TunerService:
                 )
                 session.add(db_completion)
 
-                # Grant the run a fresh time budget for its next step. Every
-                # recorded completion pushes `expires_at` out so a run only
-                # expires when a single step takes longer than
-                # RUN_EXPIRE_SECONDS.
-                await session.execute(
-                    update(RunModel)
-                    .where(
-                        RunModel.id == run_id,
-                        RunModel.tuner_id == tuner_id,
-                    )
-                    .values(expires_at=utcnow() + timedelta(seconds=RUN_EXPIRE_SECONDS))
-                )
+                # The run's `expires_at` is a fixed lease set at creation
+                # (`now + recipe.run_expire_seconds`) and is intentionally left
+                # untouched here: the whole run shares one time slot rather than
+                # each completion granting a fresh budget.
 
     async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
         """
@@ -1699,7 +1684,8 @@ class TunerService:
                 datum_id=datum_id,
                 reward=None,
                 trained_count=0,
-                expires_at=utcnow() + timedelta(seconds=RUN_EXPIRE_SECONDS),
+                expires_at=utcnow()
+                + timedelta(seconds=recipe.run_expire_seconds),
             )
             async with self.async_session() as session:
                 async with session.begin():

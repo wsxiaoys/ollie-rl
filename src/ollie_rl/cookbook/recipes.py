@@ -16,6 +16,12 @@ class Recipe(BaseModel, frozen=True):
     max_off_policy_generation: int = 4
     malformed_penalty: float = -1.0
 
+    # ---- Run lease ------------------------------------------------------
+    # Fixed time budget (seconds) granted to a run at creation. The whole run
+    # (all turns combined) must finish within this window before it is
+    # considered expired; the deadline never moves once set. Defaults to 2h.
+    run_expire_seconds: int = 2 * 60 * 60
+
 
 # ---- Named recipe instances --------------------------------------------
 
