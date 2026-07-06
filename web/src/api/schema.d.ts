@@ -815,6 +815,8 @@ export interface components {
             in_flight: number;
             /** Expired */
             expired: number;
+            /** Length */
+            length: number;
             /** Rewarded */
             rewarded: number;
             /** Succeeded */
@@ -1168,8 +1170,11 @@ export interface components {
              * @default -1
              */
             length_penalty: number;
-            /** Max Context Window */
-            max_context_window?: number | null;
+            /**
+             * Max Context Window
+             * @default 60000
+             */
+            max_context_window: number;
         };
         /** RunDetailResponse */
         RunDetailResponse: {
@@ -1518,9 +1523,9 @@ export interface operations {
     dispense_run_tuners__tuner_id__runs_post: {
         parameters: {
             query?: {
-                /** @description When set, quarantine datums that genuinely keep expiring: a datum is skipped once it has at least half a group's worth of terminal attempts (0.5 * recipe.group_size) and an expiration rate >= this value. Only `expired` runs count -- those that still have a lingering in-flight op (the generation itself stalled past the lease) or whose total duration crossed the expiration threshold; `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are ignored. Omit to disable. */
-                max_expire_rate?: number | null;
-                /** @description When set, quarantine datums that are solved too reliably: a datum is skipped once it has at least half a group's worth of terminal attempts (0.5 * recipe.group_size) and a success ratio > this value. A run counts as a success when its reward is exactly 1.0; the ratio is succeeded runs over all terminal attempts (expired + rewarded, the same denominator as max_expire_rate). Such datums are considered too easy to yield a useful learning signal. Omit to disable. */
+                /** @description When set, quarantine datums that repeatedly produce length-limited completions: a datum is skipped once it has at least half a group's worth of rewarded attempts (0.5 * recipe.group_size) and a length rate >= this value. Length runs are rewarded runs with at least one completion whose finish_reason is 'length'. Omit to disable. */
+                max_length_rate?: number | null;
+                /** @description When set, quarantine datums that are solved too reliably: a datum is skipped once it has at least half a group's worth of rewarded attempts (0.5 * recipe.group_size) and a success ratio > this value. A run counts as a success when its reward is exactly 1.0; the ratio is succeeded runs over rewarded attempts. Such datums are considered too easy to yield a useful learning signal. Omit to disable. */
                 max_succeed_ratio?: number | null;
             };
             header?: never;

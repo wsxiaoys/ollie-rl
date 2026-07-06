@@ -57,37 +57,37 @@ export function DatumTable({
       header: "In flight",
       cell: (info) => <span className="num">{info.getValue()}</span>,
     }),
-    columnHelper.accessor("expired", {
+    columnHelper.accessor("length", {
       id: "audit",
       header: "Audit",
       cell: (info) => {
-        const expired = info.row.original.expired;
+        const length = info.row.original.length;
         const rewarded = info.row.original.rewarded;
         const succeeded = info.row.original.succeeded;
-        // Both quarantine metrics share the terminal denominator
-        // (expired + rewarded); in-flight runs are excluded (outcome unknown).
-        const terminal = expired + rewarded;
-        const expireRate = terminal > 0 ? expired / terminal : null;
-        const succeedRate = terminal > 0 ? succeeded / terminal : null;
+        // Both quarantine metrics share the rewarded-attempt denominator.
+        // Expired/lost runs are status observability only and do not affect
+        // quarantine rates.
+        const lengthRate = rewarded > 0 ? length / rewarded : null;
+        const succeedRate = rewarded > 0 ? succeeded / rewarded : null;
         // Mirror the dispenser's `min_samples = 0.5 * group_size` gate: below it
         // neither quarantine filter can fire, so the ratios are not yet
         // actionable — render them muted to signal "not enough samples".
         const minSamples = groupSize / 2;
-        const belowMinSamples = terminal < minSamples;
+        const belowMinSamples = rewarded < minSamples;
         const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
         const definition =
-          'An "expired" run is an expired, unrewarded run whose generation op is still in flight — i.e. the generation itself stalled past the lease, rather than a "lost" (crashed/abandoned) worker. A "succeeded" run earned reward == 1.0.';
+          'A "length" run is a rewarded run with at least one completion whose finish_reason is "length". A "succeeded" run earned reward == 1.0.';
         const tooltip =
-          expireRate == null || succeedRate == null
-            ? `No terminal attempts yet to compute ratios.\n${definition}`
-            : `${terminal} terminal attempts (expired + rewarded).\n` +
+          lengthRate == null || succeedRate == null
+            ? `No rewarded attempts yet to compute ratios.\n${definition}`
+            : `${rewarded} rewarded attempts.\n` +
               (belowMinSamples
                 ? `Below the ${minSamples} min-sample gate — ratios shown but not yet actionable for quarantine.\n`
                 : "") +
-              `Expire ratio ${pct(expireRate)}: ${expired} expired / ${terminal} — drives max_expire_rate.\n` +
-              `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${terminal} — drives max_succeed_ratio.\n` +
+              `Length ratio ${pct(lengthRate)}: ${length} length / ${rewarded} — drives max_length_rate.\n` +
+              `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${rewarded} — drives max_succeed_ratio.\n` +
               definition;
-        if (expireRate == null || succeedRate == null) {
+        if (lengthRate == null || succeedRate == null) {
           return (
             <span className="num muted" title={tooltip}>
               —
@@ -96,8 +96,8 @@ export function DatumTable({
         }
         const ratios = (
           <>
-            {pct(expireRate)}
-            <span className="muted"> exp</span>
+            {pct(lengthRate)}
+            <span className="muted"> len</span>
             {" · "}
             {pct(succeedRate)}
             <span className="muted"> ok</span>
@@ -106,13 +106,13 @@ export function DatumTable({
         // Below the min-sample gate the ratios aren't actionable yet. Colour
         // (muted text) alone isn't distinct enough, so add non-colour cues:
         // wrap the ratios in parentheses and append an explicit sample marker
-        // (`n <terminal>/<minSamples>`) showing how far off the gate we are.
+        // (`n <rewarded>/<minSamples>`) showing how far off the gate we are.
         if (belowMinSamples) {
           return (
             <span className="num muted" title={tooltip}>
               ({ratios}){" "}
               <span className="datum-audit__gate">
-                {terminal}/{Math.ceil(minSamples)}
+                {rewarded}/{Math.ceil(minSamples)}
               </span>
             </span>
           );

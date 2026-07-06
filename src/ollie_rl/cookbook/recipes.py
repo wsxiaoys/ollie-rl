@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal
 from pydantic import BaseModel
 
 Scheduler = Literal["fifo_epoch", "random"]
@@ -20,10 +20,10 @@ class Recipe(BaseModel, frozen=True):
     length_penalty: float = -1.0
 
     # ---- Context window guard ------------------------------------------
-    # Optional hard cap on prompt + completion + reasoning tokens. Samples that
+    # Hard cap on prompt + completion + reasoning tokens. Samples that
     # exceed this are overridden to the `length` finish reason and have their
     # response cleared.
-    max_context_window: Optional[int] = None
+    max_context_window: int = 60_000
 
 
 # ---- Named recipe instances --------------------------------------------

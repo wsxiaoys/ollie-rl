@@ -118,17 +118,17 @@ async def create_tuner(
 async def dispense_run(
     client: httpx.AsyncClient,
     tuner_id: str,
-    max_expire_rate: float | None = None,
+    max_length_rate: float | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(run_id, datum_id)`` or ``None`` when the trainer is busy (204).
 
-    ``max_expire_rate`` (when set) is forwarded as the ``POST /runs`` query
-    param that quarantines datums which genuinely keep expiring, so the server
-    stops handing out runs for hopeless tasks.
+    ``max_length_rate`` (when set) is forwarded as the ``POST /runs`` query
+    param that quarantines datums whose rewarded attempts too often produce
+    length-limited completions.
     """
     params = {}
-    if max_expire_rate is not None:
-        params["max_expire_rate"] = max_expire_rate
+    if max_length_rate is not None:
+        params["max_length_rate"] = max_length_rate
     resp = await client.post(f"/tuners/{tuner_id}/runs", params=params)
     if resp.status_code == 204:
         return None
@@ -321,7 +321,7 @@ async def worker(
         assignment: tuple[str, str] | None = None
         while assignment is None:
             assignment = await dispense_run(
-                client, tuner_id, max_expire_rate=args.max_expire_rate
+                client, tuner_id, max_length_rate=args.max_length_rate
             )
             if assignment is None:
                 await asyncio.sleep(1.0)
@@ -407,14 +407,14 @@ async def main() -> int:
         ),
     )
     parser.add_argument(
-        "--max-expire-rate",
+        "--max-length-rate",
         type=float,
         default=None,
         help=(
-            "Forwarded to POST /runs to quarantine datums that keep expiring. "
-            "A datum is skipped once it has at least half a group's worth of "
-            "terminal attempts and an expiration rate >= this value (0.0-1.0). "
-            "Omit to disable."
+            "Forwarded to POST /runs to quarantine datums that too often "
+            "produce length-limited completions. A datum is skipped once it has at "
+            "least half a group's worth of rewarded attempts and a length rate "
+            ">= this value (0.0-1.0). Omit to disable."
         ),
     )
     parser.add_argument(
