@@ -393,9 +393,10 @@ async def dispense_run(
                 "When set, quarantine datums that genuinely keep expiring: a "
                 "datum is skipped once it has at least half a group's worth of "
                 "terminal attempts (0.5 * recipe.group_size) and an expiration "
-                "rate >= this value. Only `expired` runs that still have a "
-                "lingering in-flight op (the generation itself stalled past the "
-                "lease) count; `lost` runs (crashed/abandoned worker, or runs "
+                "rate >= this value. Only `expired` runs count -- those that "
+                "still have a lingering in-flight op (the generation itself "
+                "stalled past the lease) or whose total duration crossed the "
+                "expiration threshold; `lost` runs (crashed/abandoned worker, or runs "
                 "abandoned after their ops completed) are ignored. Omit to disable."
             ),
         ),
