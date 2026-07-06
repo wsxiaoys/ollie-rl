@@ -79,7 +79,8 @@ def scheduler_scores(
 #   * `_expired_datums` (DB, in tuner_service): per *expired, unrewarded* run,
 #     its datum id. A run is `expired` when it either still has a lingering
 #     `InFlightChatCompletionModel` row (generation stalled) or its summed
-#     completion `duration_ms` is over budget (`RUN_EXPIRE_DURATION_MS`). Both
+#     completion `duration_ms` is at/past the expiration threshold
+#     (`RUN_EXPIRE_DURATION_MS`). Both
 #     signals honor the recency window, and the "expired and unrewarded" filter
 #     lives in SQL, so ongoing runs (still within their lease) never appear.
 #     Drives the *expiration* numerator.
@@ -97,8 +98,9 @@ def scheduler_scores(
 #     has a lingering in-flight op -- an op that timed out / was cancelled and is
 #     still progressing on the backend, i.e. the *generation itself* was too slow
 #     to finish within the lease; or (b) its summed completion `duration_ms` is
-#     over budget (`RUN_EXPIRE_DURATION_MS`) -- it burned real compute yet never
-#     finished. Both are the "never finishes in time" waste quarantine targets.
+#     at/past the expiration threshold (`RUN_EXPIRE_DURATION_MS`) -- it burned
+#     real compute yet never finished. Both are the "never finishes in time"
+#     waste quarantine targets.
 #     Runs matching neither are `lost` and ignored: a crashed/abandoned worker,
 #     or a run whose ops all completed but which was abandoned before a reward --
 #     neither reflects a genuinely hard datum, so a flaky worker never poisons
@@ -110,8 +112,8 @@ def scheduler_scores(
 #     In-flight runs are excluded (outcome unknown).
 #   * Recency window == recovery mechanism. Only attempts within
 #     `max_off_policy_generation` of the current policy generation are counted --
-#     this applies to both expiration signals (in-flight op and over-budget
-#     duration) as well as the rewarded denominator. That window is applied
+#     this applies to both expiration signals (in-flight op and duration past
+#     the expiration threshold) as well as the rewarded denominator. That window is applied
 #     upstream in SQL (the maps are built with `policy_generation >=
 #     min_generation`, where `min_generation = generation -
 #     max_off_policy_generation`), so by the time `expiration_stats` sees them
@@ -133,8 +135,8 @@ def scheduler_scores(
 # components, equivalent to the rate) so an operator can watch the numbers and
 # pick a sensible `max_expire_rate`. It builds the same two maps
 # (rewarded runs; expired-unrewarded runs -- lingering in-flight op or
-# over-budget total duration) so the dashboard number matches what the dispenser
-# would quarantine on.
+# total duration past the expiration threshold) so the dashboard number matches
+# what the dispenser would quarantine on.
 # ---------------------------------------------------------------------------
 def expiration_stats(
     datum_pool: List[str],
@@ -151,8 +153,9 @@ def expiration_stats(
       Drives the rewarded side of the denominator.
     * ``expired_datum_by_run`` -- one entry per *expired, unrewarded* run (its
       datum id): a run that either kept a lingering in-flight op (the generation
-      itself was too slow to finish within the lease) or burned over-budget total
-      duration -- the compute-waste cases quarantine targets. Because the
+      itself was too slow to finish within the lease) or ran past the
+      total-duration expiration threshold -- the compute-waste cases quarantine
+      targets. Because the
       "expired and unrewarded" filter is applied when the map is built, every
       entry here is an expiration (an `expired`, not `lost`, run); ongoing runs
       (still within their lease) and lost/abandoned runs never appear. Drives
@@ -170,8 +173,9 @@ def expiration_stats(
         if datum_id not in terminal:
             continue
         terminal[datum_id] += 1
-    # Expirations: expired, unrewarded runs (lingering in-flight op or
-    # over-budget total duration) -- numerator + their share of the denominator.
+    # Expirations: expired, unrewarded runs (lingering in-flight op or total
+    # duration past the expiration threshold) -- numerator + their share of the
+    # denominator.
     for datum_id in expired_datum_by_run.values():
         if datum_id not in expired:
             continue

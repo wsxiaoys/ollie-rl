@@ -540,7 +540,8 @@ class TunerService:
             # the dashboard's expired/rewarded window counts match exactly what
             # the dispenser would quarantine on: rewarded runs (denominator's
             # rewarded side) and expired, unrewarded runs (the numerator -- a
-            # run with a lingering in-flight op or over-budget total duration).
+            # run with a lingering in-flight op or total duration past the
+            # expiration threshold).
             # Kept separate from `generation_by_run_id` so the trainer-view
             # consumable calc (which only cares about recorded completions) is
             # unaffected.
@@ -578,7 +579,7 @@ class TunerService:
                     in_flight_by_datum[r.datum_id] += 1
             elif r.id in all_expired_datum_by_run:
                 # Expired: generation stalled (lingering in-flight op) or the
-                # run's total duration exceeded the budget.
+                # run's total duration crossed the expiration threshold.
                 expired += 1
             else:
                 # Neither expiration signal fired: lost/abandoned.
@@ -855,8 +856,9 @@ class TunerService:
                         durations[run_id] = int(total_duration)
 
             # Runs on this page that count as `expired` (unrewarded, past lease,
-            # with either a lingering in-flight op or over-budget total duration)
-            # -- the same definition the dispenser uses -- so a past-lease
+            # with either a lingering in-flight op or total duration past the
+            # expiration threshold) -- the same definition the dispenser uses --
+            # so a past-lease
             # unrewarded run can be split into `expired` vs `lost`. Scoped to the
             # page's run ids.
             now = utcnow()
@@ -1661,8 +1663,9 @@ class TunerService:
                     min_generation = generation - recipe.max_off_policy_generation
                     # An `expired` run is an expired, unrewarded run that either
                     # kept a lingering in-flight op (the generation stalled past
-                    # the lease) or burned over-budget total duration -- that is
-                    # the numerator. The denominator's rewarded side comes from
+                    # the lease) or ran past the total-duration expiration
+                    # threshold -- that is the numerator. The denominator's
+                    # rewarded side comes from
                     # `rewarded_datum_by_run`, since a rewarded run has no
                     # in-flight row (deleted on success) and needs its
                     # completions to locate it on the generation timeline. The
@@ -1793,9 +1796,10 @@ class TunerService:
            ``InFlightChatCompletionModel`` row (an op that timed out or was
            cancelled and is still progressing on the backend) -- the signal that
            the generation itself stalled past the lease.
-        2. **Duration over budget.** The summed ``duration_ms`` across the run's
-           recorded completions is ``>= RUN_EXPIRE_DURATION_MS`` -- the run
-           burned real generation time yet never earned a reward.
+        2. **Duration past the expiration threshold.** The summed
+           ``duration_ms`` across the run's recorded completions is
+           ``>= RUN_EXPIRE_DURATION_MS`` -- the run burned real generation time
+           yet never earned a reward.
 
         A run matching either signal is `expired`; the rest are `lost` (a
         crashed/abandoned worker, or ops that all finished but no reward was ever
@@ -1844,8 +1848,9 @@ class TunerService:
                 InFlightChatCompletionModel.run_id.in_(run_ids)
             )
 
-        # Signal 2: total recorded generation time over budget (windowed by
-        # ``min_generation`` -- only in-window completions are summed).
+        # Signal 2: total recorded generation time past the expiration threshold
+        # (windowed by ``min_generation`` -- only in-window completions are
+        # summed).
         duration_stmt = (
             select(ChatCompletionModel.run_id, RunModel.datum_id)
             .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
