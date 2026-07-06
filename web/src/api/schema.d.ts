@@ -118,6 +118,9 @@ export interface paths {
          * @description Dispense a run assignment for the tuner.
          *     Returns 200 OK with run_id, datum_id, expires_at.
          *     Or 204 No Content with Retry-After header if no run can be dispensed.
+         *
+         *     Datum quarantine (length-rate / success-rate filtering plus the two-phase
+         *     probe gate) is configured on the tuner's recipe, not per request.
          */
         post: operations["dispense_run_tuners__tuner_id__runs_post"];
         delete?: never;
@@ -1219,6 +1222,21 @@ export interface components {
              * @default 60000
              */
             max_context_window: number;
+            /**
+             * Max Length Ratio
+             * @default 1
+             */
+            max_length_ratio: number;
+            /**
+             * Max Succeed Ratio
+             * @default 1
+             */
+            max_succeed_ratio: number;
+            /**
+             * Quarantine Min Samples
+             * @default 4
+             */
+            quarantine_min_samples: number;
         };
         /**
          * RewardDistributionResponse
@@ -1627,12 +1645,7 @@ export interface operations {
     };
     dispense_run_tuners__tuner_id__runs_post: {
         parameters: {
-            query?: {
-                /** @description When set, quarantine datums that repeatedly produce length-limited completions: a datum is skipped once it has at least half a group's worth of rewarded attempts (0.5 * recipe.group_size) and a length rate >= this value. Length runs are rewarded runs with at least one completion whose finish_reason is 'length'. Omit to disable. */
-                max_length_ratio?: number | null;
-                /** @description When set, quarantine datums that are solved too reliably: a datum is skipped once it has at least half a group's worth of rewarded attempts (0.5 * recipe.group_size) and a success ratio > this value. A run counts as a success when its reward is exactly 1.0; the ratio is succeeded runs over rewarded attempts. Such datums are considered too easy to yield a useful learning signal. Omit to disable. */
-                max_succeed_ratio?: number | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 tuner_id: string;

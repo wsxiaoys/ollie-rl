@@ -16,10 +16,12 @@ const columnHelper = createColumnHelper<DatumProgress>();
 export function DatumTable({
   items,
   groupSize,
+  quarantineMinSamples,
   tunerId,
 }: {
   items: DatumProgress[];
   groupSize: number;
+  quarantineMinSamples: number;
   tunerId: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
@@ -69,10 +71,10 @@ export function DatumTable({
         // quarantine rates.
         const lengthRate = rewarded > 0 ? length / rewarded : null;
         const succeedRate = rewarded > 0 ? succeeded / rewarded : null;
-        // Mirror the dispenser's `min_samples = 0.5 * group_size` gate: below it
-        // neither quarantine filter can fire, so the ratios are not yet
-        // actionable — render them muted to signal "not enough samples".
-        const minSamples = groupSize / 2;
+        // Mirror the dispenser's `min_samples = recipe.quarantine_min_samples`
+        // gate: below it neither quarantine filter can fire, so the ratios are
+        // not yet actionable — render them muted to signal "not enough samples".
+        const minSamples = quarantineMinSamples;
         const belowMinSamples = rewarded < minSamples;
         const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
         const definition =
@@ -112,7 +114,7 @@ export function DatumTable({
             <span className="num muted" title={tooltip}>
               ({ratios}){" "}
               <span className="datum-audit__gate">
-                {rewarded}/{Math.ceil(minSamples)}
+                {rewarded}/{minSamples}
               </span>
             </span>
           );

@@ -239,6 +239,7 @@ export function TunerDetailPage() {
               <DatumTable
                 items={progress.data.items}
                 groupSize={recipe.group_size}
+                quarantineMinSamples={recipe.quarantine_min_samples}
                 tunerId={data.tuner_id}
               />
             </div>
