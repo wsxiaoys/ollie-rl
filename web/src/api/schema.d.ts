@@ -71,6 +71,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tuners/{tuner_id}/reward-distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reward Distribution
+         * @description Reward distribution bucketed by policy generation for a tuner.
+         *
+         *     Reads only `(reward, max policy_generation)` per rewarded run and returns
+         *     the finished per-generation histogram, so the dashboard doesn't fetch every
+         *     run to aggregate client-side. Pass `datum_id` to scope to a single datum.
+         */
+        get: operations["reward_distribution_tuners__tuner_id__reward_distribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tuners/{tuner_id}/runs": {
         parameters: {
             query?: never;
@@ -894,6 +918,26 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * GenerationRewardStats
+         * @description Reward summary for all rewarded runs at a single policy generation.
+         */
+        GenerationRewardStats: {
+            /** Generation */
+            generation: number;
+            /** Count */
+            count: number;
+            /** Mean */
+            mean: number;
+            /** Std */
+            std: number;
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
+            /** Bins */
+            bins: number[];
+        };
         /** GetTunerResponse */
         GetTunerResponse: {
             /** Tuner Id */
@@ -1175,6 +1219,31 @@ export interface components {
              * @default 60000
              */
             max_context_window: number;
+        };
+        /**
+         * RewardDistributionResponse
+         * @description Reward distribution bucketed by policy generation, computed server-side.
+         *
+         *     Replaces the former client-side aggregation over an *unbounded* run fetch:
+         *     the dashboard used to download every run just to bucket rewards by
+         *     generation. The server now reads only `(reward, max policy_generation)` per
+         *     rewarded run -- two scalars, no JSON blobs and no full run transfer -- and
+         *     returns the finished histogram. A run contributes only when it has both a
+         *     reward and at least one recorded completion (so a derived generation).
+         */
+        RewardDistributionResponse: {
+            /** Rows */
+            rows: components["schemas"]["GenerationRewardStats"][];
+            /** Bin Edges */
+            bin_edges: number[];
+            /** Bin Width */
+            bin_width: number;
+            /** Reward Min */
+            reward_min: number;
+            /** Reward Max */
+            reward_max: number;
+            /** Total */
+            total: number;
         };
         /** RunDetailResponse */
         RunDetailResponse: {
@@ -1471,6 +1540,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListDatumsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reward_distribution_tuners__tuner_id__reward_distribution_get: {
+        parameters: {
+            query?: {
+                /** @description Only aggregate runs dispensed for this datum id. */
+                datum_id?: string | null;
+            };
+            header?: never;
+            path: {
+                tuner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RewardDistributionResponse"];
                 };
             };
             /** @description Validation Error */

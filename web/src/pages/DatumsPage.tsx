@@ -1,7 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { dataQuery, runsByDatumQuery, tunersQuery } from "../api/queries";
+import {
+  dataQuery,
+  rewardDistributionQuery,
+  runsByDatumQuery,
+  tunersQuery,
+} from "../api/queries";
 import { RewardDistribution } from "../components/RewardDistribution";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { SearchableSelect } from "../components/SearchableSelect";
@@ -33,6 +38,10 @@ export function DatumsPage() {
   });
   const runsQ = useQuery({
     ...runsByDatumQuery(tunerId ?? "", datumId ?? ""),
+    enabled: Boolean(tunerId) && Boolean(datumId),
+  });
+  const rewardDistQ = useQuery({
+    ...rewardDistributionQuery(tunerId ?? "", datumId ?? ""),
     enabled: Boolean(tunerId) && Boolean(datumId),
   });
 
@@ -105,21 +114,22 @@ export function DatumsPage() {
           <Panel
             title="Reward distribution by generation"
             right={
-              runsQ.isFetching ? (
+              rewardDistQ.isFetching ? (
                 <span className="live-dot">● live</span>
               ) : undefined
             }
           >
-            {runsQ.isError ? (
+            {rewardDistQ.isError ? (
               <div className="placeholder placeholder--inset placeholder--error">
-                Failed to load runs: {(runsQ.error as Error).message}
+                Failed to load reward distribution:{" "}
+                {(rewardDistQ.error as Error).message}
               </div>
-            ) : !runsQ.data ? (
+            ) : !rewardDistQ.data ? (
               <div className="placeholder placeholder--inset">
-                Loading runs…
+                Loading reward distribution…
               </div>
             ) : (
-              <RewardDistribution runs={runs} />
+              <RewardDistribution dist={rewardDistQ.data} />
             )}
           </Panel>
 

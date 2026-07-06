@@ -17,6 +17,7 @@ from ollie_rl.types import (
     ListTunersResponse,
     ListDatumsResponse,
     ListRunsResponse,
+    RewardDistributionResponse,
     RunDetailResponse,
     ChatCompletionDetailResponse,
 )
@@ -179,6 +180,37 @@ async def list_data(tuner_id: str) -> ListDatumsResponse:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to list data for tuner '{tuner_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/tuners/{tuner_id}/reward-distribution",
+    response_model=RewardDistributionResponse,
+)
+async def reward_distribution(
+    tuner_id: str,
+    datum_id: Optional[str] = Query(
+        default=None,
+        description="Only aggregate runs dispensed for this datum id.",
+    ),
+) -> RewardDistributionResponse:
+    """
+    Reward distribution bucketed by policy generation for a tuner.
+
+    Reads only `(reward, max policy_generation)` per rewarded run and returns
+    the finished per-generation histogram, so the dashboard doesn't fetch every
+    run to aggregate client-side. Pass `datum_id` to scope to a single datum.
+    """
+    from ollie_rl.service.tuner import TunerNotFoundError
+
+    try:
+        return await services.tuner.reward_distribution(tuner_id, datum_id=datum_id)
+    except TunerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(
+            f"Failed to compute reward distribution for tuner '{tuner_id}'"
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 

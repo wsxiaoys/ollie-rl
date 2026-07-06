@@ -2,10 +2,11 @@
 
 import json
 import logging
-from typing import Dict, List, Optional
+import math
+from typing import Dict, List, Optional, Tuple
 
 from openai.types.chat import ChatCompletion
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from ollie_rl.cookbook import Cookbook
 from ollie_rl.db import ChatCompletionModel, DatumRowModel, TunerModel
@@ -40,9 +41,11 @@ from ollie_rl.types import (
     DatumCoverage,
     DatumPool,
     DatumProgress,
+    GenerationRewardStats,
     GetTunerResponse,
     ListRunsResponse,
     NextPick,
+    RewardDistributionResponse,
     RunDetailResponse,
     RunProgress,
     TrainingProgress,
@@ -50,6 +53,117 @@ from ollie_rl.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Histogram resolution for the reward distribution. Kept in sync with the
+# dashboard's former client-side value so the server-computed bins render
+# identically.
+REWARD_DISTRIBUTION_BIN_COUNT = 12
+
+
+def _context_tokens_sql(response_col):
+    """SQL mirror of :func:`context_tokens_from_response`.
+
+    Extracts ``usage.{prompt_tokens, completion_tokens,
+    completion_tokens_details.reasoning_tokens}`` straight out of the stored
+    JSON ``response`` and sums them, so the DB can report a completion's
+    context window without shipping the whole (blob-heavy) response back to
+    Python. Missing sub-fields coalesce to ``0`` (matching the Python helper);
+    when there is no ``usage`` at all the result is SQL ``NULL`` so it's
+    ignored by ``MAX`` (mirroring the helper's ``None`` short-circuit). The
+    JSON index operator / ``as_integer`` casts are dialect-agnostic, working on
+    both SQLite (``json_extract``) and Postgres (``->``/``->>``).
+    """
+    usage = response_col["usage"]
+    prompt_tokens = usage["prompt_tokens"].as_integer()
+    completion_tokens = usage["completion_tokens"].as_integer()
+    reasoning_tokens = usage["completion_tokens_details"][
+        "reasoning_tokens"
+    ].as_integer()
+
+    return case(
+        (
+            prompt_tokens.is_(None) & completion_tokens.is_(None),
+            None,
+        ),
+        else_=(
+            func.coalesce(prompt_tokens, 0)
+            + func.coalesce(completion_tokens, 0)
+            + func.coalesce(reasoning_tokens, 0)
+        ),
+    )
+
+
+def _build_reward_distribution(
+    pairs: List[Tuple[float, int]],
+) -> RewardDistributionResponse:
+    """Bucket ``(reward, generation)`` pairs into the per-generation histogram.
+
+    Pure translation of the aggregation the dashboard used to run in the
+    browser (same bin count, population std, and degenerate-range widening) so
+    the rendered result is unchanged now that the work happens server-side.
+    """
+    if not pairs:
+        return RewardDistributionResponse(
+            rows=[],
+            bin_edges=[],
+            bin_width=0.0,
+            reward_min=0.0,
+            reward_max=0.0,
+            total=0,
+        )
+
+    bin_count = REWARD_DISTRIBUTION_BIN_COUNT
+    rewards = [reward for reward, _ in pairs]
+    reward_min = min(rewards)
+    reward_max = max(rewards)
+
+    # Guard against a degenerate range (all rewards equal): widen by a unit so
+    # every value lands in a valid bin instead of dividing by zero.
+    span = reward_max - reward_min
+    effective_span = span if span > 0 else 1.0
+    bin_width = effective_span / bin_count
+    bin_edges = [reward_min + i * bin_width for i in range(bin_count)]
+
+    def bin_of(reward: float) -> int:
+        idx = math.floor((reward - reward_min) / bin_width)
+        # Clamp so the maximum reward falls into the last bin instead of
+        # overflowing.
+        return min(bin_count - 1, max(0, idx))
+
+    by_generation: Dict[int, List[float]] = {}
+    for reward, generation in pairs:
+        by_generation.setdefault(generation, []).append(reward)
+
+    rows: List[GenerationRewardStats] = []
+    for generation, gen_rewards in by_generation.items():
+        count = len(gen_rewards)
+        mean = sum(gen_rewards) / count
+        variance = sum((r - mean) ** 2 for r in gen_rewards) / count
+        bins = [0] * bin_count
+        for reward in gen_rewards:
+            bins[bin_of(reward)] += 1
+        rows.append(
+            GenerationRewardStats(
+                generation=generation,
+                count=count,
+                mean=mean,
+                std=math.sqrt(variance),
+                min=min(gen_rewards),
+                max=max(gen_rewards),
+                bins=bins,
+            )
+        )
+
+    rows.sort(key=lambda row: row.generation)
+
+    return RewardDistributionResponse(
+        rows=rows,
+        bin_edges=bin_edges,
+        bin_width=bin_width,
+        reward_min=reward_min,
+        reward_max=reward_max,
+        total=len(pairs),
+    )
 
 
 class QueryMixin(TunerServiceBase):
@@ -354,6 +468,53 @@ class QueryMixin(TunerServiceBase):
             )
             return list(result.scalars().all())
 
+    async def reward_distribution(
+        self, tuner_id: str, datum_id: Optional[str] = None
+    ) -> RewardDistributionResponse:
+        """Reward distribution bucketed by policy generation for ``tuner_id``.
+
+        Powers the dashboard's "Reward distribution by generation" panel. Only
+        rewarded runs with at least one recorded completion contribute; the run
+        is labelled with the max ``policy_generation`` across its completions
+        (mirroring how ``list_runs`` derives a run's generation). The heavy
+        lifting -- one grouped scan reading just ``(reward, max generation)`` per
+        run and the histogram build -- happens here so the browser no longer
+        fetches every run to aggregate client-side.
+
+        Pass ``datum_id`` to restrict the distribution to a single datum's runs.
+        """
+        async with self.async_session() as session:
+            exists = await session.execute(
+                select(TunerModel.id).where(TunerModel.id == tuner_id)
+            )
+            if exists.scalar_one_or_none() is None:
+                raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+
+            stmt = (
+                select(
+                    RunModel.reward,
+                    func.max(ChatCompletionModel.policy_generation),
+                )
+                .join(ChatCompletionModel, ChatCompletionModel.run_id == RunModel.id)
+                .where(
+                    ChatCompletionModel.tuner_id == tuner_id,
+                    RunModel.tuner_id == tuner_id,
+                    RunModel.reward.is_not(None),
+                )
+                .group_by(RunModel.id)
+            )
+            if datum_id is not None:
+                stmt = stmt.where(RunModel.datum_id == datum_id)
+
+            result = await session.execute(stmt)
+
+        pairs: List[Tuple[float, int]] = [
+            (float(reward), int(generation))
+            for reward, generation in result.all()
+            if reward is not None and generation is not None
+        ]
+        return _build_reward_distribution(pairs)
+
     async def list_runs(
         self,
         tuner_id: str,
@@ -427,18 +588,24 @@ class QueryMixin(TunerServiceBase):
             length_datum_by_run: Dict[str, str] = {}
             if runs:
                 # One grouped pass yields the completion count, the run's
-                # policy generation (max across its completions), and the total
-                # generation latency (sum of durations), so the runs list can
-                # bucket rewards by generation and show timing without an extra
-                # per-run fetch. Scope the aggregate to the page's run ids so a
-                # paginated request doesn't scan every completion.
+                # policy generation (max across its completions), the total
+                # generation latency (sum of durations), and the peak context
+                # window (max prompt+completion+reasoning tokens), so the runs
+                # list can bucket rewards by generation and show timing/context
+                # without an extra per-run fetch. The context window is derived
+                # in-SQL via JSON extraction on `response.usage` so we avoid
+                # dragging every (blob-heavy) `response` back to Python just to
+                # read three integers. Scope the aggregate to the page's run
+                # ids so a paginated request doesn't scan every completion.
                 run_ids = [r.id for r in runs]
+                context_tokens_expr = _context_tokens_sql(ChatCompletionModel.response)
                 agg_result = await session.execute(
                     select(
                         ChatCompletionModel.run_id,
                         func.count(),
                         func.max(ChatCompletionModel.policy_generation),
                         func.sum(ChatCompletionModel.duration_ms),
+                        func.max(context_tokens_expr),
                     )
                     .where(
                         ChatCompletionModel.tuner_id == tuner_id,
@@ -446,7 +613,13 @@ class QueryMixin(TunerServiceBase):
                     )
                     .group_by(ChatCompletionModel.run_id)
                 )
-                for run_id, count, max_generation, total_duration in agg_result.all():
+                for (
+                    run_id,
+                    count,
+                    max_generation,
+                    total_duration,
+                    max_context_tokens,
+                ) in agg_result.all():
                     if run_id is None:
                         continue
                     counts[run_id] = count
@@ -454,25 +627,8 @@ class QueryMixin(TunerServiceBase):
                         generations[run_id] = max_generation
                     if total_duration is not None:
                         durations[run_id] = int(total_duration)
-
-                context_result = await session.execute(
-                    select(
-                        ChatCompletionModel.run_id,
-                        ChatCompletionModel.response,
-                    ).where(
-                        ChatCompletionModel.tuner_id == tuner_id,
-                        ChatCompletionModel.run_id.in_(run_ids),
-                    )
-                )
-                for run_id, response in context_result.all():
-                    if run_id is None:
-                        continue
-                    context_tokens = context_tokens_from_response(response)
-                    if context_tokens is None:
-                        continue
-                    context_windows[run_id] = max(
-                        context_windows.get(run_id, 0), context_tokens
-                    )
+                    if max_context_tokens is not None:
+                        context_windows[run_id] = int(max_context_tokens)
 
                 length_datum_by_run = await self._length_datums(
                     tuner_id, session, run_ids=run_ids

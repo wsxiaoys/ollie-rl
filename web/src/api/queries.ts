@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import {
   getCompletion,
+  getRewardDistribution,
   getRun,
   getTuner,
   listData,
@@ -34,12 +35,13 @@ export const dataQuery = (tunerId: string) =>
     staleTime: Infinity,
   });
 
-// Unbounded fetch of every run — used by the reward-distribution view, which
-// needs the full history to bucket rewards by generation.
-export const runsQuery = (tunerId: string) =>
+// Server-computed reward distribution bucketed by policy generation. Replaces
+// the former unbounded run fetch: the browser no longer downloads every run
+// just to build the histogram. Pass `datumId` to scope to a single datum.
+export const rewardDistributionQuery = (tunerId: string, datumId?: string) =>
   queryOptions({
-    queryKey: ["runs", tunerId],
-    queryFn: () => listRuns(tunerId),
+    queryKey: ["reward-distribution", tunerId, datumId ?? null],
+    queryFn: () => getRewardDistribution(tunerId, datumId),
     refetchInterval: 5000,
   });
 
