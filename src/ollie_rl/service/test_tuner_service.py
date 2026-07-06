@@ -37,7 +37,9 @@ from ollie_rl.types import ChatCompletionRequest
 
 _RECIPE = "grpo_16x32"
 _TRAINER_KIND = "mock"
-FinishReason = Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
+FinishReason = Literal[
+    "stop", "length", "tool_calls", "content_filter", "function_call"
+]
 
 
 def _make_chat_completion(

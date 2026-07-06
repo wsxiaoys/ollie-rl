@@ -21,14 +21,9 @@ class Recipe(BaseModel, frozen=True):
 
     # ---- Context window guard ------------------------------------------
     # Optional hard cap on prompt + completion + reasoning tokens. Samples that
-    # exceed this are treated as length-limited and have their response cleared.
+    # exceed this are overridden to the `length` finish reason and have their
+    # response cleared.
     max_context_window: Optional[int] = None
-
-    # ---- Run lease ------------------------------------------------------
-    # Fixed time budget (seconds) granted to a run at creation. The whole run
-    # (all turns combined) must finish within this window before it is
-    # considered expired; the deadline never moves once set. Defaults to 1.5h.
-    run_expire_seconds: int = 5400
 
 
 # ---- Named recipe instances --------------------------------------------
