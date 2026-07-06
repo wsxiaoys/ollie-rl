@@ -176,9 +176,9 @@ def _run_status(run: RunModel, now: datetime, has_in_flight_op: bool) -> RunStat
 
     Once a run is past its lease with no reward, ``has_in_flight_op`` splits it:
     a lingering ``InFlightChatCompletionModel`` row means the generation itself
-    stalled past the lease (a *real* expiration -> ``expired``); otherwise the
-    run was lost (crashed/abandoned worker, or ops finished but no reward was
-    ever posted -> ``lost``).
+    stalled past the lease (-> ``expired``); otherwise the run was lost
+    (crashed/abandoned worker, or ops finished but no reward was ever posted ->
+    ``lost``).
     """
     if run.trained_count > 0:
         return "trained"
@@ -837,10 +837,10 @@ class TunerService:
                     if total_duration is not None:
                         durations[run_id] = int(total_duration)
 
-            # Runs on this page that are *real* expirations (expired, unrewarded,
+            # Runs on this page that count as `expired` (unrewarded, past lease,
             # with a lingering in-flight op) -- the same definition the dispenser
-            # uses -- so an expired run can be split into `expired` (real) vs
-            # `lost`. Scoped to the page's run ids.
+            # uses -- so a past-lease unrewarded run can be split into `expired`
+            # vs `lost`. Scoped to the page's run ids.
             now = utcnow()
             expired_run_ids = set(
                 await self._expired_in_flight_datums(
