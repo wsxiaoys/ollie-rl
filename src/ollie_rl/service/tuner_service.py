@@ -184,12 +184,19 @@ def _last_train_op_duration_seconds(state_data: object) -> Optional[float]:
     return (end - start).total_seconds()
 
 
-def _run_status(run: RunModel, now: datetime, is_expired: bool) -> RunStatus:
+def _run_status(
+    run: RunModel, now: datetime, is_expired: bool, is_length: bool
+) -> RunStatus:
     """Derive a single mutually-exclusive lifecycle label for a run.
 
     Priority mirrors how the bookkeeping columns accumulate: a run that
     has been trained or requeued (rejected) takes precedence over its
     reward/lease state.
+
+    ``is_length`` marks runs where at least one completion exceeded the recipe's
+    ``max_context_window`` and was rewritten to a length sample. It is surfaced
+    before ordinary rewarded state so dashboard run rows can distinguish this
+    automatic penalty path from user-provided rewards.
 
     Once a run is past its lease with no reward, ``is_expired`` splits it into
     ``expired`` vs ``lost``. ``is_expired`` is true when the run either still
@@ -203,6 +210,8 @@ def _run_status(run: RunModel, now: datetime, is_expired: bool) -> RunStatus:
         return "trained"
     if run.rejected_count > 0:
         return "rejected"
+    if is_length:
+        return "length"
     if run.reward is not None:
         return "rewarded"
     if run.expires_at > now:
@@ -241,11 +250,12 @@ def _build_run_item(
     policy_generation: Optional[int] = None,
     duration_ms_total: Optional[int] = None,
     is_expired: bool = False,
+    is_length: bool = False,
 ) -> RunItem:
     return RunItem(
         run_id=run.id,
         datum_id=run.datum_id,
-        status=_run_status(run, now, is_expired),
+        status=_run_status(run, now, is_expired, is_length),
         reward=run.reward,
         policy_generation=policy_generation,
         trained_count=run.trained_count,
@@ -296,6 +306,14 @@ def _completion_context_tokens(completion: ChatCompletion) -> int:
     )
 
 
+def _completion_exceeded_context_window(
+    completion: ChatCompletion, max_context_window: Optional[int]
+) -> bool:
+    if max_context_window is None:
+        return False
+    return _completion_context_tokens(completion) > max_context_window
+
+
 def _clear_completion_as_length(completion: ChatCompletion) -> ChatCompletion:
     """Return a copy with every choice converted to an empty length stop."""
     cleared = completion.model_copy(deep=True)
@@ -316,9 +334,7 @@ def _apply_max_context_window(
     completion: ChatCompletion, max_context_window: Optional[int]
 ) -> ChatCompletion:
     """Convert oversized completions to cleared length samples."""
-    if max_context_window is None:
-        return completion
-    if _completion_context_tokens(completion) <= max_context_window:
+    if not _completion_exceeded_context_window(completion, max_context_window):
         return completion
     return _clear_completion_as_length(completion)
 
@@ -812,11 +828,13 @@ class TunerService:
         cursor_key = _decode_run_cursor(cursor) if cursor else None
 
         async with self.async_session() as session:
-            exists = await session.execute(
-                select(TunerModel.id).where(TunerModel.id == tuner_id)
+            tuner_result = await session.execute(
+                select(TunerModel).where(TunerModel.id == tuner_id)
             )
-            if exists.scalar_one_or_none() is None:
+            tuner = tuner_result.scalar_one_or_none()
+            if tuner is None:
                 raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+            recipe = Cookbook.get(tuner.recipe)
 
             runs_stmt = (
                 select(RunModel)
@@ -854,6 +872,7 @@ class TunerService:
             counts: Dict[str, int] = {}
             generations: Dict[str, int] = {}
             durations: Dict[str, int] = {}
+            length_datum_by_run: Dict[str, str] = {}
             if runs:
                 # One grouped pass yields the completion count, the run's
                 # policy generation (max across its completions), and the total
@@ -884,6 +903,10 @@ class TunerService:
                     if total_duration is not None:
                         durations[run_id] = int(total_duration)
 
+                length_datum_by_run = await self._length_datums(
+                    tuner_id, recipe.max_context_window, session, run_ids=run_ids
+                )
+
             # Runs on this page that count as `expired` (unrewarded, past lease,
             # with either a lingering in-flight op or total duration past the
             # expiration threshold) -- the same definition the dispenser uses --
@@ -905,6 +928,7 @@ class TunerService:
                 generations.get(r.id),
                 durations.get(r.id),
                 r.id in expired_run_ids,
+                r.id in length_datum_by_run,
             )
             for r in runs
         ]
@@ -922,16 +946,20 @@ class TunerService:
         """
         async with self.async_session() as session:
             run_result = await session.execute(
-                select(RunModel).where(
+                select(RunModel, TunerModel.recipe)
+                .join(TunerModel, TunerModel.id == RunModel.tuner_id)
+                .where(
                     RunModel.tuner_id == tuner_id,
                     RunModel.id == run_id,
                 )
             )
-            run = run_result.scalar_one_or_none()
-            if run is None:
+            row = run_result.one_or_none()
+            if row is None:
                 raise RunNotFoundError(
                     f"Run '{run_id}' not found under tuner '{tuner_id}'"
                 )
+            run, recipe_name = row
+            recipe = Cookbook.get(recipe_name)
 
             comp_result = await session.execute(
                 select(ChatCompletionModel)
@@ -947,6 +975,9 @@ class TunerService:
             expired_run_ids = set(
                 await self._expired_datums(tuner_id, now, session, run_ids=[run_id])
             )
+            length_datum_by_run = await self._length_datums(
+                tuner_id, recipe.max_context_window, session, run_ids=[run_id]
+            )
 
         policy_generation = (
             max(c.policy_generation for c in completions) if completions else None
@@ -960,6 +991,7 @@ class TunerService:
             policy_generation,
             duration_ms_total,
             run_id in expired_run_ids,
+            run_id in length_datum_by_run,
         )
         completion_items = [
             ChatCompletionItem(
@@ -1811,6 +1843,47 @@ class TunerService:
             for run_id, datum_id, reward in result.all()
             if run_id is not None
         }
+
+    async def _length_datums(
+        self,
+        tuner_id: str,
+        max_context_window: Optional[int],
+        session,
+        run_ids: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Per *length-limited* run, its ``datum_id``.
+
+        Returns a ``run_id -> datum_id`` map for runs with at least one
+        completion over ``max_context_window``. This backs the presentation-only
+        ``RunStatus == "length"`` split for ``list_runs``/``get_run``. The
+        source of truth is the persisted completion usage: if prompt +
+        completion + reasoning tokens exceeds the recipe's context-window cap,
+        the sampling path rewrites the completion to a cleared
+        ``finish_reason == "length"`` response and assigns the length penalty.
+        Length runs remain ordinary rewarded runs for terminal-stat accounting.
+        """
+        if max_context_window is None:
+            return {}
+        if run_ids is not None and not run_ids:
+            return {}
+
+        stmt = (
+            select(ChatCompletionModel.run_id, RunModel.datum_id, ChatCompletionModel.response)
+            .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
+            .where(ChatCompletionModel.tuner_id == tuner_id)
+        )
+        if run_ids is not None:
+            stmt = stmt.where(ChatCompletionModel.run_id.in_(run_ids))
+
+        result = await session.execute(stmt)
+        length_datum_by_run: Dict[str, str] = {}
+        for run_id, datum_id, response in result.all():
+            if run_id is None:
+                continue
+            completion = ChatCompletion.model_validate(response)
+            if _completion_exceeded_context_window(completion, max_context_window):
+                length_datum_by_run[run_id] = datum_id
+        return length_datum_by_run
 
     async def _expired_datums(
         self,

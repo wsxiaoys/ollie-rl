@@ -1168,11 +1168,8 @@ export interface components {
              * @default -1
              */
             length_penalty: number;
-            /**
-             * Run Expire Seconds
-             * @default 5400
-             */
-            run_expire_seconds: number;
+            /** Max Context Window */
+            max_context_window?: number | null;
         };
         /** RunDetailResponse */
         RunDetailResponse: {
@@ -1193,7 +1190,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "in_flight" | "expired" | "lost" | "rewarded" | "trained" | "rejected";
+            status: "in_flight" | "expired" | "lost" | "length" | "rewarded" | "trained" | "rejected";
             /** Reward */
             reward: number | null;
             /** Policy Generation */

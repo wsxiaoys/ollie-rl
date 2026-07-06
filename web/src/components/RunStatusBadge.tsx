@@ -8,6 +8,7 @@ const STATUS_TONE: Record<
   in_flight: "info",
   expired: "warn",
   lost: "danger",
+  length: "warn",
   rewarded: "good",
   trained: "default",
   rejected: "danger",
