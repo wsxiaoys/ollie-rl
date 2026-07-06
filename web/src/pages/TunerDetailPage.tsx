@@ -126,6 +126,11 @@ export function TunerDetailPage() {
               tone="warn"
             />
             <StatCard
+              label="lost"
+              value={progress.runs.lost}
+              tone="danger"
+            />
+            <StatCard
               label="rejected"
               value={progress.runs.rejected}
               tone="warn"

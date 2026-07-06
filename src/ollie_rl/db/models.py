@@ -149,6 +149,16 @@ class ChatCompletionModel(BaseModel):
             "run_id",
             "request_hash",
         ),
+        # Recent-generation scan for the dispenser's expiration-quarantine
+        # logic: the rewarded-run lookup filters
+        # `tuner_id = ? AND policy_generation >= ?` (then DISTINCT run_id). This
+        # composite lets the DB range-scan just the recent window instead of the
+        # whole tuner history.
+        Index(
+            "ix_chat_completions_tuner_id_policy_generation",
+            "tuner_id",
+            "policy_generation",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -227,6 +237,14 @@ class InFlightChatCompletionModel(BaseModel):
     run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     request_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
 
+    # Trainer policy generation at first submit. Stamped from
+    # `trainer.policy_generation` the moment the op is created (the actual
+    # `sample.policy_generation` isn't known until the op completes). It places
+    # an in-flight run on the policy-generation timeline so the dispenser's
+    # expiration-quarantine window can treat a run that is still churning
+    # (recorded no completion yet) as recent "real work" rather than a lost
+    # job. NULL for rows written before this column existed.
+    policy_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # `op.save_state()` (the op resource name for gemini_msrl).
     state: Mapped[str] = mapped_column(String(512), nullable=False)
     # First-submit time, used as the start for end-to-end duration across any

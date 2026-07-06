@@ -8,7 +8,7 @@ export function StatCard({
 }: {
   label: string;
   value: ReactNode;
-  tone?: "default" | "good" | "warn" | "muted";
+  tone?: "default" | "good" | "warn" | "muted" | "danger";
   title?: string;
 }) {
   return (
