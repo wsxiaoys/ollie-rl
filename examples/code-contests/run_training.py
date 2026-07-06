@@ -68,7 +68,22 @@ DEFAULT_LLM_TIMEOUT_SEC: int | None = 300
 # defaults (``auto_stop_interval_mins=0``) disable auto-stop entirely. Enabling
 # an inactivity auto-stop plus a post-stop auto-delete lets orphaned sandboxes
 # self-reclaim even after a hard crash. Only applied when ``--environment daytona``.
-DEFAULT_DAYTONA_AUTO_STOP_MINS = 10
+#
+# ``auto_stop_interval_mins`` is Daytona's *inactivity* timer: the sandbox stops
+# once it has seen no SDK events for this many minutes. "Activity" means an SDK
+# interaction with the sandbox -- command exec, ``send_keys``, file up/downloads,
+# lifecycle state changes -- each of which stamps ``last_activity_at`` and resets
+# the countdown. Crucially, it is a *per-gap* limit, not cumulative: it trips
+# only when a single idle gap between two sandbox calls exceeds the interval.
+# The dominant gap is the agent waiting on an LLM completion -- that wait happens
+# outside the sandbox, emits no event, and so does not refresh the timer. A slow
+# turn longer than the interval therefore lets the sandbox auto-stop mid-run,
+# invalidating its bearer token and crashing the trial with a Daytona auth error
+# (observed on trial ``code_contests-0006__7DbYZo5``: a ~17-min completion tripped
+# the old 10-min value). Keep this comfortably above the worst-case single-turn
+# LLM latency (``DEFAULT_LLM_TIMEOUT_SEC`` can be ~3x with retries) so only real
+# leaks -- not slow-but-healthy turns -- get reclaimed.
+DEFAULT_DAYTONA_AUTO_STOP_MINS = 30
 DEFAULT_DAYTONA_AUTO_DELETE_MINS = 5
 
 # Terminus 2 routes through litellm, which needs a provider prefix. ollie-rl
