@@ -1208,6 +1208,8 @@ export interface components {
             completion_count: number;
             /** Duration Ms Total */
             duration_ms_total?: number | null;
+            /** Context Window Tokens Max */
+            context_window_tokens_max?: number | null;
             /**
              * Created At
              * Format: date-time

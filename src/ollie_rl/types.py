@@ -221,6 +221,10 @@ class RunItem(BaseModel):
     # completions. `None` when the run has no recorded completions (or none
     # carry a duration, e.g. only legacy rows).
     duration_ms_total: Optional[int] = None
+    # Maximum context-window length observed across the run's chat completions,
+    # measured as prompt + completion + reasoning tokens. `None` when no
+    # completion reports token usage.
+    context_window_tokens_max: Optional[int] = None
     created_at: datetime
     expires_at: datetime
 

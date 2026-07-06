@@ -15,6 +15,12 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
 }
 
+/** Format token counts compactly for dense tables. */
+function formatTokens(tokens: number): string {
+  if (tokens < 1000) return tokens.toLocaleString();
+  return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+}
+
 export function RunListPage() {
   const { tuner: tunerId, datum: datumId } = useSearch({ from: "/runs" });
   const navigate = useNavigate();
@@ -121,6 +127,7 @@ export function RunListPage() {
               <th className="num">Reward</th>
               <th className="num">Completions</th>
               <th className="num">Duration</th>
+              <th className="num">Context</th>
               <th>Created</th>
             </tr>
           </thead>
@@ -167,6 +174,18 @@ export function RunListPage() {
                 >
                   {typeof r.duration_ms_total === "number"
                     ? formatDuration(r.duration_ms_total)
+                    : "—"}
+                </td>
+                <td
+                  className="num"
+                  title={
+                    typeof r.context_window_tokens_max === "number"
+                      ? `${r.context_window_tokens_max.toLocaleString()} tokens — max prompt + completion + reasoning tokens across this run's chat completions.`
+                      : undefined
+                  }
+                >
+                  {typeof r.context_window_tokens_max === "number"
+                    ? formatTokens(r.context_window_tokens_max)
                     : "—"}
                 </td>
                 <td

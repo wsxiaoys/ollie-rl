@@ -247,6 +247,7 @@ def _build_run_item(
     now: datetime,
     policy_generation: Optional[int] = None,
     duration_ms_total: Optional[int] = None,
+    context_window_tokens_max: Optional[int] = None,
     is_expired: bool = False,
     is_length: bool = False,
 ) -> RunItem:
@@ -260,6 +261,7 @@ def _build_run_item(
         rejected_count=run.rejected_count,
         completion_count=completion_count,
         duration_ms_total=duration_ms_total,
+        context_window_tokens_max=context_window_tokens_max,
         created_at=run.created_at,
         expires_at=run.expires_at,
     )
@@ -301,6 +303,24 @@ def _completion_context_tokens(completion: ChatCompletion) -> int:
 
     return (
         (usage.prompt_tokens or 0) + (usage.completion_tokens or 0) + reasoning_tokens
+    )
+
+
+def _context_tokens_from_response(response: Dict[str, Any]) -> Optional[int]:
+    """Return prompt + completion + reasoning tokens from a stored response JSON."""
+    usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    reasoning_tokens = 0
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict):
+        reasoning_tokens = int(details.get("reasoning_tokens") or 0)
+
+    return (
+        int(usage.get("prompt_tokens") or 0)
+        + int(usage.get("completion_tokens") or 0)
+        + reasoning_tokens
     )
 
 
@@ -884,6 +904,7 @@ class TunerService:
             counts: Dict[str, int] = {}
             generations: Dict[str, int] = {}
             durations: Dict[str, int] = {}
+            context_windows: Dict[str, int] = {}
             length_datum_by_run: Dict[str, str] = {}
             if runs:
                 # One grouped pass yields the completion count, the run's
@@ -915,6 +936,25 @@ class TunerService:
                     if total_duration is not None:
                         durations[run_id] = int(total_duration)
 
+                context_result = await session.execute(
+                    select(
+                        ChatCompletionModel.run_id,
+                        ChatCompletionModel.response,
+                    ).where(
+                        ChatCompletionModel.tuner_id == tuner_id,
+                        ChatCompletionModel.run_id.in_(run_ids),
+                    )
+                )
+                for run_id, response in context_result.all():
+                    if run_id is None:
+                        continue
+                    context_tokens = _context_tokens_from_response(response)
+                    if context_tokens is None:
+                        continue
+                    context_windows[run_id] = max(
+                        context_windows.get(run_id, 0), context_tokens
+                    )
+
                 length_datum_by_run = await self._length_datums(
                     tuner_id, session, run_ids=run_ids
                 )
@@ -938,6 +978,7 @@ class TunerService:
                 now,
                 generations.get(r.id),
                 durations.get(r.id),
+                context_windows.get(r.id),
                 r.id in expired_run_ids,
                 r.id in length_datum_by_run,
             )
@@ -991,12 +1032,19 @@ class TunerService:
         )
         durations = [c.duration_ms for c in completions if c.duration_ms is not None]
         duration_ms_total = sum(durations) if durations else None
+        context_windows = [
+            context_tokens
+            for c in completions
+            if (context_tokens := _context_tokens_from_response(c.response)) is not None
+        ]
+        context_window_tokens_max = max(context_windows) if context_windows else None
         run_item = _build_run_item(
             run,
             len(completions),
             now,
             policy_generation,
             duration_ms_total,
+            context_window_tokens_max,
             run_id in expired_run_ids,
             run_id in length_datum_by_run,
         )

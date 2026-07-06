@@ -65,6 +65,18 @@ export function RunDetailPage() {
           tone={typeof run.duration_ms_total === "number" ? "default" : "muted"}
           title="Sum of individual chat completion generation latencies — not the run's wall-clock duration."
         />
+        <StatCard
+          label="context"
+          value={
+            typeof run.context_window_tokens_max === "number"
+              ? run.context_window_tokens_max.toLocaleString()
+              : "—"
+          }
+          tone={
+            typeof run.context_window_tokens_max === "number" ? "default" : "muted"
+          }
+          title="Max prompt + completion + reasoning tokens across this run's chat completions."
+        />
         <StatCard label="trained" value={run.trained_count} />
         <StatCard
           label="rejected"
