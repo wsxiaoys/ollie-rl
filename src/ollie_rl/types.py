@@ -184,18 +184,22 @@ class ListDatumsResponse(BaseModel):
 # the expired/lost split, whether a lingering in-flight op remains or the run's
 # total duration crossed the expiration threshold). The labels are mutually
 # exclusive and assigned by priority in `TunerService`:
-# trained > rejected > rewarded > in_flight > expired > lost.
+# trained > rejected > length > rewarded > in_flight > expired > lost.
 #
-# `expired` and `lost` both mean "reward is None and the lease has passed"; they
-# differ on *why*. `expired` means a compute-waste signal fired: the run either
-# still has a lingering `InFlightChatCompletionModel` row (the generation itself
-# stalled past the lease) or its summed completion duration crossed the
-# expiration threshold (the same cases the dispenser quarantines on). `lost` is
-# the residual case
-# (crashed/abandoned worker, or ops all finished but no reward was ever posted).
-# Both are surfaced as their own aggregate counts (`RunProgress.expired` /
-# `RunProgress.lost`) and per-datum (`DatumProgress.expired`).
-RunStatus = Literal["in_flight", "expired", "lost", "rewarded", "trained", "rejected"]
+# `length` means at least one recorded completion exceeded the recipe's
+# `max_context_window` (prompt + completion + reasoning tokens) and was converted
+# to a cleared length sample. `expired` and `lost` both mean "reward is None and
+# the lease has passed"; they differ on *why*. `expired` means a compute-waste
+# signal fired: the run either still has a lingering `InFlightChatCompletionModel`
+# row (the generation itself stalled past the lease) or its summed completion
+# duration crossed the expiration threshold (the same cases the dispenser
+# quarantines on). `lost` is the residual case (crashed/abandoned worker, or ops
+# all finished but no reward was ever posted). Both are surfaced as their own
+# aggregate counts (`RunProgress.expired` / `RunProgress.lost`) and per-datum
+# (`DatumProgress.expired`).
+RunStatus = Literal[
+    "in_flight", "expired", "lost", "length", "rewarded", "trained", "rejected"
+]
 
 
 class RunItem(BaseModel):
