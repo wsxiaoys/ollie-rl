@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 Scheduler = Literal["fifo_epoch", "random"]
@@ -18,6 +18,11 @@ class Recipe(BaseModel, frozen=True):
     # ---- Behavior penalties ----
     content_filter_penalty: float = -1.0
     length_penalty: float = -1.0
+
+    # ---- Context window guard ------------------------------------------
+    # Optional hard cap on prompt + completion + reasoning tokens. Samples that
+    # exceed this are treated as length-limited and have their response cleared.
+    max_context_window: Optional[int] = None
 
     # ---- Run lease ------------------------------------------------------
     # Fixed time budget (seconds) granted to a run at creation. The whole run

@@ -275,6 +275,47 @@ def _request_hash(request: "ChatCompletionRequest") -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _completion_context_tokens(completion: ChatCompletion) -> int:
+    """Return prompt + completion + reasoning tokens reported for completion."""
+    usage = completion.usage
+    if usage is None:
+        return 0
+
+    reasoning_tokens = 0
+    details = usage.completion_tokens_details
+    if details is not None:
+        reasoning_tokens = details.reasoning_tokens or 0
+
+    return (usage.prompt_tokens or 0) + (usage.completion_tokens or 0) + reasoning_tokens
+
+
+def _clear_completion_as_length(completion: ChatCompletion) -> ChatCompletion:
+    """Return a copy with every choice converted to an empty length stop."""
+    cleared = completion.model_copy(deep=True)
+    for choice in cleared.choices:
+        choice.finish_reason = "length"
+        if choice.message is None:
+            continue
+        choice.message.content = None
+        choice.message.tool_calls = None
+        if hasattr(choice.message, "function_call"):
+            choice.message.function_call = None
+        if hasattr(choice.message, "refusal"):
+            choice.message.refusal = None
+    return cleared
+
+
+def _apply_max_context_window(
+    completion: ChatCompletion, max_context_window: Optional[int]
+) -> ChatCompletion:
+    """Convert oversized completions to cleared length samples."""
+    if max_context_window is None:
+        return completion
+    if _completion_context_tokens(completion) <= max_context_window:
+        return completion
+    return _clear_completion_as_length(completion)
+
+
 class _KeyedLocks:
     """
     A manager of per-key ``asyncio.Lock``s with reference-counted cleanup.
@@ -1080,7 +1121,10 @@ class TunerService:
         if run_id is None:
             sample_op = await trainer.sample(request)
             sample = await sample_op.wait()
-            return sample.completion
+            recipe = await self._recipe_for(tuner_id)
+            return _apply_max_context_window(
+                sample.completion, recipe.max_context_window
+            )
 
         assert datum_id is not None
 
@@ -1154,6 +1198,11 @@ class TunerService:
                 await self._clear_in_flight_completion(tuner_id, run_id, request_hash)
                 raise
 
+            recipe = await self._recipe_for(tuner_id)
+            sample.completion = _apply_max_context_window(
+                sample.completion, recipe.max_context_window
+            )
+
             # End-to-end generation latency from first submit, so re-attach
             # cycles are counted. For a turn that never re-attaches (the common
             # fast path) `first_submit ~= now` at submit, matching prior timing.
@@ -1186,7 +1235,6 @@ class TunerService:
                     raw_content = choice.message.content
 
             if finish_reason == "content_filter":
-                recipe = await self._recipe_for(tuner_id)
                 content_filter_penalty = recipe.content_filter_penalty
                 await self.update_reward(
                     tuner_id, run_id, reward=content_filter_penalty
@@ -1197,7 +1245,6 @@ class TunerService:
                 )
 
             if finish_reason == "length":
-                recipe = await self._recipe_for(tuner_id)
                 length_penalty = recipe.length_penalty
                 await self.update_reward(tuner_id, run_id, reward=length_penalty)
                 raise LengthSampleError(
