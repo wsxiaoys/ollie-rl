@@ -367,9 +367,7 @@ class SamplingMixin(TunerServiceBase):
                         RunModel.tuner_id == tuner_id,
                         RunModel.id == run_id,
                     )
-                    .values(
-                        expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS)
-                    )
+                    .values(expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS))
                 )
 
     async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
