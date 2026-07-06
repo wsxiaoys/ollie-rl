@@ -12,7 +12,6 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from openai.types.chat import ChatCompletion
 from sqlalchemy import func, select
 
 from ollie_rl.background import BackgroundJob
@@ -26,7 +25,6 @@ from ollie_rl.db import (
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
 from ollie_rl.service.tuner.dispense import RewardedRun
-from ollie_rl.service.tuner.completion_helpers import completion_has_length_finish
 from ollie_rl.service.tuner.constants import RUN_EXPIRE_GENERATION_BUDGET_MS
 from ollie_rl.service.tuner.errors import TunerNotFoundError
 from ollie_rl.service.tuner.locks import KeyedLocks
@@ -206,25 +204,35 @@ class TunerServiceBase:
         if run_ids is not None and not run_ids:
             return {}
 
+        # Every recorded completion is single-choice -- all trainers build a
+        # ``ChatCompletion`` with exactly one choice -- so a run is
+        # length-limited iff any of its completions has
+        # ``choices[0].finish_reason == "length"``. Push that predicate into SQL
+        # via a JSON-path extract (``JSON_EXTRACT`` on SQLite, ``#>>`` on
+        # Postgres) instead of fetching and ``model_validate``-ing every
+        # (tens-of-KB) ``response`` blob in Python. This is the hot path for the
+        # frequently polled progress snapshot, which scans every completion for
+        # the tuner; extracting just the scalar finish reason keeps the blobs on
+        # the database side.
+        finish_reason = ChatCompletionModel.response["choices"][0][
+            "finish_reason"
+        ].as_string()
         stmt = (
-            select(
-                ChatCompletionModel.run_id,
-                RunModel.datum_id,
-                ChatCompletionModel.response,
-            )
+            select(ChatCompletionModel.run_id, RunModel.datum_id)
             .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
-            .where(ChatCompletionModel.tuner_id == tuner_id)
+            .where(
+                ChatCompletionModel.tuner_id == tuner_id,
+                finish_reason == "length",
+            )
+            .distinct()
         )
         if run_ids is not None:
             stmt = stmt.where(ChatCompletionModel.run_id.in_(run_ids))
 
         result = await session.execute(stmt)
         length_datum_by_run: Dict[str, str] = {}
-        for run_id, datum_id, response in result.all():
-            if run_id is None:
-                continue
-            completion = ChatCompletion.model_validate(response)
-            if completion_has_length_finish(completion):
+        for run_id, datum_id in result.all():
+            if run_id is not None:
                 length_datum_by_run[run_id] = datum_id
         return length_datum_by_run
 
