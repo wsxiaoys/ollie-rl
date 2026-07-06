@@ -24,7 +24,7 @@ from ollie_rl.db import (
 )
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
-from ollie_rl.service.tuner.dispense import RewardedRun
+from ollie_rl.service.tuner.types import RewardedRun
 from ollie_rl.service.tuner.constants import RUN_EXPIRE_GENERATION_BUDGET_MS
 from ollie_rl.service.tuner.errors import TunerNotFoundError
 from ollie_rl.service.tuner.locks import KeyedLocks

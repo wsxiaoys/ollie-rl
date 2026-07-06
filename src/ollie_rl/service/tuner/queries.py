@@ -12,14 +12,13 @@ from ollie_rl.cookbook import Cookbook
 from ollie_rl.db import ChatCompletionModel, DatumRowModel, TunerModel
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
-from ollie_rl.service.tuner.dispense import (
-    RewardedRun,
-    TerminalStats,
+from ollie_rl.service.tuner.dispensing import (
     pick_datum,
     pick_tier,
     scheduler_scores,
     terminal_stats,
 )
+from ollie_rl.service.tuner.types import RewardedRun, TerminalStats
 from ollie_rl.service.tuner.completion_helpers import context_tokens_from_response
 from ollie_rl.service.tuner.run_helpers import (
     build_run_item,
@@ -383,7 +382,7 @@ class QueryMixin(TunerServiceBase):
 
         never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
 
-        score, _ = scheduler_scores(datum_pool, runs)
+        scores = scheduler_scores(datum_pool, runs)
         picked = pick_datum(datum_pool, runs, recipe)
         if picked is None:
             next_pick = NextPick(
@@ -392,7 +391,7 @@ class QueryMixin(TunerServiceBase):
                 reason="no datum dispensable (pool empty or all groups saturated on-policy)",
             )
         else:
-            tier, reason = pick_tier(picked, score, recipe)
+            tier, reason = pick_tier(picked, scores.score, recipe)
             next_pick = NextPick(datum_id=picked, tier=tier, reason=reason)
 
         return TrainingProgress(
