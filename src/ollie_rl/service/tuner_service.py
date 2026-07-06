@@ -914,9 +914,7 @@ class TunerService:
 
             now = utcnow()
             expired_run_ids = set(
-                await self._expired_datums(
-                    tuner_id, now, session, run_ids=[run_id]
-                )
+                await self._expired_datums(tuner_id, now, session, run_ids=[run_id])
             )
 
         policy_generation = (
@@ -1867,9 +1865,7 @@ class TunerService:
                 ChatCompletionModel.policy_generation >= min_generation
             )
         if run_ids is not None:
-            duration_stmt = duration_stmt.where(
-                ChatCompletionModel.run_id.in_(run_ids)
-            )
+            duration_stmt = duration_stmt.where(ChatCompletionModel.run_id.in_(run_ids))
 
         expired: Dict[str, str] = {}
         for stmt in (in_flight_stmt, duration_stmt):
