@@ -31,7 +31,7 @@ export function DatumTable({
       header: "Datum ID",
       cell: (info) => (
         <Link
-          to="/data"
+          to="/datums"
           search={{ tuner: tunerId, datum: info.getValue() }}
           className="mono link-plain"
         >

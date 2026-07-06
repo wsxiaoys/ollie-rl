@@ -40,17 +40,17 @@ export function RootLayout() {
 
   // Which section the current route belongs to. Run detail pages live under
   // `/tuners/$tunerId/runs/...`, so they count as "Runs" rather than "General".
-  const onData = pathname.startsWith("/data");
+  const onDatums = pathname.startsWith("/datums");
   const onRuns =
     pathname.startsWith("/runs") || /^\/tuners\/[^/]+\/runs/.test(pathname);
   const onGeneral = /^\/tuners\/[^/]+$/.test(pathname);
 
-  // Switching tuner keeps you in the same section (General vs Runs vs Data).
+  // Switching tuner keeps you in the same section (General vs Runs vs Datums).
   const onSelectTuner = (e: ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     if (!id) return;
-    if (onData) {
-      navigate({ to: "/data", search: { tuner: id } });
+    if (onDatums) {
+      navigate({ to: "/datums", search: { tuner: id } });
     } else if (onRuns) {
       navigate({ to: "/runs", search: { tuner: id } });
     } else {
@@ -98,18 +98,18 @@ export function RootLayout() {
                 Runs
               </Link>
               <Link
-                to="/data"
+                to="/datums"
                 search={{ tuner: activeTunerId }}
-                className={"nav-link" + (onData ? " nav-link--active" : "")}
+                className={"nav-link" + (onDatums ? " nav-link--active" : "")}
               >
-                Data
+                Datums
               </Link>
             </>
           ) : (
             <>
               <span className="nav-link nav-link--disabled">General</span>
               <span className="nav-link nav-link--disabled">Runs</span>
-              <span className="nav-link nav-link--disabled">Data</span>
+              <span className="nav-link nav-link--disabled">Datums</span>
             </>
           )}
         </nav>
