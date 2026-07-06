@@ -155,15 +155,26 @@ class TrainingMixin(TunerServiceBase):
         if not run_records:
             return [], []
 
-        # 1. Retrieve ChatCompletions for all candidate runs to check for staleness
+        # 1. Retrieve ChatCompletions for all candidate runs to check for staleness.
+        # Only project the columns actually consumed below; skip the large,
+        # blob-heavy `request`/`response` payloads and instead extract the
+        # single needed field (`response['id']`, the backend candidate id) via
+        # a JSON query.
         candidate_run_ids = [r.id for r in run_records]
         result = await session.execute(
-            select(ChatCompletionModel).where(
+            select(
+                ChatCompletionModel.id,
+                ChatCompletionModel.run_id,
+                ChatCompletionModel.policy_generation,
+                ChatCompletionModel.tokens,
+                ChatCompletionModel.logprobs,
+                ChatCompletionModel.response["id"].as_string().label("candidate_id"),
+            ).where(
                 ChatCompletionModel.tuner_id == tuner_id,
                 ChatCompletionModel.run_id.in_(candidate_run_ids),
             )
         )
-        completions = result.scalars().all()
+        completions = result.all()
         completion_by_run_id = {c.run_id: c for c in completions if c.run_id}
 
         # 2. Filter out stale runs and requeue them (mark them as rejected)
@@ -265,19 +276,17 @@ class TrainingMixin(TunerServiceBase):
         # `chat_completion_id` must be the *backend-issued* candidate id (what
         # gemini_msrl replays via `candidate_id`), which is the completion's
         # own id captured at sample time and persisted in the `response`
-        # payload. The row primary key (`c.id`) is a synthetic internal id and
-        # must NOT leak to a training backend; fall back to it only if the
-        # response somehow lacks an id.
+        # payload -- extracted above via the `response['id']` JSON query as
+        # `candidate_id`. The row primary key (`c.id`) is a synthetic internal
+        # id and must NOT leak to a training backend; fall back to it only if
+        # the response somehow lacks an id.
         examples = []
         for c in completions:
             if c.run_id not in run_advantages:
                 continue
-            candidate_id = (
-                c.response.get("id") if isinstance(c.response, dict) else None
-            )
             examples.append(
                 Example(
-                    chat_completion_id=candidate_id or c.id,
+                    chat_completion_id=c.candidate_id or c.id,
                     advantage=run_advantages[c.run_id],
                     policy_generation=c.policy_generation,
                     tokens=c.tokens,
