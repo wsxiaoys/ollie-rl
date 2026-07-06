@@ -84,24 +84,26 @@ class DatumProgress(BaseModel):
     datum_id: str
     consumable: int  # rewarded runs counting toward this group's group_size
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
-    # All-time count of `expired` runs for this datum: expired, unrewarded
-    # runs that either still have a lingering in-flight op (the generation itself
+    # Per-datum terminal-attempt tallies over the datum's entire history (no
+    # recency window), matching the dispenser's quarantine logic. Together they
+    # let a client compute the two quarantine metrics and pick sensible
+    # thresholds for POST /runs (`max_expire_rate` / `max_succeed_ratio`), where
+    # `terminal = expired + rewarded` is the shared denominator:
+    #   * expire rate   = expired   / terminal
+    #   * success ratio = succeeded / terminal
+    #
+    # `expired`: all-time count of `expired` runs -- expired, unrewarded runs
+    # that either still have a lingering in-flight op (the generation itself
     # stalled past the lease) or crossed the total-duration expiration
-    # threshold, regardless of policy generation. The headline "how flaky is
-    # this datum" number, not
-    # clipped by the recency window the quarantine rate uses. This is the
-    # per-datum tally of runs the run-status `expired` label counts (`lost` runs
-    # are excluded), matching the aggregate `RunProgress.expired`.
+    # threshold. The `lost` runs are excluded, matching the aggregate
+    # `RunProgress.expired`.
     expired: int
+    # `rewarded`: runs that earned a reward (the rest of the terminal
+    # denominator). `succeeded`: the `reward == 1.0` subset of `rewarded` (the
+    # success numerator).
+    rewarded: int
+    succeeded: int
     trained: int  # prior training exposure (fresh-tier tie-break)
-    # Expiration signal, matching the dispenser's quarantine logic: the raw
-    # per-datum terminal-attempt counts over the datum's entire history (no
-    # recency window). We pass the two components directly (rather than a
-    # pre-computed rate) since together they are equivalent: the expire rate is
-    # `expired / (expired + rewarded)` and the sample size is their sum. Use these
-    # to pick a sensible `max_expire_rate` threshold for POST /runs.
-    expired_terminal_count: int  # expirations (numerator)
-    rewarded_terminal_count: int  # rewarded terminal attempts
 
 
 class NextPick(BaseModel):

@@ -531,6 +531,21 @@ td.num {
   color: var(--text-muted);
 }
 
+/* Below-min-sample marker in the datum Audit column: a small outlined pill so
+   "not enough samples yet" reads clearly even without relying on text colour. */
+.datum-audit__gate {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+
 .batch-readiness__sub {
   margin-top: 8px;
   display: flex;
