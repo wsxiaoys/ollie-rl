@@ -17,7 +17,7 @@ class Recipe(BaseModel, frozen=True):
 
     # ---- Behavior penalties ----
     content_filter_penalty: float = -1.0
-    length_penalty: float = -1.0
+    length_penalty: float = -10.0
 
     # ---- Context window guard ------------------------------------------
     # Hard cap on prompt + completion + reasoning tokens. Samples that
