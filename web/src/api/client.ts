@@ -4,6 +4,7 @@ import type {
   ListDatumsResponse,
   ListRunsResponse,
   ListTunersResponse,
+  RewardDistributionData,
   RunDetailResponse,
 } from "./types";
 
@@ -65,6 +66,20 @@ export function listRuns(
   const qs = params.toString();
   return get<ListRunsResponse>(
     `/tuners/${encodeURIComponent(tunerId)}/runs${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export function getRewardDistribution(
+  tunerId: string,
+  datumId?: string | null,
+): Promise<RewardDistributionData> {
+  const params = new URLSearchParams();
+  if (datumId) params.set("datum_id", datumId);
+  const qs = params.toString();
+  return get<RewardDistributionData>(
+    `/tuners/${encodeURIComponent(tunerId)}/reward-distribution${
+      qs ? `?${qs}` : ""
+    }`,
   );
 }
 

@@ -238,6 +238,42 @@ class ListRunsResponse(BaseModel):
     next_cursor: Optional[str] = None
 
 
+class GenerationRewardStats(BaseModel):
+    """Reward summary for all rewarded runs at a single policy generation."""
+
+    generation: int
+    count: int
+    mean: float
+    std: float  # population standard deviation
+    min: float
+    max: float
+    # Per-bin reward counts, aligned to the response's shared `bin_edges`.
+    bins: List[int]
+
+
+class RewardDistributionResponse(BaseModel):
+    """Reward distribution bucketed by policy generation, computed server-side.
+
+    Replaces the former client-side aggregation over an *unbounded* run fetch:
+    the dashboard used to download every run just to bucket rewards by
+    generation. The server now reads only `(reward, max policy_generation)` per
+    rewarded run -- two scalars, no JSON blobs and no full run transfer -- and
+    returns the finished histogram. A run contributes only when it has both a
+    reward and at least one recorded completion (so a derived generation).
+    """
+
+    # Per-generation rows, ascending by generation.
+    rows: List[GenerationRewardStats]
+    # Shared lower edges of each histogram bin (length matches the bin count).
+    bin_edges: List[float]
+    bin_width: float
+    # Global reward range across all contributing rewarded runs.
+    reward_min: float
+    reward_max: float
+    # Total rewarded runs that contributed (reward + generation present).
+    total: int
+
+
 class ChatCompletionItem(BaseModel):
     """A single recorded LLM request/response inside a run."""
 

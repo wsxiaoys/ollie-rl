@@ -11,7 +11,7 @@ import {
   type ChartOptions,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
-import type { GenStats } from "./RewardDistribution";
+import type { GenerationRewardStats } from "../api/types";
 
 ChartJS.register(
   CategoryScale,
@@ -37,7 +37,7 @@ function cssVar(name: string, fallback: string): string {
  * envelope, so the reward trend and its spread across training are visible at
  * a glance.
  */
-export function RewardCurveChart({ rows }: { rows: GenStats[] }) {
+export function RewardCurveChart({ rows }: { rows: GenerationRewardStats[] }) {
   const accent = cssVar("--accent", "#58a6ff");
   const good = cssVar("--good", "#3fb950");
   const muted = cssVar("--text-muted", "#8b949e");

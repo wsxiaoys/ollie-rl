@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { runsQuery, tunerQuery } from "../api/queries";
+import { rewardDistributionQuery, tunerQuery } from "../api/queries";
 import type { NextPickTier } from "../api/types";
 import { DatumTable } from "../components/DatumTable";
 import { RewardDistribution } from "../components/RewardDistribution";
@@ -29,7 +29,7 @@ export function TunerDetailPage() {
   const { data, isLoading, isError, error, isFetching } = useQuery(
     tunerQuery(tunerId),
   );
-  const runsQ = useQuery(runsQuery(tunerId));
+  const rewardDistQ = useQuery(rewardDistributionQuery(tunerId));
 
   if (isLoading) {
     return <div className="placeholder">Loading tuner…</div>;
@@ -208,21 +208,22 @@ export function TunerDetailPage() {
           <Panel
             title="Reward distribution by generation"
             right={
-              runsQ.isFetching ? (
+              rewardDistQ.isFetching ? (
                 <span className="live-dot">● live</span>
               ) : undefined
             }
           >
-            {runsQ.isError ? (
+            {rewardDistQ.isError ? (
               <div className="placeholder placeholder--inset placeholder--error">
-                Failed to load runs: {(runsQ.error as Error).message}
+                Failed to load reward distribution:{" "}
+                {(rewardDistQ.error as Error).message}
               </div>
-            ) : !runsQ.data ? (
+            ) : !rewardDistQ.data ? (
               <div className="placeholder placeholder--inset">
-                Loading runs…
+                Loading reward distribution…
               </div>
             ) : (
-              <RewardDistribution runs={runsQ.data.runs} />
+              <RewardDistribution dist={rewardDistQ.data} />
             )}
           </Panel>
 
