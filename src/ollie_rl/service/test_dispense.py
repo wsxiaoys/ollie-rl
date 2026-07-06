@@ -13,10 +13,20 @@ from ollie_rl.cookbook import Recipe
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
 from ollie_rl.service.dispense import (
-    expiration_stats,
-    expiring_datums,
+    RewardedRun,
+    TerminalStats,
     pick_datum,
+    quarantined_datums,
+    terminal_stats,
 )
+
+
+def _rewarded(**runs: tuple[str, float]) -> dict[str, RewardedRun]:
+    """Build a ``run_id -> RewardedRun`` map from ``run_id=(datum_id, reward)``."""
+    return {
+        run_id: RewardedRun(datum_id=datum_id, reward=reward)
+        for run_id, (datum_id, reward) in runs.items()
+    }
 
 
 def _pick_run(
@@ -111,119 +121,213 @@ class PickDatumTestCase(unittest.TestCase):
         self.assertEqual(pick_datum(["d1", "d2"], runs, recipe), "d1")
 
 
-class ExpirationStatsTestCase(unittest.TestCase):
-    """Unit tests for the pure expiration_stats tallier.
+class TerminalStatsTestCase(unittest.TestCase):
+    """Unit tests for the pure terminal_stats tallier.
 
-    Both inputs are ``run_id -> datum_id`` maps already scoped to the recency
-    window by their caller: rewarded runs (denominator only) and expired,
-    unrewarded runs with a lingering in-flight op (numerator + their share of
-    the denominator). It returns ``(expired, terminal)`` per datum, where
-    ``terminal = expired + rewarded``.
+    Inputs are two maps: ``run_id -> RewardedRun`` (datum id + reward; the
+    rewarded denominator, with ``reward == 1.0`` entries also feeding the
+    success numerator) and ``run_id -> datum_id`` for expired, unrewarded runs
+    (the expiration numerator). It returns a ``TerminalStats(expired, rewarded,
+    succeeded)`` per datum.
     """
 
     def test_empty_maps_are_all_zero(self):
-        stats = expiration_stats(["d1", "d2"], {}, {})
-        self.assertEqual(stats, {"d1": (0, 0), "d2": (0, 0)})
+        stats = terminal_stats(["d1", "d2"], {}, {})
+        self.assertEqual(
+            stats,
+            {
+                "d1": TerminalStats(expired=0, rewarded=0, succeeded=0),
+                "d2": TerminalStats(expired=0, rewarded=0, succeeded=0),
+            },
+        )
 
-    def test_rewarded_only_counts_toward_terminal(self):
-        # Two rewarded runs on d1: terminal=2, expired=0.
-        stats = expiration_stats(["d1"], {"r1": "d1", "r2": "d1"}, {})
-        self.assertEqual(stats["d1"], (0, 2))
+    def test_rewarded_counts_and_success_subset(self):
+        # d1: 3 rewarded (2 of them reward==1.0) -> rewarded=3, succeeded=2.
+        stats = terminal_stats(
+            ["d1"],
+            _rewarded(r1=("d1", 1.0), r2=("d1", 1.0), r3=("d1", 0.0)),
+            {},
+        )
+        self.assertEqual(stats["d1"], TerminalStats(expired=0, rewarded=3, succeeded=2))
 
-    def test_expired_counts_toward_numerator_and_denominator(self):
-        # Two expirations on d1 and nothing rewarded: expired=2, terminal=2.
-        stats = expiration_stats(["d1"], {}, {"r1": "d1", "r2": "d1"})
-        self.assertEqual(stats["d1"], (2, 2))
+    def test_expired_counts_toward_numerator_only(self):
+        # Two expirations on d1 and nothing rewarded: expired=2, rewarded=0.
+        stats = terminal_stats(["d1"], {}, {"r1": "d1", "r2": "d1"})
+        self.assertEqual(stats["d1"], TerminalStats(expired=2, rewarded=0, succeeded=0))
 
-    def test_mixed_rewarded_and_expired(self):
-        # d1: 1 expired + 3 rewarded -> (1, 4); d2: 2 expired + 0 rewarded.
-        stats = expiration_stats(
+    def test_mixed_rewarded_expired_and_succeeded(self):
+        # d1: 3 rewarded (1 success) + 1 expired; d2: 2 expired only.
+        stats = terminal_stats(
             ["d1", "d2"],
-            {"r1": "d1", "r2": "d1", "r3": "d1"},
+            _rewarded(r1=("d1", 1.0), r2=("d1", 0.0), r3=("d1", 0.5)),
             {"r4": "d1", "r5": "d2", "r6": "d2"},
         )
-        self.assertEqual(stats["d1"], (1, 4))
-        self.assertEqual(stats["d2"], (2, 2))
+        self.assertEqual(stats["d1"], TerminalStats(expired=1, rewarded=3, succeeded=1))
+        self.assertEqual(stats["d2"], TerminalStats(expired=2, rewarded=0, succeeded=0))
 
     def test_runs_outside_pool_are_ignored(self):
         # Entries referencing datums not in the pool must not appear or crash.
-        stats = expiration_stats(
+        stats = terminal_stats(
             ["d1"],
-            {"r1": "gone"},
+            _rewarded(r1=("gone", 1.0)),
             {"r2": "gone"},
         )
-        self.assertEqual(stats, {"d1": (0, 0)})
+        self.assertEqual(
+            stats, {"d1": TerminalStats(expired=0, rewarded=0, succeeded=0)}
+        )
 
 
-class ExpiringDatumsTestCase(unittest.TestCase):
-    """Unit tests for the pure expiring_datums quarantine selector.
+class QuarantinedDatumsExpireTestCase(unittest.TestCase):
+    """The expire filter of the pure quarantined_datums selector.
 
-    A datum is quarantined when its window holds at least ``min_samples``
-    terminal attempts and the expiration rate (``expired / terminal``) is
-    ``>= max_expire_rate``.
+    A datum is quarantined when it holds at least ``min_samples`` terminal
+    attempts (expired + rewarded) and the expiration rate (``expired /
+    terminal``) is ``>= max_expire_rate``.
     """
 
     def test_no_datums_when_maps_empty(self):
         self.assertEqual(
-            expiring_datums(["d1", "d2"], {}, {}, max_expire_rate=0.5, min_samples=2),
+            quarantined_datums(
+                ["d1", "d2"], {}, {}, min_samples=2, max_expire_rate=0.5
+            ),
             set(),
         )
 
     def test_quarantines_high_expire_rate(self):
         # d1: 3 expired / 3 terminal = 1.0 >= 0.5, samples 3 >= 2 -> quarantine.
-        flaky = expiring_datums(
+        excluded = quarantined_datums(
             ["d1"],
             {},
             {"r1": "d1", "r2": "d1", "r3": "d1"},
-            max_expire_rate=0.5,
             min_samples=2,
+            max_expire_rate=0.5,
         )
-        self.assertEqual(flaky, {"d1"})
+        self.assertEqual(excluded, {"d1"})
 
     def test_not_quarantined_below_min_samples(self):
         # d1: 1 expired / 1 terminal = 1.0 rate, but only 1 sample < 2 samples.
-        flaky = expiring_datums(
-            ["d1"],
-            {},
-            {"r1": "d1"},
-            max_expire_rate=0.5,
-            min_samples=2,
+        excluded = quarantined_datums(
+            ["d1"], {}, {"r1": "d1"}, min_samples=2, max_expire_rate=0.5
         )
-        self.assertEqual(flaky, set())
+        self.assertEqual(excluded, set())
 
     def test_not_quarantined_below_rate(self):
         # d1: 1 expired / 4 terminal = 0.25 < 0.5, enough samples but low rate.
-        flaky = expiring_datums(
+        excluded = quarantined_datums(
             ["d1"],
-            {"r1": "d1", "r2": "d1", "r3": "d1"},
+            _rewarded(r1=("d1", 0.0), r2=("d1", 0.0), r3=("d1", 0.0)),
             {"r4": "d1"},
-            max_expire_rate=0.5,
             min_samples=2,
+            max_expire_rate=0.5,
         )
-        self.assertEqual(flaky, set())
+        self.assertEqual(excluded, set())
 
     def test_rate_and_samples_thresholds_are_inclusive(self):
         # d1: 2 expired / 4 terminal = exactly 0.5 rate and exactly 4 samples,
         # matching both `>=` thresholds -> quarantined.
-        flaky = expiring_datums(
+        excluded = quarantined_datums(
             ["d1"],
-            {"r1": "d1", "r2": "d1"},
+            _rewarded(r1=("d1", 0.0), r2=("d1", 0.0)),
             {"r3": "d1", "r4": "d1"},
-            max_expire_rate=0.5,
             min_samples=4,
+            max_expire_rate=0.5,
         )
-        self.assertEqual(flaky, {"d1"})
+        self.assertEqual(excluded, {"d1"})
 
     def test_only_flaky_datums_selected(self):
         # d1 is flaky (2/2 = 1.0); d2 is healthy (0/3 = 0.0).
-        flaky = expiring_datums(
+        excluded = quarantined_datums(
             ["d1", "d2"],
-            {"r1": "d2", "r2": "d2", "r3": "d2"},
+            _rewarded(r1=("d2", 0.0), r2=("d2", 0.0), r3=("d2", 0.0)),
             {"r4": "d1", "r5": "d1"},
-            max_expire_rate=0.5,
             min_samples=2,
+            max_expire_rate=0.5,
         )
-        self.assertEqual(flaky, {"d1"})
+        self.assertEqual(excluded, {"d1"})
+
+    def test_disabled_when_threshold_none(self):
+        # No thresholds supplied -> nothing quarantined even at rate 1.0.
+        excluded = quarantined_datums(
+            ["d1"], {}, {"r1": "d1", "r2": "d1"}, min_samples=1
+        )
+        self.assertEqual(excluded, set())
+
+
+class QuarantinedDatumsSucceedTestCase(unittest.TestCase):
+    """The too-easy filter of the pure quarantined_datums selector.
+
+    A datum is quarantined when it holds at least ``min_samples`` terminal
+    attempts and the success ratio (``succeeded / terminal``, sharing the
+    ``expired + rewarded`` denominator with the expire filter) is ``>
+    max_succeed_ratio``.
+    """
+
+    def test_quarantines_high_success_ratio(self):
+        # d1: 3/3 terminal succeed = 1.0 > 0.9, samples 3 >= 2 -> quarantine.
+        excluded = quarantined_datums(
+            ["d1"],
+            _rewarded(r1=("d1", 1.0), r2=("d1", 1.0), r3=("d1", 1.0)),
+            {},
+            min_samples=2,
+            max_succeed_ratio=0.9,
+        )
+        self.assertEqual(excluded, {"d1"})
+
+    def test_not_quarantined_below_min_samples(self):
+        # d1: 1/1 = 1.0 ratio, but only 1 terminal sample < 2.
+        excluded = quarantined_datums(
+            ["d1"],
+            _rewarded(r1=("d1", 1.0)),
+            {},
+            min_samples=2,
+            max_succeed_ratio=0.9,
+        )
+        self.assertEqual(excluded, set())
+
+    def test_strictly_greater_than_threshold(self):
+        # d1: 2/4 terminal = exactly 0.5, not > 0.5 -> not quarantined.
+        excluded = quarantined_datums(
+            ["d1"],
+            _rewarded(r1=("d1", 1.0), r2=("d1", 1.0), r3=("d1", 0.0), r4=("d1", 0.0)),
+            {},
+            min_samples=2,
+            max_succeed_ratio=0.5,
+        )
+        self.assertEqual(excluded, set())
+
+    def test_expired_runs_dilute_ratio(self):
+        # d1: 2 succeed but terminal = 2 rewarded + 3 expired = 5, so
+        # 2/5 = 0.4 <= 0.9 -> not too-easy (expirations share the denominator).
+        excluded = quarantined_datums(
+            ["d1"],
+            _rewarded(r1=("d1", 1.0), r2=("d1", 1.0)),
+            {"r3": "d1", "r4": "d1", "r5": "d1"},
+            min_samples=2,
+            max_succeed_ratio=0.9,
+        )
+        self.assertEqual(excluded, set())
+
+
+class QuarantinedDatumsCombinedTestCase(unittest.TestCase):
+    """Both filters together: a datum caught by either is excluded."""
+
+    def test_union_of_both_filters(self):
+        # d1 too flaky (2 expired / 2 terminal), d2 too easy (2/2 success),
+        # d3 healthy (1/2 success, 0 expired).
+        excluded = quarantined_datums(
+            ["d1", "d2", "d3"],
+            _rewarded(
+                s1=("d2", 1.0),
+                s2=("d2", 1.0),
+                h1=("d3", 1.0),
+                h2=("d3", 0.0),
+            ),
+            {"e1": "d1", "e2": "d1"},
+            min_samples=2,
+            max_expire_rate=0.5,
+            max_succeed_ratio=0.9,
+        )
+        self.assertEqual(excluded, {"d1", "d2"})
 
 
 if __name__ == "__main__":

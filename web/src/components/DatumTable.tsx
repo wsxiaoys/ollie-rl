@@ -58,27 +58,68 @@ export function DatumTable({
       cell: (info) => <span className="num">{info.getValue()}</span>,
     }),
     columnHelper.accessor("expired", {
-      header: "Expired",
+      id: "audit",
+      header: "Audit",
       cell: (info) => {
-        const expired = info.getValue();
-        const expiredCount =
-          info.row.original.expired_terminal_count;
-        const rewardedCount =
-          info.row.original.rewarded_terminal_count;
-        const samples = expiredCount + rewardedCount;
-        const rate = samples > 0 ? expiredCount / samples : null;
+        const expired = info.row.original.expired;
+        const rewarded = info.row.original.rewarded;
+        const succeeded = info.row.original.succeeded;
+        // Both quarantine metrics share the terminal denominator
+        // (expired + rewarded); in-flight runs are excluded (outcome unknown).
+        const terminal = expired + rewarded;
+        const expireRate = terminal > 0 ? expired / terminal : null;
+        const succeedRate = terminal > 0 ? succeeded / terminal : null;
+        // Mirror the dispenser's `min_samples = 0.5 * group_size` gate: below it
+        // neither quarantine filter can fire, so the ratios are not yet
+        // actionable — render them muted to signal "not enough samples".
+        const minSamples = groupSize / 2;
+        const belowMinSamples = terminal < minSamples;
+        const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
         const definition =
-          'An "expired" run is an expired, unrewarded run whose generation op is still in flight — i.e. the generation itself stalled past the lease, rather than a "lost" (crashed/abandoned) worker.';
+          'An "expired" run is an expired, unrewarded run whose generation op is still in flight — i.e. the generation itself stalled past the lease, rather than a "lost" (crashed/abandoned) worker. A "succeeded" run earned reward == 1.0.';
         const tooltip =
-          rate == null
-            ? `${expired} all-time expired run(s) for this datum.\n${definition}\nExpire rate: no terminal attempts yet to compute a rate.`
-            : `${expired} all-time expired run(s) for this datum.\n${definition}\nExpire rate ${(rate * 100).toFixed(0)}%: ${expiredCount} expired / ${samples} terminal attempts (expired + rewarded).`;
+          expireRate == null || succeedRate == null
+            ? `No terminal attempts yet to compute ratios.\n${definition}`
+            : `${terminal} terminal attempts (expired + rewarded).\n` +
+              (belowMinSamples
+                ? `Below the ${minSamples} min-sample gate — ratios shown but not yet actionable for quarantine.\n`
+                : "") +
+              `Expire ratio ${pct(expireRate)}: ${expired} expired / ${terminal} — drives max_expire_rate.\n` +
+              `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${terminal} — drives max_succeed_ratio.\n` +
+              definition;
+        if (expireRate == null || succeedRate == null) {
+          return (
+            <span className="num muted" title={tooltip}>
+              —
+            </span>
+          );
+        }
+        const ratios = (
+          <>
+            {pct(expireRate)}
+            <span className="muted"> exp</span>
+            {" · "}
+            {pct(succeedRate)}
+            <span className="muted"> ok</span>
+          </>
+        );
+        // Below the min-sample gate the ratios aren't actionable yet. Colour
+        // (muted text) alone isn't distinct enough, so add non-colour cues:
+        // wrap the ratios in parentheses and append an explicit sample marker
+        // (`n <terminal>/<minSamples>`) showing how far off the gate we are.
+        if (belowMinSamples) {
+          return (
+            <span className="num muted" title={tooltip}>
+              ({ratios}){" "}
+              <span className="datum-audit__gate">
+                {terminal}/{Math.ceil(minSamples)}
+              </span>
+            </span>
+          );
+        }
         return (
           <span className="num" title={tooltip}>
-            {expired}
-            {rate != null && (
-              <span className="muted"> ({(rate * 100).toFixed(0)}%)</span>
-            )}
+            {ratios}
           </span>
         );
       },

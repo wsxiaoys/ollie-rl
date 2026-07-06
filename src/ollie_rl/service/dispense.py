@@ -23,9 +23,40 @@ per-run policy generations) and then feeds them to these helpers.
 
 from typing import Dict, List, Literal, Optional, Set, Tuple
 
+from pydantic import BaseModel
+
 from ollie_rl.cookbook import Recipe
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
+
+
+class RewardedRun(BaseModel):
+    """A single rewarded run's outcome, keyed by ``run_id`` in the map the
+    dispenser's quarantine logic consumes.
+
+    Carries the run's ``datum_id`` (so per-datum tallies never need the full
+    ``RunModel`` list) plus its ``reward``. The reward lets the success metric
+    (``reward == 1.0``) be derived from the *same* rewarded map the expiration
+    metric uses, so no separate "succeeded runs" query is needed.
+    """
+
+    datum_id: str
+    reward: float
+
+
+class TerminalStats(BaseModel):
+    """Per-datum terminal-attempt tallies over the datum's entire history.
+
+    * ``expired`` -- expired, unrewarded runs (the expiration numerator).
+    * ``rewarded`` -- runs that earned a reward; with ``expired`` it forms the
+      shared ``terminal`` denominator (``expired + rewarded``) both metrics use.
+    * ``succeeded`` -- rewarded runs with ``reward == 1.0`` (the success
+      numerator); a subset of ``rewarded``.
+    """
+
+    expired: int
+    rewarded: int
+    succeeded: int
 
 
 def scheduler_scores(
@@ -63,29 +94,41 @@ def scheduler_scores(
 
 
 # ---------------------------------------------------------------------------
-# Expiration quarantine (opt-in dispenser filter)
+# Dispenser quarantine (opt-in filters)
 #
-# `dispense_run` accepts an optional `max_expire_rate` (from the `POST /runs`
-# query param; omit/None to disable). When set, the dispenser *quarantines*
-# datums that genuinely keep expiring, so compute isn't wasted on datums that
-# never finish in time. The moving parts:
+# `dispense_run` accepts two optional thresholds (both from `POST /runs` query
+# params; omit/None to disable each):
 #
-#   * `_rewarded_datums` (DB, in tuner_service): per *rewarded* run, its datum
-#     id (a `run_id -> datum_id` map). Drives the *rewarded* side of the
-#     denominator. Every rewarded run for the tuner is counted (no recency
-#     window).
+#   * `max_expire_rate` -- quarantine datums that genuinely keep expiring, so
+#     compute isn't wasted on datums that never finish in time.
+#   * `max_succeed_ratio` -- quarantine datums that are solved too reliably, so
+#     compute isn't wasted on datums the policy has already mastered (they no
+#     longer produce a useful learning signal).
+#
+# Both are computed from the same per-datum terminal tallies (`TerminalStats`),
+# built once by `terminal_stats` and consumed by a single `quarantined_datums`
+# helper. The moving parts:
+#
+#   * `_rewarded_datums` (DB, in tuner_service): per *rewarded* run, its
+#     `RewardedRun` (datum id + reward). Drives the *rewarded* denominator for
+#     both filters; the reward lets the success numerator (`reward == 1.0`) be
+#     derived from this same map -- no separate query. Every rewarded run for
+#     the tuner is counted (no recency window).
 #   * `_expired_datums` (DB, in tuner_service): per *expired, unrewarded* run,
 #     its datum id. A run is `expired` when it either still has a lingering
 #     `InFlightChatCompletionModel` row (generation stalled) or its summed
 #     completion `duration_ms` is at/past the expiration threshold
 #     (`RUN_EXPIRE_GENERATION_BUDGET_MS`). The "expired and unrewarded" filter
 #     lives in SQL, so ongoing runs (still within their lease) never appear.
-#     Drives the *expiration* numerator.
-#   * `expiration_stats` (pure): per-datum (expired, terminal) counts,
-#     computed straight from the two already-windowed maps (each entry carries
-#     its datum id, so no `RunModel` list and no recency filter are needed).
-#   * `expiring_datums` (pure): turns those counts into the quarantine set.
-#   * `dispense_run`: filters the flaky datums out of the candidate pool.
+#     Drives the *expiration* numerator (only fetched when `max_expire_rate`
+#     is set).
+#   * `terminal_stats` (pure): per-datum `TerminalStats(expired, rewarded,
+#     succeeded)`, computed straight from the two already-windowed maps (each
+#     entry carries its datum id, so no `RunModel` list and no recency filter
+#     are needed).
+#   * `quarantined_datums` (pure): turns those tallies into the quarantine set
+#     for whichever thresholds are supplied.
+#   * `dispense_run`: filters the quarantined datums out of the candidate pool.
 #
 # Definitions and the reasoning behind them:
 #
@@ -105,101 +148,119 @@ def scheduler_scores(
 #     when the two maps are built (the expired map is pre-filtered to expired,
 #     unrewarded runs; the rewarded map holds the rewarded runs, which have no
 #     lingering in-flight row since it is deleted on success).
-#   * Rate = expired / terminal, where terminal = expired + rewarded.
-#     In-flight runs are excluded (outcome unknown).
+#   * Succeeded. A rewarded run with `reward == 1.0`; a subset of the rewarded
+#     runs, derived from `RewardedRun.reward`.
+#   * Both metrics share the terminal denominator, where terminal = expired +
+#     rewarded (in-flight runs are excluded -- outcome unknown):
+#       - expire rate    = expired   / terminal.
+#       - success ratio  = succeeded / terminal.
 #   * All-time counting. Every terminal attempt for a datum is counted -- there
-#     is no recency window, so both expiration signals (in-flight op and
-#     duration past the expiration threshold) and the rewarded denominator span
-#     the datum's entire history. A quarantined datum receives no new runs, so
-#     once its rate crosses `max_expire_rate` (with enough samples) it stays
-#     quarantined; the rate only moves when new terminal attempts are recorded.
-#   * Quarantine condition: terminal >= min_samples (dispense passes
-#     `0.5 * recipe.group_size`, i.e. half a group's worth of terminal
-#     attempts) AND rate >= max_expire_rate.
+#     is no recency window, so all signals span the datum's entire history. A
+#     quarantined datum receives no new runs, so once it crosses a threshold
+#     (with enough samples) it stays quarantined; the metric only moves when new
+#     terminal attempts are recorded.
+#   * Quarantine conditions (dispense passes `min_samples = 0.5 *
+#     recipe.group_size`, i.e. half a group's worth of terminal attempts).
+#     Both gate on terminal >= min_samples, then:
+#       - expire:  rate  >= max_expire_rate.
+#       - succeed: ratio >  max_succeed_ratio.
 #
-# Observability: `get_progress` reuses `expiration_stats` to populate
-# `DatumProgress.expired_terminal_count` / `rewarded_terminal_count` (the raw
-# numerator/denominator components, equivalent to the rate) so an operator can
-# watch the numbers and pick a sensible `max_expire_rate`. It builds the same
-# two maps
-# (rewarded runs; expired-unrewarded runs -- lingering in-flight op or
-# total duration past the expiration threshold) so the dashboard number matches
-# what the dispenser would quarantine on.
+# Observability: `get_progress` reuses `terminal_stats` to populate
+# `DatumProgress.expired` / `rewarded` / `succeeded` (the raw tallies) so an
+# operator can watch the numbers and pick sensible thresholds. It builds the
+# same maps so the dashboard numbers match what the dispenser would quarantine
+# on.
 # ---------------------------------------------------------------------------
-def expiration_stats(
+def terminal_stats(
     datum_pool: List[str],
-    rewarded_datum_by_run: Dict[str, str],
+    rewarded_by_run: Dict[str, RewardedRun],
     expired_datum_by_run: Dict[str, str],
-) -> Dict[str, Tuple[int, int]]:
-    """Per-datum ``(expired, terminal)`` counts.
+) -> Dict[str, TerminalStats]:
+    """Per-datum ``TerminalStats`` tallies.
 
-    Computed straight from two ``run_id -> datum_id`` maps, each spanning the
-    datum's entire history (no recency window; see the block comment above):
+    Computed straight from two ``run_id ->`` maps, each spanning the datum's
+    entire history (no recency window; see the block comment above):
 
-    * ``rewarded_datum_by_run`` -- one entry per rewarded run (its datum id).
-      Drives the rewarded side of the denominator.
+    * ``rewarded_by_run`` -- one entry per rewarded run (a :class:`RewardedRun`
+      carrying its datum id + reward). Drives the ``rewarded`` denominator; its
+      ``reward == 1.0`` entries drive the ``succeeded`` numerator.
     * ``expired_datum_by_run`` -- one entry per *expired, unrewarded* run (its
       datum id): a run that either kept a lingering in-flight op (the generation
       itself was too slow to finish within the lease) or ran past the
-      total-duration expiration threshold -- the compute-waste cases quarantine
-      targets. Because the
-      "expired and unrewarded" filter is applied when the map is built, every
-      entry here is an expiration (an `expired`, not `lost`, run); ongoing runs
-      (still within their lease) and lost/abandoned runs never appear. Drives
-      both the numerator and its share of the denominator.
+      total-duration expiration threshold. Because the "expired and unrewarded"
+      filter is applied when the map is built, every entry here is an expiration
+      (an `expired`, not `lost`, run); ongoing runs (still within their lease)
+      and lost/abandoned runs never appear.
 
-    Both maps span the datum's entire history (no recency window), so this
-    function just tallies. ``terminal`` is the denominator (expired + rewarded);
-    the caller derives the rate as ``expired / terminal``.
+    Both maps span the datum's entire history, so this function just tallies.
     """
     expired: Dict[str, int] = {d: 0 for d in datum_pool}
-    terminal: Dict[str, int] = {d: 0 for d in datum_pool}
-    # Rewarded terminal attempts (denominator only).
-    for datum_id in rewarded_datum_by_run.values():
-        if datum_id not in terminal:
+    rewarded: Dict[str, int] = {d: 0 for d in datum_pool}
+    succeeded: Dict[str, int] = {d: 0 for d in datum_pool}
+    # Rewarded terminal attempts (denominator), plus their successes.
+    for run in rewarded_by_run.values():
+        if run.datum_id not in rewarded:
             continue
-        terminal[datum_id] += 1
+        rewarded[run.datum_id] += 1
+        if run.reward == 1.0:
+            succeeded[run.datum_id] += 1
     # Expirations: expired, unrewarded runs (lingering in-flight op or total
-    # duration past the expiration threshold) -- numerator + their share of the
-    # denominator.
+    # duration past the expiration threshold).
     for datum_id in expired_datum_by_run.values():
         if datum_id not in expired:
             continue
         expired[datum_id] += 1
-        terminal[datum_id] += 1
-    return {d: (expired[d], terminal[d]) for d in datum_pool}
+    return {
+        d: TerminalStats(
+            expired=expired[d],
+            rewarded=rewarded[d],
+            succeeded=succeeded[d],
+        )
+        for d in datum_pool
+    }
 
 
-def expiring_datums(
+def quarantined_datums(
     datum_pool: List[str],
-    rewarded_datum_by_run: Dict[str, str],
+    rewarded_by_run: Dict[str, RewardedRun],
     expired_datum_by_run: Dict[str, str],
-    max_expire_rate: float,
+    *,
     min_samples: float,
+    max_expire_rate: Optional[float] = None,
+    max_succeed_ratio: Optional[float] = None,
 ) -> Set[str]:
-    """Datums to quarantine because they genuinely keep expiring.
+    """Datums to exclude from dispense, per the enabled quarantine filters.
 
-    Built on :func:`expiration_stats`: a datum is quarantined when it has
-    accumulated at least ``min_samples`` terminal attempts and the expiration
-    rate across them is ``>= max_expire_rate``.
+    Built on :func:`terminal_stats`. Both filters share the same
+    ``terminal = expired + rewarded`` denominator and the ``min_samples`` gate;
+    a datum is quarantined when it has at least ``min_samples`` terminal
+    attempts and *either* enabled filter fires:
 
-    Counts span the datum's entire history (no recency window): once a datum's
-    rate crosses ``max_expire_rate`` with at least ``min_samples`` terminal
-    attempts it stays quarantined, since it receives no new runs to move the
-    rate.
+    * expiration (``max_expire_rate``): expire rate ``expired / terminal >=
+      max_expire_rate`` -- it genuinely keeps expiring.
+    * too-easy (``max_succeed_ratio``): success ratio ``succeeded / terminal >
+      max_succeed_ratio`` -- it is solved too reliably.
+
+    Passing ``None`` for a threshold disables that filter. Counts span the
+    datum's entire history (no recency window): once a datum crosses a threshold
+    with enough samples it stays quarantined, since it receives no new runs to
+    move the metric.
     """
-    stats = expiration_stats(
-        datum_pool,
-        rewarded_datum_by_run,
-        expired_datum_by_run,
-    )
-    flaky: Set[str] = set()
-    for d, (expired, terminal) in stats.items():
+    stats = terminal_stats(datum_pool, rewarded_by_run, expired_datum_by_run)
+    excluded: Set[str] = set()
+    for d, s in stats.items():
+        # Both filters share the terminal denominator (expired + rewarded) and
+        # the same min-samples gate, so in-flight runs are the only ones
+        # excluded from either metric.
+        terminal = s.expired + s.rewarded
         if terminal < min_samples:
             continue
-        if expired / terminal >= max_expire_rate:
-            flaky.add(d)
-    return flaky
+        if max_expire_rate is not None and s.expired / terminal >= max_expire_rate:
+            excluded.add(d)
+            continue
+        if max_succeed_ratio is not None and s.succeeded / terminal > max_succeed_ratio:
+            excluded.add(d)
+    return excluded
 
 
 def pick_tier(

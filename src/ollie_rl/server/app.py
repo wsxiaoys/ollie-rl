@@ -401,6 +401,23 @@ async def dispense_run(
             ),
         ),
     ] = None,
+    max_succeed_ratio: Annotated[
+        Optional[float],
+        Query(
+            ge=0.0,
+            le=1.0,
+            description=(
+                "When set, quarantine datums that are solved too reliably: a "
+                "datum is skipped once it has at least half a group's worth of "
+                "terminal attempts (0.5 * recipe.group_size) and a success "
+                "ratio > this value. A run counts as a success when its reward "
+                "is exactly 1.0; the ratio is succeeded runs over all terminal "
+                "attempts (expired + rewarded, the same denominator as "
+                "max_expire_rate). Such datums are considered too easy to yield "
+                "a useful learning signal. Omit to disable."
+            ),
+        ),
+    ] = None,
 ) -> DispenseRun:
     """
     Dispense a run assignment for the tuner.
@@ -413,6 +430,7 @@ async def dispense_run(
         run_response = await services.tuner.dispense_run(
             tuner_id,
             max_expire_rate=max_expire_rate,
+            max_succeed_ratio=max_succeed_ratio,
         )
         if run_response is None:
             raise HTTPException(204, headers={"Retry-After": "1"})
