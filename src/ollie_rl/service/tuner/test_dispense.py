@@ -12,7 +12,7 @@ from typing import Optional
 from ollie_rl.cookbook import Recipe
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
-from ollie_rl.service.dispense import (
+from ollie_rl.service.tuner.dispense import (
     RewardedRun,
     TerminalStats,
     pick_datum,

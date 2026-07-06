@@ -18,7 +18,7 @@ from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from ollie_rl.db.connection import init_db, shutdown_db
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
-from ollie_rl.service.tuner_service import (
+from ollie_rl.service.tuner import (
     EmptyRunError,
     RewardAlreadySetError,
     RunExpiredError,
@@ -472,7 +472,7 @@ class TestSample(TunerServiceTestCase):
         from sqlalchemy import select
         from ollie_rl.db.connection import get_sessionmaker
         from ollie_rl.db.models import RunModel
-        from ollie_rl.service.tuner_service import ContentFilterSampleError
+        from ollie_rl.service.tuner import ContentFilterSampleError
 
         tuner_id = await self._create_tuner()
         run = await self._add_run(tuner_id)

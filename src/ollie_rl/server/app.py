@@ -151,7 +151,7 @@ async def get_tuner(tuner_id: str, progress: bool = False) -> GetTunerResponse:
     stored trainer state. Pass `?progress=true` to also include a recipe-aware
     training-progress snapshot (batch readiness, run/group coverage, next pick).
     """
-    from ollie_rl.service.tuner_service import TunerNotFoundError
+    from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
         return await services.tuner.get_tuner_details(
@@ -170,7 +170,7 @@ async def list_data(tuner_id: str) -> ListDatumsResponse:
     Return the full datum-id pool registered for a tuner, so clients can build
     a filter dropdown for the runs list.
     """
-    from ollie_rl.service.tuner_service import TunerNotFoundError
+    from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
         datum_ids = await services.tuner.list_datums(tuner_id)
@@ -211,7 +211,7 @@ async def list_runs(
     a `next_cursor` when more runs are available. Pass `datum_id` to filter the
     listing to runs for a single datum.
     """
-    from ollie_rl.service.tuner_service import (
+    from ollie_rl.service.tuner import (
         InvalidRunCursorError,
         TunerNotFoundError,
     )
@@ -235,7 +235,7 @@ async def get_run(tuner_id: str, run_id: str) -> RunDetailResponse:
     Return a single run and its chat completions (oldest first) so the full
     request/response transcript can be visualized.
     """
-    from ollie_rl.service.tuner_service import RunNotFoundError
+    from ollie_rl.service.tuner import RunNotFoundError
 
     try:
         return await services.tuner.get_run_details(tuner_id, run_id)
@@ -257,7 +257,7 @@ async def get_completion(
     Return a single recorded chat completion (request, response, and any
     sample-time tensors) so it can be inspected in isolation.
     """
-    from ollie_rl.service.tuner_service import ChatCompletionNotFoundError
+    from ollie_rl.service.tuner import ChatCompletionNotFoundError
 
     try:
         return await services.tuner.get_completion_details(
@@ -285,7 +285,7 @@ async def _generate_chat_completion(
     requested, the full completion is generated first and then replayed as a
     simulated SSE stream so that OpenAI-compatible clients keep working.
     """
-    from ollie_rl.service.tuner_service import (
+    from ollie_rl.service.tuner import (
         TunerNotFoundError,
         RunNotFoundError,
         RunExpiredError,
@@ -431,7 +431,7 @@ async def dispense_run(
     Returns 200 OK with run_id, datum_id, expires_at.
     Or 204 No Content with Retry-After header if no run can be dispensed.
     """
-    from ollie_rl.service.tuner_service import TunerNotFoundError
+    from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
         run_response = await services.tuner.dispense_run(
@@ -459,7 +459,7 @@ async def put_reward(
     """
     Sets the reward for a specific run under a tuner.
     """
-    from ollie_rl.service.tuner_service import (
+    from ollie_rl.service.tuner import (
         RunNotFoundError,
         RunExpiredError,
         RewardAlreadySetError,

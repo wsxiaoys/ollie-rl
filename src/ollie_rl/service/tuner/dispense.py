@@ -1,7 +1,7 @@
 """Pure dispense / scheduling algorithm for the tuner.
 
 This module holds the *decision logic* behind ``POST /tuners/{id}/runs``,
-factored out of :mod:`ollie_rl.service.tuner_service` so it can be read (and
+factored out of the tuner service so it can be read (and
 unit-tested) in isolation from any service/DB state. Every function here is a
 pure function of its arguments -- given the datum pool, the current runs, and
 the recipe, it decides *which* datum to dispense next and *why*.
