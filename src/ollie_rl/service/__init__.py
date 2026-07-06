@@ -1,3 +1,3 @@
-from .tuner_service import TunerService
+from .tuner import TunerService
 
 __all__ = ["TunerService"]
