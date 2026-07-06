@@ -8,7 +8,7 @@ backends.
 
 import unittest
 from datetime import timedelta
-from typing import List, Optional
+from typing import List, Literal, Optional
 from unittest.mock import AsyncMock
 
 from openai.types.chat import ChatCompletion
@@ -37,14 +37,17 @@ from ollie_rl.types import ChatCompletionRequest
 
 _RECIPE = "grpo_16x32"
 _TRAINER_KIND = "mock"
+FinishReason = Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
 
 
-def _make_chat_completion(completion_id: str = "cmpl-test") -> ChatCompletion:
+def _make_chat_completion(
+    completion_id: str = "cmpl-test", finish_reason: FinishReason = "stop"
+) -> ChatCompletion:
     return ChatCompletion(
         id=completion_id,
         choices=[
             Choice(
-                finish_reason="stop",
+                finish_reason=finish_reason,
                 index=0,
                 message=ChatCompletionMessage(role="assistant", content="hello"),
             )
@@ -58,12 +61,11 @@ def _make_chat_completion(completion_id: str = "cmpl-test") -> ChatCompletion:
 def _make_sample_op(
     completion_id: str = "cmpl-test",
     policy_generation: int = 0,
-    malformed: bool = False,
+    finish_reason: FinishReason = "stop",
 ):
     sample = Sample(
-        completion=_make_chat_completion(completion_id),
+        completion=_make_chat_completion(completion_id, finish_reason),
         policy_generation=policy_generation,
-        malformed=malformed,
     )
 
     op = AsyncMock()
@@ -464,27 +466,28 @@ class TestSample(TunerServiceTestCase):
         self.assertIsNotNone(record.response)
         self.assertEqual(record.response["id"], "cmpl-recorded")
 
-    async def test_raises_malformed_sample_error_and_sets_penalty_reward(self):
+    async def test_raises_content_filter_sample_error_and_sets_penalty_reward(self):
         from sqlalchemy import select
         from ollie_rl.db.connection import get_sessionmaker
         from ollie_rl.db.models import RunModel
-        from ollie_rl.service.tuner_service import MalformedSampleError
+        from ollie_rl.service.tuner_service import ContentFilterSampleError
 
         tuner_id = await self._create_tuner()
         run = await self._add_run(tuner_id)
 
-        # Make FakeTrainer return a malformed sample.
+        # Make FakeTrainer return a content-filtered sample.
         trainer = self.service.active_trainers[tuner_id]
         assert isinstance(trainer, FakeTrainer)
         trainer._sample_op = _make_sample_op(
-            completion_id="cmpl-malformed", malformed=True
+            completion_id="cmpl-content-filter",
+            finish_reason="content_filter",
         )
 
         req = self._make_request()
-        with self.assertRaises(MalformedSampleError) as ctx:
+        with self.assertRaises(ContentFilterSampleError) as ctx:
             await self.service.sample(tuner_id, req, run_id=run.id)
 
-        self.assertIn("Malformed sample on run", str(ctx.exception))
+        self.assertIn("Content-filtered sample on run", str(ctx.exception))
 
         async_session = get_sessionmaker()
         async with async_session() as session:
@@ -492,7 +495,7 @@ class TestSample(TunerServiceTestCase):
                 select(RunModel).where(RunModel.id == run.id)
             )
             record = result.scalar_one()
-            self.assertEqual(record.reward, -1.0)  # default malformed_penalty
+            self.assertEqual(record.reward, -1.0)  # default content_filter_penalty
 
 
 # ---------------------------------------------------------------------------

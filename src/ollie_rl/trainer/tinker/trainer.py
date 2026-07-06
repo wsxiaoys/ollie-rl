@@ -205,7 +205,7 @@ class TinkerTrainer(Trainer):
         )
         full_tokens = prompt_tokens + completion_tokens
         parsed_message, parse_success = self.renderer.parse_response(sequence.tokens)
-        malformed = (not parse_success) and sequence.stop_reason != "length"
+        content_filtered = (not parse_success) and sequence.stop_reason != "length"
         text_content = parsed_message.get("content") or ""
 
         tool_calls: list[Any] = []
@@ -225,7 +225,7 @@ class TinkerTrainer(Trainer):
 
         completion_id = f"cmpl_{uuid.uuid4().hex}"
         finish_reason = sequence.stop_reason
-        if malformed:
+        if content_filtered:
             finish_reason = "content_filter"
         elif tool_calls:
             finish_reason = "tool_calls"
@@ -263,7 +263,6 @@ class TinkerTrainer(Trainer):
         return Sample(
             completion=completion,
             policy_generation=self.state.sampler_step,
-            malformed=malformed,
             tokens=full_tokens,
             logprobs=completion_logprobs,
         )

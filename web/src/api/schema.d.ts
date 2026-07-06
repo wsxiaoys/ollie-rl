@@ -1159,13 +1159,18 @@ export interface components {
              */
             max_off_policy_generation: number;
             /**
-             * Malformed Penalty
+             * Content Filter Penalty
              * @default -1
              */
-            malformed_penalty: number;
+            content_filter_penalty: number;
+            /**
+             * Length Penalty
+             * @default -1
+             */
+            length_penalty: number;
             /**
              * Run Expire Seconds
-             * @default 7200
+             * @default 5400
              */
             run_expire_seconds: number;
         };
