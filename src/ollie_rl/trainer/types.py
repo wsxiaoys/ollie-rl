@@ -25,7 +25,6 @@ class Example(BaseModel):
 class Sample(BaseModel):
     completion: ChatCompletion
     policy_generation: int
-    malformed: bool = False
     # Optional cached sample-time data. Same layout convention as Example.
     tokens: Optional[List[int]] = None
     logprobs: Optional[List[float]] = None

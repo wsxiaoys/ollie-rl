@@ -290,7 +290,8 @@ async def _generate_chat_completion(
         RunNotFoundError,
         RunExpiredError,
         RewardAlreadySetError,
-        MalformedSampleError,
+        ContentFilterSampleError,
+        LengthSampleError,
     )
 
     try:
@@ -306,14 +307,23 @@ async def _generate_chat_completion(
         )
     except (RunExpiredError, RewardAlreadySetError) as e:
         raise HTTPException(
-            status_code=409,
+            status_code=403,
             detail=str(e),
         )
-    except MalformedSampleError as e:
+    except ContentFilterSampleError as e:
         raise HTTPException(
-            status_code=409,
+            status_code=403,
             detail={
-                "error": "malformed_sample",
+                "error": "content_filter_sample",
+                "message": str(e),
+                "raw_content": e.raw_content,
+            },
+        )
+    except LengthSampleError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "length_sample",
                 "message": str(e),
                 "raw_content": e.raw_content,
             },
@@ -472,7 +482,7 @@ async def put_reward(
     except RunNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except (RunExpiredError, RewardAlreadySetError, EmptyRunError) as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to record reward for run '{run_id}'")
         raise HTTPException(status_code=500, detail=str(e))

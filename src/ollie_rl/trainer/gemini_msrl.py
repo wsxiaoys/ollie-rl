@@ -280,7 +280,6 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         text_content = "\n".join(text_parts) if text_parts else None
 
         finish_reason = "stop"
-        malformed = False
         if tool_calls:
             finish_reason = "tool_calls"
         elif candidate.finish_reason:
@@ -291,7 +290,6 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
                 finish_reason = "length"
             elif finish_reason == FinishReason.MALFORMED_FUNCTION_CALL:
                 finish_reason = "content_filter"
-                malformed = True
             elif finish_reason in (
                 FinishReason.SAFETY,
                 FinishReason.RECITATION,
@@ -358,7 +356,6 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         return Sample(
             completion=completion,
             policy_generation=int(response.train_step_id),
-            malformed=malformed,
         )
 
 

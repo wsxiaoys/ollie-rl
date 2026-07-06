@@ -107,7 +107,13 @@ class EmptyRunError(Exception):
     pass
 
 
-class MalformedSampleError(Exception):
+class ContentFilterSampleError(Exception):
+    def __init__(self, message: str, raw_content: Optional[str] = None):
+        super().__init__(message)
+        self.raw_content = raw_content
+
+
+class LengthSampleError(Exception):
     def __init__(self, message: str, raw_content: Optional[str] = None):
         super().__init__(message)
         self.raw_content = raw_content
@@ -1171,15 +1177,31 @@ class TunerService:
             )
             # The recorded 200 supersedes the in-flight row; drop it.
             await self._clear_in_flight_completion(tuner_id, run_id, request_hash)
-            if sample.malformed:
+            raw_content = None
+            finish_reason = None
+            if sample.completion.choices:
+                choice = sample.completion.choices[0]
+                finish_reason = choice.finish_reason
+                if choice.message:
+                    raw_content = choice.message.content
+
+            if finish_reason == "content_filter":
                 recipe = await self._recipe_for(tuner_id)
-                malformed_penalty = recipe.malformed_penalty
-                await self.update_reward(tuner_id, run_id, reward=malformed_penalty)
-                raw_content = None
-                if sample.completion.choices and sample.completion.choices[0].message:
-                    raw_content = sample.completion.choices[0].message.content
-                raise MalformedSampleError(
-                    f"Malformed sample on run {run_id}; reward set to {malformed_penalty}",
+                content_filter_penalty = recipe.content_filter_penalty
+                await self.update_reward(
+                    tuner_id, run_id, reward=content_filter_penalty
+                )
+                raise ContentFilterSampleError(
+                    f"Content-filtered sample on run {run_id}; reward set to {content_filter_penalty}",
+                    raw_content=raw_content,
+                )
+
+            if finish_reason == "length":
+                recipe = await self._recipe_for(tuner_id)
+                length_penalty = recipe.length_penalty
+                await self.update_reward(tuner_id, run_id, reward=length_penalty)
+                raise LengthSampleError(
+                    f"Length-limited sample on run {run_id}; reward set to {length_penalty}",
                     raw_content=raw_content,
                 )
 

@@ -86,7 +86,10 @@ export function TunerDetailPage() {
             <span className="chip">
               off-policy ≤ {recipe.max_off_policy_generation}
             </span>
-            <span className="chip">malformed {recipe.malformed_penalty}</span>
+            <span className="chip">
+              content_filter {recipe.content_filter_penalty}
+            </span>
+            <span className="chip">length {recipe.length_penalty}</span>
           </div>
         </div>
       </header>

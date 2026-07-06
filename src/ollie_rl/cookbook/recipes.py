@@ -14,7 +14,10 @@ class Recipe(BaseModel, frozen=True):
     group_size: int = 16
     num_groups_per_batch: int = 32
     max_off_policy_generation: int = 4
-    malformed_penalty: float = -1.0
+
+    # ---- Behavior penalties ----
+    content_filter_penalty: float = -1.0
+    length_penalty: float = -1.0
 
     # ---- Run lease ------------------------------------------------------
     # Fixed time budget (seconds) granted to a run at creation. The whole run
