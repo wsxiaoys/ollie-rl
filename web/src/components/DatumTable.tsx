@@ -9,7 +9,7 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import type { DatumProgress } from "../api/types";
-import { ProgressBar } from "./ui";
+import { Badge, ProgressBar } from "./ui";
 
 const columnHelper = createColumnHelper<DatumProgress>();
 
@@ -17,11 +17,15 @@ export function DatumTable({
   items,
   groupSize,
   quarantineMinSamples,
+  maxLengthRatio,
+  maxSucceedRatio,
   tunerId,
 }: {
   items: DatumProgress[];
   groupSize: number;
   quarantineMinSamples: number;
+  maxLengthRatio: number;
+  maxSucceedRatio: number;
   tunerId: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
@@ -77,8 +81,24 @@ export function DatumTable({
         const minSamples = quarantineMinSamples;
         const belowMinSamples = rewarded < minSamples;
         const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
+        // Mirror `quarantined_datums`: past the min-sample gate a datum is
+        // quarantined (and so receives no new runs) when the length rate
+        // reaches `max_length_ratio` (>=) or the success ratio reaches
+        // `max_succeed_ratio` (>=).
+        const lengthHit =
+          !belowMinSamples && lengthRate != null && lengthRate >= maxLengthRatio;
+        const succeedHit =
+          !belowMinSamples &&
+          succeedRate != null &&
+          succeedRate >= maxSucceedRatio;
+        const quarantined = lengthHit || succeedHit;
         const definition =
           'A "length" run is a rewarded run with at least one completion whose finish_reason is "length". A "succeeded" run earned reward == 1.0.';
+        const quarantineReason = lengthHit
+          ? `Quarantined: length rate ${pct(lengthRate!)} ≥ max_length_ratio ${pct(maxLengthRatio)} — no new runs dispensed.\n`
+          : succeedHit
+            ? `Quarantined: succeed ratio ${pct(succeedRate!)} ≥ max_succeed_ratio ${pct(maxSucceedRatio)} — no new runs dispensed.\n`
+            : "";
         const tooltip =
           lengthRate == null || succeedRate == null
             ? `No rewarded attempts yet to compute ratios.\n${definition}`
@@ -86,8 +106,9 @@ export function DatumTable({
               (belowMinSamples
                 ? `Below the ${minSamples} min-sample gate — ratios shown but not yet actionable for quarantine.\n`
                 : "") +
-              `Length ratio ${pct(lengthRate)}: ${length} length / ${rewarded} — drives max_length_ratio.\n` +
-              `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${rewarded} — drives max_succeed_ratio.\n` +
+              quarantineReason +
+              `Length ratio ${pct(lengthRate)}: ${length} length / ${rewarded} — drives max_length_ratio (${pct(maxLengthRatio)}).\n` +
+              `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${rewarded} — drives max_succeed_ratio (${pct(maxSucceedRatio)}).\n` +
               definition;
         if (lengthRate == null || succeedRate == null) {
           return (
@@ -98,11 +119,15 @@ export function DatumTable({
         }
         const ratios = (
           <>
-            {pct(lengthRate)}
-            <span className="muted"> len</span>
+            <span className={lengthHit ? "datum-audit__hit" : undefined}>
+              {pct(lengthRate)}
+              <span className="muted"> len</span>
+            </span>
             {" · "}
-            {pct(succeedRate)}
-            <span className="muted"> ok</span>
+            <span className={succeedHit ? "datum-audit__hit" : undefined}>
+              {pct(succeedRate)}
+              <span className="muted"> ok</span>
+            </span>
           </>
         );
         // Below the min-sample gate the ratios aren't actionable yet. Colour
@@ -122,6 +147,13 @@ export function DatumTable({
         return (
           <span className="num" title={tooltip}>
             {ratios}
+            {quarantined && (
+              <span className="datum-audit__quarantine">
+                <Badge tone="warn" title={quarantineReason.trim()}>
+                  excluded
+                </Badge>
+              </span>
+            )}
           </span>
         );
       },

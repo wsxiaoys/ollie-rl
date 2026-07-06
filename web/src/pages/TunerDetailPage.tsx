@@ -240,6 +240,8 @@ export function TunerDetailPage() {
                 items={progress.data.items}
                 groupSize={recipe.group_size}
                 quarantineMinSamples={recipe.quarantine_min_samples}
+                maxLengthRatio={recipe.max_length_ratio}
+                maxSucceedRatio={recipe.max_succeed_ratio}
                 tunerId={data.tuner_id}
               />
             </div>

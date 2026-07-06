@@ -125,7 +125,7 @@ def scheduler_scores(
 #     recipe.group_size`, i.e. half a group's worth of rewarded attempts).
 #     Both gate on rewarded >= min_samples, then:
 #       - length:  rate  >= max_length_ratio.
-#       - succeed: ratio >  max_succeed_ratio.
+#       - succeed: ratio >= max_succeed_ratio.
 #
 # Observability: `get_progress` reuses `terminal_stats` to populate
 # `DatumProgress.length` / `rewarded` / `succeeded` (the raw tallies) so an
@@ -198,7 +198,7 @@ def quarantined_datums(
 
     * length (``max_length_ratio``): length rate ``length / rewarded >=
       max_length_ratio`` -- it repeatedly produces length-limited completions.
-    * too-easy (``max_succeed_ratio``): success ratio ``succeeded / rewarded >
+    * too-easy (``max_succeed_ratio``): success ratio ``succeeded / rewarded >=
       max_succeed_ratio`` -- it is solved too reliably.
 
     Passing ``None`` for a threshold disables that filter. Counts span the
@@ -216,7 +216,7 @@ def quarantined_datums(
             continue
         if (
             max_succeed_ratio is not None
-            and s.succeeded / s.rewarded > max_succeed_ratio
+            and s.succeeded / s.rewarded >= max_succeed_ratio
         ):
             excluded.add(d)
     return excluded
@@ -359,11 +359,12 @@ class DispenseMixin(TunerServiceBase):
           finish reason is ``"length"``.
         * ``recipe.max_succeed_ratio`` -- skip datums solved too reliably
           (success ratio, reward ``== 1.0`` over rewarded attempts,
-          ``> max_succeed_ratio``); considered too easy to yield a useful
+          ``>= max_succeed_ratio``); considered too easy to yield a useful
           learning signal (see ``quarantined_datums``).
 
-        The default ratios (1.0/1.0) are permissive -- succeed never fires and
-        length fires only when every rewarded attempt is length-limited -- and a
+        The default ratios (1.0/1.0) fire only at the extreme: succeed
+        quarantines a datum whose every rewarded attempt succeeded, and length
+        quarantines one whose every rewarded attempt is length-limited -- and a
         datum caught by either is excluded. The scheduler always uses the
         two-phase probe gate (see ``pick_datum``).
         """

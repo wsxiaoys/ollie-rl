@@ -546,6 +546,18 @@ td.num {
   vertical-align: middle;
 }
 
+/* Highlight the ratio that crossed its quarantine threshold, and flag the
+   whole datum as quarantined (no new runs dispensed) with a warn badge. */
+.datum-audit__hit {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.datum-audit__quarantine {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 .batch-readiness__sub {
   margin-top: 8px;
   display: flex;

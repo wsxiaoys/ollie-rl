@@ -257,12 +257,12 @@ class QuarantinedDatumsSucceedTestCase(unittest.TestCase):
     """The too-easy filter of the pure quarantined_datums selector.
 
     A datum is quarantined when it holds at least ``min_samples`` rewarded
-    attempts and the success ratio (``succeeded / rewarded``) is ``>``
+    attempts and the success ratio (``succeeded / rewarded``) is ``>=``
     ``max_succeed_ratio``.
     """
 
     def test_quarantines_high_success_ratio(self):
-        # d1: 3/3 rewarded succeed = 1.0 > 0.9, samples 3 >= 2 -> quarantine.
+        # d1: 3/3 rewarded succeed = 1.0 >= 0.9, samples 3 >= 2 -> quarantine.
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(r1=("d1", 1.0), r2=("d1", 1.0), r3=("d1", 1.0)),
@@ -283,13 +283,29 @@ class QuarantinedDatumsSucceedTestCase(unittest.TestCase):
         )
         self.assertEqual(excluded, set())
 
-    def test_strictly_greater_than_threshold(self):
-        # d1: 2/4 rewarded = exactly 0.5, not > 0.5 -> not quarantined.
+    def test_at_threshold_is_quarantined(self):
+        # d1: 2/4 rewarded = exactly 0.5, >= 0.5 -> quarantined (inclusive).
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(
                 r1=("d1", 1.0),
                 r2=("d1", 1.0),
+                r3=("d1", 0.0),
+                r4=("d1", 0.0),
+            ),
+            {},
+            min_samples=2,
+            max_succeed_ratio=0.5,
+        )
+        self.assertEqual(excluded, {"d1"})
+
+    def test_below_threshold_not_quarantined(self):
+        # d1: 1/4 rewarded = 0.25, < 0.5 -> not quarantined.
+        excluded = quarantined_datums(
+            ["d1"],
+            _rewarded(
+                r1=("d1", 1.0),
+                r2=("d1", 0.0),
                 r3=("d1", 0.0),
                 r4=("d1", 0.0),
             ),

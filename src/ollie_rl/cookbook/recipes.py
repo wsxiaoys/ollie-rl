@@ -29,15 +29,15 @@ class Recipe(BaseModel, frozen=True):
     # Skip datums that no longer yield a useful learning signal. Both ratios
     # are measured over the datum's rewarded attempts (all-time, no recency
     # window) and only take effect once the datum has accumulated at least
-    # `quarantine_min_samples` rewarded attempts. The default ratios (1.0) are
-    # permissive: `max_succeed_ratio = 1.0` never fires (a success ratio can't
-    # exceed 1.0) and `max_length_ratio = 1.0` fires only when *every* rewarded
-    # attempt is length-limited.
+    # `quarantine_min_samples` rewarded attempts. The default ratios (1.0) fire
+    # only at the extreme: `max_succeed_ratio = 1.0` quarantines a datum whose
+    # every rewarded attempt succeeded, and `max_length_ratio = 1.0` quarantines
+    # one whose every rewarded attempt is length-limited.
     #
     #   * `max_length_ratio`: quarantine when the fraction of rewarded attempts
     #     with a length-limited completion is >= this value.
     #   * `max_succeed_ratio`: quarantine when the success ratio (reward == 1.0
-    #     over rewarded attempts) is > this value (solved too reliably).
+    #     over rewarded attempts) is >= this value (solved too reliably).
     max_length_ratio: float = 1.0
     max_succeed_ratio: float = 1.0
     # Number of rewarded attempts a datum must accumulate before the quarantine
