@@ -80,7 +80,7 @@ def scheduler_scores(
 #     its datum id. A run is `expired` when it either still has a lingering
 #     `InFlightChatCompletionModel` row (generation stalled) or its summed
 #     completion `duration_ms` is at/past the expiration threshold
-#     (`RUN_EXPIRE_DURATION_MS`). Both
+#     (`RUN_EXPIRE_GENERATION_BUDGET_MS`). Both
 #     signals honor the recency window, and the "expired and unrewarded" filter
 #     lives in SQL, so ongoing runs (still within their lease) never appear.
 #     Drives the *expiration* numerator.
@@ -98,7 +98,7 @@ def scheduler_scores(
 #     has a lingering in-flight op -- an op that timed out / was cancelled and is
 #     still progressing on the backend, i.e. the *generation itself* was too slow
 #     to finish within the lease; or (b) its summed completion `duration_ms` is
-#     at/past the expiration threshold (`RUN_EXPIRE_DURATION_MS`) -- it burned
+#     at/past the expiration threshold (`RUN_EXPIRE_GENERATION_BUDGET_MS`) -- it burned
 #     real compute yet never finished. Both are the "never finishes in time"
 #     waste quarantine targets.
 #     Runs matching neither are `lost` and ignored: a crashed/abandoned worker,
