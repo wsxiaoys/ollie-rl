@@ -210,6 +210,24 @@ class ChatCompletionModel(BaseModel):
     )
 
 
+# Length-limited-run scan (`_length_datums`, the hot path behind the frequently
+# polled progress snapshot) filters
+# `tuner_id = ? AND response->choices[0]->finish_reason = 'length'`. Every
+# recorded completion is single-choice, so this JSON-path extract is the length
+# signal. A functional index over the *extracted* finish reason lets the planner
+# evaluate the predicate from the index instead of reading and JSON-parsing each
+# (potentially large) `response` blob per row; `run_id` is carried as a trailing
+# key so the run-id listing is served from the index alone. The expression is
+# built from the ORM JSON accessor so it renders per-dialect (`JSON_EXTRACT` on
+# SQLite, `#>>` on Postgres) and matches the query expression exactly.
+Index(
+    "ix_chat_completions_tuner_id_finish_reason",
+    ChatCompletionModel.tuner_id,
+    ChatCompletionModel.response["choices"][0]["finish_reason"].as_string(),
+    ChatCompletionModel.run_id,
+)
+
+
 class InFlightChatCompletionModel(BaseModel):
     """
     Durable resume state for a chat completion whose backend op is still
