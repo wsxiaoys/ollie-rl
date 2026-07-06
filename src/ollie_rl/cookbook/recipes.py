@@ -19,8 +19,8 @@ class Recipe(BaseModel, frozen=True):
     # ---- Run lease ------------------------------------------------------
     # Fixed time budget (seconds) granted to a run at creation. The whole run
     # (all turns combined) must finish within this window before it is
-    # considered expired; the deadline never moves once set. Defaults to 2h.
-    run_expire_seconds: int = 2 * 60 * 60
+    # considered expired; the deadline never moves once set. Defaults to 1.5h.
+    run_expire_seconds: int = 5400
 
 
 # ---- Named recipe instances --------------------------------------------
