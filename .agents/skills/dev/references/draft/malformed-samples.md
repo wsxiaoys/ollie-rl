@@ -13,6 +13,31 @@ Read this alongside [`data-model.md`](./data-model.md) (for the
 
 ---
 
+## ⚠️ Implementation status (how the shipped design diverged)
+
+This remains the design rationale, but the code that shipped chose a
+different surface than the draft below. Treat the specifics here as
+historical; the current behavior is:
+
+- **`finish_reason = "content_filter"` *was* adopted** to mark malformed
+  samples — the "semantic overload of `content_filter`" alternative that the
+  table at the bottom lists as *rejected*. The trainer
+  (`trainer/tinker/trainer.py`, `trainer/gemini_msrl.py`) sets
+  `finish_reason = "content_filter"` on malformed completions.
+- **The penalty is `Recipe.content_filter_penalty` (default `-1.0`)**, not
+  `Recipe.malformed_penalty`.
+- **The error is `content_filter_sample` → `409 Conflict`** (see
+  `server/app.py`), not `MalformedSampleError`. The rest of the flow matches
+  the draft: the malformed completion is recorded, the reward is set
+  server-side, and the sample trains as a first-class GRPO example (it is
+  *not* dropped or re-dispensed).
+- **Quarantine interaction:** a `content_filter` run counts in `rewarded` and,
+  alongside `length`, feeds the `max_unhealthy_finish_ratio` quarantine
+  numerator (`(length + content_filter) / rewarded`). See `quarantined_datums`
+  in `service/tuner/dispensing.py`.
+
+---
+
 ## TL;DR
 
 - Malformed model output is **expected** during GRPO training,

@@ -92,7 +92,12 @@ Workers request work by calling `POST /tuners/{tuner_id}/runs` with an empty bod
 - **200 OK**: Returns `{ run_id, datum_id, expires_at }`. The worker should execute the run.
 - **204 No Content**: The trainer is currently in the middle of a train step. The response includes a `Retry-After: 1` header. The worker should back off and retry.
 
-Optional query param `max_expire_rate` (float in `[0, 1]`, omit to disable): when set, the dispenser skips ("quarantines") datums that genuinely keep expiring — those whose recent expiration rate is `>= max_expire_rate`. The rate counts only `expired` runs: unrewarded runs whose lease passed while a lingering in-flight op remained (an `InFlightChatCompletionModel` row — the generation itself stalled past the lease). `lost` runs (crashed/abandoned worker, or runs abandoned after their ops completed) are *not* counted. The rate is measured over a recent policy-generation window so quarantined datums can recover automatically. See the "Expiration quarantine" section in `tuner_service.py` for the full mechanism.
+**Datum quarantine** is configured on the tuner's `Recipe` (not via query params): the dispenser skips ("quarantines") datums that no longer yield a useful learning signal. Both filters are measured over the datum's **rewarded** attempts (all-time — no recency window) and only take effect once the datum has accumulated at least `quarantine_min_samples` rewarded attempts:
+
+- `max_unhealthy_finish_ratio` — quarantine when the fraction of rewarded attempts that ended on an **unhealthy finish reason** is `>= this value`. Unhealthy finishes are the two auto-penalty finish reasons summed together: `length` (length-limited, incl. the context-window guard rewriting an oversized completion) and `content_filter` (a malformed model output the server terminated with `content_filter_penalty`). The rate is `(length + content_filter) / rewarded`.
+- `max_succeed_ratio` — quarantine when the success ratio (`reward == 1.0` over rewarded attempts, `succeeded / rewarded`) is `>= this value` (solved too reliably).
+
+Both filters share the full `rewarded` denominator and the `quarantine_min_samples` gate. The default ratios (`1.0` / `1.0`) fire only at the extreme. Since a quarantined datum receives no new runs, once it crosses a threshold it stays quarantined. `expired` / `lost` runs are observability-only and are **not** a quarantine metric. See `quarantined_datums` in `service/tuner/dispensing.py` for the full mechanism.
 
 ### Phase 2 — execute run and submit reward
 
