@@ -817,8 +817,12 @@ export interface components {
         DatumCoverage: {
             /** In Progress */
             in_progress: number;
+            /** Trained */
+            trained: number;
             /** Never Trained */
             never_trained: number;
+            /** Excluded */
+            excluded: number;
         };
         /**
          * DatumPool
@@ -1325,8 +1329,6 @@ export interface components {
             lost: number;
             /** Rewarded */
             rewarded: number;
-            /** Consumable */
-            consumable: number;
             /** Trained */
             trained: number;
             /** Rejected */

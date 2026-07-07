@@ -58,7 +58,6 @@ export function TunerDetailPage() {
         maxSucceedRatio: recipe.max_succeed_ratio,
       }).quarantined,
   ).length;
-  const activeCount = datumItems.length - excludedCount;
 
   return (
     <div className="page">
@@ -130,11 +129,6 @@ export function TunerDetailPage() {
               tone="muted"
             />
             <StatCard label="rewarded" value={progress.runs.rewarded} />
-            <StatCard
-              label="consumable"
-              value={progress.runs.consumable}
-              tone="good"
-            />
             <StatCard label="trained" value={progress.runs.trained} />
             <StatCard
               label="expired"
@@ -189,13 +183,25 @@ export function TunerDetailPage() {
                     <span className="big">
                       {progress.data.coverage.in_progress}
                     </span>
-                    <span className="muted">data in progress</span>
+                    <span className="muted">datums in progress</span>
+                  </div>
+                  <div>
+                    <span className="big">
+                      {progress.data.coverage.trained}
+                    </span>
+                    <span className="muted">trained</span>
                   </div>
                   <div>
                     <span className="big">
                       {progress.data.coverage.never_trained}
                     </span>
                     <span className="muted">never trained</span>
+                  </div>
+                  <div>
+                    <span className="big">
+                      {progress.data.coverage.excluded}
+                    </span>
+                    <span className="muted">excluded</span>
                   </div>
                 </div>
               </div>
@@ -244,15 +250,6 @@ export function TunerDetailPage() {
             title="Datum pool"
             right={
               <div className="datum-pool-header">
-                <span className="muted">
-                  {excludedCount > 0 ? (
-                    <>
-                      {activeCount} active · {excludedCount} excluded
-                    </>
-                  ) : (
-                    <>{activeCount} active data</>
-                  )}
-                </span>
                 <label className="datum-pool-toggle">
                   <input
                     type="checkbox"

@@ -73,7 +73,6 @@ class RunProgress(BaseModel):
     # Matches the `lost` run status; re-dispensable.
     lost: int
     rewarded: int  # reward set (any trained/rejected state)
-    consumable: int  # rewarded & trained<=0 & rejected<=0 & not stale
     trained: int  # trained_count > 0
     rejected: int  # rejected_count > 0
 
@@ -134,7 +133,9 @@ class DatumCoverage(BaseModel):
     """How the datum pool is being exercised."""
 
     in_progress: int  # datums with >=1 consumable or in-flight run
+    trained: int  # datums with >=1 trained run
     never_trained: int  # datums with no trained run yet
+    excluded: int  # datums quarantined out of the dispensable pool
 
 
 class DatumPool(BaseModel):

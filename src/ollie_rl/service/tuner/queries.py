@@ -278,7 +278,7 @@ class QueryMixin(TunerServiceBase):
 
         group_size = recipe.group_size
 
-        in_flight = expired = lost = rewarded = consumable = trained = rejected = 0
+        in_flight = expired = lost = rewarded = trained = rejected = 0
         consumable_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         in_flight_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         trained_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
@@ -311,7 +311,6 @@ class QueryMixin(TunerServiceBase):
             if rewarded_flag and r.trained_count <= 0 and r.rejected_count <= 0:
                 run_generation = generation_by_run_id.get(r.id)
                 if run_generation is None or (generation - run_generation <= max_off):
-                    consumable += 1
                     if r.datum_id in consumable_by_datum:
                         consumable_by_datum[r.datum_id] += 1
 
@@ -327,6 +326,20 @@ class QueryMixin(TunerServiceBase):
         for datum_id in expired_datum_by_run.values():
             if datum_id in expired_by_datum:
                 expired_by_datum[datum_id] += 1
+
+        # Datums quarantined out of the dispensable pool. Computed up front so
+        # the coverage counters below can net them out: a quarantined datum
+        # can't progress toward a future batch and won't be trained while
+        # excluded, so counting it as "in progress" or "never trained" would
+        # overstate the active/reachable pool.
+        excluded = quarantined_datums(
+            datum_pool,
+            rewarded_by_run,
+            finish_reason_by_run,
+            min_samples=recipe.quarantine_min_samples,
+            max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
+            max_succeed_ratio=recipe.max_succeed_ratio,
+        )
 
         items: List[DatumProgress] = []
         groups_ready = 0
@@ -362,9 +375,12 @@ class QueryMixin(TunerServiceBase):
             # "in progress" and batch readiness only reflect datums with an
             # active (consumable or in-flight) group. A purely trained datum is
             # listed for visibility but isn't forming a new group, so it must
-            # not inflate these counters.
+            # not inflate these counters. Quarantined (excluded) datums are left
+            # out of the `datums_in_progress` coverage count since they can no
+            # longer progress toward a future batch.
             if count > 0 or pending > 0:
-                datums_in_progress += 1
+                if datum_id not in excluded:
+                    datums_in_progress += 1
                 ready = count >= group_size
                 if ready:
                     groups_ready += 1
@@ -386,20 +402,21 @@ class QueryMixin(TunerServiceBase):
             )
         items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
 
-        never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
+        # Datums with any training history (historical fact, so quarantined
+        # datums that were trained before exclusion still count).
+        trained_datums = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) > 0)
+        # Reachable, still-untrained datums: exclude quarantined ones since they
+        # won't be trained while excluded.
+        never_trained = sum(
+            1
+            for d in datum_pool
+            if trained_by_datum.get(d, 0) == 0 and d not in excluded
+        )
 
         scores = scheduler_scores(datum_pool, runs)
         # Mirror the dispenser: quarantine is configured on the recipe, so the
         # `next_pick` preview filters the same problematic datums out of the
         # candidate pool and `pick_datum` applies the matching probe gate.
-        excluded = quarantined_datums(
-            datum_pool,
-            rewarded_by_run,
-            finish_reason_by_run,
-            min_samples=recipe.quarantine_min_samples,
-            max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
-            max_succeed_ratio=recipe.max_succeed_ratio,
-        )
         picked_pool = [d for d in datum_pool if d not in excluded]
         picked = pick_datum(picked_pool, runs, recipe)
         if picked is None:
@@ -423,14 +440,15 @@ class QueryMixin(TunerServiceBase):
                 expired=expired,
                 lost=lost,
                 rewarded=rewarded,
-                consumable=consumable,
                 trained=trained,
                 rejected=rejected,
             ),
             data=DatumPool(
                 coverage=DatumCoverage(
                     in_progress=datums_in_progress,
+                    trained=trained_datums,
                     never_trained=never_trained,
+                    excluded=len(excluded),
                 ),
                 items=items,
             ),

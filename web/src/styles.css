@@ -518,11 +518,16 @@ td.num {
 }
 
 /* ---- Batch readiness ---- */
-.batch-readiness__numbers,
-.coverage > div {
+.batch-readiness__numbers {
   display: flex;
   align-items: baseline;
   gap: 8px;
+}
+
+.coverage > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .big {
@@ -595,6 +600,11 @@ td.num {
 .coverage {
   display: flex;
   gap: 32px;
+}
+
+.coverage .muted {
+  font-size: 13px;
+  line-height: 1.2;
 }
 
 /* ---- Next pick ---- */
