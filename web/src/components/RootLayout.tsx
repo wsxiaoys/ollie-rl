@@ -13,6 +13,7 @@ function getInitialTheme(): "dark" | "light" {
 
 export function RootLayout() {
   const [theme, setTheme] = useState<"dark" | "light">(getInitialTheme);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -25,6 +26,12 @@ export function RootLayout() {
 
   const navigate = useNavigate();
   const { pathname, search } = useRouterState({ select: (s) => s.location });
+
+  // Close the mobile drawer whenever the location (path or search) changes so
+  // tapping a nav link / picking a tuner returns you to the page content.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname, search]);
   const { data } = useQuery(tunersQuery);
   const tuners = data?.tuners ?? [];
 
@@ -59,9 +66,26 @@ export function RootLayout() {
   };
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={"app-shell" + (menuOpen ? " app-shell--menu-open" : "")}>
+      <header className="topbar">
+        <button
+          type="button"
+          className="topbar__menu"
+          aria-label="Open navigation menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen(true)}
+        >
+          ☰
+        </button>
         <div className="brand">🛹 ollie-rl</div>
+      </header>
+      <div
+        className="sidebar-backdrop"
+        aria-hidden
+        onClick={() => setMenuOpen(false)}
+      />
+      <aside className="sidebar">
+        <div className="brand brand--sidebar">🛹 ollie-rl</div>
 
         <div className="tuner-picker">
           <label htmlFor="sidebar-tuner">Tuner</label>

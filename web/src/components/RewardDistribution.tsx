@@ -52,6 +52,7 @@ function DistributionBar({
 
 function DistributionTable({ dist }: { dist: RewardDistributionData }) {
   return (
+    <div className="table-scroll">
     <table className="table table--dense">
       <thead>
         <tr>
@@ -85,6 +86,7 @@ function DistributionTable({ dist }: { dist: RewardDistributionData }) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 

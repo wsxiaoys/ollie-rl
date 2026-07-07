@@ -29,6 +29,7 @@ export function TunerListPage() {
       )}
 
       {data && data.tuners.length > 0 && (
+        <div className="table-scroll">
         <table className="table">
           <thead>
             <tr>
@@ -61,6 +62,7 @@ export function TunerListPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );

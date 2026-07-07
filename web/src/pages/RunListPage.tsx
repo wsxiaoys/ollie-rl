@@ -118,6 +118,7 @@ export function RunListPage() {
       )}
 
       {tunerId && runsQ.data && runs.length > 0 && (
+        <div className="table-scroll">
         <table className="table table--dense">
           <thead>
             <tr>
@@ -197,6 +198,7 @@ export function RunListPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {tunerId && runs.length > 0 && (

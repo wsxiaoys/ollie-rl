@@ -142,6 +142,7 @@ export function DatumsPage() {
                 No runs dispensed for this datum yet.
               </div>
             ) : (
+              <div className="table-scroll">
               <table className="table table--dense">
                 <thead>
                   <tr>
@@ -208,6 +209,7 @@ export function DatumsPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </Panel>
         </>
