@@ -266,13 +266,15 @@ class QueryMixin(TunerServiceBase):
             # unaffected.
             rewarded_by_run: Dict[str, RewardedRun] = {}
             expired_datum_by_run: Dict[str, str] = {}
-            length_datum_by_run: Dict[str, str] = {}
+            finish_reason_by_run: Dict[str, str] = {}
             if runs:
                 rewarded_by_run = await self._rewarded_datums(tuner_id, session)
                 expired_datum_by_run = await self._expired_datums(
                     tuner_id, now, session
                 )
-                length_datum_by_run = await self._length_datums(tuner_id, session)
+                finish_reason_by_run = await self._finish_reason_datums(
+                    tuner_id, session
+                )
 
         group_size = recipe.group_size
 
@@ -319,7 +321,7 @@ class QueryMixin(TunerServiceBase):
         stats_by_datum = terminal_stats(
             datum_pool,
             rewarded_by_run,
-            length_datum_by_run,
+            finish_reason_by_run,
         )
         expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         for datum_id in expired_datum_by_run.values():
@@ -334,10 +336,11 @@ class QueryMixin(TunerServiceBase):
             count = consumable_by_datum[datum_id]
             pending = in_flight_by_datum.get(datum_id, 0)
             trained_here = trained_by_datum.get(datum_id, 0)
-            # `terminal_stats` gives per-datum (rewarded, length, succeeded).
-            # `length`, `rewarded`, and `succeeded` let a client derive the
-            # active length/success quarantine ratios. Expired is counted
-            # separately for run-status observability only.
+            # `terminal_stats` gives per-datum (rewarded, length, succeeded,
+            # content_filter). These let a client derive the active
+            # unhealthy-finish (`(length + content_filter) / rewarded`) and
+            # success quarantine ratios. Expired is counted separately for
+            # run-status observability only.
             stats = stats_by_datum.get(datum_id, TerminalStats())
             expired_here = expired_by_datum.get(datum_id, 0)
             # Surface any datum that has activity worth showing: a group
@@ -353,6 +356,7 @@ class QueryMixin(TunerServiceBase):
                 and trained_here <= 0
                 and expired_here <= 0
                 and stats.length <= 0
+                and stats.content_filter <= 0
             ):
                 continue
             # "in progress" and batch readiness only reflect datums with an
@@ -376,6 +380,7 @@ class QueryMixin(TunerServiceBase):
                     length=stats.length,
                     rewarded=stats.rewarded,
                     succeeded=stats.succeeded,
+                    content_filter=stats.content_filter,
                     trained=trained_here,
                 )
             )
@@ -390,9 +395,9 @@ class QueryMixin(TunerServiceBase):
         excluded = quarantined_datums(
             datum_pool,
             rewarded_by_run,
-            length_datum_by_run,
+            finish_reason_by_run,
             min_samples=recipe.quarantine_min_samples,
-            max_length_ratio=recipe.max_length_ratio,
+            max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
             max_succeed_ratio=recipe.max_succeed_ratio,
         )
         picked_pool = [d for d in datum_pool if d not in excluded]
@@ -597,7 +602,7 @@ class QueryMixin(TunerServiceBase):
             generations: Dict[str, int] = {}
             durations: Dict[str, int] = {}
             context_windows: Dict[str, int] = {}
-            length_datum_by_run: Dict[str, str] = {}
+            finish_reason_by_run: Dict[str, str] = {}
             if runs:
                 # One grouped pass yields the completion count, the run's
                 # policy generation (max across its completions), the total
@@ -642,7 +647,7 @@ class QueryMixin(TunerServiceBase):
                     if max_context_tokens is not None:
                         context_windows[run_id] = int(max_context_tokens)
 
-                length_datum_by_run = await self._length_datums(
+                finish_reason_by_run = await self._finish_reason_datums(
                     tuner_id, session, run_ids=run_ids
                 )
 
@@ -667,7 +672,8 @@ class QueryMixin(TunerServiceBase):
                 durations.get(r.id),
                 context_windows.get(r.id),
                 r.id in expired_run_ids,
-                r.id in length_datum_by_run,
+                finish_reason_by_run.get(r.id) == "length",
+                finish_reason_by_run.get(r.id) == "content_filter",
             )
             for r in runs
         ]
@@ -710,7 +716,7 @@ class QueryMixin(TunerServiceBase):
             expired_run_ids = set(
                 await self._expired_datums(tuner_id, now, session, run_ids=[run_id])
             )
-            length_datum_by_run = await self._length_datums(
+            finish_reason_by_run = await self._finish_reason_datums(
                 tuner_id, session, run_ids=[run_id]
             )
 
@@ -733,7 +739,8 @@ class QueryMixin(TunerServiceBase):
             duration_ms_total,
             context_window_tokens_max,
             run_id in expired_run_ids,
-            run_id in length_datum_by_run,
+            finish_reason_by_run.get(run_id) == "length",
+            finish_reason_by_run.get(run_id) == "content_filter",
         )
         completion_items = [
             ChatCompletionItem(

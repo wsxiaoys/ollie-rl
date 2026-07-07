@@ -848,6 +848,8 @@ export interface components {
             rewarded: number;
             /** Succeeded */
             succeeded: number;
+            /** Content Filter */
+            content_filter: number;
             /** Trained */
             trained: number;
         };
@@ -1223,10 +1225,10 @@ export interface components {
              */
             max_context_window: number;
             /**
-             * Max Length Ratio
+             * Max Unhealthy Finish Ratio
              * @default 1
              */
-            max_length_ratio: number;
+            max_unhealthy_finish_ratio: number;
             /**
              * Max Succeed Ratio
              * @default 1
@@ -1282,7 +1284,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "in_flight" | "expired" | "lost" | "length" | "rewarded" | "trained" | "rejected";
+            status: "in_flight" | "expired" | "lost" | "length" | "content_filter" | "rewarded" | "trained" | "rejected";
             /** Reward */
             reward: number | null;
             /** Policy Generation */

@@ -85,10 +85,10 @@ class DatumProgress(BaseModel):
     consumable: int  # rewarded runs counting toward this group's group_size
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
     # Per-datum terminal-attempt tallies over the datum's entire history (no
-    # recency window). `rewarded` is the quarantine denominator for POST /runs
-    # (`max_length_ratio` / `max_succeed_ratio`):
-    #   * length rate   = length    / rewarded
-    #   * success ratio = succeeded / rewarded
+    # recency window). Both POST /runs quarantine filters share the full
+    # `rewarded` denominator and the `min_samples` gate:
+    #   * unhealthy-finish rate = (length + content_filter) / rewarded
+    #   * success ratio         = succeeded / rewarded
     #
     # `expired`: all-time count of `expired` runs -- expired, unrewarded runs
     # that either still have a lingering in-flight op (the generation itself
@@ -97,12 +97,21 @@ class DatumProgress(BaseModel):
     # `RunProgress.expired`. This is observability-only and is not used for
     # quarantine.
     expired: int
-    # `rewarded`: runs that earned a reward (the quarantine denominator).
-    # `length`: the subset of rewarded runs with a length finish reason.
+    # `rewarded`: every run that earned a reward, *including* both length-limited
+    # and content-filtered (malformed) runs (consistent with batch/group
+    # accounting). It is the shared denominator for both quarantine filters and
+    # the `min_samples` gate.
+    # `length`: the subset of rewarded runs with a length finish reason; part of
+    # the unhealthy-finish numerator.
     # `succeeded`: the `reward == 1.0` subset of `rewarded`.
+    # `content_filter`: the subset of rewarded runs whose completion was
+    # content-filtered (malformed); carries the `content_filter_penalty` reward.
+    # Summed with `length` into the unhealthy-finish numerator (both are
+    # auto-penalty degenerate rollouts).
     length: int
     rewarded: int
     succeeded: int
+    content_filter: int
     trained: int  # prior training exposure (fresh-tier tie-break)
 
 
@@ -184,11 +193,16 @@ class ListDatumsResponse(BaseModel):
 # the expired/lost split, whether a lingering in-flight op remains or the run's
 # total duration crossed the expiration threshold). The labels are mutually
 # exclusive and assigned by priority in `TunerService`:
-# trained > rejected > length > rewarded > in_flight > expired > lost.
+# trained > rejected > length > content_filter > rewarded > in_flight > expired
+# > lost.
 #
 # `length` means at least one recorded completion exceeded the recipe's
 # `max_context_window` (prompt + completion + reasoning tokens) and was converted
-# to a cleared length sample. `expired` and `lost` both mean "reward is None and
+# to a cleared length sample. `content_filter` means at least one completion was
+# content-filtered (a malformed model output the server terminated with the
+# recipe's `content_filter_penalty`); like `length`, it is an unhealthy finish
+# reason, and both are summed into the `max_unhealthy_finish_ratio` quarantine
+# numerator. `expired` and `lost` both mean "reward is None and
 # the lease has passed"; they differ on *why*. `expired` means a compute-waste
 # signal fired: the run either still has a lingering `InFlightChatCompletionModel`
 # row (the generation itself stalled past the lease) or its summed completion
@@ -196,9 +210,17 @@ class ListDatumsResponse(BaseModel):
 # (crashed/abandoned worker, or ops all finished but no reward was ever posted).
 # Both are surfaced as their own aggregate counts (`RunProgress.expired` /
 # `RunProgress.lost`) and per-datum (`DatumProgress.expired`). Quarantine uses
-# rewarded length samples instead of expired runs.
+# rewarded unhealthy-finish (length + content_filter) samples instead of expired
+# runs.
 RunStatus = Literal[
-    "in_flight", "expired", "lost", "length", "rewarded", "trained", "rejected"
+    "in_flight",
+    "expired",
+    "lost",
+    "length",
+    "content_filter",
+    "rewarded",
+    "trained",
+    "rejected",
 ]
 
 

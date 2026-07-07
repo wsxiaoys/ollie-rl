@@ -136,9 +136,10 @@ async def dispense_run(
 ) -> tuple[str, str] | None:
     """Return ``(run_id, datum_id)`` or ``None`` when the trainer is busy (204).
 
-    Datum quarantine (length-rate / success-rate filtering) is now configured
-    on the tuner's recipe (``max_length_ratio`` / ``max_succeed_ratio``), not
-    per request, so this call takes no quarantine params.
+    Datum quarantine (unhealthy-finish-rate / success-rate filtering) is now
+    configured on the tuner's recipe (``max_unhealthy_finish_ratio`` /
+    ``max_succeed_ratio``), not per request, so this call takes no quarantine
+    params.
     """
     resp = await client.post(f"/tuners/{tuner_id}/runs")
     if resp.status_code == 204:

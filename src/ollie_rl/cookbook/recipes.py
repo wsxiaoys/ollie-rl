@@ -31,14 +31,18 @@ class Recipe(BaseModel, frozen=True):
     # window) and only take effect once the datum has accumulated at least
     # `quarantine_min_samples` rewarded attempts. The default ratios (1.0) fire
     # only at the extreme: `max_succeed_ratio = 1.0` quarantines a datum whose
-    # every rewarded attempt succeeded, and `max_length_ratio = 1.0` quarantines
-    # one whose every rewarded attempt is length-limited.
+    # every rewarded attempt succeeded, and `max_unhealthy_finish_ratio = 1.0`
+    # quarantines one whose every rewarded attempt ended on an unhealthy finish
+    # reason (`length` or `content_filter`).
     #
-    #   * `max_length_ratio`: quarantine when the fraction of rewarded attempts
-    #     with a length-limited completion is >= this value.
+    #   * `max_unhealthy_finish_ratio`: quarantine when the fraction of rewarded
+    #     attempts that ended on an unhealthy finish reason -- length-limited
+    #     (`length`) or malformed (`content_filter`) -- is >= this value. Both
+    #     are auto-penalty degenerate rollouts (no verifier grade), so they
+    #     share one numerator: `(length + content_filter) / rewarded`.
     #   * `max_succeed_ratio`: quarantine when the success ratio (reward == 1.0
     #     over rewarded attempts) is >= this value (solved too reliably).
-    max_length_ratio: float = 1.0
+    max_unhealthy_finish_ratio: float = 1.0
     max_succeed_ratio: float = 1.0
     # Number of rewarded attempts a datum must accumulate before the quarantine
     # verdict is trusted. Also sets the two-phase probe size: a started group is

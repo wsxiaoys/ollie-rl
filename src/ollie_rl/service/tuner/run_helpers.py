@@ -41,7 +41,11 @@ def last_train_op_duration_seconds(state_data: object) -> Optional[float]:
 
 
 def _run_status(
-    run: RunModel, now: datetime, is_expired: bool, is_length: bool
+    run: RunModel,
+    now: datetime,
+    is_expired: bool,
+    is_length: bool,
+    is_content_filter: bool,
 ) -> RunStatus:
     """Derive a single mutually-exclusive lifecycle label for a run.
 
@@ -50,9 +54,14 @@ def _run_status(
     reward/lease state.
 
     ``is_length`` marks runs where at least one completion exceeded the recipe's
-    ``max_context_window`` and was rewritten to a length sample. It is surfaced
-    before ordinary rewarded state so dashboard run rows can distinguish this
-    automatic penalty path from user-provided rewards.
+    ``max_context_window`` and was rewritten to a length sample.
+    ``is_content_filter`` marks runs whose completion was content-filtered
+    (malformed) and carried the ``content_filter_penalty`` reward. Both are
+    surfaced before ordinary rewarded state so dashboard run rows can
+    distinguish these automatic penalty paths from user-provided rewards. They
+    are mutually exclusive in practice (a run terminates at its first
+    behavior-penalty completion); ``length`` takes precedence if both were ever
+    recorded.
 
     Once a run is past its lease with no reward, ``is_expired`` splits it into
     ``expired`` vs ``lost``. ``is_expired`` is true when the run either still
@@ -68,6 +77,8 @@ def _run_status(
         return "rejected"
     if is_length:
         return "length"
+    if is_content_filter:
+        return "content_filter"
     if run.reward is not None:
         return "rewarded"
     if run.expires_at > now:
@@ -108,11 +119,12 @@ def build_run_item(
     context_window_tokens_max: Optional[int] = None,
     is_expired: bool = False,
     is_length: bool = False,
+    is_content_filter: bool = False,
 ) -> RunItem:
     return RunItem(
         run_id=run.id,
         datum_id=run.datum_id,
-        status=_run_status(run, now, is_expired, is_length),
+        status=_run_status(run, now, is_expired, is_length, is_content_filter),
         reward=run.reward,
         policy_generation=policy_generation,
         trained_count=run.trained_count,

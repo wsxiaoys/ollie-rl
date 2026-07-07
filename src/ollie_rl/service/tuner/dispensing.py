@@ -46,6 +46,18 @@ def scheduler_scores(
 
     Shared by ``pick_datum`` (dispense decision) and the progress builder
     (``next_pick`` labeling) so the two never drift.
+
+    Note: ``rewarded`` here intentionally counts *every* run with a reward set,
+    including content-filtered (malformed) runs -- unlike the quarantine
+    denominator in :func:`terminal_stats`, which excludes them. The two measure
+    different things: this is batch/group accounting, and a malformed run is a
+    first-class GRPO sample (it carries the ``content_filter_penalty`` reward
+    and trains with a negative advantage; see ``_collect_consumable_batch``), so
+    it must count toward ``group_size``. Excluding it here would leave any group
+    with a malformed run permanently short of ``group_size``, over-dispensing to
+    replace a sample that is actually trainable. Quarantine, by contrast, asks
+    whether the datum still yields a useful signal *distribution*, where a
+    malformed outcome is noise -- hence the deliberate mismatch.
     """
     now = utcnow()
     score = {d: 0 for d in datum_pool}
@@ -75,8 +87,8 @@ def scheduler_scores(
 # `dispense_run` accepts two optional thresholds (both from `POST /runs` query
 # params; omit/None to disable each):
 #
-#   * `max_length_ratio` -- quarantine datums whose rewarded attempts too often
-#     produce length-limited completions.
+#   * `max_unhealthy_finish_ratio` -- quarantine datums whose rewarded attempts
+#     too often end on an unhealthy finish reason (length-limited or malformed).
 #   * `max_succeed_ratio` -- quarantine datums that are solved too reliably, so
 #     compute isn't wasted on datums the policy has already mastered (they no
 #     longer produce a useful learning signal).
@@ -89,15 +101,18 @@ def scheduler_scores(
 #     both filters. The reward lets the success numerator (`reward == 1.0`) be
 #     derived from this same map -- no separate query. Every rewarded run for
 #     the tuner is counted (no recency window).
-#   * `_length_datums` (DB, in tuner_service): per run with at least one
-#     length-limited completion, its datum id. `terminal_stats` intersects this
-#     with `_rewarded_datums`, so the length numerator is a subset of the
-#     rewarded denominator.
+#   * `_finish_reason_datums` (DB, in tuner_service): per run with a
+#     behavior-penalty terminal `finish_reason`, that reason (`"length"` or
+#     `"content_filter"`). `terminal_stats` joins it to `_rewarded_datums`: both
+#     `length` and `content_filter` runs are tallied (each on its own axis) and
+#     both count in `rewarded`. The unhealthy-finish filter sums them
+#     (`length + content_filter`) over the full `rewarded` denominator.
 #   * Expired/lost status is tracked separately in `tuner_service` for progress
 #     and run-list observability, but is intentionally not a quarantine metric
 #     anymore.
 #   * `terminal_stats` (pure): per-datum `TerminalStats(rewarded, length,
-#     succeeded)`, computed straight from the already-windowed maps.
+#     succeeded, content_filter)`, computed straight from the already-windowed
+#     maps.
 #   * `quarantined_datums` (pure): turns those tallies into the quarantine set
 #     for whichever thresholds are supplied.
 #   * `dispense_run`: filters the quarantined datums out of the candidate pool.
@@ -109,13 +124,22 @@ def scheduler_scores(
 #     from the local context-window guard rewriting an oversized completion, so
 #     repeated length samples are a clear signal that the datum often exhausts
 #     the available generation budget.
+#   * Content-filtered (malformed). A run with at least one completion whose
+#     `finish_reason` is `"content_filter"`, terminated with the recipe's
+#     `content_filter_penalty`. It counts as a real reward (in `rewarded`, like
+#     batch/group accounting) and, like `length`, as an unhealthy finish: both
+#     are auto-penalty degenerate rollouts (no verifier grade), so the
+#     unhealthy-finish filter sums them into one numerator.
 #   * Succeeded. A rewarded run with `reward == 1.0`; a subset of the rewarded
 #     runs, derived from `RewardedRun.reward`.
-#   * Quarantine denominator. Both active quarantine metrics use rewarded
-#     attempts only (expired/lost attempts are excluded because they no longer
-#     drive quarantine):
-#       - length rate   = length    / rewarded.
-#       - success ratio = succeeded / rewarded.
+#   * Quarantine denominators (expired/lost attempts never counted). Both
+#     filters share the full `rewarded` denominator and the `min_samples` gate
+#     (`rewarded >= min_samples`):
+#       - unhealthy-finish rate = (length + content_filter) / rewarded.
+#       - success ratio         = succeeded / rewarded.
+#     `content_filter` is no longer subtracted anywhere: a malformed run is a
+#     genuine (degenerate) rewarded attempt, so it counts both as a sample and
+#     in the unhealthy-finish numerator alongside `length`.
 #   * All-time counting. Every rewarded attempt for a datum is counted -- there
 #     is no recency window, so all signals span the datum's entire history. A
 #     quarantined datum receives no new runs, so once it crosses a threshold
@@ -124,8 +148,8 @@ def scheduler_scores(
 #   * Quarantine conditions (dispense passes `min_samples = 0.5 *
 #     recipe.group_size`, i.e. half a group's worth of rewarded attempts).
 #     Both gate on rewarded >= min_samples, then:
-#       - length:  rate  >= max_length_ratio.
-#       - succeed: ratio >= max_succeed_ratio.
+#       - unhealthy: rate  >= max_unhealthy_finish_ratio.
+#       - succeed:   ratio >= max_succeed_ratio.
 #
 # Observability: `get_progress` reuses `terminal_stats` to populate
 # `DatumProgress.length` / `rewarded` / `succeeded` (the raw tallies) so an
@@ -135,7 +159,7 @@ def scheduler_scores(
 def terminal_stats(
     datum_pool: List[str],
     rewarded_by_run: Dict[str, RewardedRun],
-    length_datum_by_run: Optional[Dict[str, str]] = None,
+    finish_reason_by_run: Optional[Dict[str, str]] = None,
 ) -> Dict[str, TerminalStats]:
     """Per-datum ``TerminalStats`` tallies.
 
@@ -146,35 +170,42 @@ def terminal_stats(
       carrying its datum id + reward). Drives the rewarded quarantine
       denominator; its ``reward == 1.0`` entries drive the ``succeeded``
       numerator.
-    * ``length_datum_by_run`` -- one entry per run with at least one
-      length-limited completion. Only entries that are also present in
-      ``rewarded_by_run`` count, keeping ``length`` a subset of ``rewarded``.
+    * ``finish_reason_by_run`` -- one entry per run with a behavior-penalty
+      terminal ``finish_reason`` (``"length"`` or ``"content_filter"``). Only
+      entries also present in ``rewarded_by_run`` count. A ``"length"`` run is
+      tallied as a length-limited rewarded attempt; a ``"content_filter"``
+      (malformed) run is tallied on its own ``content_filter`` axis.
+
+    ``rewarded`` counts *every* rewarded run (including content-filtered ones),
+    matching ``scheduler_scores`` and batch/group accounting. The unhealthy-finish
+    quarantine filter sums ``length + content_filter`` over this full ``rewarded``
+    denominator (see :func:`quarantined_datums`); ``content_filter`` is not
+    subtracted anywhere.
     """
-    length_datum_by_run = length_datum_by_run or {}
+    finish_reason_by_run = finish_reason_by_run or {}
     rewarded: Dict[str, int] = {d: 0 for d in datum_pool}
     length: Dict[str, int] = {d: 0 for d in datum_pool}
     succeeded: Dict[str, int] = {d: 0 for d in datum_pool}
+    content_filter: Dict[str, int] = {d: 0 for d in datum_pool}
 
-    # Rewarded terminal attempts (denominator), plus their successes.
-    for run in rewarded_by_run.values():
+    for run_id, run in rewarded_by_run.items():
         if run.datum_id not in rewarded:
             continue
         rewarded[run.datum_id] += 1
+        reason = finish_reason_by_run.get(run_id)
+        if reason == "content_filter":
+            content_filter[run.datum_id] += 1
+        elif reason == "length":
+            length[run.datum_id] += 1
         if run.reward == 1.0:
             succeeded[run.datum_id] += 1
-
-    # Length-limited attempts: only rewarded runs count toward the quarantine
-    # numerator, so intersect by run id with `rewarded_by_run`.
-    for run_id, datum_id in length_datum_by_run.items():
-        if run_id not in rewarded_by_run or datum_id not in length:
-            continue
-        length[datum_id] += 1
 
     return {
         d: TerminalStats(
             rewarded=rewarded[d],
             length=length[d],
             succeeded=succeeded[d],
+            content_filter=content_filter[d],
         )
         for d in datum_pool
     }
@@ -183,21 +214,26 @@ def terminal_stats(
 def quarantined_datums(
     datum_pool: List[str],
     rewarded_by_run: Dict[str, RewardedRun],
-    length_datum_by_run: Dict[str, str],
+    finish_reason_by_run: Dict[str, str],
     *,
     min_samples: float,
-    max_length_ratio: Optional[float] = None,
+    max_unhealthy_finish_ratio: Optional[float] = None,
     max_succeed_ratio: Optional[float] = None,
 ) -> Set[str]:
     """Datums to exclude from dispense, per the enabled quarantine filters.
 
-    Built on :func:`terminal_stats`. Both filters share the same
-    ``rewarded`` denominator and the ``min_samples`` gate; a datum is
-    quarantined when it has at least ``min_samples`` rewarded attempts and
-    *either* enabled filter fires:
+    Built on :func:`terminal_stats`. Both filters share the full ``rewarded``
+    denominator and the ``min_samples`` gate (``rewarded >= min_samples``);
+    content-filtered (malformed) runs count as real rewarded samples like any
+    other. Once the gate is met, a datum is quarantined when *either* enabled
+    filter fires:
 
-    * length (``max_length_ratio``): length rate ``length / rewarded >=
-      max_length_ratio`` -- it repeatedly produces length-limited completions.
+    * unhealthy-finish (``max_unhealthy_finish_ratio``): rate ``(length +
+      content_filter) / rewarded >= max_unhealthy_finish_ratio`` -- its rewarded
+      attempts too often end on an unhealthy finish reason. ``length``
+      (length-limited) and ``content_filter`` (malformed) are both auto-penalty
+      degenerate rollouts (no verifier grade), so they're summed into one
+      numerator.
     * too-easy (``max_succeed_ratio``): success ratio ``succeeded / rewarded >=
       max_succeed_ratio`` -- it is solved too reliably.
 
@@ -206,14 +242,23 @@ def quarantined_datums(
     with enough samples it stays quarantined, since it receives no new runs to
     move the metric.
     """
-    stats = terminal_stats(datum_pool, rewarded_by_run, length_datum_by_run)
+    stats = terminal_stats(datum_pool, rewarded_by_run, finish_reason_by_run)
     excluded: Set[str] = set()
     for d, s in stats.items():
-        if s.rewarded < min_samples:
+        # Every rewarded run is a sample (including content-filtered/malformed
+        # ones); both filters divide by the full `rewarded` count.
+        if s.rewarded <= 0 or s.rewarded < min_samples:
             continue
-        if max_length_ratio is not None and s.length / s.rewarded >= max_length_ratio:
+        # Unhealthy-finish filter: `length` (length-limited) and `content_filter`
+        # (malformed) are both auto-penalty degenerate rollouts with no verifier
+        # grade, so sum them into one numerator over the full `rewarded`.
+        if (
+            max_unhealthy_finish_ratio is not None
+            and (s.length + s.content_filter) / s.rewarded >= max_unhealthy_finish_ratio
+        ):
             excluded.add(d)
             continue
+        # Too-easy filter: solved too reliably.
         if (
             max_succeed_ratio is not None
             and s.succeeded / s.rewarded >= max_succeed_ratio
@@ -353,20 +398,21 @@ class DispenseMixin(TunerServiceBase):
         accumulated at least ``recipe.quarantine_min_samples`` rewarded
         attempts):
 
-        * ``recipe.max_length_ratio`` -- skip datums that repeatedly produce
-          length-limited completions (length rate ``>= max_length_ratio``).
-          Length runs are rewarded runs with at least one completion whose
-          finish reason is ``"length"``.
+        * ``recipe.max_unhealthy_finish_ratio`` -- skip datums whose rewarded
+          attempts too often end on an unhealthy finish reason: length-limited
+          (``"length"``) or malformed (``"content_filter"``). The two are summed
+          (``(length + content_filter) / rewarded``); both are auto-penalty
+          degenerate rollouts.
         * ``recipe.max_succeed_ratio`` -- skip datums solved too reliably
           (success ratio, reward ``== 1.0`` over rewarded attempts,
           ``>= max_succeed_ratio``); considered too easy to yield a useful
           learning signal (see ``quarantined_datums``).
 
         The default ratios (1.0/1.0) fire only at the extreme: succeed
-        quarantines a datum whose every rewarded attempt succeeded, and length
-        quarantines one whose every rewarded attempt is length-limited -- and a
-        datum caught by either is excluded. The scheduler always uses the
-        two-phase probe gate (see ``pick_datum``).
+        quarantines a datum whose every rewarded attempt succeeded, and
+        unhealthy-finish quarantines one whose every rewarded attempt ended on
+        an unhealthy finish reason -- and a datum caught by either is excluded.
+        The scheduler always uses the two-phase probe gate (see ``pick_datum``).
         """
         # Ensure trainer is initialized.
         _trainer = await self._get_trainer(tuner_id)
@@ -389,16 +435,18 @@ class DispenseMixin(TunerServiceBase):
                     # no separate query. Counted over the datum's entire history
                     # (no recency window), so the pure helper just tallies.
                     rewarded_by_run = await self._rewarded_datums(tuner_id, session)
-                    # The length numerator is intersected with `rewarded_by_run`
-                    # in the pure helper so length rate is length-limited rewarded
-                    # attempts divided by all rewarded attempts.
-                    length_datum_by_run = await self._length_datums(tuner_id, session)
+                    # Behavior-penalty finish reasons per run: `length` and
+                    # `content_filter` both feed the unhealthy-finish numerator
+                    # (intersected with `rewarded_by_run` in the pure helper).
+                    finish_reason_by_run = await self._finish_reason_datums(
+                        tuner_id, session
+                    )
                     excluded = quarantined_datums(
                         datum_pool,
                         rewarded_by_run,
-                        length_datum_by_run,
+                        finish_reason_by_run,
                         min_samples=recipe.quarantine_min_samples,
-                        max_length_ratio=recipe.max_length_ratio,
+                        max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
                         max_succeed_ratio=recipe.max_succeed_ratio,
                     )
                     if excluded:

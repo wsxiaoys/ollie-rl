@@ -29,17 +29,25 @@ class RewardedRun(BaseModel):
 class TerminalStats(BaseModel):
     """Per-datum rewarded-attempt tallies over the datum's entire history.
 
-    * ``rewarded`` -- runs that earned a reward; this is the quarantine
-      denominator for length and success metrics.
-    * ``length`` -- rewarded runs with at least one length-limited completion
-      (the length numerator); a subset of ``rewarded``.
+    * ``rewarded`` -- every run that earned a reward, *including* both
+      length-limited and content-filtered (malformed) ones (consistent with
+      batch/group accounting): ``length`` and ``content_filter`` are subsets of
+      it. It is the shared denominator for both quarantine filters and the
+      ``min_samples`` sample gate.
+    * ``length`` -- rewarded runs with at least one length-limited completion; a
+      subset of ``rewarded`` and part of the unhealthy-finish numerator.
     * ``succeeded`` -- rewarded runs with ``reward == 1.0`` (the success
       numerator); a subset of ``rewarded``.
+    * ``content_filter`` -- rewarded runs whose completion was content-filtered
+      (malformed); a subset of ``rewarded`` carrying the
+      ``content_filter_penalty`` reward. Summed with ``length`` into the
+      unhealthy-finish numerator; both are auto-penalty degenerate rollouts.
     """
 
     rewarded: int = 0
     length: int = 0
     succeeded: int = 0
+    content_filter: int = 0
 
 
 class SchedulerScores(BaseModel):

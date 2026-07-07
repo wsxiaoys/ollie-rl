@@ -184,45 +184,53 @@ class TunerServiceBase:
             if run_id is not None
         }
 
-    async def _length_datums(
+    async def _finish_reason_datums(
         self,
         tuner_id: str,
         session,
         run_ids: Optional[List[str]] = None,
     ) -> Dict[str, str]:
-        """Per *length-limited* run, its ``datum_id``.
+        """Per *behavior-penalty* run, its terminal ``finish_reason``.
 
-        Returns a ``run_id -> datum_id`` map for runs with at least one recorded
-        completion whose finish reason is ``"length"``. This backs the
-        ``RunStatus == "length"`` split for ``list_runs``/``get_run`` and the
-        dispenser's length-rate quarantine numerator. The source of truth is the
-        persisted response: either the backend returned a length-limited sample,
-        or the context-window guard rewrote an oversized completion to a cleared
-        ``finish_reason == "length"`` response before recording it. Length runs
-        remain ordinary rewarded runs for terminal-stat denominator accounting.
+        Returns a ``run_id -> finish_reason`` map covering runs with at least
+        one recorded completion whose finish reason is a behavior penalty --
+        ``"length"`` (length-limited, or the context-window guard rewrote an
+        oversized completion) or ``"content_filter"`` (a malformed model output
+        the server terminated with the recipe's ``content_filter_penalty``).
+
+        One query serves every consumer:
+
+        * ``list_runs``/``get_run`` derive the ``RunStatus == "length"`` and
+          ``"content_filter"`` splits from the mapped value.
+        * :func:`terminal_stats` uses it to count both ``length`` and
+          ``content_filter`` attempts; both are summed into the unhealthy-finish
+          quarantine numerator (``(length + content_filter) / rewarded``).
+
+        A run terminates at its first behavior-penalty completion, so the two
+        reasons are mutually exclusive in practice; if a run ever recorded both,
+        ``"length"`` wins (the dominant, more severe penalty).
         """
         if run_ids is not None and not run_ids:
             return {}
 
         # Every recorded completion is single-choice -- all trainers build a
-        # ``ChatCompletion`` with exactly one choice -- so a run is
-        # length-limited iff any of its completions has
-        # ``choices[0].finish_reason == "length"``. Push that predicate into SQL
-        # via a JSON-path extract (``JSON_EXTRACT`` on SQLite, ``#>>`` on
-        # Postgres) instead of fetching and ``model_validate``-ing every
-        # (tens-of-KB) ``response`` blob in Python. This is the hot path for the
-        # frequently polled progress snapshot, which scans every completion for
-        # the tuner; extracting just the scalar finish reason keeps the blobs on
-        # the database side.
+        # ``ChatCompletion`` with exactly one choice -- so a run's behavior
+        # penalty is whichever of ``choices[0].finish_reason`` its completions
+        # carry. Push that predicate into SQL via a JSON-path extract
+        # (``JSON_EXTRACT`` on SQLite, ``#>>`` on Postgres) instead of fetching
+        # and ``model_validate``-ing every (tens-of-KB) ``response`` blob in
+        # Python. This is the hot path for the frequently polled progress
+        # snapshot, which scans every completion for the tuner; extracting just
+        # the scalar finish reason keeps the blobs on the database side. The
+        # ``finish_reason`` functional index serves the predicate.
         finish_reason = ChatCompletionModel.response["choices"][0][
             "finish_reason"
         ].as_string()
         stmt = (
-            select(ChatCompletionModel.run_id, RunModel.datum_id)
-            .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
+            select(ChatCompletionModel.run_id, finish_reason)
             .where(
                 ChatCompletionModel.tuner_id == tuner_id,
-                finish_reason == "length",
+                finish_reason.in_(["length", "content_filter"]),
             )
             .distinct()
         )
@@ -230,11 +238,15 @@ class TunerServiceBase:
             stmt = stmt.where(ChatCompletionModel.run_id.in_(run_ids))
 
         result = await session.execute(stmt)
-        length_datum_by_run: Dict[str, str] = {}
-        for run_id, datum_id in result.all():
-            if run_id is not None:
-                length_datum_by_run[run_id] = datum_id
-        return length_datum_by_run
+        finish_reason_by_run: Dict[str, str] = {}
+        for run_id, reason in result.all():
+            if run_id is None:
+                continue
+            # `length` dominates when a run recorded both penalty reasons.
+            if finish_reason_by_run.get(run_id) == "length":
+                continue
+            finish_reason_by_run[run_id] = reason
+        return finish_reason_by_run
 
     async def _expired_datums(
         self,

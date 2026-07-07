@@ -9,6 +9,7 @@ const STATUS_TONE: Record<
   expired: "warn",
   lost: "danger",
   length: "warn",
+  content_filter: "warn",
   rewarded: "good",
   trained: "default",
   rejected: "danger",

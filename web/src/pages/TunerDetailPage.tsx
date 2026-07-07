@@ -54,7 +54,7 @@ export function TunerDetailPage() {
     (item) =>
       computeQuarantine(item, {
         quarantineMinSamples: recipe.quarantine_min_samples,
-        maxLengthRatio: recipe.max_length_ratio,
+        maxUnhealthyFinishRatio: recipe.max_unhealthy_finish_ratio,
         maxSucceedRatio: recipe.max_succeed_ratio,
       }).quarantined,
   ).length;
@@ -82,15 +82,6 @@ export function TunerDetailPage() {
             </Badge>
             {isFetching && <span className="live-dot">● live</span>}
           </div>
-        </div>
-        <div className="detail-header__aside">
-          <Link
-            to="/runs"
-            search={{ tuner: data.tuner_id }}
-            className="link"
-          >
-            View runs →
-          </Link>
           <div className="recipe-chips">
             <span className="chip">group_size {recipe.group_size}</span>
             <span className="chip">
@@ -104,6 +95,15 @@ export function TunerDetailPage() {
             </span>
             <span className="chip">length {recipe.length_penalty}</span>
           </div>
+        </div>
+        <div className="detail-header__aside">
+          <Link
+            to="/runs"
+            search={{ tuner: data.tuner_id }}
+            className="link"
+          >
+            View runs →
+          </Link>
         </div>
       </header>
 
@@ -269,7 +269,7 @@ export function TunerDetailPage() {
                 items={progress.data.items}
                 groupSize={recipe.group_size}
                 quarantineMinSamples={recipe.quarantine_min_samples}
-                maxLengthRatio={recipe.max_length_ratio}
+                maxUnhealthyFinishRatio={recipe.max_unhealthy_finish_ratio}
                 maxSucceedRatio={recipe.max_succeed_ratio}
                 hideExcluded={hideExcluded}
                 tunerId={data.tuner_id}

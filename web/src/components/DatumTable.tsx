@@ -15,44 +15,60 @@ const columnHelper = createColumnHelper<DatumProgress>();
 
 export type QuarantineConfig = {
   quarantineMinSamples: number;
-  maxLengthRatio: number;
+  maxUnhealthyFinishRatio: number;
   maxSucceedRatio: number;
 };
 
 export type QuarantineState = {
-  lengthRate: number | null;
+  unhealthyRate: number | null;
   succeedRate: number | null;
   belowMinSamples: boolean;
-  lengthHit: boolean;
+  unhealthyHit: boolean;
   succeedHit: boolean;
   quarantined: boolean;
 };
 
 /**
- * Mirror the dispenser's quarantine logic for a single datum. Both quarantine
- * metrics share the rewarded-attempt denominator; expired/lost runs are status
- * observability only and do not affect quarantine rates. Below the min-sample
- * gate neither filter can fire, so the ratios are not yet actionable.
+ * Mirror the dispenser's quarantine logic for a single datum. Both filters
+ * share the full `rewarded` denominator and the `min_samples` gate; every
+ * rewarded run is a sample (content-filtered/malformed runs included):
+ *   - unhealthy-finish rate = (length + content_filter) / rewarded
+ *   - success ratio         = succeeded / rewarded
+ * `length` (length-limited) and `content_filter` (malformed) are both
+ * auto-penalty degenerate rollouts, so they're summed into one unhealthy-finish
+ * numerator. Expired/lost runs are status observability only and do not affect
+ * quarantine rates. Below the min-sample gate neither filter can fire.
  */
 export function computeQuarantine(
-  item: Pick<DatumProgress, "length" | "rewarded" | "succeeded">,
-  { quarantineMinSamples, maxLengthRatio, maxSucceedRatio }: QuarantineConfig,
+  item: Pick<
+    DatumProgress,
+    "length" | "rewarded" | "succeeded" | "content_filter"
+  >,
+  {
+    quarantineMinSamples,
+    maxUnhealthyFinishRatio,
+    maxSucceedRatio,
+  }: QuarantineConfig,
 ): QuarantineState {
-  const { length, rewarded, succeeded } = item;
-  const lengthRate = rewarded > 0 ? length / rewarded : null;
+  const { length, rewarded, succeeded, content_filter } = item;
+  // Unhealthy finishes (length-limited + malformed) share one numerator; both
+  // filters divide by the full `rewarded` count.
+  const unhealthyRate = rewarded > 0 ? (length + content_filter) / rewarded : null;
   const succeedRate = rewarded > 0 ? succeeded / rewarded : null;
   const belowMinSamples = rewarded < quarantineMinSamples;
-  const lengthHit =
-    !belowMinSamples && lengthRate != null && lengthRate >= maxLengthRatio;
+  const unhealthyHit =
+    !belowMinSamples &&
+    unhealthyRate != null &&
+    unhealthyRate >= maxUnhealthyFinishRatio;
   const succeedHit =
     !belowMinSamples && succeedRate != null && succeedRate >= maxSucceedRatio;
   return {
-    lengthRate,
+    unhealthyRate,
     succeedRate,
     belowMinSamples,
-    lengthHit,
+    unhealthyHit,
     succeedHit,
-    quarantined: lengthHit || succeedHit,
+    quarantined: unhealthyHit || succeedHit,
   };
 }
 
@@ -60,7 +76,7 @@ export function DatumTable({
   items,
   groupSize,
   quarantineMinSamples,
-  maxLengthRatio,
+  maxUnhealthyFinishRatio,
   maxSucceedRatio,
   hideExcluded = false,
   tunerId,
@@ -68,7 +84,7 @@ export function DatumTable({
   items: DatumProgress[];
   groupSize: number;
   quarantineMinSamples: number;
-  maxLengthRatio: number;
+  maxUnhealthyFinishRatio: number;
   maxSucceedRatio: number;
   hideExcluded?: boolean;
   tunerId: string;
@@ -121,39 +137,50 @@ export function DatumTable({
         const length = info.row.original.length;
         const rewarded = info.row.original.rewarded;
         const succeeded = info.row.original.succeeded;
+        const contentFilter = info.row.original.content_filter;
+        // Unhealthy finishes = length-limited + content-filtered (malformed).
+        const unhealthy = length + contentFilter;
         const minSamples = quarantineMinSamples;
         const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
         const {
-          lengthRate,
+          unhealthyRate,
           succeedRate,
           belowMinSamples,
-          lengthHit,
+          unhealthyHit,
           succeedHit,
           quarantined,
         } = computeQuarantine(info.row.original, {
           quarantineMinSamples,
-          maxLengthRatio,
+          maxUnhealthyFinishRatio,
           maxSucceedRatio,
         });
         const definition =
-          'A "length" run is a rewarded run with at least one completion whose finish_reason is "length". A "succeeded" run earned reward == 1.0.';
-        const quarantineReason = lengthHit
-          ? `Quarantined: length rate ${pct(lengthRate!)} ≥ max_length_ratio ${pct(maxLengthRatio)} — no new runs dispensed.\n`
+          'A "length" run is a rewarded run with at least one completion whose finish_reason is "length"; a "content_filter" run is a malformed rewarded run. Both are "unhealthy" finishes — auto-penalty degenerate rollouts with no verifier grade. A "succeeded" run earned reward == 1.0.\n' +
+          "Both filters divide by the full rewarded count:\n" +
+          "• Unhealthy-finish rate = (length + content_filter) / rewarded.\n" +
+          "• Succeed ratio = succeeded / rewarded.";
+        const quarantineReason = unhealthyHit
+          ? `Quarantined: unhealthy-finish rate ${pct(unhealthyRate!)} ≥ max_unhealthy_finish_ratio ${pct(maxUnhealthyFinishRatio)} — no new runs dispensed.\n`
           : succeedHit
             ? `Quarantined: succeed ratio ${pct(succeedRate!)} ≥ max_succeed_ratio ${pct(maxSucceedRatio)} — no new runs dispensed.\n`
             : "";
+        const unhealthyNote =
+          unhealthy > 0
+            ? `Unhealthy finishes: ${length} length + ${contentFilter} content_filter = ${unhealthy} of ${rewarded} rewarded.\n`
+            : "";
         const tooltip =
-          lengthRate == null || succeedRate == null
+          unhealthyRate == null || succeedRate == null
             ? `No rewarded attempts yet to compute ratios.\n${definition}`
             : `${rewarded} rewarded attempts.\n` +
+              unhealthyNote +
               (belowMinSamples
                 ? `Below the ${minSamples} min-sample gate — ratios shown but not yet actionable for quarantine.\n`
                 : "") +
               quarantineReason +
-              `Length ratio ${pct(lengthRate)}: ${length} length / ${rewarded} — drives max_length_ratio (${pct(maxLengthRatio)}).\n` +
-              `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${rewarded} — drives max_succeed_ratio (${pct(maxSucceedRatio)}).\n` +
+              `Unhealthy-finish ratio ${pct(unhealthyRate)}: ${unhealthy} unhealthy (${length} length + ${contentFilter} content_filter) / ${rewarded} rewarded — drives max_unhealthy_finish_ratio (${pct(maxUnhealthyFinishRatio)}).\n` +
+              `Succeed ratio ${pct(succeedRate)}: ${succeeded} succeeded / ${rewarded} rewarded — drives max_succeed_ratio (${pct(maxSucceedRatio)}).\n` +
               definition;
-        if (lengthRate == null || succeedRate == null) {
+        if (unhealthyRate == null || succeedRate == null) {
           return (
             <span className="num muted" title={tooltip}>
               —
@@ -162,9 +189,9 @@ export function DatumTable({
         }
         const ratios = (
           <>
-            <span className={lengthHit ? "datum-audit__hit" : undefined}>
-              {pct(lengthRate)}
-              <span className="muted"> len</span>
+            <span className={unhealthyHit ? "datum-audit__hit" : undefined}>
+              {pct(unhealthyRate)}
+              <span className="muted"> unhealthy</span>
             </span>
             {" · "}
             <span className={succeedHit ? "datum-audit__hit" : undefined}>
@@ -176,7 +203,7 @@ export function DatumTable({
         // Below the min-sample gate the ratios aren't actionable yet. Colour
         // (muted text) alone isn't distinct enough, so add non-colour cues:
         // wrap the ratios in parentheses and append an explicit sample marker
-        // (`n <rewarded>/<minSamples>`) showing how far off the gate we are.
+        // (`<rewarded>/<minSamples>`) showing how far off the gate we are.
         if (belowMinSamples) {
           return (
             <span className="num muted" title={tooltip}>
@@ -205,7 +232,13 @@ export function DatumTable({
       header: "Trained",
       cell: (info) => <span className="num">{info.getValue()}</span>,
     }),
-  ], [groupSize, tunerId, quarantineMinSamples, maxLengthRatio, maxSucceedRatio]);
+  ], [
+    groupSize,
+    tunerId,
+    quarantineMinSamples,
+    maxUnhealthyFinishRatio,
+    maxSucceedRatio,
+  ]);
 
   const visibleItems = useMemo(
     () =>
@@ -214,12 +247,18 @@ export function DatumTable({
             (item) =>
               !computeQuarantine(item, {
                 quarantineMinSamples,
-                maxLengthRatio,
+                maxUnhealthyFinishRatio,
                 maxSucceedRatio,
               }).quarantined,
           )
         : items,
-    [items, hideExcluded, quarantineMinSamples, maxLengthRatio, maxSucceedRatio],
+    [
+      items,
+      hideExcluded,
+      quarantineMinSamples,
+      maxUnhealthyFinishRatio,
+      maxSucceedRatio,
+    ],
   );
 
   const table = useReactTable({

@@ -224,6 +224,7 @@ body,
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 12px;
 }
 
 .chip {
@@ -248,6 +249,7 @@ body,
   margin-left: 8px;
   padding-left: 8px;
   border-left: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  white-space: nowrap;
 }
 
 .training-now__dot {
@@ -255,6 +257,7 @@ body,
   height: 7px;
   border-radius: 50%;
   background: var(--good);
+  flex-shrink: 0;
   animation: training-pulse 1.2s ease-in-out infinite;
 }
 
@@ -494,6 +497,7 @@ td.num {
   border: 1px solid var(--border);
   background: var(--bg-elev-2);
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .badge--good {
