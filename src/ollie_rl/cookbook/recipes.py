@@ -15,6 +15,13 @@ class Recipe(BaseModel, frozen=True):
     num_groups_per_batch: int = 32
     max_off_policy_generation: int = 4
 
+    # ---- Evaluation ----------------------------------------------------
+    # Rollouts to dispense per eval datum per checkpoint. Averaging K attempts
+    # smooths per-checkpoint eval variance the same way `group_size` does for a
+    # training group. Only matters when the tuner has eval datums; 1 = a single
+    # attempt per datum per checkpoint, 0 disables the eval dispense tier.
+    eval_group_size: int = 4
+
     # ---- Behavior penalties ----
     content_filter_penalty: float = -1.0
     length_penalty: float = -10.0

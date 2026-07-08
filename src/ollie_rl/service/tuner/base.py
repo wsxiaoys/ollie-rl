@@ -18,6 +18,7 @@ from ollie_rl.background import BackgroundJob
 from ollie_rl.cookbook import Cookbook, Recipe
 from ollie_rl.db import (
     ChatCompletionModel,
+    CheckpointModel,
     DatumRowModel,
     InFlightChatCompletionModel,
     TunerModel,
@@ -145,16 +146,51 @@ class TunerServiceBase:
     async def _load_pool_and_runs(
         self, tuner_id: str, session
     ) -> Tuple[List[str], List[RunModel]]:
-        result = await session.execute(
-            select(DatumRowModel.datum_id).where(DatumRowModel.tuner_id == tuner_id)
-        )
-        datum_pool = list(result.scalars().all())
+        # The training pool is train-only: eval datums are held out, so they
+        # are excluded here. Any eval runs left in the `runs` list are then
+        # ignored by the pure schedulers (`scheduler_scores` / `pick_datum` /
+        # `quarantined_datums`) because their `datum_id` is absent from the
+        # score maps (`if r.datum_id not in score: continue`).
+        datum_pool = await self._load_datums(tuner_id, session, kind="train")
 
         runs_result = await session.execute(
             select(RunModel).where(RunModel.tuner_id == tuner_id)
         )
         runs = list(runs_result.scalars().all())
         return datum_pool, runs
+
+    async def _load_datums(
+        self, tuner_id: str, session, kind: str
+    ) -> List[str]:
+        """Datum ids registered for ``tuner_id`` of the given ``kind``.
+
+        ``kind`` is ``"train"`` (dispensable training pool) or ``"eval"``
+        (held-out scoring pool).
+        """
+        result = await session.execute(
+            select(DatumRowModel.datum_id).where(
+                DatumRowModel.tuner_id == tuner_id,
+                DatumRowModel.kind == kind,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def _latest_checkpoint(
+        self, tuner_id: str, session
+    ) -> Optional[CheckpointModel]:
+        """The newest persisted checkpoint for ``tuner_id`` (highest
+        generation, newest-first tie-break), or ``None`` when the tuner has
+        produced no checkpoints yet."""
+        result = await session.execute(
+            select(CheckpointModel)
+            .where(CheckpointModel.tuner_id == tuner_id)
+            .order_by(
+                CheckpointModel.policy_generation.desc(),
+                CheckpointModel.created_at.desc(),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def _rewarded_datums(self, tuner_id: str, session) -> Dict[str, RewardedRun]:
         """Per *rewarded* run, a :class:`RewardedRun` (datum id + reward).

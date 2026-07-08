@@ -30,6 +30,25 @@ class Sample(BaseModel):
     logprobs: Optional[List[float]] = None
 
 
+# Reserved ref: the step produced no usable frozen checkpoint (e.g. gemini's
+# TunedModelCheckpoint is null), so "sampling this checkpoint" means replay the
+# live policy rather than address frozen weights.
+LIVE_POLICY_CHECKPOINT = "live"
+
+
+class Checkpoint(BaseModel):
+    """A frozen snapshot produced by one train step, or the live-policy
+    sentinel when the backend emits no usable handle.
+
+    `ref` is the backend's opaque handle, or `LIVE_POLICY_CHECKPOINT` when the
+    step produced none. `policy_generation` is the attribution tag eval buckets
+    by.
+    """
+
+    ref: str = LIVE_POLICY_CHECKPOINT  # backend handle, or live-policy sentinel
+    policy_generation: int  # monotonic; ordering / display / bucketing
+
+
 class StateStore(Protocol):
     """
     Bi-directional opaque-blob persistence handle owned by a Trainer.
@@ -60,7 +79,10 @@ class Op(ABC, Generic[T]):
         return None
 
 
-class TrainOp(Op[None]):
+class TrainOp(Op[Optional[Checkpoint]]):
+    """wait() returns the Checkpoint the step produced, or None if the backend
+    does not emit a generation for the completed step."""
+
     pass
 
 

@@ -7,6 +7,8 @@ from openai.types.chat.chat_completion import Choice
 
 from ollie_rl.types import ChatCompletionRequest
 from ollie_rl.trainer.types import (
+    LIVE_POLICY_CHECKPOINT,
+    Checkpoint,
     Trainer,
     TrainerFactory,
     Example,
@@ -21,8 +23,16 @@ logger = logging.getLogger(__name__)
 
 
 class FakeTrainOp(TrainOp):
-    async def wait(self) -> None:
-        return None
+    def __init__(self, policy_generation: int):
+        self._policy_generation = policy_generation
+
+    async def wait(self) -> Optional[Checkpoint]:
+        # No usable frozen checkpoint: tag the completed step with the
+        # live-policy sentinel so eval (if any) samples the live policy.
+        return Checkpoint(
+            ref=LIVE_POLICY_CHECKPOINT,
+            policy_generation=self._policy_generation,
+        )
 
     async def peek(self) -> bool:
         return True
@@ -41,11 +51,14 @@ class FakeSampleOp(SampleOp):
 
 class FakeTrainer(Trainer):
     def __init__(self):
-        pass
+        # Monotonic step counter advanced on each `train_step`, so the fake
+        # backend emits a checkpoint per completed step (with the live-policy
+        # sentinel ref, since it has no frozen weights to address).
+        self._train_step = 0
 
     @property
     def policy_generation(self) -> int:
-        return 0
+        return self._train_step
 
     async def sample(
         self,
@@ -80,7 +93,8 @@ class FakeTrainer(Trainer):
 
     async def train_step(self, examples: List[Example]) -> TrainOp:
         logger.info(f"FakeTrainer training step with {len(examples)} examples.")
-        return FakeTrainOp()
+        self._train_step += 1
+        return FakeTrainOp(self._train_step)
 
 
 class FakeTrainerFactory(TrainerFactory):

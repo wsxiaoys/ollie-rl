@@ -3,14 +3,14 @@
 import asyncio
 import logging
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import select, update
 
 from ollie_rl.db import ChatCompletionModel, TunerModel
-from ollie_rl.db.models import RunModel
+from ollie_rl.db.models import CheckpointModel, DatumRowModel, RunModel
 from ollie_rl.service.tuner.base import TunerServiceBase
-from ollie_rl.trainer import Example, Trainer
+from ollie_rl.trainer import Checkpoint, Example, Trainer
 from ollie_rl.types import Rollout, RolloutRun
 
 logger = logging.getLogger(__name__)
@@ -97,63 +97,99 @@ class TrainingMixin(TunerServiceBase):
         async with self._train_lock_for(tuner_id):
             trainer = await self._get_trainer(tuner_id)
 
-            in_flight = await trainer.pending_train_op()
-            if in_flight is not None:
+            train_op = await trainer.pending_train_op()
+            if train_op is not None:
                 # A train op is in flight. In steady state the coroutine that
                 # submitted it still holds this lock and we never reach here. If
                 # we DID acquire the lock, no one is awaiting it (e.g. it was
-                # submitted before a restart): drive it to completion so trainer
-                # state advances and `pending_train_op` clears.
+                # submitted before a restart): fall through to the shared
+                # wait/persist below to drive it to completion so trainer state
+                # advances and `pending_train_op` clears.
                 logger.info(
                     f"Reconciling in-flight train op for tuner {tuner_id}"
                 )
-                await in_flight.wait()
-                return
+            else:
+                async with self.async_session() as session:
+                    async with session.begin():
+                        batch, run_ids = await self._collect_consumable_batch(
+                            tuner_id, session, trainer
+                        )
+                        if not batch:
+                            return
 
-            train_op = None
-            async with self.async_session() as session:
-                async with session.begin():
-                    batch, run_ids = await self._collect_consumable_batch(
-                        tuner_id, session, trainer
-                    )
-                    if not batch:
-                        return
+                        # Accepted limitation (dual-write, not fully atomic):
+                        # `train_step` submits the backend LRO and persists
+                        # `pending_train_op` in its *own* transaction, before
+                        # the `trained_count` bump below commits. If the process
+                        # crashes in between, on restart the LRO still completes
+                        # (advancing policy_generation) but these runs keep
+                        # `trained_count = 0` and get collected into a later
+                        # batch -- i.e. the batch may be trained twice. Bounded
+                        # (and dampened by the off-policy staleness filter);
+                        # tolerated for now rather than adding a cross-backend
+                        # 2-phase commit.
+                        train_op = await trainer.train_step(
+                            batch,
+                        )  # submits LRO + state_store.save
+                        await session.execute(  # bump trained_count
+                            update(RunModel)
+                            .where(RunModel.tuner_id == tuner_id)
+                            .where(RunModel.id.in_(run_ids))
+                            .values(trained_count=RunModel.trained_count + 1)
+                        )
 
-                    # Accepted limitation (dual-write, not fully atomic):
-                    # `train_step` submits the backend LRO and persists
-                    # `pending_train_op` in its *own* transaction, before the
-                    # `trained_count` bump below commits. If the process crashes
-                    # in between, on restart the LRO still completes (advancing
-                    # policy_generation) but these runs keep `trained_count = 0`
-                    # and get collected into a later batch -- i.e. the batch may
-                    # be trained twice. Bounded (and dampened by the off-policy
-                    # staleness filter); tolerated for now rather than adding a
-                    # cross-backend 2-phase commit.
-                    train_op = await trainer.train_step(
-                        batch,
-                    )  # submits LRO + state_store.save
-                    await session.execute(  # bump trained_count
-                        update(RunModel)
-                        .where(RunModel.tuner_id == tuner_id)
-                        .where(RunModel.id.in_(run_ids))
-                        .values(trained_count=RunModel.trained_count + 1)
-                    )
-
+            # Single completion barrier for both paths (fresh submit + restart
+            # reconcile): await the op once and persist the checkpoint it
+            # yielded. A checkpoint can complete across a restart, so the insert
+            # must run on the reconcile path too.
             if train_op is not None:
-                await train_op.wait()
+                checkpoint = await train_op.wait()
+                await self._persist_checkpoint(tuner_id, checkpoint)
                 logger.info(f"Successfully completed train step for tuner {tuner_id}")
+
+    async def _persist_checkpoint(
+        self, tuner_id: str, checkpoint: Optional[Checkpoint]
+    ) -> None:
+        """Persist the checkpoint a completed train step yielded.
+
+        Shared by both ``_maybe_train`` ``wait()`` sites (fresh submit +
+        post-restart reconcile) since a checkpoint can complete across a
+        restart. A ``None`` checkpoint (the backend emitted no generation for
+        the step) is a no-op. The service, not the trainer, owns this DB write.
+        This ``checkpoints`` table is the eval scheduler's source of truth for
+        "what checkpoints exist to be evaluated".
+        """
+        if checkpoint is None:
+            return
+        async with self.async_session() as session:
+            async with session.begin():
+                session.add(
+                    CheckpointModel(
+                        tuner_id=tuner_id,
+                        ref=checkpoint.ref,
+                        policy_generation=checkpoint.policy_generation,
+                    )
+                )
 
     async def _collect_consumable_batch(
         self, tuner_id: str, session, trainer: Trainer
     ) -> Tuple[List[Example], List[str]]:
         recipe = await self._recipe_for(tuner_id)
 
+        # Exclude eval runs: eval-ness is derived from the datum's kind, so
+        # anti-join against the tuner's eval datum set. A rewarded eval run
+        # must never enter a GRPO group (it scores a held-out datum only).
+        eval_datums = select(DatumRowModel.datum_id).where(
+            DatumRowModel.tuner_id == tuner_id,
+            DatumRowModel.kind == "eval",
+        )
         result = await session.execute(
             select(RunModel).where(
                 RunModel.tuner_id == tuner_id,
                 RunModel.trained_count <= 0,
                 RunModel.rejected_count <= 0,
                 RunModel.reward != None,  # noqa: E711
+                RunModel.datum_id.not_in(eval_datums),
             )
         )
         run_records = list(result.scalars().all())

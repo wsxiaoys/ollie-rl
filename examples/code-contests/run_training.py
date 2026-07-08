@@ -113,7 +113,8 @@ async def create_tuner(
     name: str,
     recipe: str,
     trainer: str,
-    datum_ids: list[str],
+    train_datum_ids: list[str],
+    eval_datum_ids: list[str],
 ) -> str:
     resp = await client.post(
         "/tuners",
@@ -121,13 +122,51 @@ async def create_tuner(
             "name": name,
             "recipe": recipe,
             "trainer": trainer,
-            "datum_ids": datum_ids,
+            "train_datum_ids": train_datum_ids,
+            "eval_datum_ids": eval_datum_ids,
         },
     )
     resp.raise_for_status()
     tuner_id = resp.json()["tuner_id"]
-    print(f"[driver] created tuner {tuner_id} ({len(datum_ids)} tasks)")
+    print(
+        f"[driver] created tuner {tuner_id} "
+        f"({len(train_datum_ids)} train / {len(eval_datum_ids)} eval tasks)"
+    )
     return tuner_id
+
+
+# Fraction of discovered tasks held out as the eval split (scored per
+# checkpoint, never trained on). A fixed-seed shuffle picks the eval subset so
+# the split is random (not correlated with datum-id ordering) yet deterministic
+# across runs.
+EVAL_FRACTION = 0.1
+EVAL_SPLIT_SEED = 0xBADBEEF
+
+
+def split_train_eval(datum_ids: list[str]) -> tuple[list[str], list[str]]:
+    """Deterministically hold out a random fraction of datums for eval.
+
+    Shuffles a copy with a fixed seed and takes the first
+    `ceil(n * EVAL_FRACTION)` as eval, so the split is reproducible run-to-run
+    while decoupled from datum-id ordering. Reserves at least one eval datum
+    when there are >=2 tasks (so eval is exercised), and always keeps at least
+    one training datum.
+    """
+    import math
+    import random
+
+    n = len(datum_ids)
+    if n < 2:
+        # Too few to hold any out; train on everything, eval disabled.
+        return list(datum_ids), []
+    eval_count = max(1, math.ceil(n * EVAL_FRACTION))
+    eval_count = min(eval_count, n - 1)  # keep at least one training datum
+
+    shuffled = list(datum_ids)
+    random.Random(EVAL_SPLIT_SEED).shuffle(shuffled)
+    eval_datum_ids = shuffled[:eval_count]
+    train_datum_ids = shuffled[eval_count:]
+    return train_datum_ids, eval_datum_ids
 
 
 async def dispense_run(
@@ -464,12 +503,14 @@ async def main() -> int:
                 )
 
         if not tuner_id:
+            train_datum_ids, eval_datum_ids = split_train_eval(datum_ids)
             tuner_id = await create_tuner(
                 client,
                 name=args.name,
                 recipe=args.recipe,
                 trainer=args.trainer,
-                datum_ids=datum_ids,
+                train_datum_ids=train_datum_ids,
+                eval_datum_ids=eval_datum_ids,
             )
 
         budget: asyncio.Queue[int] = asyncio.Queue()

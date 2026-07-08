@@ -22,6 +22,7 @@ from tinker_cookbook.renderers import get_renderer, Message
 
 from ollie_rl.types import ChatCompletionRequest
 from ollie_rl.trainer.types import (
+    Checkpoint,
     Trainer,
     TrainerFactory,
     Example,
@@ -89,10 +90,17 @@ class TinkerTrainOp(TrainOp):
     This is intentional. Callers that use ``await train_op.wait()``
     as a uniform completion barrier across backends will simply fall
     through.
+
+    ``wait()`` returns the :class:`Checkpoint` published by this step -- a real
+    sampler ``path`` on the steps where Tinker promotes a sampler (cadence
+    ``sampler_promotion_every``), and ``None`` on steps that don't promote.
     """
 
-    async def wait(self) -> None:
-        return None
+    def __init__(self, checkpoint: Optional[Checkpoint] = None):
+        self._checkpoint = checkpoint
+
+    async def wait(self) -> Optional[Checkpoint]:
+        return self._checkpoint
 
     async def peek(self) -> bool:
         return True
@@ -358,13 +366,22 @@ class TinkerTrainer(Trainer):
 
             # 4. Advance step counter; promote sampler at cadence.
             self.state.train_step += 1
+            checkpoint: Optional[Checkpoint] = None
             if self.state.train_step % self.config.sampler_promotion_every == 0:
                 await self._promote_sampler()
+                # A promotion publishes a real, addressable sampler checkpoint
+                # (the saved sampler `path`), so tag it with that handle and
+                # the sampler generation it was published at. Steps that don't
+                # promote yield no checkpoint.
+                checkpoint = Checkpoint(
+                    ref=self.state.sampler_path,
+                    policy_generation=self.state.sampler_step,
+                )
             await self._persist_state()
         finally:
             self._is_training = False
 
-        return TinkerTrainOp()
+        return TinkerTrainOp(checkpoint)
 
 
 class TinkerTrainerFactory(TrainerFactory):

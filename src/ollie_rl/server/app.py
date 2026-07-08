@@ -105,14 +105,13 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
     Creates a new LoRA training client / model dynamically from a recipe template.
     """
     try:
-        if not request.datum_ids:
-            raise HTTPException(status_code=400, detail="datum_ids must be non-empty")
-
-        # Create, initialize, and register the tuner dynamically
+        # Datum-set validation (train non-empty, no train/eval overlap) lives
+        # in `create_tuner`; surface its ValueError as a 400.
         tuner_id = await services.tuner.create_tuner(
             recipe=request.recipe,
             name=request.name,
-            datum_ids=request.datum_ids,
+            train_datum_ids=request.train_datum_ids,
+            eval_datum_ids=request.eval_datum_ids,
             trainer=request.trainer,
             trainer_params=request.trainer_params,
         )
@@ -127,6 +126,8 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
         )
     except HTTPException as e:
         raise e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to create tuner for name: {request.name}")
         raise HTTPException(status_code=500, detail=str(e))

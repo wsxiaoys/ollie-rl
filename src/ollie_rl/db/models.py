@@ -84,6 +84,10 @@ def generate_run_id() -> str:
     return f"run_{uuid.uuid4().hex}"
 
 
+def generate_checkpoint_id() -> str:
+    return f"ckpt_{uuid.uuid4().hex}"
+
+
 class BaseModel(DeclarativeBase):
     """SQLAlchemy Declarative Base"""
 
@@ -305,6 +309,18 @@ class RunModel(BaseModel):
         String(255), ForeignKey("tuners.id"), index=True
     )
     datum_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # The checkpoint this *evaluation* run scores. NULL for ordinary training
+    # runs. Run eval-ness is derived from the datum's kind; this column records
+    # *which* checkpoint the attempt targets, so the dispenser can schedule up
+    # to `eval_group_size` eval runs per eval datum per checkpoint and progress
+    # can bucket eval rewards by checkpoint. A real (single-column) FK to the
+    # surrogate `checkpoints.id`: the referenced checkpoint always exists first
+    # (persisted on train-step completion, before any eval dispense), so the
+    # constraint is always satisfiable; nullable so training runs skip it (SQL
+    # MATCH SIMPLE leaves a NULL FK unchecked).
+    checkpoint_id: Mapped[Optional[str]] = mapped_column(
+        String(255), ForeignKey("checkpoints.id"), nullable=True
+    )
     reward: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     trained_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -326,3 +342,37 @@ class DatumRowModel(BaseModel):
         String(255), ForeignKey("tuners.id"), primary_key=True
     )
     datum_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    # `kind in {"train", "eval"}`. Eval datums are held out: scored per
+    # checkpoint but never grouped into a training batch nor counted toward
+    # datum quarantine. `server_default="train"` backfills existing rows to
+    # training on migration, so today's tuners are unchanged.
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="train", server_default="train"
+    )
+
+
+class CheckpointModel(BaseModel):
+    """A frozen snapshot yielded by one completed train step.
+
+    The surrogate `id` (a single, globally-unique column) is what `runs`
+    reference by FK; the backend's opaque handle lives in the separate `ref`
+    column, which today holds the `LIVE_POLICY_CHECKPOINT` sentinel (gemini's
+    `TunedModelCheckpoint` is null) and later a real handle (Tinker's sampler
+    path). Keeping our internal id off the backend lets `checkpoint_id` be a
+    clean single-column FK.
+    """
+
+    __tablename__ = "checkpoints"
+
+    id: Mapped[str] = mapped_column(
+        String(255), primary_key=True, default=generate_checkpoint_id
+    )
+    tuner_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tuners.id"), nullable=False, index=True
+    )
+    # Backend handle, or the LIVE_POLICY_CHECKPOINT sentinel.
+    ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    policy_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=utcnow
+    )

@@ -19,14 +19,30 @@ class LifecycleMixin(TunerServiceBase):
         self,
         recipe: str,
         name: str,
-        datum_ids: List[str],
+        train_datum_ids: List[str],
         trainer: str,
+        eval_datum_ids: Optional[List[str]] = None,
         trainer_params: Optional[dict] = None,
     ) -> str:
         """
         Create and initialize a tuner using the Cookbook and register it.
+
+        ``train_datum_ids`` become the training pool (dispensed, rewarded,
+        consumed by train steps); ``eval_datum_ids`` are held out for
+        per-checkpoint scoring only. A datum id must be train or eval, never
+        both. Raises ``ValueError`` when ``train_datum_ids`` is empty or the
+        two sets overlap (the single source of truth for this validation; the
+        API layer maps it to a 400).
         """
         assert Cookbook.has(recipe)
+        eval_datum_ids = eval_datum_ids or []
+        if not train_datum_ids:
+            raise ValueError("train_datum_ids must be non-empty")
+        overlap = set(train_datum_ids) & set(eval_datum_ids)
+        if overlap:
+            raise ValueError(
+                f"train/eval datum ids overlap: {sorted(overlap)}"
+            )
         factory = trainer_factory.get(trainer)  # validate now, fail fast
 
         # Accepted limitation (non-atomic creation): the tuner row is committed
@@ -46,11 +62,20 @@ class LifecycleMixin(TunerServiceBase):
                 )
                 session.add(tuner_record)
                 await session.flush()
-                for datum_id in datum_ids:
+                for datum_id in train_datum_ids:
                     session.add(
                         DatumRowModel(
                             tuner_id=tuner_record.id,
                             datum_id=datum_id,
+                            kind="train",
+                        )
+                    )
+                for datum_id in eval_datum_ids:
+                    session.add(
+                        DatumRowModel(
+                            tuner_id=tuner_record.id,
+                            datum_id=datum_id,
+                            kind="eval",
                         )
                     )
 

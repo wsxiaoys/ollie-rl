@@ -23,7 +23,13 @@ class CreateTunerRequest(BaseModel):
     name: str
     recipe: str
     trainer: str
-    datum_ids: List[str]
+    # Datums to train on (dispensed into GRPO groups, rewarded, consumed by a
+    # train_step). Must be non-empty.
+    train_datum_ids: List[str]
+    # Held-out datums scored per checkpoint but never trained on nor counted
+    # toward datum quarantine. Empty disables eval. Must not overlap
+    # `train_datum_ids`.
+    eval_datum_ids: List[str] = []
     trainer_params: Optional[Dict[str, Any]] = None
 
 

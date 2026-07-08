@@ -37,6 +37,8 @@ from google.genai.types import (
 )
 
 from ollie_rl.trainer.types import (
+    LIVE_POLICY_CHECKPOINT,
+    Checkpoint,
     Trainer,
     TrainerFactory,
     Example,
@@ -375,9 +377,14 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
         super().__init__(trainer.client, op_name)
         self.trainer = trainer
 
-    async def wait(self) -> None:
+    async def wait(self) -> Optional[Checkpoint]:
         """Wait for the train-step LRO to terminate, record the completed
         ``TrainStepResponse`` in ``last_train_op`` and clear ``pending_train_op``.
+
+        Returns the :class:`Checkpoint` the step produced (tagged with the
+        live-policy sentinel ref, since gemini's ``TunedModelCheckpoint`` comes
+        back null), or ``None`` when the completed op carried no
+        ``completed_train_step_id``.
 
         A train step can legitimately run much longer than a single
         ``wait_for_operation`` budget, so we keep retrying on timeouts /
@@ -420,6 +427,7 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                 continue
 
+        checkpoint: Optional[Checkpoint] = None
         try:
             response = completed_op.get_response_as(TrainStepResponse)
             if asyncio.iscoroutine(response):
@@ -449,6 +457,21 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
                             else None
                         ),
                     )
+                # The completed step yields a checkpoint. When Vertex returns a
+                # `TunedModelCheckpoint`, persist its full opaque payload as the
+                # ref (a JSON dump, since the container has no declared fields);
+                # only fall back to the live-policy sentinel when it is null, in
+                # which case eval attributed to this checkpoint samples the live
+                # policy.
+                ref = (
+                    response.tuned_model_checkpoint.model_dump_json()
+                    if response.tuned_model_checkpoint is not None
+                    else LIVE_POLICY_CHECKPOINT
+                )
+                checkpoint = Checkpoint(
+                    ref=ref,
+                    policy_generation=completed,
+                )
 
             # Clear the in-flight pointer if it still refers to this op; a newer
             # train_step may have already replaced it.
@@ -458,6 +481,8 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
             await trainer._persist_state()
         except Exception as e:
             logger.error(f"Error polling train step or updating state: {e}")
+
+        return checkpoint
 
 
 class GeminiMsrlTrainer(Trainer):

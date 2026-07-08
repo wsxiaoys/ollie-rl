@@ -386,6 +386,47 @@ def pick_datum(
     return best
 
 
+def pick_eval_datum(
+    eval_pool: List[str],
+    runs: List[RunModel],
+    checkpoint_id: str,
+    group_size: int,
+) -> Optional[str]:
+    """First eval datum with fewer than ``group_size`` live attempts against
+    ``checkpoint_id``.
+
+    An attempt "counts" for a datum/checkpoint when it is a ``RunModel`` whose
+    ``checkpoint_id`` equals the target and is either rewarded or still pending
+    (reward ``None``, lease not expired). Expired-unrewarded attempts don't
+    count, so a dropped eval rollout is re-dispensed. Among under-filled datums
+    the least-covered wins (spread coverage). Returns ``None`` when every eval
+    datum already has ``group_size`` live attempts for this checkpoint, when the
+    pool is empty, or when ``group_size <= 0``.
+
+    Pure helper (no service/DB state), mirroring :func:`pick_datum`.
+    """
+    if not eval_pool or group_size <= 0:
+        return None
+
+    now = utcnow()
+    covered = {d: 0 for d in eval_pool}
+    for r in runs:
+        if r.checkpoint_id != checkpoint_id:
+            continue
+        if r.datum_id not in covered:
+            continue
+        has_reward = r.reward is not None
+        is_pending = r.reward is None and r.expires_at > now
+        if has_reward or is_pending:
+            covered[r.datum_id] += 1
+
+    # Least-covered under-filled datum wins; None when all are full.
+    best = min(eval_pool, key=lambda d: covered[d])
+    if covered[best] >= group_size:
+        return None
+    return best
+
+
 class DispenseMixin(TunerServiceBase):
     """Serialized read-pick-insert dispensing of runs for a tuner."""
 
@@ -426,6 +467,20 @@ class DispenseMixin(TunerServiceBase):
         async with self._dispense_lock:
             async with self.async_session() as session:
                 datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
+
+                # ── Tier 0 (highest): eval the latest checkpoint ────────────
+                # As soon as a train step persists a checkpoint, eval its
+                # held-out datums -- up to `eval_group_size` runs per datum for
+                # that checkpoint -- ahead of all training work, so the
+                # per-checkpoint metric resolves before the policy drifts far.
+                # Inert when there is no checkpoint yet, `eval_group_size == 0`,
+                # the eval pool is empty, or every eval datum is already
+                # covered.
+                eval_run = await self._maybe_dispense_eval(
+                    tuner_id, session, runs, recipe
+                )
+                if eval_run is not None:
+                    return eval_run
 
                 if datum_pool:
                     # Both filters share the rewarded denominator: a rewarded
@@ -471,6 +526,57 @@ class DispenseMixin(TunerServiceBase):
             async with self.async_session() as session:
                 async with session.begin():
                     session.add(run_record)
+
+        return DispenseRun(
+            run_id=run_record.id,
+            datum_id=run_record.datum_id,
+            expires_at=run_record.expires_at,
+        )
+
+    async def _maybe_dispense_eval(
+        self,
+        tuner_id: str,
+        session,
+        runs: List[RunModel],
+        recipe: Recipe,
+    ) -> Optional[DispenseRun]:
+        """Dispense one held-out eval run for the latest checkpoint, if any is
+        due (dispense tier 0).
+
+        Returns a :class:`DispenseRun` (whose ``RunModel`` is tagged with the
+        checkpoint's id) when an eval datum is uncovered for the newest
+        checkpoint, else ``None`` -- in which case the caller falls through to
+        the ordinary training tiers. Eval-ness is not surfaced on the response:
+        a driver derives it from the datum id, and the server persists it on the
+        run row. Called inside the ``_dispense_lock`` critical section (the
+        passed ``session`` is used for reads only; the insert opens its own
+        transaction).
+        """
+        if recipe.eval_group_size <= 0:
+            return None
+
+        latest = await self._latest_checkpoint(tuner_id, session)
+        if latest is None:
+            return None
+
+        eval_pool = await self._load_datums(tuner_id, session, kind="eval")
+        eval_datum = pick_eval_datum(
+            eval_pool, runs, latest.id, recipe.eval_group_size
+        )
+        if eval_datum is None:
+            return None
+
+        run_record = RunModel(
+            tuner_id=tuner_id,
+            datum_id=eval_datum,
+            checkpoint_id=latest.id,
+            reward=None,
+            trained_count=0,
+            expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS),
+        )
+        async with self.async_session() as insert_session:
+            async with insert_session.begin():
+                insert_session.add(run_record)
 
         return DispenseRun(
             run_id=run_record.id,
