@@ -138,6 +138,24 @@ class CompletedTrainOp(BaseModel):
     metadata: Optional[GenericMetadata] = None
 
 
+class PendingTrainOp(BaseModel):
+    """An in-flight train-step LRO and the metadata needed to reconcile it.
+
+    Set the moment a train step is submitted and cleared once
+    `GeminiMsrlTrainOp.wait()` observes its completion. Used to detect
+    in-flight training and, via `pending_train_op()`, to reconcile an op that
+    was submitted before a restart.
+    """
+
+    # Operation resource name of the in-flight train-step LRO.
+    name: str
+    # `skip_weight_sync` flag the op was submitted with. Needed so `wait()` can
+    # tell a promotion step that produced no `TunedModelCheckpoint` (attribute
+    # to the completed step id) apart from a non-promotion step (no new
+    # checkpoint at all).
+    skip_weight_sync: bool = False
+
+
 class GeminiMsrlTrainerState(BaseModel):
     tuning_job_name: str
     # The most recent *completed* train-step op. This is the source of truth
@@ -145,12 +163,8 @@ class GeminiMsrlTrainerState(BaseModel):
     # so the generation can't regress to 0 while a new train step is running
     # (that is tracked separately by `pending_train_op`).
     last_train_op: Optional[CompletedTrainOp] = None
-    # Op name of an in-flight train-step LRO, if any. Set the moment a train
-    # step is submitted and cleared once `GeminiMsrlTrainOp.wait()` observes
-    # its completion. Used to detect in-flight training and, via
-    # `pending_train_op()`, to reconcile an op that was submitted before a
-    # restart.
-    pending_train_op: Optional[str] = None
+    # The in-flight train-step LRO, if any.
+    pending_train_op: Optional[PendingTrainOp] = None
     config: GeminiMsrlTrainerConfig
 
     @model_validator(mode="before")
@@ -162,6 +176,9 @@ class GeminiMsrlTrainerState(BaseModel):
            into `pending_train_op`.
         2. Previous format stored the bare `TrainStepResponse` dict; wrap it
            into the new `CompletedTrainOp` container under `response`.
+        3. `pending_train_op` was previously a bare op-name `str`; wrap it
+           into the `PendingTrainOp` container (defaulting `skip_weight_sync`
+           to False).
         """
         if not isinstance(data, dict):
             return data
@@ -173,6 +190,10 @@ class GeminiMsrlTrainerState(BaseModel):
         elif isinstance(legacy, dict) and "response" not in legacy:
             data = dict(data)
             data["last_train_op"] = {"response": legacy}
+        legacy_pending = data.get("pending_train_op")
+        if isinstance(legacy_pending, str):
+            data = dict(data)
+            data["pending_train_op"] = {"name": legacy_pending}
         return data
 
     @property
@@ -462,19 +483,42 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
                 # only fall back to the live-policy sentinel when it is null, in
                 # which case eval attributed to this checkpoint samples the live
                 # policy.
-                ref = (
-                    response.tuned_model_checkpoint.model_dump_json()
-                    if response.tuned_model_checkpoint is not None
-                    else LIVE_POLICY_CHECKPOINT
-                )
-                checkpoint = Checkpoint(
-                    ref=ref,
-                    policy_generation=completed,
-                )
+                tuned_checkpoint = response.tuned_model_checkpoint
+                if tuned_checkpoint is not None:
+                    # Vertex returned a frozen `TunedModelCheckpoint`: persist
+                    # its full opaque payload as the ref and attribute the
+                    # sample to the checkpoint's own `step`, falling back to the
+                    # completed train step id when `step` is absent.
+                    checkpoint = Checkpoint(
+                        ref=tuned_checkpoint.model_dump_json(),
+                        policy_generation=(
+                            tuned_checkpoint.step
+                            if tuned_checkpoint.step is not None
+                            else completed
+                        ),
+                    )
+                elif not (
+                    trainer.state.pending_train_op is not None
+                    and trainer.state.pending_train_op.skip_weight_sync
+                ):
+                    # No frozen checkpoint, but this was a promotion step
+                    # (`skip_weight_sync=False`): the live policy advanced, so
+                    # attribute the sample to the completed train step id via
+                    # the live-policy sentinel. (An unknown/cleared pending op,
+                    # e.g. a legacy reconcile, is treated as a promotion too.)
+                    checkpoint = Checkpoint(
+                        ref=LIVE_POLICY_CHECKPOINT,
+                        policy_generation=completed,
+                    )
+                # Otherwise `skip_weight_sync=True` produced no checkpoint at
+                # all, so leave `checkpoint` as None: no new generation.
 
             # Clear the in-flight pointer if it still refers to this op; a newer
             # train_step may have already replaced it.
-            if trainer.state.pending_train_op == op_name:
+            if (
+                trainer.state.pending_train_op is not None
+                and trainer.state.pending_train_op.name == op_name
+            ):
                 trainer.state.pending_train_op = None
 
             await trainer._persist_state()
@@ -572,7 +616,7 @@ class GeminiMsrlTrainer(Trainer):
         wrap the op name in a fresh (authoritative) `GeminiMsrlTrainOp` handle.
         """
         if self.state.pending_train_op is not None:
-            return GeminiMsrlTrainOp(self, self.state.pending_train_op)
+            return GeminiMsrlTrainOp(self, self.state.pending_train_op.name)
         return None
 
     async def _persist_state(self) -> None:
@@ -856,11 +900,12 @@ class GeminiMsrlTrainer(Trainer):
         if self.state.pending_train_op:
             last_op = GeminiMsrlTrainOp(
                 self,
-                self.state.pending_train_op,
+                self.state.pending_train_op.name,
             )
             if not await last_op.peek():
                 raise RuntimeError(
-                    f"Last training step {self.state.pending_train_op} is still active"
+                    "Last training step "
+                    f"{self.state.pending_train_op.name} is still active"
                 )
 
         # 1. Translate examples to TrainStepRequest
@@ -892,7 +937,10 @@ class GeminiMsrlTrainer(Trainer):
         # 2. Trigger TrainStep LRO
         op = await self.client.train_step(tuning_job_id, train_req)
 
-        self.state.pending_train_op = op.name
+        self.state.pending_train_op = PendingTrainOp(
+            name=op.name,
+            skip_weight_sync=skip_weight_sync,
+        )
         await self._persist_state()
 
         # The returned op is the single authoritative waiter: the service

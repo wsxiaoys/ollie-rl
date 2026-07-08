@@ -199,6 +199,11 @@ class TunedModelCheckpoint(BaseModelConfig):
     # Flexible container for TunedModelCheckpoint fields
     model_config = ConfigDict(extra="allow")
 
+    # The training step this checkpoint was produced at. Used as the
+    # checkpoint's `policy_generation`. Vertex serializes int64 as a string,
+    # so accept both and coerce to int.
+    step: Optional[int] = None
+
 
 class TrainStepMetric(BaseModelConfig):
     # Flexible container for TrainStepMetric fields
