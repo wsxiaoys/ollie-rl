@@ -159,9 +159,7 @@ class TunerServiceBase:
         runs = list(runs_result.scalars().all())
         return datum_pool, runs
 
-    async def _load_datums(
-        self, tuner_id: str, session, kind: str
-    ) -> List[str]:
+    async def _load_datums(self, tuner_id: str, session, kind: str) -> List[str]:
         """Datum ids registered for ``tuner_id`` of the given ``kind``.
 
         ``kind`` is ``"train"`` (dispensable training pool) or ``"eval"``

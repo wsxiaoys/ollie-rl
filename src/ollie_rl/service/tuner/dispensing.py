@@ -560,9 +560,7 @@ class DispenseMixin(TunerServiceBase):
             return None
 
         eval_pool = await self._load_datums(tuner_id, session, kind="eval")
-        eval_datum = pick_eval_datum(
-            eval_pool, runs, latest.id, recipe.eval_group_size
-        )
+        eval_datum = pick_eval_datum(eval_pool, runs, latest.id, recipe.eval_group_size)
         if eval_datum is None:
             return None
 

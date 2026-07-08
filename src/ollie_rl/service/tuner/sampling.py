@@ -278,9 +278,7 @@ class SamplingMixin(TunerServiceBase):
             )
             return result.scalar_one_or_none()
 
-    async def _sampler_for(
-        self, tuner_id: str, checkpoint: CheckpointModel
-    ) -> Sampler:
+    async def _sampler_for(self, tuner_id: str, checkpoint: CheckpointModel) -> Sampler:
         """Return the (cached) frozen :class:`Sampler` for ``checkpoint``.
 
         Amortizes the backend weight-load across a checkpoint's eval rollouts

@@ -27,8 +27,8 @@ import ollie_rl.db.types
 
 
 # revision identifiers, used by Alembic.
-revision: str = '821cc4f5d981'
-down_revision: Union[str, None] = 'ecae048edc2f'
+revision: str = "821cc4f5d981"
+down_revision: Union[str, None] = "ecae048edc2f"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -36,31 +36,34 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # New checkpoint table (created first so the runs FK target exists).
     op.create_table(
-        'checkpoints',
-        sa.Column('id', sa.String(length=255), nullable=False),
-        sa.Column('tuner_id', sa.String(length=255), nullable=False),
-        sa.Column('ref', sa.String(length=512), nullable=False),
-        sa.Column('policy_generation', sa.Integer(), nullable=False),
+        "checkpoints",
+        sa.Column("id", sa.String(length=255), nullable=False),
+        sa.Column("tuner_id", sa.String(length=255), nullable=False),
+        sa.Column("ref", sa.String(length=512), nullable=False),
+        sa.Column("policy_generation", sa.Integer(), nullable=False),
         sa.Column(
-            'created_at',
+            "created_at",
             ollie_rl.db.types.UtcDateTime(timezone=True),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(['tuner_id'], ['tuners.id'], ),
-        sa.PrimaryKeyConstraint('id'),
+        sa.ForeignKeyConstraint(
+            ["tuner_id"],
+            ["tuners.id"],
+        ),
+        sa.PrimaryKeyConstraint("id"),
     )
-    with op.batch_alter_table('checkpoints', schema=None) as batch_op:
+    with op.batch_alter_table("checkpoints", schema=None) as batch_op:
         batch_op.create_index(
-            batch_op.f('ix_checkpoints_tuner_id'), ['tuner_id'], unique=False
+            batch_op.f("ix_checkpoints_tuner_id"), ["tuner_id"], unique=False
         )
 
     # datum_rows.kind: train | eval, backfilled to "train" on existing rows.
-    with op.batch_alter_table('datum_rows', schema=None) as batch_op:
+    with op.batch_alter_table("datum_rows", schema=None) as batch_op:
         batch_op.add_column(
             sa.Column(
-                'kind',
+                "kind",
                 sa.String(length=16),
-                server_default='train',
+                server_default="train",
                 nullable=False,
             )
         )
@@ -68,28 +71,28 @@ def upgrade() -> None:
     # runs.checkpoint_id: nullable FK; only eval runs set it. batch mode so the
     # foreign key is created via table-rebuild on SQLite (no native ALTER ADD
     # CONSTRAINT).
-    with op.batch_alter_table('runs', schema=None) as batch_op:
+    with op.batch_alter_table("runs", schema=None) as batch_op:
         batch_op.add_column(
-            sa.Column('checkpoint_id', sa.String(length=255), nullable=True)
+            sa.Column("checkpoint_id", sa.String(length=255), nullable=True)
         )
         batch_op.create_foreign_key(
-            'fk_runs_checkpoint_id_checkpoints',
-            'checkpoints',
-            ['checkpoint_id'],
-            ['id'],
+            "fk_runs_checkpoint_id_checkpoints",
+            "checkpoints",
+            ["checkpoint_id"],
+            ["id"],
         )
 
 
 def downgrade() -> None:
-    with op.batch_alter_table('runs', schema=None) as batch_op:
+    with op.batch_alter_table("runs", schema=None) as batch_op:
         batch_op.drop_constraint(
-            'fk_runs_checkpoint_id_checkpoints', type_='foreignkey'
+            "fk_runs_checkpoint_id_checkpoints", type_="foreignkey"
         )
-        batch_op.drop_column('checkpoint_id')
+        batch_op.drop_column("checkpoint_id")
 
-    with op.batch_alter_table('datum_rows', schema=None) as batch_op:
-        batch_op.drop_column('kind')
+    with op.batch_alter_table("datum_rows", schema=None) as batch_op:
+        batch_op.drop_column("kind")
 
-    with op.batch_alter_table('checkpoints', schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f('ix_checkpoints_tuner_id'))
-    op.drop_table('checkpoints')
+    with op.batch_alter_table("checkpoints", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_checkpoints_tuner_id"))
+    op.drop_table("checkpoints")

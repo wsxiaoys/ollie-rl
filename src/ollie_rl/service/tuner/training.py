@@ -105,9 +105,7 @@ class TrainingMixin(TunerServiceBase):
                 # submitted before a restart): fall through to the shared
                 # wait/persist below to drive it to completion so trainer state
                 # advances and `pending_train_op` clears.
-                logger.info(
-                    f"Reconciling in-flight train op for tuner {tuner_id}"
-                )
+                logger.info(f"Reconciling in-flight train op for tuner {tuner_id}")
             else:
                 async with self.async_session() as session:
                     async with session.begin():

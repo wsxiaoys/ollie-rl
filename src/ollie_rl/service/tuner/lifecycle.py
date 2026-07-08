@@ -40,9 +40,7 @@ class LifecycleMixin(TunerServiceBase):
             raise ValueError("train_datum_ids must be non-empty")
         overlap = set(train_datum_ids) & set(eval_datum_ids)
         if overlap:
-            raise ValueError(
-                f"train/eval datum ids overlap: {sorted(overlap)}"
-            )
+            raise ValueError(f"train/eval datum ids overlap: {sorted(overlap)}")
         factory = trainer_factory.get(trainer)  # validate now, fail fast
 
         # Accepted limitation (non-atomic creation): the tuner row is committed
