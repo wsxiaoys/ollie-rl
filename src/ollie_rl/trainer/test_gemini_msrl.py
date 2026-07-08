@@ -421,9 +421,10 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
     async def test_train_step_fails_when_last_op_active(self):
         from gemini_msrl.types import Operation
         from ollie_rl.trainer.types import Example
+        from ollie_rl.trainer.gemini_msrl import PendingTrainOp
 
         # Set an in-flight train op in state
-        self.job.state.pending_train_op = "previous-operation-train-step"
+        self.job.state.pending_train_op = PendingTrainOp(name="previous-operation-train-step")
 
         # Mock the previous operation as active (done=False)
         mock_op_pending = Operation(name="previous-operation-train-step", done=False)
@@ -449,9 +450,10 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
     async def test_train_step_succeeds_when_last_op_completed(self):
         from gemini_msrl.types import Operation
         from ollie_rl.trainer.types import Example
+        from ollie_rl.trainer.gemini_msrl import PendingTrainOp
 
         # Set an in-flight train op in state
-        self.job.state.pending_train_op = "previous-operation-train-step"
+        self.job.state.pending_train_op = PendingTrainOp(name="previous-operation-train-step")
 
         # Mock the previous operation as completed (done=True)
         mock_op_done = Operation(name="previous-operation-train-step", done=True)
@@ -473,4 +475,4 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         # Call train_step and expect success
         train_op = await self.job.train_step(examples)
         self.assertEqual(train_op.op_name, "new-operation-train-step")
-        self.assertEqual(self.job.state.pending_train_op, "new-operation-train-step")
+        self.assertEqual(self.job.state.pending_train_op, PendingTrainOp(name="new-operation-train-step", skip_weight_sync=False))
