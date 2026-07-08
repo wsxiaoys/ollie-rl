@@ -6,18 +6,40 @@ function fmt(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(3);
 }
 
+/**
+ * Color a value on a red -> green scale pivoted at zero: any reward <= 0 reads
+ * red (a failed / penalized run), while positive rewards ramp from amber up to
+ * green as they approach the max. Pivoting at 0 (instead of coloring by bin
+ * position across min..max) keeps the color meaningful even when a few large
+ * negative penalties, e.g. -10, stretch the range.
+ */
+function rewardColor(value: number, rewardMax: number): string {
+  if (value <= 0) return "var(--danger)";
+  const f = rewardMax > 0 ? Math.min(1, value / rewardMax) : 1;
+  return `color-mix(in srgb, var(--good) ${Math.round(f * 100)}%, var(--warn))`;
+}
+
+/** CSS gradient for the legend, using the same zero-pivoted color scale. */
+function scaleGradient(min: number, max: number): string {
+  if (min >= 0) return "linear-gradient(to right, var(--warn), var(--good))";
+  if (max <= 0) return "var(--danger)";
+  const zeroPct = ((0 - min) / (max - min)) * 100;
+  return `linear-gradient(to right, var(--danger) 0, var(--danger) ${zeroPct}%, var(--warn) ${zeroPct}%, var(--good))`;
+}
+
 function DistributionBar({
   bins,
   binEdges,
   binWidth,
   total,
+  rewardMax,
 }: {
   bins: number[];
   binEdges: number[];
   binWidth: number;
   total: number;
+  rewardMax: number;
 }) {
-  const binCount = bins.length;
   return (
     <div
       className="reward-bar"
@@ -29,12 +51,8 @@ function DistributionBar({
         const lo = binEdges[i];
         const hi = lo + binWidth;
         const widthPct = (c / total) * 100;
-        // Color on a red -> green scale by bin position: lower rewards are
-        // red, higher rewards green, so the bar's color reads as reward value.
-        const f = binCount > 1 ? i / (binCount - 1) : 1;
-        const color = `color-mix(in srgb, var(--good) ${Math.round(
-          f * 100,
-        )}%, var(--danger))`;
+        // Color by the bin's reward value, pivoted at zero (see rewardColor).
+        const color = rewardColor(lo + binWidth / 2, rewardMax);
         return (
           <div
             key={i}
@@ -80,6 +98,7 @@ function DistributionTable({ dist }: { dist: RewardDistributionData }) {
                 binEdges={dist.bin_edges}
                 binWidth={dist.bin_width}
                 total={row.count}
+                rewardMax={dist.reward_max}
               />
             </td>
           </tr>
@@ -117,7 +136,13 @@ export function RewardDistribution({
         </span>
         <span className="reward-dist__scale" title="bar color encodes reward">
           <span className="muted num">{dist.reward_min.toFixed(2)}</span>
-          <span className="reward-dist__gradient" aria-hidden="true" />
+          <span
+            className="reward-dist__gradient"
+            aria-hidden="true"
+            style={{
+              background: scaleGradient(dist.reward_min, dist.reward_max),
+            }}
+          />
           <span className="muted num">{dist.reward_max.toFixed(2)}</span>
         </span>
       </div>
