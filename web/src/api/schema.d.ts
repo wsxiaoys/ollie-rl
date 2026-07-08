@@ -784,8 +784,13 @@ export interface components {
             recipe: string;
             /** Trainer */
             trainer: string;
-            /** Datum Ids */
-            datum_ids: string[];
+            /** Train Datum Ids */
+            train_datum_ids: string[];
+            /**
+             * Eval Datum Ids
+             * @default []
+             */
+            eval_datum_ids: string[];
             /** Trainer Params */
             trainer_params?: {
                 [key: string]: unknown;
@@ -1213,6 +1218,11 @@ export interface components {
              * @default 4
              */
             max_off_policy_generation: number;
+            /**
+             * Eval Group Size
+             * @default 4
+             */
+            eval_group_size: number;
             /**
              * Content Filter Penalty
              * @default -1
