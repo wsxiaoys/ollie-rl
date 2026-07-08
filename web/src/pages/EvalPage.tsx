@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
+import { useState } from "react";
 import { evalProgressQuery, rewardDistributionQuery } from "../api/queries";
 import { RewardDistribution } from "../components/RewardDistribution";
-import { Mono, Panel } from "../components/ui";
+import { Mono, Panel, ProgressBar } from "../components/ui";
 
 /**
  * Held-out evaluation view: mean reward on the eval split bucketed by the
@@ -13,6 +14,10 @@ import { Mono, Panel } from "../components/ui";
  */
 export function EvalPage() {
   const { tunerId } = useParams({ from: "/tuners/$tunerId/eval" });
+  // Datums with no runs against the latest checkpoint (0 in-flight / 0
+  // completed) are noise while a checkpoint is being scored; hide them by
+  // default the way the datum pool hides excluded rows.
+  const [hideIdle, setHideIdle] = useState(true);
 
   const evalDistQ = useQuery(
     rewardDistributionQuery(tunerId, undefined, "eval"),
@@ -21,6 +26,10 @@ export function EvalPage() {
 
   const progress = evalProgressQ.data;
   const items = progress?.items ?? [];
+  const evalGroupSize = progress?.eval_group_size ?? 0;
+  const visibleItems = hideIdle
+    ? items.filter((it) => it.in_flight > 0 || it.completed > 0)
+    : items;
 
   return (
     <div className="page">
@@ -63,11 +72,21 @@ export function EvalPage() {
           <Panel
             title="Eval datums"
             right={
-              <span className="muted">
-                {progress?.latest_checkpoint_generation != null
-                  ? `latest checkpoint gen ${progress.latest_checkpoint_generation}`
-                  : "no checkpoint yet"}
-              </span>
+              <div className="datum-pool-header">
+                <label className="datum-pool-toggle">
+                  <input
+                    type="checkbox"
+                    checked={hideIdle}
+                    onChange={(e) => setHideIdle(e.target.checked)}
+                  />
+                  Hide idle
+                </label>
+                <span className="muted">
+                  {progress?.latest_checkpoint_generation != null
+                    ? `latest checkpoint gen ${progress.latest_checkpoint_generation}`
+                    : "no checkpoint yet"}
+                </span>
+              </div>
             }
           >
             {evalProgressQ.isError ? (
@@ -80,18 +99,24 @@ export function EvalPage() {
                 This tuner has no eval datums. Pass <code>eval_datum_ids</code>{" "}
                 at creation to hold out a datum for per-checkpoint scoring.
               </div>
+            ) : visibleItems.length === 0 ? (
+              <div className="placeholder placeholder--inset">
+                {progress?.latest_checkpoint_generation != null
+                  ? "No eval runs against the latest checkpoint yet. Toggle “Hide idle” to view every eval datum."
+                  : "No checkpoint has been produced yet, so there are no eval runs. Toggle “Hide idle” to view every eval datum."}
+              </div>
             ) : (
               <div className="table-scroll">
                 <table className="table table--dense">
                   <thead>
                     <tr>
                       <th>Datum ID</th>
+                      <th>Completed / {evalGroupSize}</th>
                       <th className="num">In flight</th>
-                      <th className="num">Completed</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((it) => (
+                    {visibleItems.map((it) => (
                       <tr key={it.datum_id}>
                         <td>
                           <Link
@@ -102,8 +127,19 @@ export function EvalPage() {
                             <Mono>{it.datum_id}</Mono>
                           </Link>
                         </td>
+                        <td>
+                          <div className="datum-progress">
+                            <ProgressBar
+                              value={it.completed}
+                              max={evalGroupSize}
+                              tone="good"
+                            />
+                            <span className="datum-progress__label">
+                              {it.completed}/{evalGroupSize}
+                            </span>
+                          </div>
+                        </td>
                         <td className="num">{it.in_flight}</td>
-                        <td className="num">{it.completed}</td>
                       </tr>
                     ))}
                   </tbody>

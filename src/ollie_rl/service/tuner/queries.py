@@ -605,14 +605,17 @@ class QueryMixin(TunerServiceBase):
         """Per-eval-datum held-out status rollup for ``tuner_id``.
 
         Lists every registered eval datum (``DatumRowModel.kind == "eval"``),
-        including ones with no runs yet, with a cumulative rollup across all of
-        its eval runs: how many are still in flight (reward not yet set, lease
-        unexpired) and how many completed (rewarded).
-        ``latest_checkpoint_generation`` is the newest checkpoint the eval tier
-        is currently targeting (``None`` before any checkpoint exists), shown for
-        context.
+        including ones with no runs yet. Each datum's ``in_flight`` (reward not
+        yet set, lease unexpired) and ``completed`` (rewarded) counts are scoped
+        to the *latest checkpoint* -- the newest checkpoint the eval tier is
+        currently targeting (``latest_checkpoint_generation``; ``None`` before
+        any checkpoint exists) -- mirroring how a training datum's ``consumable``
+        counts toward the current group rather than all-time. ``eval_group_size``
+        is the recipe's per-datum-per-checkpoint attempt target (the progress
+        denominator).
         """
         now = utcnow()
+        recipe = await self._recipe_for(tuner_id)
         async with self.async_session() as session:
             exists = await session.execute(
                 select(TunerModel.id).where(TunerModel.id == tuner_id)
@@ -635,21 +638,30 @@ class QueryMixin(TunerServiceBase):
                 .all()
             )
 
-            latest_generation = (
+            # The eval tier always targets the highest-generation checkpoint, so
+            # scope per-datum progress to that one checkpoint (by id, not just
+            # generation -- a generation could in principle have multiple).
+            latest = (
                 await session.execute(
-                    select(func.max(CheckpointModel.policy_generation)).where(
-                        CheckpointModel.tuner_id == tuner_id
+                    select(
+                        CheckpointModel.id, CheckpointModel.policy_generation
                     )
+                    .where(CheckpointModel.tuner_id == tuner_id)
+                    .order_by(CheckpointModel.policy_generation.desc())
+                    .limit(1)
                 )
-            ).scalar_one_or_none()
+            ).first()
+            latest_checkpoint_id = latest[0] if latest is not None else None
+            latest_generation = latest[1] if latest is not None else None
 
             runs: List[RunModel] = []
-            if eval_datums:
+            if eval_datums and latest_checkpoint_id is not None:
                 runs = list(
                     (
                         await session.execute(
                             select(RunModel).where(
                                 RunModel.tuner_id == tuner_id,
+                                RunModel.checkpoint_id == latest_checkpoint_id,
                                 RunModel.datum_id.in_(eval_datums),
                             )
                         )
@@ -679,6 +691,7 @@ class QueryMixin(TunerServiceBase):
 
         return EvalProgress(
             latest_checkpoint_generation=latest_generation,
+            eval_group_size=recipe.eval_group_size,
             total=len(eval_datums),
             items=items,
         )

@@ -161,7 +161,13 @@ class TrainingProgress(BaseModel):
 
 
 class EvalDatumProgress(BaseModel):
-    """Held-out status for a single eval datum, cumulative across its runs."""
+    """Held-out status for a single eval datum against the latest checkpoint.
+
+    Both counts are scoped to the newest checkpoint the eval tier is currently
+    targeting (`EvalProgress.latest_checkpoint_generation`) -- mirroring how a
+    training datum's `consumable` counts toward the *current* group rather than
+    all-time -- so the numbers describe progress toward scoring that checkpoint.
+    """
 
     datum_id: str
     in_flight: int  # eval runs pending a reward (lease unexpired)
@@ -172,11 +178,15 @@ class EvalProgress(BaseModel):
     """Per-eval-datum held-out status rollup for a tuner.
 
     `latest_checkpoint_generation` is the newest checkpoint the eval tier is
-    currently targeting (None before any checkpoint exists). `items` covers
-    every registered eval datum, including ones with no runs yet.
+    currently targeting (None before any checkpoint exists); every per-datum
+    count in `items` is scoped to it. `eval_group_size` is the target number of
+    eval attempts per datum per checkpoint (the progress-bar denominator, from
+    the recipe). `items` covers every registered eval datum, including ones with
+    no runs against the latest checkpoint yet.
     """
 
     latest_checkpoint_generation: Optional[int]
+    eval_group_size: int  # target attempts per datum per checkpoint
     total: int  # number of registered eval datums
     items: List[EvalDatumProgress]
 
