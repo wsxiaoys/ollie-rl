@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Float,
     JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -363,6 +364,14 @@ class CheckpointModel(BaseModel):
     """
 
     __tablename__ = "checkpoints"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tuner_id",
+            "policy_generation",
+            name="uq_checkpoints_tuner_id_policy_generation",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String(255), primary_key=True, default=generate_checkpoint_id

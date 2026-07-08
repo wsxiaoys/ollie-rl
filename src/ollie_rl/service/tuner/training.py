@@ -6,6 +6,7 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from ollie_rl.db import ChatCompletionModel, TunerModel
 from ollie_rl.db.models import CheckpointModel, DatumRowModel, RunModel
@@ -158,18 +159,33 @@ class TrainingMixin(TunerServiceBase):
         the step) is a no-op. The service, not the trainer, owns this DB write.
         This ``checkpoints`` table is the eval scheduler's source of truth for
         "what checkpoints exist to be evaluated".
+
+        Idempotent on ``(tuner_id, policy_generation)`` (the table's unique
+        constraint): the batch may be trained twice across a restart (see the
+        note in ``_maybe_train``), so a checkpoint for a given generation can be
+        yielded more than once. We rely on the DB's unique constraint and treat
+        the resulting ``IntegrityError`` as a benign duplicate rather than
+        pre-checking (which would race).
         """
         if checkpoint is None:
             return
-        async with self.async_session() as session:
-            async with session.begin():
-                session.add(
-                    CheckpointModel(
-                        tuner_id=tuner_id,
-                        ref=checkpoint.ref,
-                        policy_generation=checkpoint.policy_generation,
+        try:
+            async with self.async_session() as session:
+                async with session.begin():
+                    session.add(
+                        CheckpointModel(
+                            tuner_id=tuner_id,
+                            ref=checkpoint.ref,
+                            policy_generation=checkpoint.policy_generation,
+                        )
                     )
-                )
+        except IntegrityError:
+            logger.info(
+                "Checkpoint for tuner %s generation %s already persisted; "
+                "skipping duplicate insert",
+                tuner_id,
+                checkpoint.policy_generation,
+            )
 
     async def _collect_consumable_batch(
         self, tuner_id: str, session, trainer: Trainer
