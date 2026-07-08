@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Dict, Any
 from openai.types.chat import (
     ChatCompletion,
@@ -160,6 +160,39 @@ class TrainingProgress(BaseModel):
     next_pick: NextPick
 
 
+class EvalDatumProgress(BaseModel):
+    """Held-out status for a single eval datum, cumulative across its runs."""
+
+    datum_id: str
+    in_flight: int  # eval runs pending a reward (lease unexpired)
+    completed: int  # eval runs that have been rewarded
+
+
+class EvalProgress(BaseModel):
+    """Per-eval-datum held-out status rollup for a tuner.
+
+    `latest_checkpoint_generation` is the newest checkpoint the eval tier is
+    currently targeting (None before any checkpoint exists). `items` covers
+    every registered eval datum, including ones with no runs yet.
+    """
+
+    latest_checkpoint_generation: Optional[int]
+    total: int  # number of registered eval datums
+    items: List[EvalDatumProgress]
+
+
+class TunerProgress(BaseModel):
+    """Optional progress snapshots attached to a tuner detail response.
+
+    Each field is populated only when its kind was requested via the tuner
+    detail endpoint's `progress` query param (a comma-separated list of
+    `train`/`eval`); un-requested kinds stay `None`.
+    """
+
+    train: Optional[TrainingProgress] = None
+    eval: Optional[EvalProgress] = None
+
+
 class GetTunerResponse(BaseModel):
     tuner_id: str
     name: str
@@ -167,7 +200,9 @@ class GetTunerResponse(BaseModel):
     trainer: str
     policy_generation: int
     trainer_state: Optional[Any] = None
-    progress: Optional[TrainingProgress] = None
+    # Optional progress snapshots, each populated only when requested via the
+    # `progress` query param (comma-separated `train`/`eval`).
+    progress: TunerProgress = Field(default_factory=TunerProgress)
     # True while an asynchronous train op is in flight. Backends that train
     # inline (or don't track ops) always report False. The completed step is
     # already available via `policy_generation`, so we only expose the
@@ -191,7 +226,11 @@ class ListTunersResponse(BaseModel):
 
 
 class ListDatumsResponse(BaseModel):
-    """The full datum-id pool registered for a tuner (for filter dropdowns)."""
+    """The datum-id pool registered for a tuner (for filter dropdowns).
+
+    Scoped to a single split when the request passes `split=train`/`eval`,
+    otherwise the full pool.
+    """
 
     datum_ids: List[str]
 

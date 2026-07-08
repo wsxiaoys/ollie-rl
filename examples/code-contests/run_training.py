@@ -139,7 +139,7 @@ async def create_tuner(
 # checkpoint, never trained on). A fixed-seed shuffle picks the eval subset so
 # the split is random (not correlated with datum-id ordering) yet deterministic
 # across runs.
-EVAL_FRACTION = 0.1
+EVAL_FRACTION = 0.05
 EVAL_SPLIT_SEED = 0xBADBEEF
 
 

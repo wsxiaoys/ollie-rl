@@ -38,8 +38,9 @@ export interface paths {
         /**
          * Get Tuner
          * @description Returns information for a specific tuner, including policy_generation and
-         *     stored trainer state. Pass `?progress=true` to also include a recipe-aware
-         *     training-progress snapshot (batch readiness, run/group coverage, next pick).
+         *     stored trainer state. Pass `?progress=train` and/or `?progress=eval`
+         *     (comma-separated) to also include the corresponding progress snapshot(s)
+         *     under the response's `progress` object.
          */
         get: operations["get_tuner_tuners__tuner_id__get"];
         put?: never;
@@ -59,8 +60,9 @@ export interface paths {
         };
         /**
          * List Data
-         * @description Return the full datum-id pool registered for a tuner, so clients can build
-         *     a filter dropdown for the runs list.
+         * @description Return the datum-id pool registered for a tuner, so clients can build a
+         *     filter dropdown for the runs list. Pass `split=train`/`eval` to scope the
+         *     pool to a single split.
          */
         get: operations["list_data_tuners__tuner_id__data_get"];
         put?: never;
@@ -82,9 +84,10 @@ export interface paths {
          * Reward Distribution
          * @description Reward distribution bucketed by policy generation for a tuner.
          *
-         *     Reads only `(reward, max policy_generation)` per rewarded run and returns
-         *     the finished per-generation histogram, so the dashboard doesn't fetch every
-         *     run to aggregate client-side. Pass `datum_id` to scope to a single datum.
+         *     Reads only `(reward, generation)` per rewarded run and returns the finished
+         *     per-generation histogram, so the dashboard doesn't fetch every run to
+         *     aggregate client-side. Pass `datum_id` to scope to a single datum, and
+         *     `kind=eval` to bucket the held-out eval split by checkpoint generation.
          */
         get: operations["reward_distribution_tuners__tuner_id__reward_distribution_get"];
         put?: never;
@@ -109,7 +112,8 @@ export interface paths {
          *
          *     Supports cursor-based pagination via `limit`/`cursor`; the response returns
          *     a `next_cursor` when more runs are available. Pass `datum_id` to filter the
-         *     listing to runs for a single datum.
+         *     listing to runs for a single datum, and `kind` to restrict to training vs
+         *     held-out eval runs.
          */
         get: operations["list_runs_tuners__tuner_id__runs_get"];
         put?: never;
@@ -875,6 +879,34 @@ export interface components {
             expires_at: string;
         };
         /**
+         * EvalDatumProgress
+         * @description Held-out status for a single eval datum, cumulative across its runs.
+         */
+        EvalDatumProgress: {
+            /** Datum Id */
+            datum_id: string;
+            /** In Flight */
+            in_flight: number;
+            /** Completed */
+            completed: number;
+        };
+        /**
+         * EvalProgress
+         * @description Per-eval-datum held-out status rollup for a tuner.
+         *
+         *     `latest_checkpoint_generation` is the newest checkpoint the eval tier is
+         *     currently targeting (None before any checkpoint exists). `items` covers
+         *     every registered eval datum, including ones with no runs yet.
+         */
+        EvalProgress: {
+            /** Latest Checkpoint Generation */
+            latest_checkpoint_generation: number | null;
+            /** Total */
+            total: number;
+            /** Items */
+            items: components["schemas"]["EvalDatumProgress"][];
+        };
+        /**
          * File
          * @description Learn about [file inputs](https://platform.openai.com/docs/guides/text) for text generation.
          */
@@ -965,7 +997,7 @@ export interface components {
             policy_generation: number;
             /** Trainer State */
             trainer_state?: unknown | null;
-            progress?: components["schemas"]["TrainingProgress"] | null;
+            progress?: components["schemas"]["TunerProgress"];
             /**
              * Is Training
              * @default false
@@ -1001,7 +1033,10 @@ export interface components {
         };
         /**
          * ListDatumsResponse
-         * @description The full datum-id pool registered for a tuner (for filter dropdowns).
+         * @description The datum-id pool registered for a tuner (for filter dropdowns).
+         *
+         *     Scoped to a single split when the request passes `split=train`/`eval`,
+         *     otherwise the full pool.
          */
         ListDatumsResponse: {
             /** Datum Ids */
@@ -1376,6 +1411,18 @@ export interface components {
             /** Policy Generation */
             policy_generation: number;
         };
+        /**
+         * TunerProgress
+         * @description Optional progress snapshots attached to a tuner detail response.
+         *
+         *     Each field is populated only when its kind was requested via the tuner
+         *     detail endpoint's `progress` query param (a comma-separated list of
+         *     `train`/`eval`); un-requested kinds stay `None`.
+         */
+        TunerProgress: {
+            train?: components["schemas"]["TrainingProgress"] | null;
+            eval?: components["schemas"]["EvalProgress"] | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1524,7 +1571,8 @@ export interface operations {
     get_tuner_tuners__tuner_id__get: {
         parameters: {
             query?: {
-                progress?: boolean;
+                /** @description Comma-separated progress snapshots to attach: any of 'train' (a recipe-aware training-progress snapshot -- batch readiness, run/group coverage, next pick) and 'eval' (a per-eval-datum held-out status rollup). E.g. 'train', 'eval', or 'train,eval'. Empty (default) attaches neither. */
+                progress?: string;
             };
             header?: never;
             path: {
@@ -1556,7 +1604,10 @@ export interface operations {
     };
     list_data_tuners__tuner_id__data_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only return datums from this split: 'train' or 'eval'. Omit to return the full pool. */
+                split?: ("train" | "eval") | null;
+            };
             header?: never;
             path: {
                 tuner_id: string;
@@ -1590,6 +1641,8 @@ export interface operations {
             query?: {
                 /** @description Only aggregate runs dispensed for this datum id. */
                 datum_id?: string | null;
+                /** @description Which runs to bucket: 'train' (rewarded training runs by completion generation) or 'eval' (held-out eval runs by the generation of the checkpoint they targeted). */
+                kind?: "train" | "eval";
             };
             header?: never;
             path: {
@@ -1628,6 +1681,8 @@ export interface operations {
                 cursor?: string | null;
                 /** @description Only return runs dispensed for this datum id. */
                 datum_id?: string | null;
+                /** @description Only return runs of this kind: 'train' (runs on the training split) or 'eval' (held-out eval runs, i.e. those targeting a checkpoint). Omit to return both. */
+                kind?: ("train" | "eval") | null;
             };
             header?: never;
             path: {

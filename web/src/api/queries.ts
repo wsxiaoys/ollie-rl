@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import {
   getCompletion,
+  getEvalProgress,
   getRewardDistribution,
   getRun,
   getTuner,
@@ -28,20 +29,36 @@ export const tunerQuery = (tunerId: string) =>
 
 // The datum pool is static for a tuner's lifetime, so fetch it once and cache
 // it — used to populate the runs filter dropdown.
-export const dataQuery = (tunerId: string) =>
+export const dataQuery = (
+  tunerId: string,
+  split?: "train" | "eval",
+) =>
   queryOptions({
-    queryKey: ["data", tunerId],
-    queryFn: () => listData(tunerId),
+    queryKey: ["data", tunerId, split ?? null],
+    queryFn: () => listData(tunerId, split),
     staleTime: Infinity,
   });
 
 // Server-computed reward distribution bucketed by policy generation. Replaces
 // the former unbounded run fetch: the browser no longer downloads every run
 // just to build the histogram. Pass `datumId` to scope to a single datum.
-export const rewardDistributionQuery = (tunerId: string, datumId?: string) =>
+export const rewardDistributionQuery = (
+  tunerId: string,
+  datumId?: string,
+  kind: "train" | "eval" = "train",
+) =>
   queryOptions({
-    queryKey: ["reward-distribution", tunerId, datumId ?? null],
-    queryFn: () => getRewardDistribution(tunerId, datumId),
+    queryKey: ["reward-distribution", tunerId, datumId ?? null, kind],
+    queryFn: () => getRewardDistribution(tunerId, datumId, kind),
+    refetchInterval: 5000,
+  });
+
+// Per-eval-datum held-out status (in-flight / completed / mean reward). Powers
+// the Eval page's status table; polled so new eval rollouts appear as they land.
+export const evalProgressQuery = (tunerId: string) =>
+  queryOptions({
+    queryKey: ["eval-progress", tunerId],
+    queryFn: () => getEvalProgress(tunerId),
     refetchInterval: 5000,
   });
 
@@ -58,14 +75,19 @@ export const runsByDatumQuery = (tunerId: string, datumId: string) =>
 // runs; `next_cursor` drives `fetchNextPage`. An optional `datumId` narrows the
 // listing to a single datum and is part of the query key so switching filters
 // starts a fresh paginated fetch.
-export const runsPageQuery = (tunerId: string, datumId?: string) =>
+export const runsPageQuery = (
+  tunerId: string,
+  datumId?: string,
+  kind: "train" | "eval" = "train",
+) =>
   infiniteQueryOptions({
-    queryKey: ["runs", "paged", tunerId, datumId ?? null],
+    queryKey: ["runs", "paged", tunerId, datumId ?? null, kind],
     queryFn: ({ pageParam }) =>
       listRuns(tunerId, {
         limit: RUNS_PAGE_SIZE,
         cursor: pageParam,
         datumId,
+        kind,
       }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,

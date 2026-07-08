@@ -3,13 +3,18 @@
 import json
 import logging
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from openai.types.chat import ChatCompletion
 from sqlalchemy import case, func, select
 
 from ollie_rl.cookbook import Cookbook
-from ollie_rl.db import ChatCompletionModel, DatumRowModel, TunerModel
+from ollie_rl.db import (
+    ChatCompletionModel,
+    CheckpointModel,
+    DatumRowModel,
+    TunerModel,
+)
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.dispensing import (
@@ -41,8 +46,11 @@ from ollie_rl.types import (
     DatumCoverage,
     DatumPool,
     DatumProgress,
+    EvalDatumProgress,
+    EvalProgress,
     GenerationRewardStats,
     GetTunerResponse,
+    ListDatumsResponse,
     ListRunsResponse,
     NextPick,
     RewardDistributionResponse,
@@ -50,6 +58,7 @@ from ollie_rl.types import (
     RunProgress,
     TrainingProgress,
     TunerItem,
+    TunerProgress,
 )
 
 logger = logging.getLogger(__name__)
@@ -170,14 +179,18 @@ class QueryMixin(TunerServiceBase):
     """Dashboard/observability reads over tuners, runs, and completions."""
 
     async def get_tuner_details(
-        self, tuner_id: str, include_progress: bool = False
+        self, tuner_id: str, progress: Optional[Iterable[str]] = None
     ) -> GetTunerResponse:
         """
         Retrieve tuner details, including current policy_generation and stored trainer state.
 
-        When `include_progress` is set, a recipe-aware `TrainingProgress`
-        snapshot is computed and attached (extra DB reads).
+        ``progress`` is an iterable of the optional (extra DB reads) progress
+        snapshots to attach: ``"train"`` computes a recipe-aware
+        `TrainingProgress` (into ``progress.train``) and ``"eval"`` computes a
+        per-eval-datum `EvalProgress` (into ``progress.eval``). Both may be
+        requested together; omit both (the default) to attach neither.
         """
+        kinds = set(progress or ())
         async with self.async_session() as session:
             result = await session.execute(
                 select(TunerModel).where(TunerModel.id == tuner_id)
@@ -197,9 +210,10 @@ class QueryMixin(TunerServiceBase):
             except json.JSONDecodeError:
                 state_data = record.trainer_state
 
-        progress = None
-        if include_progress:
-            progress = await self.get_progress(tuner_id)
+        tuner_progress = TunerProgress(
+            train=await self.get_progress(tuner_id) if "train" in kinds else None,
+            eval=await self.eval_progress(tuner_id) if "eval" in kinds else None,
+        )
 
         return GetTunerResponse(
             tuner_id=record.id,
@@ -208,7 +222,7 @@ class QueryMixin(TunerServiceBase):
             trainer=record.trainer,
             policy_generation=policy_generation,
             trainer_state=state_data,
-            progress=progress,
+            progress=tuner_progress,
             is_training=(await trainer.pending_train_op()) is not None,
             last_train_op_duration_seconds=last_train_op_duration_seconds(state_data),
         )
@@ -482,41 +496,16 @@ class QueryMixin(TunerServiceBase):
 
         return tuners_list
 
-    async def list_datums(self, tuner_id: str) -> List[str]:
-        """Return the full datum-id pool registered for ``tuner_id``.
+    async def list_datums(
+        self, tuner_id: str, split: Optional[str] = None
+    ) -> ListDatumsResponse:
+        """Return the datum-id pool registered for ``tuner_id``.
 
-        Used to populate the runs filter dropdown. The pool is the static set
-        of datums the tuner was created with, returned in a stable
-        (alphabetical) order so the dropdown listing is deterministic.
-        """
-        async with self.async_session() as session:
-            exists = await session.execute(
-                select(TunerModel.id).where(TunerModel.id == tuner_id)
-            )
-            if exists.scalar_one_or_none() is None:
-                raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
-
-            result = await session.execute(
-                select(DatumRowModel.datum_id)
-                .where(DatumRowModel.tuner_id == tuner_id)
-                .order_by(DatumRowModel.datum_id.asc())
-            )
-            return list(result.scalars().all())
-
-    async def reward_distribution(
-        self, tuner_id: str, datum_id: Optional[str] = None
-    ) -> RewardDistributionResponse:
-        """Reward distribution bucketed by policy generation for ``tuner_id``.
-
-        Powers the dashboard's "Reward distribution by generation" panel. Only
-        rewarded runs with at least one recorded completion contribute; the run
-        is labelled with the max ``policy_generation`` across its completions
-        (mirroring how ``list_runs`` derives a run's generation). The heavy
-        lifting -- one grouped scan reading just ``(reward, max generation)`` per
-        run and the histogram build -- happens here so the browser no longer
-        fetches every run to aggregate client-side.
-
-        Pass ``datum_id`` to restrict the distribution to a single datum's runs.
+        Used to populate the runs/datums filter dropdowns. The pool is the
+        static set of datums the tuner was created with, returned in a stable
+        (alphabetical) order so the dropdown listing is deterministic. Pass
+        ``split`` (``"train"`` / ``"eval"``) to restrict to that split; ``None``
+        (default) returns the full pool.
         """
         async with self.async_session() as session:
             exists = await session.execute(
@@ -526,18 +515,80 @@ class QueryMixin(TunerServiceBase):
                 raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
 
             stmt = (
-                select(
-                    RunModel.reward,
-                    func.max(ChatCompletionModel.policy_generation),
-                )
-                .join(ChatCompletionModel, ChatCompletionModel.run_id == RunModel.id)
-                .where(
-                    ChatCompletionModel.tuner_id == tuner_id,
-                    RunModel.tuner_id == tuner_id,
-                    RunModel.reward.is_not(None),
-                )
-                .group_by(RunModel.id)
+                select(DatumRowModel.datum_id)
+                .where(DatumRowModel.tuner_id == tuner_id)
+                .order_by(DatumRowModel.datum_id.asc())
             )
+            if split is not None:
+                stmt = stmt.where(DatumRowModel.kind == split)
+
+            result = await session.execute(stmt)
+
+        return ListDatumsResponse(datum_ids=list(result.scalars().all()))
+
+    async def reward_distribution(
+        self,
+        tuner_id: str,
+        datum_id: Optional[str] = None,
+        kind: str = "train",
+    ) -> RewardDistributionResponse:
+        """Reward distribution bucketed by policy generation for ``tuner_id``.
+
+        Powers the dashboard's reward-distribution panels. ``kind`` selects
+        which runs contribute and how each is attributed to a generation:
+
+        - ``"train"`` (default): rewarded runs with at least one recorded
+          completion, labelled with the max ``policy_generation`` across their
+          completions (mirroring how ``list_runs`` derives a run's generation).
+        - ``"eval"``: held-out *eval* runs only -- those carrying a
+          ``checkpoint_id`` (set solely by the eval dispense tier) with a reward
+          recorded -- bucketed by the ``policy_generation`` of the checkpoint
+          they targeted (looked up on ``CheckpointModel``). An eval run points at
+          exactly one checkpoint, so no per-completion max is needed.
+
+        Both branches feed the same histogram builder, so the rendered result is
+        identical in shape. Pass ``datum_id`` to restrict to a single datum's
+        runs. The heavy lifting -- one scan reading just ``(reward, generation)``
+        per run plus the histogram build -- happens here so the browser no longer
+        fetches every run to aggregate client-side.
+        """
+        async with self.async_session() as session:
+            exists = await session.execute(
+                select(TunerModel.id).where(TunerModel.id == tuner_id)
+            )
+            if exists.scalar_one_or_none() is None:
+                raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+
+            if kind == "eval":
+                stmt = (
+                    select(RunModel.reward, CheckpointModel.policy_generation)
+                    .join(
+                        CheckpointModel,
+                        CheckpointModel.id == RunModel.checkpoint_id,
+                    )
+                    .where(
+                        RunModel.tuner_id == tuner_id,
+                        RunModel.checkpoint_id.is_not(None),
+                        RunModel.reward.is_not(None),
+                    )
+                )
+            else:
+                stmt = (
+                    select(
+                        RunModel.reward,
+                        func.max(ChatCompletionModel.policy_generation),
+                    )
+                    .join(
+                        ChatCompletionModel,
+                        ChatCompletionModel.run_id == RunModel.id,
+                    )
+                    .where(
+                        ChatCompletionModel.tuner_id == tuner_id,
+                        RunModel.tuner_id == tuner_id,
+                        RunModel.reward.is_not(None),
+                    )
+                    .group_by(RunModel.id)
+                )
             if datum_id is not None:
                 stmt = stmt.where(RunModel.datum_id == datum_id)
 
@@ -550,12 +601,95 @@ class QueryMixin(TunerServiceBase):
         ]
         return _build_reward_distribution(pairs)
 
+    async def eval_progress(self, tuner_id: str) -> EvalProgress:
+        """Per-eval-datum held-out status rollup for ``tuner_id``.
+
+        Lists every registered eval datum (``DatumRowModel.kind == "eval"``),
+        including ones with no runs yet, with a cumulative rollup across all of
+        its eval runs: how many are still in flight (reward not yet set, lease
+        unexpired) and how many completed (rewarded).
+        ``latest_checkpoint_generation`` is the newest checkpoint the eval tier
+        is currently targeting (``None`` before any checkpoint exists), shown for
+        context.
+        """
+        now = utcnow()
+        async with self.async_session() as session:
+            exists = await session.execute(
+                select(TunerModel.id).where(TunerModel.id == tuner_id)
+            )
+            if exists.scalar_one_or_none() is None:
+                raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+
+            eval_datums = (
+                (
+                    await session.execute(
+                        select(DatumRowModel.datum_id)
+                        .where(
+                            DatumRowModel.tuner_id == tuner_id,
+                            DatumRowModel.kind == "eval",
+                        )
+                        .order_by(DatumRowModel.datum_id.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            latest_generation = (
+                await session.execute(
+                    select(func.max(CheckpointModel.policy_generation)).where(
+                        CheckpointModel.tuner_id == tuner_id
+                    )
+                )
+            ).scalar_one_or_none()
+
+            runs: List[RunModel] = []
+            if eval_datums:
+                runs = list(
+                    (
+                        await session.execute(
+                            select(RunModel).where(
+                                RunModel.tuner_id == tuner_id,
+                                RunModel.datum_id.in_(eval_datums),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+        in_flight_by_datum: Dict[str, int] = {d: 0 for d in eval_datums}
+        completed_by_datum: Dict[str, int] = {d: 0 for d in eval_datums}
+        for r in runs:
+            if r.datum_id not in completed_by_datum:
+                continue
+            if r.reward is not None:
+                completed_by_datum[r.datum_id] += 1
+            elif r.expires_at > now:
+                in_flight_by_datum[r.datum_id] += 1
+
+        items = [
+            EvalDatumProgress(
+                datum_id=datum_id,
+                in_flight=in_flight_by_datum[datum_id],
+                completed=completed_by_datum[datum_id],
+            )
+            for datum_id in eval_datums
+        ]
+
+        return EvalProgress(
+            latest_checkpoint_generation=latest_generation,
+            total=len(eval_datums),
+            items=items,
+        )
+
     async def list_runs(
         self,
         tuner_id: str,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
         datum_id: Optional[str] = None,
+        kind: Optional[str] = None,
     ) -> ListRunsResponse:
         """
         List runs for a tuner (newest first), each with its derived lifecycle
@@ -568,7 +702,10 @@ class QueryMixin(TunerServiceBase):
         run in one shot (``next_cursor`` is then always ``None``).
 
         Pass ``datum_id`` to restrict the listing to runs dispensed for that
-        datum; the filter composes with cursor-based pagination.
+        datum; the filter composes with cursor-based pagination. Pass ``kind``
+        (``"train"`` / ``"eval"``) to restrict to training vs held-out eval runs
+        -- eval runs are exactly those carrying a ``checkpoint_id`` (set solely
+        by the eval dispense tier); ``None`` (default) returns both.
         """
         if limit is not None and limit < 0:
             limit = 0
@@ -590,6 +727,10 @@ class QueryMixin(TunerServiceBase):
             )
             if datum_id is not None:
                 runs_stmt = runs_stmt.where(RunModel.datum_id == datum_id)
+            if kind == "eval":
+                runs_stmt = runs_stmt.where(RunModel.checkpoint_id.is_not(None))
+            elif kind == "train":
+                runs_stmt = runs_stmt.where(RunModel.checkpoint_id.is_(None))
             if cursor_key is not None:
                 cursor_created_at, cursor_id = cursor_key
                 # Rows strictly "after" the cursor in (created_at DESC, id DESC)

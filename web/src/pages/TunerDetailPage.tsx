@@ -45,7 +45,8 @@ export function TunerDetailPage() {
   }
   if (!data) return null;
 
-  const { recipe, progress } = data;
+  const { recipe } = data;
+  const progress = data.progress?.train;
   const isTraining = data.is_training;
   const lastTrainOpDuration = data.last_train_op_duration_seconds;
 

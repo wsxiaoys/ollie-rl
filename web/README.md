@@ -9,7 +9,7 @@ the API, so no CORS or API base URL configuration is needed.
 ## Pages
 
 - **`/app/tuners`** — list of tuners (`GET /tuners`).
-- **`/app/tuners/:tunerId`** — live training dashboard (`GET /tuners/{id}?progress=true`),
+- **`/app/tuners/:tunerId`** — live training dashboard (`GET /tuners/{id}?progress=train`),
   polled every ~2s. Shows the run KPI strip, batch readiness, the scheduler's
   next pick, and the per-datum pool table.
 

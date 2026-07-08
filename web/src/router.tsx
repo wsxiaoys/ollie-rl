@@ -9,6 +9,7 @@ import { TunerListPage } from "./pages/TunerListPage";
 import { TunerDetailPage } from "./pages/TunerDetailPage";
 import { RunListPage } from "./pages/RunListPage";
 import { DatumsPage } from "./pages/DatumsPage";
+import { EvalPage } from "./pages/EvalPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { CompletionDetailPage } from "./pages/CompletionDetailPage";
 
@@ -41,9 +42,10 @@ const runListRoute = createRoute({
   path: "/runs",
   validateSearch: (
     search: Record<string, unknown>,
-  ): { tuner?: string; datum?: string } => ({
+  ): { tuner?: string; datum?: string; kind?: "train" | "eval" } => ({
     tuner: typeof search.tuner === "string" ? search.tuner : undefined,
     datum: typeof search.datum === "string" ? search.datum : undefined,
+    kind: search.kind === "eval" ? "eval" : undefined,
   }),
   component: RunListPage,
 });
@@ -58,6 +60,12 @@ const datumsRoute = createRoute({
     datum: typeof search.datum === "string" ? search.datum : undefined,
   }),
   component: DatumsPage,
+});
+
+const evalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tuners/$tunerId/eval",
+  component: EvalPage,
 });
 
 const runDetailRoute = createRoute({
@@ -78,6 +86,7 @@ const routeTree = rootRoute.addChildren([
   tunerDetailRoute,
   runListRoute,
   datumsRoute,
+  evalRoute,
   runDetailRoute,
   completionDetailRoute,
 ]);

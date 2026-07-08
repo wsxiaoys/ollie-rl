@@ -22,16 +22,24 @@ function formatTokens(tokens: number): string {
 }
 
 export function RunListPage() {
-  const { tuner: tunerId, datum: datumId } = useSearch({ from: "/runs" });
+  const {
+    tuner: tunerId,
+    datum: datumId,
+    kind: kindParam,
+  } = useSearch({ from: "/runs" });
   const navigate = useNavigate();
+
+  // Runs default to the training split; the kind dropdown switches to the
+  // held-out eval runs.
+  const kind = kindParam ?? "train";
 
   const tunersQ = useQuery(tunersQuery);
   const dataQ = useQuery({
-    ...dataQuery(tunerId ?? ""),
+    ...dataQuery(tunerId ?? "", kind),
     enabled: Boolean(tunerId),
   });
   const runsQ = useInfiniteQuery({
-    ...runsPageQuery(tunerId ?? "", datumId),
+    ...runsPageQuery(tunerId ?? "", datumId, kind),
     enabled: Boolean(tunerId),
   });
 
@@ -69,7 +77,21 @@ export function RunListPage() {
   const onDatumChange = (value: string | null) => {
     navigate({
       to: "/runs",
-      search: { tuner: tunerId, datum: value ?? undefined },
+      search: { tuner: tunerId, datum: value ?? undefined, kind: kindParam },
+    });
+  };
+
+  const onKindChange = (value: "train" | "eval") => {
+    navigate({
+      to: "/runs",
+      // Clear the datum filter: a datum belongs to exactly one split, so the
+      // current selection is meaningless after switching. "train" is the
+      // default, so keep it out of the URL to stay clean.
+      search: {
+        tuner: tunerId,
+        datum: undefined,
+        kind: value === "train" ? undefined : value,
+      },
     });
   };
 
@@ -83,6 +105,16 @@ export function RunListPage() {
       </header>
 
       <div className="runs-picker">
+        <label htmlFor="kind-filter">Split</label>
+        <select
+          id="kind-filter"
+          value={kind}
+          onChange={(e) => onKindChange(e.target.value as "train" | "eval")}
+          disabled={!tunerId}
+        >
+          <option value="train">Train</option>
+          <option value="eval">Eval</option>
+        </select>
         <label htmlFor="datum-filter">Datum ID</label>
         <SearchableSelect
           id="datum-filter"

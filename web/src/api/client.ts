@@ -1,5 +1,6 @@
 import type {
   ChatCompletionDetailResponse,
+  EvalProgress,
   GetTunerResponse,
   ListDatumsResponse,
   ListRunsResponse,
@@ -45,42 +46,74 @@ export function listTuners(): Promise<ListTunersResponse> {
 
 export function getTuner(tunerId: string): Promise<GetTunerResponse> {
   return get<GetTunerResponse>(
-    `/tuners/${encodeURIComponent(tunerId)}?progress=true`,
+    `/tuners/${encodeURIComponent(tunerId)}?progress=train`,
   );
 }
 
-export function listData(tunerId: string): Promise<ListDatumsResponse> {
+// Datum-id pool for a tuner, optionally scoped to a single `split`
+// ("train"/"eval") so a dropdown can list only the relevant datums.
+export function listData(
+  tunerId: string,
+  split?: "train" | "eval" | null,
+): Promise<ListDatumsResponse> {
+  const params = new URLSearchParams();
+  if (split) params.set("split", split);
+  const qs = params.toString();
   return get<ListDatumsResponse>(
-    `/tuners/${encodeURIComponent(tunerId)}/data`,
+    `/tuners/${encodeURIComponent(tunerId)}/data${qs ? `?${qs}` : ""}`,
   );
 }
 
 export function listRuns(
   tunerId: string,
-  opts: { limit?: number; cursor?: string | null; datumId?: string | null } = {},
+  opts: {
+    limit?: number;
+    cursor?: string | null;
+    datumId?: string | null;
+    kind?: "train" | "eval" | null;
+  } = {},
 ): Promise<ListRunsResponse> {
   const params = new URLSearchParams();
   if (opts.limit != null) params.set("limit", String(opts.limit));
   if (opts.cursor) params.set("cursor", opts.cursor);
   if (opts.datumId) params.set("datum_id", opts.datumId);
+  if (opts.kind) params.set("kind", opts.kind);
   const qs = params.toString();
   return get<ListRunsResponse>(
     `/tuners/${encodeURIComponent(tunerId)}/runs${qs ? `?${qs}` : ""}`,
   );
 }
 
+// Reward distribution bucketed by policy generation. `kind="eval"` buckets the
+// held-out eval split by the generation of the checkpoint each eval run
+// targeted; `kind="train"` (default) buckets training runs by completion
+// generation. `datumId` optionally scopes to a single datum.
 export function getRewardDistribution(
   tunerId: string,
   datumId?: string | null,
+  kind: "train" | "eval" = "train",
 ): Promise<RewardDistributionData> {
   const params = new URLSearchParams();
   if (datumId) params.set("datum_id", datumId);
+  if (kind !== "train") params.set("kind", kind);
   const qs = params.toString();
   return get<RewardDistributionData>(
     `/tuners/${encodeURIComponent(tunerId)}/reward-distribution${
       qs ? `?${qs}` : ""
     }`,
   );
+}
+
+// Per-eval-datum held-out status rollup (in-flight / completed), powering the
+// Eval page's status table. Served as `progress.eval` on the tuner detail
+// endpoint when fetched with `?progress=eval`.
+export async function getEvalProgress(
+  tunerId: string,
+): Promise<EvalProgress | null> {
+  const tuner = await get<GetTunerResponse>(
+    `/tuners/${encodeURIComponent(tunerId)}?progress=eval`,
+  );
+  return tuner.progress?.eval ?? null;
 }
 
 export function getRun(

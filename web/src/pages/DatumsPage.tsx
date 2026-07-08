@@ -10,7 +10,7 @@ import {
 import { RewardDistribution } from "../components/RewardDistribution";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { SearchableSelect } from "../components/SearchableSelect";
-import { Mono, Panel } from "../components/ui";
+import { Badge, Mono, Panel } from "../components/ui";
 
 /**
  * Format a millisecond duration into a compact, human-readable string:
@@ -36,6 +36,12 @@ export function DatumsPage() {
     ...dataQuery(tunerId ?? ""),
     enabled: Boolean(tunerId),
   });
+  // Held-out eval datum ids, used only to flag whether the selected datum is
+  // from the eval split.
+  const evalDataQ = useQuery({
+    ...dataQuery(tunerId ?? "", "eval"),
+    enabled: Boolean(tunerId),
+  });
   const runsQ = useQuery({
     ...runsByDatumQuery(tunerId ?? "", datumId ?? ""),
     enabled: Boolean(tunerId) && Boolean(datumId),
@@ -46,6 +52,9 @@ export function DatumsPage() {
   });
 
   const datumIds = dataQ.data?.datum_ids ?? [];
+  const isEvalDatum = Boolean(
+    datumId && evalDataQ.data?.datum_ids.includes(datumId),
+  );
 
   // Default the tuner to the first available one so the page is never empty
   // when reached directly (the sidebar normally supplies `?tuner=`).
@@ -98,6 +107,9 @@ export function DatumsPage() {
           clearable={false}
           disabled={!tunerId || datumIds.length === 0}
         />
+        <Badge tone={isEvalDatum ? "info" : "default"}>
+          {isEvalDatum ? "eval" : "train"}
+        </Badge>
         {runsQ.isFetching && <span className="live-dot">● live</span>}
       </div>
 

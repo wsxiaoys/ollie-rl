@@ -1,7 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -147,18 +147,37 @@ async def list_tuners() -> ListTunersResponse:
 
 
 @app.get("/tuners/{tuner_id}")
-async def get_tuner(tuner_id: str, progress: bool = False) -> GetTunerResponse:
+async def get_tuner(
+    tuner_id: str,
+    progress: str = Query(
+        default="",
+        description=(
+            "Comma-separated progress snapshots to attach: any of 'train' (a "
+            "recipe-aware training-progress snapshot -- batch readiness, "
+            "run/group coverage, next pick) and 'eval' (a per-eval-datum "
+            "held-out status rollup). E.g. 'train', 'eval', or 'train,eval'. "
+            "Empty (default) attaches neither."
+        ),
+    ),
+) -> GetTunerResponse:
     """
     Returns information for a specific tuner, including policy_generation and
-    stored trainer state. Pass `?progress=true` to also include a recipe-aware
-    training-progress snapshot (batch readiness, run/group coverage, next pick).
+    stored trainer state. Pass `?progress=train` and/or `?progress=eval`
+    (comma-separated) to also include the corresponding progress snapshot(s)
+    under the response's `progress` object.
     """
     from ollie_rl.service.tuner import TunerNotFoundError
 
-    try:
-        return await services.tuner.get_tuner_details(
-            tuner_id, include_progress=progress
+    kinds = [p.strip() for p in progress.split(",") if p.strip()]
+    invalid = sorted(set(kinds) - {"train", "eval"})
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid progress kind(s): {invalid}. Allowed: 'train', 'eval'.",
         )
+
+    try:
+        return await services.tuner.get_tuner_details(tuner_id, progress=kinds)
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -167,16 +186,25 @@ async def get_tuner(tuner_id: str, progress: bool = False) -> GetTunerResponse:
 
 
 @app.get("/tuners/{tuner_id}/data", response_model=ListDatumsResponse)
-async def list_data(tuner_id: str) -> ListDatumsResponse:
+async def list_data(
+    tuner_id: str,
+    split: Optional[Literal["train", "eval"]] = Query(
+        default=None,
+        description=(
+            "Only return datums from this split: 'train' or 'eval'. Omit to "
+            "return the full pool."
+        ),
+    ),
+) -> ListDatumsResponse:
     """
-    Return the full datum-id pool registered for a tuner, so clients can build
-    a filter dropdown for the runs list.
+    Return the datum-id pool registered for a tuner, so clients can build a
+    filter dropdown for the runs list. Pass `split=train`/`eval` to scope the
+    pool to a single split.
     """
     from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
-        datum_ids = await services.tuner.list_datums(tuner_id)
-        return ListDatumsResponse(datum_ids=datum_ids)
+        return await services.tuner.list_datums(tuner_id, split=split)
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -194,18 +222,29 @@ async def reward_distribution(
         default=None,
         description="Only aggregate runs dispensed for this datum id.",
     ),
+    kind: Literal["train", "eval"] = Query(
+        default="train",
+        description=(
+            "Which runs to bucket: 'train' (rewarded training runs by "
+            "completion generation) or 'eval' (held-out eval runs by the "
+            "generation of the checkpoint they targeted)."
+        ),
+    ),
 ) -> RewardDistributionResponse:
     """
     Reward distribution bucketed by policy generation for a tuner.
 
-    Reads only `(reward, max policy_generation)` per rewarded run and returns
-    the finished per-generation histogram, so the dashboard doesn't fetch every
-    run to aggregate client-side. Pass `datum_id` to scope to a single datum.
+    Reads only `(reward, generation)` per rewarded run and returns the finished
+    per-generation histogram, so the dashboard doesn't fetch every run to
+    aggregate client-side. Pass `datum_id` to scope to a single datum, and
+    `kind=eval` to bucket the held-out eval split by checkpoint generation.
     """
     from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
-        return await services.tuner.reward_distribution(tuner_id, datum_id=datum_id)
+        return await services.tuner.reward_distribution(
+            tuner_id, datum_id=datum_id, kind=kind
+        )
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -235,6 +274,14 @@ async def list_runs(
         default=None,
         description="Only return runs dispensed for this datum id.",
     ),
+    kind: Optional[Literal["train", "eval"]] = Query(
+        default=None,
+        description=(
+            "Only return runs of this kind: 'train' (runs on the training "
+            "split) or 'eval' (held-out eval runs, i.e. those targeting a "
+            "checkpoint). Omit to return both."
+        ),
+    ),
 ) -> ListRunsResponse:
     """
     List runs for a tuner (newest first) with their derived lifecycle status
@@ -242,7 +289,8 @@ async def list_runs(
 
     Supports cursor-based pagination via `limit`/`cursor`; the response returns
     a `next_cursor` when more runs are available. Pass `datum_id` to filter the
-    listing to runs for a single datum.
+    listing to runs for a single datum, and `kind` to restrict to training vs
+    held-out eval runs.
     """
     from ollie_rl.service.tuner import (
         InvalidRunCursorError,
@@ -251,7 +299,7 @@ async def list_runs(
 
     try:
         return await services.tuner.list_runs(
-            tuner_id, limit=limit, cursor=cursor, datum_id=datum_id
+            tuner_id, limit=limit, cursor=cursor, datum_id=datum_id, kind=kind
         )
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
