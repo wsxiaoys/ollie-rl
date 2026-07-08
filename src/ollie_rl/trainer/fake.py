@@ -92,7 +92,12 @@ class FakeTrainer(Trainer):
         )
         return FakeSampleOp(sample)
 
-    async def train_step(self, examples: List[Example]) -> TrainOp:
+    async def train_step(
+        self,
+        examples: List[Example],
+        *,
+        sampler_promotion_every: int = 1,
+    ) -> TrainOp:
         logger.info(f"FakeTrainer training step with {len(examples)} examples.")
         self._train_step += 1
         return FakeTrainOp(self._train_step)

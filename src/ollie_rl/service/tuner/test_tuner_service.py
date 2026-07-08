@@ -97,7 +97,7 @@ class FakeTrainer(Trainer):
     ):
         return self._sample_op
 
-    async def train_step(self, examples):
+    async def train_step(self, examples, *, sampler_promotion_every: int = 1):
         op = AsyncMock()
         op.wait = AsyncMock(return_value=None)
         op.peek = AsyncMock(return_value=True)
@@ -672,9 +672,11 @@ class TestMaybeTrain(TunerServiceTestCase):
         original_train_step = trainer.train_step
         called = []
 
-        async def spy_train_step(examples):
+        async def spy_train_step(examples, *, sampler_promotion_every: int = 1):
             called.append(examples)
-            return await original_train_step(examples)
+            return await original_train_step(
+                examples, sampler_promotion_every=sampler_promotion_every
+            )
 
         trainer.train_step = spy_train_step  # type: ignore
 
@@ -707,9 +709,11 @@ class TestMaybeTrain(TunerServiceTestCase):
         called_examples = []
         original_train_step = trainer.train_step
 
-        async def spy_train_step(examples):
+        async def spy_train_step(examples, *, sampler_promotion_every: int = 1):
             called_examples.extend(examples)
-            return await original_train_step(examples)
+            return await original_train_step(
+                examples, sampler_promotion_every=sampler_promotion_every
+            )
 
         trainer.train_step = spy_train_step  # type: ignore
 

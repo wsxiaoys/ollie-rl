@@ -140,7 +140,21 @@ class Trainer(Sampler):
         ...
 
     @abstractmethod
-    async def train_step(self, examples: List[Example]) -> TrainOp: ...
+    async def train_step(
+        self,
+        examples: List[Example],
+        *,
+        sampler_promotion_every: int = 1,
+    ) -> TrainOp:
+        """Run one train step over ``examples``.
+
+        ``sampler_promotion_every`` is the sampler-promotion cadence (from the
+        recipe): a fresh sampler snapshot is published only every N steps, and
+        on the other steps backends that support it skip the weight sync to the
+        sampler/serving path. Backends compute the promote/skip decision from
+        their own (post-increment) step counter.
+        """
+        ...
 
     async def pending_train_op(self) -> Optional[TrainOp]:
         """The in-flight train op, if one is running, else None.

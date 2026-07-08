@@ -54,7 +54,6 @@ class TinkerTrainerConfig(BaseModel):
     temperature: Optional[float] = None
     kl_penalty_coef: float = 0.0
     loss_fn: str = "importance_sampling"
-    sampler_promotion_every: int = 1
 
 
 class TinkerTrainerState(BaseModel):
@@ -414,7 +413,12 @@ class TinkerTrainer(Trainer):
             f"({new_sampler_path})"
         )
 
-    async def train_step(self, examples: List[Example]) -> TrainOp:
+    async def train_step(
+        self,
+        examples: List[Example],
+        *,
+        sampler_promotion_every: int = 1,
+    ) -> TrainOp:
         logger.info(f"TinkerTrainer.train_step called with {len(examples)} examples")
 
         if not examples:
@@ -456,7 +460,7 @@ class TinkerTrainer(Trainer):
             # 4. Advance step counter; promote sampler at cadence.
             self.state.train_step += 1
             checkpoint: Optional[Checkpoint] = None
-            if self.state.train_step % self.config.sampler_promotion_every == 0:
+            if self.state.train_step % sampler_promotion_every == 0:
                 await self._promote_sampler()
                 # A promotion publishes a real, addressable sampler checkpoint
                 # (the saved sampler `path`), so tag it with that handle and

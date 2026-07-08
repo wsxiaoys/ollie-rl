@@ -880,7 +880,12 @@ export interface components {
         };
         /**
          * EvalDatumProgress
-         * @description Held-out status for a single eval datum, cumulative across its runs.
+         * @description Held-out status for a single eval datum against the latest checkpoint.
+         *
+         *     Both counts are scoped to the newest checkpoint the eval tier is currently
+         *     targeting (`EvalProgress.latest_checkpoint_generation`) -- mirroring how a
+         *     training datum's `consumable` counts toward the *current* group rather than
+         *     all-time -- so the numbers describe progress toward scoring that checkpoint.
          */
         EvalDatumProgress: {
             /** Datum Id */
@@ -895,12 +900,17 @@ export interface components {
          * @description Per-eval-datum held-out status rollup for a tuner.
          *
          *     `latest_checkpoint_generation` is the newest checkpoint the eval tier is
-         *     currently targeting (None before any checkpoint exists). `items` covers
-         *     every registered eval datum, including ones with no runs yet.
+         *     currently targeting (None before any checkpoint exists); every per-datum
+         *     count in `items` is scoped to it. `eval_group_size` is the target number of
+         *     eval attempts per datum per checkpoint (the progress-bar denominator, from
+         *     the recipe). `items` covers every registered eval datum, including ones with
+         *     no runs against the latest checkpoint yet.
          */
         EvalProgress: {
             /** Latest Checkpoint Generation */
             latest_checkpoint_generation: number | null;
+            /** Eval Group Size */
+            eval_group_size: number;
             /** Total */
             total: number;
             /** Items */

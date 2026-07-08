@@ -15,6 +15,13 @@ class Recipe(BaseModel, frozen=True):
     num_groups_per_batch: int = 32
     max_off_policy_generation: int = 4
 
+    # ---- Sampler promotion cadence -------------------------------------
+    # Publish a fresh sampler snapshot every N train steps. On steps that
+    # don't promote, backends that support it skip the (expensive) weight
+    # sync to the sampler/serving path (e.g. Gemini's `skipWeightSync`,
+    # Tinker's `save_weights_for_sampler`). 1 = promote on every step.
+    sampler_promotion_every: int = 4
+
     # ---- Evaluation ----------------------------------------------------
     # Rollouts to dispense per eval datum per checkpoint. Averaging K attempts
     # smooths per-checkpoint eval variance the same way `group_size` does for a

@@ -278,18 +278,24 @@ class TestTinkerTrainer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.trainer.state.sampler_step, 1)
 
     async def test_train_step_promotes_sampler_on_cadence(self):
-        self.trainer.config.sampler_promotion_every = 2
-
         # Step 1: no promotion (1 % 2 != 0).
         forward_backward, _, save_weights, _ = self._wire_training_mocks()
-        await (await self.trainer.train_step([self._make_example()])).wait()
+        await (
+            await self.trainer.train_step(
+                [self._make_example()], sampler_promotion_every=2
+            )
+        ).wait()
         self.assertEqual(self.trainer.state.train_step, 1)
         self.assertEqual(self.trainer.state.sampler_step, 0)
         save_weights.assert_not_awaited()
 
         # Step 2: promotion (2 % 2 == 0).
         forward_backward, _, save_weights, _ = self._wire_training_mocks()
-        await (await self.trainer.train_step([self._make_example()])).wait()
+        await (
+            await self.trainer.train_step(
+                [self._make_example()], sampler_promotion_every=2
+            )
+        ).wait()
         self.assertEqual(self.trainer.state.train_step, 2)
         self.assertEqual(self.trainer.state.sampler_step, 2)
         save_weights.assert_awaited_once()

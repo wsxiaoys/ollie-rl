@@ -174,6 +174,11 @@ class ReinforcementTuningTrainingDataBatch(BaseModelConfig):
 
 class TrainStepRequest(BaseModelConfig):
     reinforcement_tuning_training_data_batch: ReinforcementTuningTrainingDataBatch
+    # When true, the backend applies the gradient step but skips syncing the
+    # updated weights to the serving/sampler path. Used to promote a sampler
+    # only every N steps (see Recipe.sampler_promotion_every) rather than on
+    # every train step. Serialized as `skipWeightSync`.
+    skip_weight_sync: Optional[bool] = None
 
 
 class UsedCandidate(BaseModelConfig):

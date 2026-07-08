@@ -842,7 +842,12 @@ class GeminiMsrlTrainer(Trainer):
 
         return GeminiMsrlSamplingOp(self.client, op.name, request.model)
 
-    async def train_step(self, examples: List[Example]) -> GeminiMsrlTrainOp:
+    async def train_step(
+        self,
+        examples: List[Example],
+        *,
+        sampler_promotion_every: int = 1,
+    ) -> GeminiMsrlTrainOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
 
         # Ensure the tuning job is running before submitting work to it.
@@ -869,10 +874,19 @@ class GeminiMsrlTrainer(Trainer):
             )
 
         tuning_job_id = self.tuning_job_name.split("/")[-1]
+
+        # Promote a sampler only every `sampler_promotion_every` steps: skip the
+        # weight sync on the steps in between. The step this op completes is the
+        # next one after the last completed step, so promote when that lands on
+        # the cadence boundary.
+        next_step = self.state.train_step + 1
+        skip_weight_sync = next_step % sampler_promotion_every != 0
+
         train_req = TrainStepRequest(
             reinforcement_tuning_training_data_batch=ReinforcementTuningTrainingDataBatch(
                 examples=rt_examples
-            )
+            ),
+            skip_weight_sync=skip_weight_sync,
         )
 
         # 2. Trigger TrainStep LRO

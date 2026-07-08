@@ -107,6 +107,7 @@ class TrainingMixin(TunerServiceBase):
                 # advances and `pending_train_op` clears.
                 logger.info(f"Reconciling in-flight train op for tuner {tuner_id}")
             else:
+                recipe = await self._recipe_for(tuner_id)
                 async with self.async_session() as session:
                     async with session.begin():
                         batch, run_ids = await self._collect_consumable_batch(
@@ -128,6 +129,7 @@ class TrainingMixin(TunerServiceBase):
                         # 2-phase commit.
                         train_op = await trainer.train_step(
                             batch,
+                            sampler_promotion_every=recipe.sampler_promotion_every,
                         )  # submits LRO + state_store.save
                         await session.execute(  # bump trained_count
                             update(RunModel)
