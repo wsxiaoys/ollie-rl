@@ -643,9 +643,7 @@ class QueryMixin(TunerServiceBase):
             # generation -- a generation could in principle have multiple).
             latest = (
                 await session.execute(
-                    select(
-                        CheckpointModel.id, CheckpointModel.policy_generation
-                    )
+                    select(CheckpointModel.id, CheckpointModel.policy_generation)
                     .where(CheckpointModel.tuner_id == tuner_id)
                     .order_by(CheckpointModel.policy_generation.desc())
                     .limit(1)
