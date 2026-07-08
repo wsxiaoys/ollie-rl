@@ -103,6 +103,12 @@ class FakeTrainer(Trainer):
         op.peek = AsyncMock(return_value=True)
         return op
 
+    async def create_sampler(self, checkpoint):
+        # The test suite only exercises live-policy sampling, so the frozen
+        # checkpoint path is never routed here; return self (a Trainer is a
+        # Sampler) to satisfy the now-abstract contract.
+        return self
+
 
 class FakeTrainerFactory(TrainerFactory):
     async def create(
@@ -155,7 +161,7 @@ class TunerServiceTestCase(unittest.IsolatedAsyncioTestCase):
         return await self.service.create_tuner(
             recipe=_RECIPE,
             name="test-tuner",
-            datum_ids=datum_ids or ["datum-1", "datum-2"],
+            train_datum_ids=datum_ids or ["datum-1", "datum-2"],
             trainer=_TRAINER_KIND,
         )
 
@@ -245,7 +251,7 @@ class TestCreateTuner(TunerServiceTestCase):
             await self.service.create_tuner(
                 recipe="nonexistent_recipe",
                 name="bad",
-                datum_ids=["d1"],
+                train_datum_ids=["d1"],
                 trainer=_TRAINER_KIND,
             )
 
@@ -254,7 +260,7 @@ class TestCreateTuner(TunerServiceTestCase):
             await self.service.create_tuner(
                 recipe=_RECIPE,
                 name="bad",
-                datum_ids=["d1"],
+                train_datum_ids=["d1"],
                 trainer="nonexistent_trainer",
             )
 
@@ -281,7 +287,7 @@ class TestDispenseRun(TunerServiceTestCase):
         tuner_id = await self.service.create_tuner(
             recipe="test_async",
             name="test-tuner-async",
-            datum_ids=["datum-1", "datum-2"],
+            train_datum_ids=["datum-1", "datum-2"],
             trainer=_TRAINER_KIND,
         )
 
@@ -691,7 +697,7 @@ class TestMaybeTrain(TunerServiceTestCase):
         tuner_id = await self.service.create_tuner(
             recipe="test_2x2",
             name="test-tuner-small",
-            datum_ids=["d1", "d2"],
+            train_datum_ids=["d1", "d2"],
             trainer=_TRAINER_KIND,
         )
 

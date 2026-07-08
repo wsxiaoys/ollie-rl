@@ -29,7 +29,7 @@ class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
                 "name": "integration-test-policy",
                 "recipe": "grpo_16x32",
                 "trainer": "fake",
-                "datum_ids": ["task-1", "task-2", "task-3"],
+                "train_datum_ids": ["task-1", "task-2", "task-3"],
             }
             res = await client.post("/tuners", json=create_tuner_payload)
             self.assertEqual(res.status_code, 200)
