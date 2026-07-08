@@ -485,6 +485,37 @@ class GeminiMsrlTrainer(Trainer):
         self.client = client
         self.state = state
         self.state_store = state_store
+        # Lazily-populated one-shot guard that resolves once the tuning job has
+        # entered the RUNNING state. TPU allocation/warm-up can take a long
+        # time, so we don't block create()/restore() on it; instead the first
+        # operation that needs a running job awaits `_ensure_running()`.
+        self._running_ready: Optional[asyncio.Task[None]] = None
+
+    async def _ensure_running(self) -> None:
+        """Wait (at most once) for the tuning job to enter RUNNING state.
+
+        The wait is deferred out of create()/restore() so those return quickly.
+        Concurrent callers share the same underlying wait; on failure the guard
+        is reset so a later call can retry.
+        """
+        if self._running_ready is None:
+            self._running_ready = asyncio.create_task(self._wait_for_running())
+        try:
+            await self._running_ready
+        except Exception:
+            self._running_ready = None
+            raise
+
+    async def _wait_for_running(self) -> None:
+        logger.info(
+            f"Waiting for tuning job '{self.tuning_job_name}' to enter RUNNING state..."
+        )
+        await self.client.wait_for_tuning_job_running(
+            self.tuning_job_name,
+            timeout_seconds=self.config.timeout_seconds * 2,
+            poll_interval=self.config.poll_interval * 2,
+        )
+        logger.info("Gemini MSRL Tuning Job is successfully running.")
 
     @property
     def policy_generation(self) -> int:
@@ -524,6 +555,9 @@ class GeminiMsrlTrainer(Trainer):
             # `restore` already do for the train op. `model_name` only shapes
             # the returned ChatCompletion envelope and comes from the request.
             return GeminiMsrlSamplingOp(self.client, restore_state, request.model)
+
+        # Ensure the tuning job is running before submitting work to it.
+        await self._ensure_running()
 
         # 1. Translate ChatCompletionRequest to GenerateContentTuningScopeRequest
         system_messages = [msg for msg in request.messages if msg["role"] == "system"]
@@ -774,6 +808,9 @@ class GeminiMsrlTrainer(Trainer):
     async def train_step(self, examples: List[Example]) -> GeminiMsrlTrainOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
 
+        # Ensure the tuning job is running before submitting work to it.
+        await self._ensure_running()
+
         if self.state.pending_train_op:
             last_op = GeminiMsrlTrainOp(
                 self,
@@ -876,17 +913,9 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         # we can recover even if TPU warm-up is interrupted below.
         await instance._persist_state()
 
-        # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING).
-        logger.info(
-            f"Waiting for tuning job '{instance.tuning_job_name}' to enter RUNNING state..."
-        )
-        await instance.client.wait_for_tuning_job_running(
-            instance.tuning_job_name,
-            timeout_seconds=instance.config.timeout_seconds * 2,
-            poll_interval=instance.config.poll_interval * 2,
-        )
-
-        logger.info("Gemini MSRL Tuning Job is successfully running.")
+        # TPU allocation and initialization (JOB_STATE_RUNNING) can take a long
+        # time. We don't block creation on it; the wait is deferred to the
+        # first operation that needs a running job via `_ensure_running()`.
         return instance
 
     async def restore(
@@ -925,17 +954,9 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
         # the service reconciles via `pending_train_op()` -> `wait()`, which is
         # the single restart-surviving completion path.
 
-        # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING).
-        logger.info(
-            f"Waiting for tuning job '{instance.tuning_job_name}' to enter RUNNING state..."
-        )
-        await instance.client.wait_for_tuning_job_running(
-            instance.tuning_job_name,
-            timeout_seconds=instance.config.timeout_seconds * 2,
-            poll_interval=instance.config.poll_interval * 2,
-        )
-
-        logger.info("Gemini MSRL Tuning Job is successfully running.")
+        # TPU allocation and initialization (JOB_STATE_RUNNING) can take a long
+        # time. We don't block restore on it; the wait is deferred to the first
+        # operation that needs a running job via `_ensure_running()`.
         return instance
 
 
