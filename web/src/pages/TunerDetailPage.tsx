@@ -3,7 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { rewardDistributionQuery, tunerQuery } from "../api/queries";
 import type { NextPickTier } from "../api/types";
-import { computeQuarantine, DatumTable } from "../components/DatumTable";
+import { DatumTable } from "../components/DatumTable";
 import { RewardDistribution } from "../components/RewardDistribution";
 import { Badge, Mono, Panel, ProgressBar, StatCard } from "../components/ui";
 
@@ -48,16 +48,6 @@ export function TunerDetailPage() {
   const { recipe, progress } = data;
   const isTraining = data.is_training;
   const lastTrainOpDuration = data.last_train_op_duration_seconds;
-
-  const datumItems = progress?.data.items ?? [];
-  const excludedCount = datumItems.filter(
-    (item) =>
-      computeQuarantine(item, {
-        quarantineMinSamples: recipe.quarantine_min_samples,
-        maxUnhealthyFinishRatio: recipe.max_unhealthy_finish_ratio,
-        maxSucceedRatio: recipe.max_succeed_ratio,
-      }).quarantined,
-  ).length;
 
   return (
     <div className="page">
