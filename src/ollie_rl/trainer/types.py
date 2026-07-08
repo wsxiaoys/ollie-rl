@@ -90,11 +90,37 @@ class SampleOp(Op[Sample]):
     pass
 
 
-class Trainer(ABC):
+class Sampler(ABC):
+    """Sampling surface scoped to one policy snapshot -- a single frozen
+    checkpoint, or the live policy.
+
+    Owns ``SampleOp`` submission plus ``restore_state`` re-attach, exactly like
+    :meth:`Trainer.sample`, so a caller can treat a checkpoint-scoped sampler
+    and the live trainer uniformly. A frozen checkpoint is a distinct, reusable
+    resource (the backend loads its weights into a serving slot), so modeling
+    it as an object lets the service create it once per checkpoint and cache it
+    -- amortizing the load across the many eval rollouts that target one
+    checkpoint.
+    """
+
+    @abstractmethod
+    async def sample(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        restore_state: Optional[str] = None,
+    ) -> SampleOp: ...
+
+
+class Trainer(Sampler):
     """
     A single, live training job against some backend.
 
     The Trainer owns its own persistence cadence via its StateStore.
+
+    A ``Trainer`` *is* a :class:`Sampler`: its :meth:`sample` already satisfies
+    the sampler surface, so a live trainer doubles as the live-policy sampler
+    (see :meth:`create_sampler`) with no wrapper on the hot path.
     """
 
     @property
@@ -128,6 +154,21 @@ class Trainer(ABC):
         poll the backend.
         """
         return None
+
+    @abstractmethod
+    async def create_sampler(self, checkpoint: "Checkpoint") -> "Sampler":
+        """Return a :class:`Sampler` scoped to ``checkpoint``.
+
+        Callers resolve the ``LIVE_POLICY_CHECKPOINT`` sentinel to the live
+        trainer *before* calling this, so ``create_sampler`` is only invoked
+        for a checkpoint with a real backend ref. A backend that publishes a
+        real, reusable checkpoint handle (Tinker's sampler ``path``) loads it
+        into frozen weights -- pinning eval to exactly that snapshot and making
+        it immune to later sampler promotions. Backends that never publish a
+        real ref (fake, gemini) are never reached and simply return ``self``
+        (the live policy, since a ``Trainer`` is already a :class:`Sampler`).
+        """
+        ...
 
 
 class TrainerFactory(ABC):

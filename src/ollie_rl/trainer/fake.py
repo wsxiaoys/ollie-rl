@@ -13,6 +13,7 @@ from ollie_rl.trainer.types import (
     TrainerFactory,
     Example,
     Sample,
+    Sampler,
     TrainOp,
     SampleOp,
     StateStore,
@@ -95,6 +96,12 @@ class FakeTrainer(Trainer):
         logger.info(f"FakeTrainer training step with {len(examples)} examples.")
         self._train_step += 1
         return FakeTrainOp(self._train_step)
+
+    async def create_sampler(self, checkpoint: Checkpoint) -> Sampler:
+        # FakeTrainer only ever emits the live-policy sentinel ref, so the
+        # service never routes a frozen checkpoint here. Return the live policy
+        # (self) to satisfy the Sampler contract.
+        return self
 
 
 class FakeTrainerFactory(TrainerFactory):

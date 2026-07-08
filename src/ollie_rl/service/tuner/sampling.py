@@ -3,13 +3,18 @@
 import asyncio
 import logging
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from openai.types.chat import ChatCompletion
 from sqlalchemy import delete, func, select, update
 
-from ollie_rl.db import ChatCompletionModel, InFlightChatCompletionModel
+from ollie_rl.db import (
+    ChatCompletionModel,
+    CheckpointModel,
+    InFlightChatCompletionModel,
+)
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.completion_helpers import (
@@ -27,13 +32,34 @@ from ollie_rl.service.tuner.errors import (
     RunNotFoundError,
     TunerNotFoundError,
 )
+from ollie_rl.service.tuner.locks import KeyedLocks
+from ollie_rl.trainer import LIVE_POLICY_CHECKPOINT, Checkpoint, Sampler
 from ollie_rl.types import ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
 
+# Bounded LRU size for the per-checkpoint sampler cache. Tier-0 eval only ever
+# targets the latest checkpoint, so a small window of recent samplers is plenty
+# (a couple in flight around a promotion); older frozen samplers are evicted.
+SAMPLER_CACHE_SIZE = 4
+
 
 class SamplingMixin(TunerServiceBase):
     """Generation, idempotent replay, completion persistence, and rewards."""
+
+    def __init__(self):
+        super().__init__()
+        # Per-checkpoint frozen samplers, one bounded LRU (`SAMPLER_CACHE_SIZE`)
+        # *per tuner*: `tuner_id -> OrderedDict[checkpoint_id, Sampler]`. Scoping
+        # the LRU per tuner keeps one busy tuner's eval rollouts from evicting
+        # another tuner's frozen samplers. Created lazily on the first eval
+        # sample that targets a checkpoint with a real (non-sentinel) ref, then
+        # reused across that checkpoint's `eval_group_size x N` rollouts so the
+        # backend weight-load is amortized. Per-(tuner, checkpoint) build locks
+        # serialize the cache-miss create so concurrent eval samples don't each
+        # load weights.
+        self._samplers: Dict[str, "OrderedDict[str, Sampler]"] = {}
+        self._sampler_locks = KeyedLocks()
 
     async def sample(
         self,
@@ -51,7 +77,14 @@ class SamplingMixin(TunerServiceBase):
                 f"Tuner '{tuner_id}' not found or not initialized."
             )
 
+        # The policy snapshot to sample from. Defaults to the live policy; an
+        # eval run pinned to a frozen checkpoint is routed to that checkpoint's
+        # cached Sampler below. Both expose the same `sample(...)` surface, so
+        # the idempotency machinery downstream is agnostic to which is used.
+        sampler = trainer
+
         datum_id = None
+        checkpoint_id: Optional[str] = None
         if run_id is not None:
             async with self.async_session() as session:
                 result = await session.execute(
@@ -75,6 +108,19 @@ class SamplingMixin(TunerServiceBase):
 
                 # Override datum_id from database record to prevent client lying
                 datum_id = run_record.datum_id
+                # An eval run records which checkpoint it scores; training runs
+                # leave this NULL.
+                checkpoint_id = run_record.checkpoint_id
+
+            # Route an eval run to its frozen checkpoint's sampler. A sentinel
+            # ref (gemini/fake, or a Tinker step that didn't promote) or a
+            # missing checkpoint keeps the live policy, so Pass-1 behavior is
+            # unchanged; only a real frozen handle (Tinker's sampler path) pins
+            # sampling to those exact weights.
+            if checkpoint_id is not None:
+                ckpt = await self._load_checkpoint(tuner_id, checkpoint_id)
+                if ckpt is not None and ckpt.ref != LIVE_POLICY_CHECKPOINT:
+                    sampler = await self._sampler_for(tuner_id, ckpt)
 
         # Ad-hoc sampling (no run to record against) never duplicates, so skip
         # the idempotency machinery entirely.
@@ -121,12 +167,12 @@ class SamplingMixin(TunerServiceBase):
                     f"(request_hash={request_hash[:12]}...); "
                     "continuing to wait rather than resubmitting."
                 )
-                sample_op = await trainer.sample(request, restore_state=in_flight.state)
+                sample_op = await sampler.sample(request, restore_state=in_flight.state)
                 # End-to-end start is the original first-submit time so the
                 # recorded latency spans all re-attach cycles.
                 first_submit = in_flight.created_at
             else:
-                sample_op = await trainer.sample(request)
+                sample_op = await sampler.sample(request)
                 first_submit = utcnow()
                 state = sample_op.save_state()
                 if state is not None:
@@ -213,6 +259,64 @@ class SamplingMixin(TunerServiceBase):
                 )
 
             return sample.completion
+
+    async def _load_checkpoint(
+        self, tuner_id: str, checkpoint_id: str
+    ) -> Optional[CheckpointModel]:
+        """The checkpoint a run references by id, or ``None`` if it's gone.
+
+        Resolves an eval run's ``checkpoint_id`` to its backend ``ref``
+        (sentinel vs a real frozen handle) so `sample()` can decide whether to
+        route to a frozen sampler.
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(CheckpointModel).where(
+                    CheckpointModel.tuner_id == tuner_id,
+                    CheckpointModel.id == checkpoint_id,
+                )
+            )
+            return result.scalar_one_or_none()
+
+    async def _sampler_for(
+        self, tuner_id: str, checkpoint: CheckpointModel
+    ) -> Sampler:
+        """Return the (cached) frozen :class:`Sampler` for ``checkpoint``.
+
+        Amortizes the backend weight-load across a checkpoint's eval rollouts
+        via that tuner's bounded LRU cache. On a miss, a per-(tuner, checkpoint)
+        lock serializes the ``trainer.create_sampler`` build so concurrent eval
+        samples for the same checkpoint don't each load weights; both the fast
+        path and the post-lock recheck mark the entry most-recently-used.
+        """
+        cache = self._samplers.get(tuner_id)
+        if cache is not None:
+            cached = cache.get(checkpoint.id)
+            if cached is not None:
+                cache.move_to_end(checkpoint.id)
+                return cached
+
+        async with self._sampler_locks.acquire((tuner_id, checkpoint.id)):
+            cache = self._samplers.get(tuner_id)
+            if cache is not None:
+                cached = cache.get(checkpoint.id)
+                if cached is not None:
+                    cache.move_to_end(checkpoint.id)
+                    return cached
+
+            trainer = await self._get_trainer(tuner_id)
+            sampler = await trainer.create_sampler(
+                Checkpoint(
+                    ref=checkpoint.ref,
+                    policy_generation=checkpoint.policy_generation,
+                )
+            )
+            cache = self._samplers.setdefault(tuner_id, OrderedDict())
+            cache[checkpoint.id] = sampler
+            cache.move_to_end(checkpoint.id)
+            while len(cache) > SAMPLER_CACHE_SIZE:
+                cache.popitem(last=False)
+            return sampler
 
     async def _find_recorded_completion(
         self, tuner_id: str, run_id: str, request_hash: str

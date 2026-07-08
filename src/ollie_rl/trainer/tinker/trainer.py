@@ -27,6 +27,7 @@ from ollie_rl.trainer.types import (
     TrainerFactory,
     Example,
     Sample,
+    Sampler,
     TrainOp,
     SampleOp,
     StateStore,
@@ -117,6 +118,170 @@ class TinkerSampleOp(SampleOp):
         return self._task.done()
 
 
+async def _generate_sample(
+    sampling_client: tinker.SamplingClient,
+    renderer: Any,
+    config: TinkerTrainerConfig,
+    request: ChatCompletionRequest,
+    policy_generation: int,
+) -> Sample:
+    """Render, sample, and assemble a :class:`Sample` from a Tinker sampling
+    client.
+
+    Shared by :meth:`TinkerTrainer._run_sample` (the live policy) and
+    :class:`TinkerSampler` (a frozen checkpoint), so the two only differ in
+    *which* sampling client / ``policy_generation`` they carry -- the render →
+    sample → parse pipeline is identical.
+    """
+    messages = []
+    for msg in request.messages:
+        content_val = msg.get("content") or ""
+        if not isinstance(content_val, str):
+            content_val = str(content_val)
+        messages.append(
+            Message(
+                role=msg["role"],
+                content=content_val,
+            )
+        )
+    model_input = renderer.build_generation_prompt(messages)
+
+    max_tokens = request.max_tokens or config.max_tokens or 1024
+    temperature = config.temperature or 1.0
+    sampling_params = tinker.SamplingParams(
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+
+    response = await sampling_client.sample_async(
+        prompt=model_input,
+        num_samples=1,
+        sampling_params=sampling_params,
+    )
+
+    if not response.sequences:
+        raise RuntimeError("Sampling returned no sequences")
+
+    sequence = response.sequences[0]
+    # Snapshot the prompt + completion tokens (and per-completion-token
+    # logprobs) so train_step can replay them through forward_backward without
+    # re-sampling. Layout matches Sample.tokens / Sample.logprobs:
+    #   tokens   = prompt_tokens + completion_tokens
+    #   logprobs = completion logprobs only
+    # (Hence prompt_len = len(tokens) - len(logprobs).)
+    prompt_tokens = model_input.to_ints()
+    completion_tokens = list(sequence.tokens)
+    completion_logprobs = (
+        list(sequence.logprobs) if sequence.logprobs is not None else []
+    )
+    full_tokens = prompt_tokens + completion_tokens
+    parsed_message, parse_success = renderer.parse_response(sequence.tokens)
+    content_filtered = (not parse_success) and sequence.stop_reason != "length"
+    text_content = parsed_message.get("content") or ""
+
+    tool_calls: list[Any] = []
+    if "tool_calls" in parsed_message and parsed_message["tool_calls"]:
+        for tc in parsed_message["tool_calls"]:
+            call_id = tc.id if tc.id else f"call_{uuid.uuid4().hex}"
+            tool_calls.append(
+                ChatCompletionMessageToolCall(
+                    id=call_id,
+                    type="function",
+                    function=Function(
+                        name=tc.function.name,
+                        arguments=tc.function.arguments,
+                    ),
+                )
+            )
+
+    completion_id = f"cmpl_{uuid.uuid4().hex}"
+    finish_reason = sequence.stop_reason
+    if content_filtered:
+        finish_reason = "content_filter"
+    elif tool_calls:
+        finish_reason = "tool_calls"
+    elif finish_reason == "stop":
+        finish_reason = "stop"
+    elif finish_reason == "length":
+        finish_reason = "length"
+    else:
+        finish_reason = "stop"
+
+    completion = ChatCompletion(
+        id=completion_id,
+        choices=[
+            Choice(
+                finish_reason=finish_reason,
+                index=0,
+                message=ChatCompletionMessage(
+                    content=text_content if text_content else None,
+                    role="assistant",
+                    tool_calls=tool_calls if tool_calls else None,
+                ),
+                logprobs=None,
+            )
+        ],
+        created=int(time.time()),
+        model=request.model,
+        object="chat.completion",
+        usage=CompletionUsage(
+            prompt_tokens=model_input.length,
+            completion_tokens=len(sequence.tokens),
+            total_tokens=model_input.length + len(sequence.tokens),
+        ),
+    )
+
+    return Sample(
+        completion=completion,
+        policy_generation=policy_generation,
+        tokens=full_tokens,
+        logprobs=completion_logprobs,
+    )
+
+
+class TinkerSampler(Sampler):
+    """A checkpoint-scoped :class:`Sampler` over a frozen Tinker sampling
+    client.
+
+    Wraps a ``create_sampling_client_async(model_path=<sampler path>)`` client
+    so eval rollouts hit exactly the promoted weights of one checkpoint, immune
+    to later sampler promotions on the live trainer (which would otherwise
+    contaminate a per-checkpoint metric mid-eval).
+    """
+
+    def __init__(
+        self,
+        sampling_client: tinker.SamplingClient,
+        renderer: Any,
+        config: TinkerTrainerConfig,
+        policy_generation: int,
+    ):
+        self._sampling_client = sampling_client
+        self._renderer = renderer
+        self._config = config
+        self._policy_generation = policy_generation
+
+    async def sample(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        restore_state: Optional[str] = None,
+    ) -> SampleOp:
+        # Tinker samples inline via a local task; there is no durable backend op
+        # to re-attach to, so `restore_state` is accepted and ignored (matches
+        # TinkerTrainer.sample).
+        task = asyncio.create_task(
+            _generate_sample(
+                self._sampling_client,
+                self._renderer,
+                self._config,
+                request,
+                self._policy_generation,
+            )
+        )
+        return TinkerSampleOp(task)
+
+
 class TinkerTrainer(Trainer):
     config: TinkerTrainerConfig
     service_client: tinker.ServiceClient
@@ -169,110 +334,34 @@ class TinkerTrainer(Trainer):
         return TinkerSampleOp(task)
 
     async def _run_sample(self, request: ChatCompletionRequest) -> Sample:
-        messages = []
-        for msg in request.messages:
-            content_val = msg.get("content") or ""
-            if not isinstance(content_val, str):
-                content_val = str(content_val)
-            messages.append(
-                Message(
-                    role=msg["role"],
-                    content=content_val,
-                )
-            )
-        model_input = self.renderer.build_generation_prompt(messages)
-
-        max_tokens = request.max_tokens or self.config.max_tokens or 1024
-        temperature = self.config.temperature or 1.0
-        sampling_params = tinker.SamplingParams(
-            max_tokens=max_tokens,
-            temperature=temperature,
+        # Live policy: sample the currently-promoted sampler client, stamped
+        # with its sampler generation. Frozen-checkpoint sampling goes through
+        # `TinkerSampler` (see `create_sampler`) instead.
+        return await _generate_sample(
+            self._sampling_client,
+            self.renderer,
+            self.config,
+            request,
+            self.state.sampler_step,
         )
 
-        response = await self._sampling_client.sample_async(
-            prompt=model_input,
-            num_samples=1,
-            sampling_params=sampling_params,
+    async def create_sampler(self, checkpoint: Checkpoint) -> Sampler:
+        """Build a sampler pinned to ``checkpoint``.
+
+        Loads the sampler ``path`` (the ref) into its own serving client via
+        ``create_sampling_client_async``, so eval scores exactly those frozen
+        weights. The caller resolves the ``LIVE_POLICY_CHECKPOINT`` sentinel to
+        the live trainer *before* calling this, so ``ref`` is always a real,
+        addressable handle here.
+        """
+        sampling_client = await self.service_client.create_sampling_client_async(
+            model_path=checkpoint.ref
         )
-
-        if not response.sequences:
-            raise RuntimeError("Sampling returned no sequences")
-
-        sequence = response.sequences[0]
-        # Snapshot the prompt + completion tokens (and per-completion-token
-        # logprobs) so train_step can replay them through
-        # forward_backward without re-sampling. Layout matches
-        # Sample.tokens / Sample.logprobs:
-        #   tokens   = prompt_tokens + completion_tokens
-        #   logprobs = completion logprobs only
-        # (Hence prompt_len = len(tokens) - len(logprobs).)
-        prompt_tokens = model_input.to_ints()
-        completion_tokens = list(sequence.tokens)
-        completion_logprobs = (
-            list(sequence.logprobs) if sequence.logprobs is not None else []
-        )
-        full_tokens = prompt_tokens + completion_tokens
-        parsed_message, parse_success = self.renderer.parse_response(sequence.tokens)
-        content_filtered = (not parse_success) and sequence.stop_reason != "length"
-        text_content = parsed_message.get("content") or ""
-
-        tool_calls: list[Any] = []
-        if "tool_calls" in parsed_message and parsed_message["tool_calls"]:
-            for tc in parsed_message["tool_calls"]:
-                call_id = tc.id if tc.id else f"call_{uuid.uuid4().hex}"
-                tool_calls.append(
-                    ChatCompletionMessageToolCall(
-                        id=call_id,
-                        type="function",
-                        function=Function(
-                            name=tc.function.name,
-                            arguments=tc.function.arguments,
-                        ),
-                    )
-                )
-
-        completion_id = f"cmpl_{uuid.uuid4().hex}"
-        finish_reason = sequence.stop_reason
-        if content_filtered:
-            finish_reason = "content_filter"
-        elif tool_calls:
-            finish_reason = "tool_calls"
-        elif finish_reason == "stop":
-            finish_reason = "stop"
-        elif finish_reason == "length":
-            finish_reason = "length"
-        else:
-            finish_reason = "stop"
-
-        completion = ChatCompletion(
-            id=completion_id,
-            choices=[
-                Choice(
-                    finish_reason=finish_reason,
-                    index=0,
-                    message=ChatCompletionMessage(
-                        content=text_content if text_content else None,
-                        role="assistant",
-                        tool_calls=tool_calls if tool_calls else None,
-                    ),
-                    logprobs=None,
-                )
-            ],
-            created=int(time.time()),
-            model=request.model,
-            object="chat.completion",
-            usage=CompletionUsage(
-                prompt_tokens=model_input.length,
-                completion_tokens=len(sequence.tokens),
-                total_tokens=model_input.length + len(sequence.tokens),
-            ),
-        )
-
-        return Sample(
-            completion=completion,
-            policy_generation=self.state.sampler_step,
-            tokens=full_tokens,
-            logprobs=completion_logprobs,
+        return TinkerSampler(
+            sampling_client=sampling_client,
+            renderer=self.renderer,
+            config=self.config,
+            policy_generation=checkpoint.policy_generation,
         )
 
     @property

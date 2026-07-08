@@ -43,6 +43,7 @@ from ollie_rl.trainer.types import (
     TrainerFactory,
     Example,
     Sample,
+    Sampler,
     TrainOp,
     SampleOp,
     StateStore,
@@ -545,6 +546,19 @@ class GeminiMsrlTrainer(Trainer):
     @property
     def policy_generation(self) -> int:
         return self.state.train_step
+
+    async def create_sampler(self, checkpoint: Checkpoint) -> Sampler:
+        # Gemini currently only emits the live-policy sentinel ref, so the
+        # service resolves that to the live trainer and never routes a real
+        # frozen checkpoint here. If/when Gemini publishes an addressable
+        # checkpoint handle, this must load it into a dedicated Gemini serving
+        # client (mirroring TinkerSampler) rather than sampling the live policy
+        # -- so fail loudly instead of silently scoring the wrong weights.
+        raise NotImplementedError(
+            "GeminiMsrlTrainer.create_sampler: frozen-checkpoint sampling is "
+            "not implemented; a real checkpoint ref must be loaded by a Gemini "
+            f"serving client (got ref={checkpoint.ref!r})."
+        )
 
     @property
     def tuning_job_name(self) -> str:
