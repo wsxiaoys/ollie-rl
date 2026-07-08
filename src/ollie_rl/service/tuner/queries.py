@@ -209,7 +209,7 @@ class QueryMixin(TunerServiceBase):
             policy_generation=policy_generation,
             trainer_state=state_data,
             progress=progress,
-            is_training=await trainer.is_training(),
+            is_training=(await trainer.pending_train_op()) is not None,
             last_train_op_duration_seconds=last_train_op_duration_seconds(state_data),
         )
 

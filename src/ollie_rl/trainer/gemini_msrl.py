@@ -36,7 +36,6 @@ from google.genai.types import (
     Tool,
 )
 
-from ollie_rl.background import BackgroundJob
 from ollie_rl.trainer.types import (
     Trainer,
     TrainerFactory,
@@ -146,8 +145,10 @@ class GeminiMsrlTrainerState(BaseModel):
     # (that is tracked separately by `pending_train_op`).
     last_train_op: Optional[CompletedTrainOp] = None
     # Op name of an in-flight train-step LRO, if any. Set the moment a train
-    # step is submitted and cleared once its completion poll lands. Used to
-    # detect in-flight training and to re-spawn the completion poll on restart.
+    # step is submitted and cleared once `GeminiMsrlTrainOp.wait()` observes
+    # its completion. Used to detect in-flight training and, via
+    # `pending_train_op()`, to reconcile an op that was submitted before a
+    # restart.
     pending_train_op: Optional[str] = None
     config: GeminiMsrlTrainerConfig
 
@@ -359,87 +360,39 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         )
 
 
-class GeminiMsrlTrainingOp(GeminiMsrlOp, TrainOp):
+class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
+    """The single, restart-surviving completion path for a train-step LRO.
+
+    Holds a reference to its :class:`GeminiMsrlTrainer` so ``wait()`` can
+    mutate and persist trainer state as it drives the op to completion. This
+    is *the* authoritative waiter: the service awaits it (either the fresh op
+    returned by ``train_step`` or the one handed back by ``pending_train_op``
+    on reconcile) and it records ``last_train_op``, clears ``pending_train_op``
+    and persists.
+    """
+
+    def __init__(self, trainer: "GeminiMsrlTrainer", op_name: str):
+        super().__init__(trainer.client, op_name)
+        self.trainer = trainer
+
     async def wait(self) -> None:
-        completed_op = await self.client.wait_for_operation(
-            self.op_name,
-            timeout_seconds=600,
-        )
-
-        response = completed_op.get_response_as(TrainStepResponse)
-        if not response:
-            raise RuntimeError("Failed to retrieve train step response")
-
-
-class GeminiMsrlTrainer(Trainer):
-    """
-    Trainer wrapping the Gemini MSRL tuning client.
-
-    The Trainer's persistable state lives directly on `self.state`
-    (a `GeminiMsrlTrainerState`). Mutate that object in place and then
-    call `_persist_state()` to push it to the backing store.
-    """
-
-    config: GeminiMsrlTrainerConfig
-    client: GeminiMsrlClient
-    state: GeminiMsrlTrainerState
-    state_store: StateStore
-
-    def __init__(
-        self,
-        config: GeminiMsrlTrainerConfig,
-        client: GeminiMsrlClient,
-        state: GeminiMsrlTrainerState,
-        state_store: StateStore,
-    ):
-        self.config = config
-        self.client = client
-        self.state = state
-        self.state_store = state_store
-        # Holds strong references to the in-flight train-op poll tasks so they
-        # aren't garbage-collected before they clear `pending_train_op` (which
-        # would otherwise leave the trainer stuck as `is_training()` forever).
-        self._background_jobs = BackgroundJob()
-
-    @property
-    def policy_generation(self) -> int:
-        return self.state.train_step
-
-    @property
-    def tuning_job_name(self) -> str:
-        return self.state.tuning_job_name
-
-    async def is_training(self) -> bool:
-        """Whether a train-step LRO is currently in flight.
-
-        `train_step` records the in-flight op name in `pending_train_op` the
-        moment it submits the LRO, and clears it once the completion poll lands.
-        That poll is started by `train_step` and re-spawned by `restore`, so a
-        non-None `pending_train_op` reliably tracks an in-flight op without an
-        extra backend round-trip.
-        """
-        return self.state.pending_train_op is not None
-
-    async def _persist_state(self) -> None:
-        await self.state_store.save(self.state.model_dump_json())
-
-    async def _poll_and_persist_train_op(self, op_name: str) -> None:
-        """Wait for a train-step LRO to terminate, record the completed
+        """Wait for the train-step LRO to terminate, record the completed
         ``TrainStepResponse`` in ``last_train_op`` and clear ``pending_train_op``.
-
-        This is spawned as a background task by ``train_step`` and re-spawned by
-        ``restore`` so an in-flight op that completes while (or after) the
-        server is down is still reflected in the persisted state.
 
         A train step can legitimately run much longer than a single
         ``wait_for_operation`` budget, so we keep retrying on timeouts /
         transient errors rather than giving up. Bailing out early is what
-        previously left ``pending_train_op`` permanently stuck (and
-        ``is_training`` true) even though the underlying Vertex op had finished.
+        previously left ``pending_train_op`` permanently stuck even though the
+        underlying Vertex op had finished. Terminal errors are logged and
+        swallowed (never raised out of ``wait()``) so the service reconcile
+        loop is not killed.
         """
         # A short backoff between retries after a transient (non-timeout)
         # failure so we don't spin tightly on a persistent error.
         _RETRY_BACKOFF_SECONDS = 5.0
+
+        trainer = self.trainer
+        op_name = self.op_name
 
         completed_op = None
         while True:
@@ -479,7 +432,7 @@ class GeminiMsrlTrainer(Trainer):
                 # `policy_generation` never regresses (guards against an older
                 # op's poll landing after a newer one).
                 completed = int(response.completed_train_step_id)
-                if completed >= self.state.train_step:
+                if completed >= trainer.state.train_step:
                     # Persist the response together with the op name + its
                     # timing metadata so the exact operation is traceable and
                     # the train-step execution time (updateTime - createTime)
@@ -487,7 +440,7 @@ class GeminiMsrlTrainer(Trainer):
                     generic_metadata = (completed_op.metadata or {}).get(
                         "genericMetadata"
                     )
-                    self.state.last_train_op = CompletedTrainOp(
+                    trainer.state.last_train_op = CompletedTrainOp(
                         response=response,
                         name=completed_op.name,
                         metadata=(
@@ -499,12 +452,63 @@ class GeminiMsrlTrainer(Trainer):
 
             # Clear the in-flight pointer if it still refers to this op; a newer
             # train_step may have already replaced it.
-            if self.state.pending_train_op == op_name:
-                self.state.pending_train_op = None
+            if trainer.state.pending_train_op == op_name:
+                trainer.state.pending_train_op = None
 
-            await self._persist_state()
+            await trainer._persist_state()
         except Exception as e:
             logger.error(f"Error polling train step or updating state: {e}")
+
+
+class GeminiMsrlTrainer(Trainer):
+    """
+    Trainer wrapping the Gemini MSRL tuning client.
+
+    The Trainer's persistable state lives directly on `self.state`
+    (a `GeminiMsrlTrainerState`). Mutate that object in place and then
+    call `_persist_state()` to push it to the backing store.
+    """
+
+    config: GeminiMsrlTrainerConfig
+    client: GeminiMsrlClient
+    state: GeminiMsrlTrainerState
+    state_store: StateStore
+
+    def __init__(
+        self,
+        config: GeminiMsrlTrainerConfig,
+        client: GeminiMsrlClient,
+        state: GeminiMsrlTrainerState,
+        state_store: StateStore,
+    ):
+        self.config = config
+        self.client = client
+        self.state = state
+        self.state_store = state_store
+
+    @property
+    def policy_generation(self) -> int:
+        return self.state.train_step
+
+    @property
+    def tuning_job_name(self) -> str:
+        return self.state.tuning_job_name
+
+    async def pending_train_op(self) -> Optional[GeminiMsrlTrainOp]:
+        """The in-flight train-step LRO, if one is running, else None.
+
+        `train_step` records the in-flight op name in `pending_train_op` the
+        moment it submits the LRO, and `GeminiMsrlTrainOp.wait()` clears it
+        once the op completes. A non-None `pending_train_op` therefore reliably
+        tracks an in-flight op without an extra backend round-trip; we just
+        wrap the op name in a fresh (authoritative) `GeminiMsrlTrainOp` handle.
+        """
+        if self.state.pending_train_op is not None:
+            return GeminiMsrlTrainOp(self, self.state.pending_train_op)
+        return None
+
+    async def _persist_state(self) -> None:
+        await self.state_store.save(self.state.model_dump_json())
 
     async def sample(
         self,
@@ -767,12 +771,12 @@ class GeminiMsrlTrainer(Trainer):
 
         return GeminiMsrlSamplingOp(self.client, op.name, request.model)
 
-    async def train_step(self, examples: List[Example]) -> GeminiMsrlTrainingOp:
+    async def train_step(self, examples: List[Example]) -> GeminiMsrlTrainOp:
         assert self.client and self.tuning_job_name, "Tuning job not initialized"
 
         if self.state.pending_train_op:
-            last_op = GeminiMsrlTrainingOp(
-                self.client,
+            last_op = GeminiMsrlTrainOp(
+                self,
                 self.state.pending_train_op,
             )
             if not await last_op.peek():
@@ -803,14 +807,12 @@ class GeminiMsrlTrainer(Trainer):
         self.state.pending_train_op = op.name
         await self._persist_state()
 
-        # Start a background task to poll the operation and update the policy
-        # generation state. This task is re-spawned on restart by `restore`.
-        self._background_jobs.spawn(self._poll_and_persist_train_op(op.name))
-
-        return GeminiMsrlTrainingOp(
-            self.client,
-            op.name,
-        )
+        # The returned op is the single authoritative waiter: the service
+        # awaits `wait()`, which drives the op to completion, records
+        # `last_train_op`, clears `pending_train_op` and persists. No
+        # background poll is spawned here (nor re-spawned on restart) --
+        # reconcile flows through `pending_train_op()` instead.
+        return GeminiMsrlTrainOp(self, op.name)
 
 
 class GeminiMsrlTrainerFactory(TrainerFactory):
@@ -918,17 +920,10 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
             state_store=state_store,
         )
 
-        # The in-process poll spawned by `train_step` is lost on restart, so a
-        # non-None `pending_train_op` means we never observed its completion.
-        # Re-spawn the poll to recover the completed `TrainStepResponse` (which
-        # drives `policy_generation`) even if the op finished while down.
-        if state.pending_train_op:
-            logger.info(
-                f"Resuming poll for in-flight train op: {state.pending_train_op}"
-            )
-            instance._background_jobs.spawn(
-                instance._poll_and_persist_train_op(state.pending_train_op)
-            )
+        # A non-None `pending_train_op` means we never observed the op's
+        # completion before the restart. We no longer re-spawn a poll here:
+        # the service reconciles via `pending_train_op()` -> `wait()`, which is
+        # the single restart-surviving completion path.
 
         # 2. Wait for TPU allocation and initialization (JOB_STATE_RUNNING).
         logger.info(

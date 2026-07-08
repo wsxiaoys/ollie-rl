@@ -97,11 +97,17 @@ class TrainingMixin(TunerServiceBase):
         async with self._train_lock_for(tuner_id):
             trainer = await self._get_trainer(tuner_id)
 
-            # Skip if a train step is already in progress for this trainer.
-            if await trainer.is_training():
-                logger.debug(
-                    f"Skipping train step for tuner {tuner_id}: already training"
+            in_flight = await trainer.pending_train_op()
+            if in_flight is not None:
+                # A train op is in flight. In steady state the coroutine that
+                # submitted it still holds this lock and we never reach here. If
+                # we DID acquire the lock, no one is awaiting it (e.g. it was
+                # submitted before a restart): drive it to completion so trainer
+                # state advances and `pending_train_op` clears.
+                logger.info(
+                    f"Reconciling in-flight train op for tuner {tuner_id}"
                 )
+                await in_flight.wait()
                 return
 
             train_op = None

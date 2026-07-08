@@ -44,8 +44,8 @@ class TunerServiceBase:
     def __init__(self):
         self.active_trainers: Dict[str, Trainer] = {}
         # Per-tuner train locks: a tuner serializes its own train steps (the
-        # `is_training()` check + batch collection + `trained_count` bump must
-        # be atomic), but distinct tuners are independent trainers with no
+        # `pending_train_op()` check + batch collection + `trained_count` bump
+        # must be atomic), but distinct tuners are independent trainers with no
         # shared state, so they train concurrently instead of being head-of-line
         # blocked behind one another's (potentially long) train step.
         self._train_locks: Dict[str, asyncio.Lock] = {}

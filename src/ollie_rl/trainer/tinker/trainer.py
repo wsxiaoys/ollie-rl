@@ -271,15 +271,20 @@ class TinkerTrainer(Trainer):
     def policy_generation(self) -> int:
         return self.state.train_step
 
-    async def is_training(self) -> bool:
-        """Whether a train step is currently running.
+    async def pending_train_op(self) -> Optional[TrainOp]:
+        """The in-flight train op, if a train step is currently running.
 
-        Unlike LRO-style backends, Tinker awaits its entire training
-        pipeline inline inside :meth:`train_step`, so there is no remote
-        op to poll. We simply report the locally-tracked flag, which is
-        set for the duration of the inline work.
+        Unlike LRO-style backends, Tinker awaits its entire training pipeline
+        inline inside :meth:`train_step`, so there is no remote op to poll or
+        reconcile. While `_is_training` is set we return a status-only
+        :class:`TinkerTrainOp` sentinel (no-op `wait()`, non-resumable
+        `save_state()`) purely to keep surfacing the in-flight indicator to the
+        dashboard. Because the per-tuner lock means `_is_training` can only be
+        true while the coroutine holding the lock is inside `await train_step`,
+        no reconcile ever observes it; after a restart the flag is false, so we
+        correctly return None.
         """
-        return self._is_training
+        return TinkerTrainOp() if self._is_training else None
 
     def _examples_to_data(self, examples: List[Example]) -> List[tinker.Datum]:
         """
