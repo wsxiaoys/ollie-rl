@@ -117,8 +117,6 @@ class GeminiMsrlTrainerConfig(BaseModel):
     base_model: str = "gemini-3.5-flash"
     adapter_size: str = "ADAPTER_SIZE_SIXTEEN"
     checkpoint_interval: int = 10
-    poll_interval: float = 2.0
-    timeout_seconds: float = 3600.0
     tuning_job_name: Optional[str] = None
 
 
@@ -538,8 +536,8 @@ class GeminiMsrlTrainer(Trainer):
         )
         await self.client.wait_for_tuning_job_running(
             self.tuning_job_name,
-            timeout_seconds=self.config.timeout_seconds * 2,
-            poll_interval=self.config.poll_interval * 2,
+            timeout_seconds=5.0,
+            poll_interval=1.0,
         )
         logger.info("Gemini MSRL Tuning Job is successfully running.")
 
