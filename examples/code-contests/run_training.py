@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import random
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
@@ -169,6 +171,57 @@ def split_train_eval(datum_ids: list[str]) -> tuple[list[str], list[str]]:
     return train_datum_ids, eval_datum_ids
 
 
+# --------------------------------------------------------------------------
+# Control-plane transport resilience
+# --------------------------------------------------------------------------
+# The dispense/reward calls are short JSON requests, but the ollie-rl server can
+# briefly stall — e.g. a pooled Postgres connection went stale during an idle
+# lull (no `pool_pre_ping`), or a train step momentarily tied up the connection
+# pool — which surfaces on the client as an `httpx.ReadTimeout`/transport error.
+# Those are transient: retrying after a short backoff succeeds, whereas letting
+# the exception escape unwinds `asyncio.gather` and kills the whole run. So wrap
+# these calls in an exponential-backoff-with-jitter retry.
+#
+# The retry is intentionally *unbounded*: a stall can coincide with a long
+# all-runs-dispensed lull (the server is simply busy training / has nothing to
+# hand out), which is a normal steady state rather than a failure, so there's no
+# attempt count at which giving up and crashing the driver would be correct. We
+# just keep backing off (capped) until the server responds again.
+CONTROL_PLANE_BACKOFF_BASE_SEC = 1.0
+CONTROL_PLANE_BACKOFF_CAP_SEC = 30.0
+
+
+async def _request_with_retry(
+    describe: str,
+    send: Callable[[], Awaitable[httpx.Response]],
+) -> httpx.Response:
+    """Send one HTTP request, retrying transient timeouts / transport errors.
+
+    ``send`` performs a single attempt and returns its response. On an
+    ``httpx.TimeoutException`` or ``httpx.TransportError`` (connection reset,
+    stale pooled connection, etc.) we back off — exponential with full jitter,
+    capped at ``CONTROL_PLANE_BACKOFF_CAP_SEC`` — and retry indefinitely, since a
+    stall may just be a busy/all-dispensed server that will recover. HTTP status
+    errors are *not* retried here (the caller inspects the response and decides).
+    """
+    attempt = 0
+    while True:
+        try:
+            return await send()
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            ceiling = min(
+                CONTROL_PLANE_BACKOFF_CAP_SEC,
+                CONTROL_PLANE_BACKOFF_BASE_SEC * (2**attempt),
+            )
+            delay = random.uniform(0, ceiling)  # full jitter
+            print(
+                f"[driver] {describe}: transient transport error "
+                f"({type(exc).__name__}); retrying in {delay:.1f}s"
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
 async def dispense_run(
     client: httpx.AsyncClient,
     tuner_id: str,
@@ -179,8 +232,15 @@ async def dispense_run(
     configured on the tuner's recipe (``max_unhealthy_finish_ratio`` /
     ``max_succeed_ratio``), not per request, so this call takes no quarantine
     params.
+
+    Transient transport failures (server briefly unresponsive under load) are
+    retried with backoff rather than crashing the driver; see
+    :func:`_request_with_retry`.
     """
-    resp = await client.post(f"/tuners/{tuner_id}/runs")
+    resp = await _request_with_retry(
+        f"dispense (tuner {tuner_id})",
+        lambda: client.post(f"/tuners/{tuner_id}/runs"),
+    )
     if resp.status_code == 204:
         return None
     resp.raise_for_status()
@@ -198,9 +258,16 @@ async def submit_reward(
     already finalized), or produced no chat completions at all (a crashed trial
     that never sampled — a reward for it carries no training signal, so the
     server refuses it). We swallow it so the driver can keep going.
+
+    Transient transport failures are retried with backoff (see
+    :func:`_request_with_retry`) so a momentary server stall doesn't crash the
+    driver.
     """
-    resp = await client.put(
-        f"/tuners/{tuner_id}/runs/{run_id}/reward", json={"reward": reward}
+    resp = await _request_with_retry(
+        f"reward (run {run_id})",
+        lambda: client.put(
+            f"/tuners/{tuner_id}/runs/{run_id}/reward", json={"reward": reward}
+        ),
     )
     if resp.status_code == 409:
         print(
@@ -467,7 +534,12 @@ async def main() -> int:
     TRIALS_DIR.mkdir(parents=True, exist_ok=True)
     datum_ids = discover_datum_ids()
 
-    async with httpx.AsyncClient(base_url=args.base_url, timeout=30.0) as client:
+    # Granular timeouts (rather than a single 30s that collides with the
+    # server's default SQLAlchemy `pool_timeout=30`): fail fast on a dead
+    # connection, but give a healthy-but-busy server room to respond on read
+    # before `_request_with_retry` backs off and retries.
+    timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=30.0)
+    async with httpx.AsyncClient(base_url=args.base_url, timeout=timeout) as client:
         tuner_id = args.tuner_id
         if tuner_id:
             # Confirm the explicitly provided tuner exists and fetch its name.
