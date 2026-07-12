@@ -37,7 +37,17 @@ def is_in_memory(url: str) -> bool:
 
 
 def get_engine():
-    """Create and return an async SQLAlchemy engine singleton."""
+    """Create and return an async SQLAlchemy engine singleton.
+
+    For Postgres (the production backend) the connection pool is tuned
+    explicitly: the SQLAlchemy defaults (``pool_size=5``, ``max_overflow=10``)
+    are too small for a service whose hot path is many concurrent sampling
+    requests, so under a burst the pool empties and every DB-touching coroutine
+    -- including ``dispense_run`` -- blocks up to ``pool_timeout`` waiting for a
+    connection. ``pool_pre_ping`` / ``pool_recycle`` additionally guard against
+    hosted-Postgres providers that silently drop idle connections. SQLite is
+    left on its defaults (a sized queue pool doesn't apply to it).
+    """
     global _engine
     if _engine is None:
         url = resolve_database_url()
@@ -46,7 +56,18 @@ def get_engine():
                 "SQLite in-memory backend is being used. "
                 "This should only be used for local development/testing and does not persist data across restarts."
             )
-        _engine = create_async_engine(url, echo=False)
+        if url.startswith("postgresql"):
+            _engine = create_async_engine(
+                url,
+                echo=False,
+                pool_size=20,  # steady connections held open
+                max_overflow=20,  # burst headroom -> 40 max
+                pool_timeout=10,  # fail fast instead of hanging ~30s
+                pool_pre_ping=True,  # drop connections the server already closed
+                pool_recycle=1800,  # recycle before the server's idle cutoff
+            )
+        else:
+            _engine = create_async_engine(url, echo=False)
     return _engine
 
 
