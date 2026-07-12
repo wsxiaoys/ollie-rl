@@ -12,11 +12,8 @@ from typing import Optional
 from ollie_rl.cookbook import Recipe
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
-from ollie_rl.service.tuner.dispensing import (
-    pick_datum,
-    quarantined_datums,
-    terminal_stats,
-)
+from ollie_rl.service.tuner.dispensing import pick_datum
+from ollie_rl.service.tuner.quarantine import quarantined_datums, terminal_stats
 from ollie_rl.service.tuner.types import RewardedRun, TerminalStats
 
 

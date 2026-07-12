@@ -11,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from ollie_rl.db import ChatCompletionModel, TunerModel
 from ollie_rl.db.models import CheckpointModel, DatumRowModel, RunModel
 from ollie_rl.service.tuner.base import TunerServiceBase
-from ollie_rl.service.tuner.dispensing import quarantined_datums
 from ollie_rl.trainer import Checkpoint, Example, Trainer
 from ollie_rl.types import Rollout, RolloutRun
 
@@ -263,15 +262,8 @@ class TrainingMixin(TunerServiceBase):
             # regardless; this only governs the `rejected_count` bump.
             datum_by_run = {r.id: r.datum_id for r in run_records}
             stale_datums = list({datum_by_run[rid] for rid in stale_run_ids})
-            rewarded_by_run = await self._rewarded_datums(tuner_id, session)
-            finish_reason_by_run = await self._finish_reason_datums(tuner_id, session)
-            quarantined = quarantined_datums(
-                stale_datums,
-                rewarded_by_run,
-                finish_reason_by_run,
-                min_samples=recipe.quarantine_min_samples,
-                max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
-                max_succeed_ratio=recipe.max_succeed_ratio,
+            quarantined = await self._quarantined_datums(
+                tuner_id, session, stale_datums, recipe
             )
             requeue_run_ids = [
                 rid for rid in stale_run_ids if datum_by_run[rid] not in quarantined

@@ -10,7 +10,7 @@ composes the feature mixins on top of this base.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from sqlalchemy import func, select
 
@@ -25,6 +25,7 @@ from ollie_rl.db import (
 )
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
+from ollie_rl.service.tuner.quarantine import quarantined_datums
 from ollie_rl.service.tuner.types import RewardedRun
 from ollie_rl.service.tuner.constants import RUN_EXPIRE_GENERATION_BUDGET_MS
 from ollie_rl.service.tuner.errors import TunerNotFoundError
@@ -217,6 +218,47 @@ class TunerServiceBase:
             for run_id, datum_id, reward in result.all()
             if run_id is not None
         }
+
+    async def _quarantined_datums(
+        self,
+        tuner_id: str,
+        session,
+        datum_pool: List[str],
+        recipe: Recipe,
+    ) -> Set[str]:
+        """Datums in ``datum_pool`` to exclude for ``tuner_id``, per the recipe.
+
+        Centralizes the shared "load stat maps -> run the pure
+        :func:`~ollie_rl.service.tuner.quarantine.quarantined_datums` predicate"
+        wiring so every *decision* site stays in lock-step: the train dispense
+        pool (``DispenseMixin.dispense_run``) and the rejected-count bump
+        (``_collect_consumable_batch``). Returns an empty set for an empty pool
+        without touching the DB. Quarantine is deliberately *not* applied to the
+        eval dispense pool -- held-out datums are scored every checkpoint
+        regardless of training-signal health.
+
+        (``get_progress`` also does *not* route through this helper: it already
+        loads the same maps for its per-datum ``terminal_stats``, so it calls
+        the pure predicate directly to avoid re-issuing these queries.)
+        """
+        if not datum_pool:
+            return set()
+        # Both filters share the rewarded denominator: a rewarded run has no
+        # in-flight row (deleted on success). Each `RewardedRun` carries its
+        # datum_id + reward, so the success numerator (reward == 1.0) is derived
+        # from this same map -- no separate query. Behavior-penalty finish
+        # reasons (`length` / `content_filter`) feed the unhealthy-finish
+        # numerator (intersected with `rewarded_by_run` in the pure helper).
+        rewarded_by_run = await self._rewarded_datums(tuner_id, session)
+        finish_reason_by_run = await self._finish_reason_datums(tuner_id, session)
+        return quarantined_datums(
+            datum_pool,
+            rewarded_by_run,
+            finish_reason_by_run,
+            min_samples=recipe.quarantine_min_samples,
+            max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
+            max_succeed_ratio=recipe.max_succeed_ratio,
+        )
 
     async def _finish_reason_datums(
         self,

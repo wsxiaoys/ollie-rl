@@ -20,10 +20,9 @@ from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.dispensing import (
     pick_datum,
     pick_tier,
-    quarantined_datums,
     scheduler_scores,
-    terminal_stats,
 )
+from ollie_rl.service.tuner.quarantine import quarantined_datums, terminal_stats
 from ollie_rl.service.tuner.types import RewardedRun, TerminalStats
 from ollie_rl.service.tuner.completion_helpers import context_tokens_from_response
 from ollie_rl.service.tuner.run_helpers import (
@@ -346,6 +345,12 @@ class QueryMixin(TunerServiceBase):
         # can't progress toward a future batch and won't be trained while
         # excluded, so counting it as "in progress" or "never trained" would
         # overstate the active/reachable pool.
+        #
+        # Unlike the dispense/rejected-count sites, this read-only path calls the
+        # pure `quarantined_datums` predicate directly rather than the
+        # `_quarantined_datums` helper: it already loaded `rewarded_by_run` /
+        # `finish_reason_by_run` above for the per-datum `terminal_stats`, so
+        # reusing them here avoids issuing those two queries a second time.
         excluded = quarantined_datums(
             datum_pool,
             rewarded_by_run,
