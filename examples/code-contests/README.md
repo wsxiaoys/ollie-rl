@@ -7,9 +7,8 @@ rollout environment and `ollie-rl` (pochi) as the tuner/trainer.
 Each rollout is a full **Harbor trial**: a [Terminus 2](https://www.harborframework.com)
 agent is dropped into a sandboxed container, reads a CodeContests problem,
 writes a solution, and Harbor's verifier runs the task's unit tests to produce
-the reward. `ollie-rl` records the agent's LLM calls and trains on them — like
-the `weather-agent` example, but with a containerized agentic environment
-instead of a shell-out to `opencode`.
+the reward. `ollie-rl` records the agent's LLM calls and trains on them, using
+a containerized agentic environment instead of a shell-out to `opencode`.
 
 ```
 examples/code-contests/
