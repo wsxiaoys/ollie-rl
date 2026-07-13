@@ -1,5 +1,9 @@
 # Example production deployment for ollie-rl.
 #
+# This mirrors the Railway "production" environment, which runs the app
+# against a managed Postgres service (not SQLite) and authenticates to the
+# Gemini MSRL forwarder via an HTTP token endpoint (GEMINI_MSRL_TOKEN_URL).
+#
 # Image is published at:
 #   https://github.com/wsxiaoys/ollie-rl/pkgs/container/ollie-rl
 #
@@ -14,18 +18,21 @@ services:
     image: ghcr.io/wsxiaoys/ollie-rl:${OLLIE_RL_IMAGE_TAG:-latest}
     container_name: ollie-rl
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"
     environment:
-      # Note the 4 slashes: that makes the SQLite path absolute (/data/db.sqlite)
-      # so it does not depend on the container's WORKDIR.
-      DATABASE_URL: sqlite+aiosqlite:////data/db.sqlite
-      # Credentials for the Gemini MSRL cookbook (override in your .env file).
-      GEMINI_MSRL_AUTH_TOKEN: ${GEMINI_MSRL_AUTH_TOKEN:-}
-      GEMINI_MSRL_PROJECT_ID: ${GEMINI_MSRL_PROJECT_ID:-}
-    volumes:
-      # Persist the SQLite database across container restarts/upgrades.
-      - ollie-rl-data:/data
+      # Connect to the Postgres service defined below (matches Railway prod,
+      # which uses postgresql+asyncpg against its managed Postgres instance).
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prod}
+      # Gemini MSRL cookbook configuration (override in your .env file).
+      # Tokens are fetched over HTTP from GEMINI_MSRL_TOKEN_URL, so no static
+      # auth token / env file is required.
+      GEMINI_MSRL_BASE_URL: ${GEMINI_MSRL_BASE_URL}
+      GEMINI_MSRL_PROJECT_ID: ${GEMINI_MSRL_PROJECT_ID}
+      GEMINI_MSRL_TOKEN_URL: ${GEMINI_MSRL_TOKEN_URL}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/docs').status < 500 else 1)\""]
       interval: 30s
@@ -33,5 +40,24 @@ services:
       retries: 5
       start_period: 20s
 
+  postgres:
+    # Matches the Railway prod Postgres service (postgres-ssl:18 template).
+    image: ghcr.io/railwayapp-templates/postgres-ssl:18
+    container_name: ollie-rl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-prod}
+    volumes:
+      # Persist the database across container restarts/upgrades.
+      - ollie-rl-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-railway}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
-  ollie-rl-data:
+  ollie-rl-pgdata:
