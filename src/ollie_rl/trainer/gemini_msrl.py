@@ -478,30 +478,25 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
                         ),
                     )
                 # The completed step yields a checkpoint. When Vertex returns a
-                # `TunedModelCheckpoint`, persist its full opaque payload as the
-                # ref (a JSON dump, since the container has no declared fields);
-                # only fall back to the live-policy sentinel when it is null, in
-                # which case eval attributed to this checkpoint samples the live
-                # policy.
+                # `TunedModelCheckpoint`, persist its endpoint resource name as
+                # the checkpoint ref. If this was a promotion step but Gemini
+                # somehow omits the checkpoint entirely, fall back to the
+                # live-policy sentinel so eval still attributes to the promoted
+                # generation instead of losing the checkpoint.
                 tuned_checkpoint = response.tuned_model_checkpoint
                 if tuned_checkpoint is not None:
-                    # Vertex returned a frozen `TunedModelCheckpoint`: persist
-                    # its full opaque payload as the ref and attribute the
-                    # sample to the checkpoint's own `step`, falling back to the
-                    # completed train step id when `step` is absent.
+                    # Vertex returned an addressable frozen checkpoint: persist
+                    # the deployed endpoint as the ref and attribute the sample
+                    # to the checkpoint's own required `step`.
                     checkpoint = Checkpoint(
-                        ref=tuned_checkpoint.model_dump_json(),
-                        policy_generation=(
-                            tuned_checkpoint.step
-                            if tuned_checkpoint.step is not None
-                            else completed
-                        ),
+                        ref=tuned_checkpoint.endpoint,
+                        policy_generation=tuned_checkpoint.step,
                     )
                 elif not (
                     trainer.state.pending_train_op is not None
                     and trainer.state.pending_train_op.skip_weight_sync
                 ):
-                    # No frozen checkpoint, but this was a promotion step
+                    # No checkpoint returned, but this was a promotion step
                     # (`skip_weight_sync=False`): the live policy advanced, so
                     # attribute the sample to the completed train step id via
                     # the live-policy sentinel. (An unknown/cleared pending op,
@@ -590,15 +585,14 @@ class GeminiMsrlTrainer(Trainer):
         return self.state.train_step
 
     async def create_sampler(self, checkpoint: Checkpoint) -> Sampler:
-        # Gemini currently only emits the live-policy sentinel ref, so the
-        # service resolves that to the live trainer and never routes a real
-        # frozen checkpoint here. If/when Gemini publishes an addressable
-        # checkpoint handle, this must load it into a dedicated Gemini serving
-        # client (mirroring TinkerSampler) rather than sampling the live policy
-        # -- so fail loudly instead of silently scoring the wrong weights.
+        # Gemini checkpoint refs are deployed endpoint resource names. Loading
+        # and sampling from those endpoints needs a dedicated Gemini sampler
+        # client (mirroring TinkerSampler) rather than routing to the live
+        # tuning job, so fail loudly instead of silently scoring the wrong
+        # weights until that path is implemented.
         raise NotImplementedError(
             "GeminiMsrlTrainer.create_sampler: frozen-checkpoint sampling is "
-            "not implemented; a real checkpoint ref must be loaded by a Gemini "
+            "not implemented; endpoint refs must be loaded by a Gemini "
             f"serving client (got ref={checkpoint.ref!r})."
         )
 

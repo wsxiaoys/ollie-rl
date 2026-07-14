@@ -34,7 +34,7 @@ class LifecycleMixin(TunerServiceBase):
         two sets overlap (the single source of truth for this validation; the
         API layer maps it to a 400).
         """
-        assert Cookbook.has(recipe)
+        recipe_config = Cookbook.get(recipe)
         eval_datum_ids = eval_datum_ids or []
         if not train_datum_ids:
             raise ValueError("train_datum_ids must be non-empty")
@@ -42,6 +42,15 @@ class LifecycleMixin(TunerServiceBase):
         if overlap:
             raise ValueError(f"train/eval datum ids overlap: {sorted(overlap)}")
         factory = trainer_factory.get(trainer)  # validate now, fail fast
+
+        if trainer == "gemini_msrl":
+            # Gemini checkpoint materialization is configured at tuning-job
+            # creation time. Align it with the recipe's sampler-promotion
+            # cadence so promotion steps are also checkpoint-producing steps.
+            trainer_params = dict(trainer_params or {})
+            trainer_params.setdefault(
+                "checkpoint_interval", recipe_config.sampler_promotion_every
+            )
 
         # Accepted limitation (non-atomic creation): the tuner row is committed
         # with `trainer_state=None` here, then `factory.create(...)` below

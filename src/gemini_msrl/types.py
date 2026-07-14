@@ -199,10 +199,17 @@ class TunedModelCheckpoint(BaseModelConfig):
     # Flexible container for TunedModelCheckpoint fields
     model_config = ConfigDict(extra="allow")
 
+    # The ID of the checkpoint.
+    checkpoint_id: str
+    # The epoch of the checkpoint.
+    epoch: int
     # The training step this checkpoint was produced at. Used as the
     # checkpoint's `policy_generation`. Vertex serializes int64 as a string,
     # so accept both and coerce to int.
-    step: Optional[int] = None
+    step: int
+    # Endpoint resource name that the checkpoint is deployed to. Ollie persists
+    # this as the checkpoint ref used for frozen/eval sampling.
+    endpoint: str
 
 
 class TrainStepMetric(BaseModelConfig):
