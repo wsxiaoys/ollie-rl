@@ -160,6 +160,25 @@ class GenerateContentTuningScopeResponse(BaseModelConfig):
     train_step_id: str
 
 
+class EndpointGenerateContentResponse(BaseModelConfig):
+    # Standard endpoint :generateContent returns list-style candidates and may
+    # drift independently from the MSRL tuning-scope wrapper. Keep parsing
+    # permissive while preserving the fields used by the trainer conversion.
+    model_config = ConfigDict(
+        alias_generator=alias_generators.to_camel,
+        populate_by_name=True,
+        from_attributes=True,
+        protected_namespaces=(),
+        extra="allow",
+        arbitrary_types_allowed=True,
+        ser_json_bytes="base64",
+        val_json_bytes="base64",
+        ignored_types=(TypeVar,),
+    )
+    candidates: List[Candidate] = Field(default_factory=list)
+    usage_metadata: Optional[UsageMetadata] = None
+
+
 # --- TrainStep Models ---
 
 

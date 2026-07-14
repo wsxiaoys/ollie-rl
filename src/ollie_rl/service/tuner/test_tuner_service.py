@@ -247,7 +247,7 @@ class TestCreateTuner(TunerServiceTestCase):
         self.assertIn(tuner_id, self.service.active_trainers)
 
     async def test_unknown_recipe_raises(self):
-        with self.assertRaises(AssertionError):
+        with self.assertRaises(ValueError):
             await self.service.create_tuner(
                 recipe="nonexistent_recipe",
                 name="bad",
