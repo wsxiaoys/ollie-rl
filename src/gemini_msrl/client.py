@@ -8,7 +8,9 @@ from typing import Any, Dict, Optional, Protocol, Union
 import httpx
 
 from .types import (
+    ContentGenerationParameters,
     CreateTuningJobRequest,
+    EndpointGenerateContentResponse,
     GenerateContentTuningScopeRequest,
     Operation,
     TrainStepRequest,
@@ -394,6 +396,34 @@ class GeminiMsrlClient:
 
         response_data = await self._request("POST", path, json_data=json_data)
         return Operation.model_validate(response_data)
+
+    async def generate_content_endpoint(
+        self,
+        endpoint_name: str,
+        request: Union[ContentGenerationParameters, Dict[str, Any]],
+    ) -> EndpointGenerateContentResponse:
+        """
+        Performs standard content generation against a deployed endpoint.
+
+        Path: POST /v1beta1/{endpoint=projects/*/locations/*/endpoints/*}:generateContent
+        """
+        path = endpoint_name.lstrip("/")
+        if not path.startswith("v1beta1/"):
+            path = f"v1beta1/{path}"
+        if not path.endswith(":generateContent"):
+            path += ":generateContent"
+
+        if isinstance(request, ContentGenerationParameters):
+            # Standard endpoint generation accepts the generate-content body
+            # directly, not the MSRL tuning-scope wrapper.
+            json_data = request.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        else:
+            json_data = request
+
+        response_data = await self._request("POST", path, json_data=json_data)
+        return EndpointGenerateContentResponse.model_validate(response_data)
 
     # --- Operation & Polling Helpers ---
 
