@@ -124,11 +124,11 @@ help = "Stop the Docker compose stack."
 cmd = "docker compose -f deploy/docker-compose.yaml down"
 
 [tool.pytest.ini_options]
-# Only collect the real test suite under src/. The Harbor task fixtures in
-# examples/code-contests/tasks/*/tests/ reuse the same basename (test_state.py)
-# without package markers, which otherwise trips pytest's import-mode collision
-# check ("import file mismatch").
+# Only collect the real test suite under src/. Files under testdata are Harbor
+# task fixtures that must run inside their provisioned environments, not on the
+# host as part of this project's pytest suite.
 testpaths = ["src"]
+norecursedirs = ["testdata"]
 
 [tool.pytest_env]
 DATABASE_URL = "sqlite+aiosqlite:///:memory:"

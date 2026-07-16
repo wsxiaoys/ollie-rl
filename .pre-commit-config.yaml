@@ -6,6 +6,8 @@
 # Fast checks (ruff, whitespace) run on every commit so PRs arrive clean.
 # Slow checks (ty, pytest, full format) run on push so iteration stays fast.
 
+exclude: (^|/)testdata/
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
