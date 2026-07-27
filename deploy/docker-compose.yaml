@@ -2,7 +2,8 @@
 #
 # This mirrors the Railway "production" environment, which runs the app
 # against a managed Postgres service (not SQLite) and authenticates to the
-# Gemini MSRL forwarder via an HTTP token endpoint (GEMINI_MSRL_TOKEN_URL).
+# Gemini MSRL forwarder through the trusted HTTP token broker compatibility
+# path (GEMINI_MSRL_TOKEN_URL).
 #
 # Image is published at:
 #   https://github.com/wsxiaoys/ollie-rl/pkgs/container/ollie-rl
@@ -28,8 +29,9 @@ services:
       # which uses postgresql+asyncpg against its managed Postgres instance).
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prod}
       # Gemini MSRL cookbook configuration (override in your .env file).
-      # Tokens are fetched over HTTP from GEMINI_MSRL_TOKEN_URL, so no static
-      # auth token / env file is required.
+      # This deployment uses a trusted token broker for compatibility. Direct
+      # Google API deployments can instead use ADC through an attached service
+      # account, workload identity, or a securely mounted credential file.
       GEMINI_MSRL_BASE_URL: ${GEMINI_MSRL_BASE_URL}
       GEMINI_MSRL_PROJECT_ID: ${GEMINI_MSRL_PROJECT_ID}
       GEMINI_MSRL_TOKEN_URL: ${GEMINI_MSRL_TOKEN_URL}

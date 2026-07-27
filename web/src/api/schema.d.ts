@@ -1264,6 +1264,11 @@ export interface components {
              */
             max_off_policy_generation: number;
             /**
+             * Sampler Promotion Every
+             * @default 4
+             */
+            sampler_promotion_every: number;
+            /**
              * Eval Group Size
              * @default 4
              */

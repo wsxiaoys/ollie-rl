@@ -48,10 +48,6 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
             config_kwargs.update(trainer_params)
 
         config = GeminiMsrlTrainerConfig(**config_kwargs)
-        # If GEMINI_MSRL_ENV_FILE is set, the client will re-read the auth
-        # token from that file (by mtime) on every outgoing request. This lets
-        # us refresh tokens externally (e.g. `gcloud auth application-default
-        # print-access-token > .env`) without restarting the server.
         client = _create_client()
 
         # Bootstrap path: create a fresh tuning job and persist its name.
@@ -110,11 +106,6 @@ class GeminiMsrlTrainerFactory(TrainerFactory):
 
         state = GeminiMsrlTrainerState.model_validate_json(raw_state)
         config = state.config
-
-        # If GEMINI_MSRL_ENV_FILE is set, the client will re-read the auth
-        # token from that file (by mtime) on every outgoing request. This lets
-        # us refresh tokens externally (e.g. `gcloud auth application-default
-        # print-access-token > .env`) without restarting the server.
         client = _create_client()
 
         logger.info(

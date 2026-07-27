@@ -187,6 +187,56 @@ src/ollie_rl/
 |---|---|---|
 | `DATABASE_URL` | `sqlite+aiosqlite:///./data/db.sqlite` | SQLAlchemy async URL. Switch to `postgresql+asyncpg://...` for prod. |
 
+### Gemini MSRL authentication
+
+`GeminiMsrlClient` calls the Google API directly and resolves authentication in
+this order:
+
+1. An explicitly supplied `token_source`.
+2. The trusted custom broker configured by `GEMINI_MSRL_TOKEN_URL`.
+3. Google Application Default Credentials (ADC).
+
+ADC produces short-lived OAuth access tokens with the Google Cloud Platform
+scope. It supports local developer credentials, `GOOGLE_APPLICATION_CREDENTIALS`,
+attached service accounts, and workload identity without treating the API URL as
+an ID-token audience.
+
+For local development, either run:
+
+```bash
+gcloud auth application-default login
+```
+
+or point ADC at a service-account JSON file:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/secure/path/service-account.json
+```
+
+An explicit source can also be injected:
+
+```python
+import os
+
+from gemini_msrl import GeminiMsrlClient, GoogleAuthTokenSource
+
+token_source = GoogleAuthTokenSource.from_service_account_file(
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+)
+client = GeminiMsrlClient(token_source=token_source)
+```
+
+A service-account JSON file contains a long-lived private key. Store it in a
+secret manager, mount it read-only with restrictive permissions, use a
+least-privilege account, and rotate it regularly. Never commit it, bake it into
+an image, or expose its contents or generated tokens in logs. Prefer an attached
+service account or workload identity for production. The HTTP broker must
+likewise be a trusted HTTPS endpoint with constrained network access.
+
+The old `GEMINI_MSRL_ENV_FILE` / `GEMINI_MSRL_AUTH_TOKEN` mechanism is no longer
+supported. Migrate those deployments to ADC or the retained HTTP broker before
+upgrading.
+
 ## Status & Roadmap
 
 `ollie-rl` is **pre-1.0 / experimental**. The HTTP surface is intentionally

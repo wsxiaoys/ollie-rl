@@ -291,10 +291,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         with (
             patch.dict(
                 "os.environ",
-                {
-                    "GEMINI_MSRL_AUTH_TOKEN": "dummy-auth-token",
-                    "GEMINI_MSRL_PROJECT_ID": "dummy-project-id",
-                },
+                {"GEMINI_MSRL_PROJECT_ID": "dummy-project-id"},
             ),
             patch("ollie_rl.trainer.gemini_msrl.GeminiMsrlClient") as mock_client_class,
         ):
@@ -322,10 +319,7 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         with (
             patch.dict(
                 "os.environ",
-                {
-                    "GEMINI_MSRL_AUTH_TOKEN": "dummy-auth-token",
-                    "GEMINI_MSRL_PROJECT_ID": "dummy-project-id",
-                },
+                {"GEMINI_MSRL_PROJECT_ID": "dummy-project-id"},
             ),
             patch("ollie_rl.trainer.gemini_msrl.GeminiMsrlClient") as mock_client_class,
         ):

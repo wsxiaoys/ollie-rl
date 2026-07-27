@@ -81,13 +81,9 @@ class TestJustBashEnvironmentTrial(unittest.IsolatedAsyncioTestCase):
         if shutil.which("pnpm") is None:
             self.skipTest("pnpm is not installed")
         if not (ollie_dir / "package.json").is_file():
-            self.skipTest(
-                "Ollie checkout not found; set OLLIE_SANDBOX_DIR to its root"
-            )
+            self.skipTest("Ollie checkout not found; set OLLIE_SANDBOX_DIR to its root")
 
-        workspace_dir = Path(
-            tempfile.mkdtemp(prefix="ollie-sandbox-", dir="/tmp")
-        )
+        workspace_dir = Path(tempfile.mkdtemp(prefix="ollie-sandbox-", dir="/tmp"))
         trials_dir = workspace_dir / "trials"
         trial_name = "real-just-bash-code-contest-test"
         trial_dir = trials_dir / trial_name
