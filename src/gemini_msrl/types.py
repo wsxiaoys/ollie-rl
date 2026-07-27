@@ -230,11 +230,12 @@ class TrainStepCheckpoint(BaseModelConfig):
 
 
 class TrainStepMetric(BaseModelConfig):
-    # Flexible container for metrics returned by TrainStep.
+    # Flexible container for metrics returned by TrainStep. Some Vertex metrics
+    # (for example, the step marker) contain only a name and omit the value.
     model_config = ConfigDict(extra="allow")
 
     metric_name: str
-    value: float
+    value: Optional[float] = None
 
 
 class TrainStepResponse(BaseModelConfig):
