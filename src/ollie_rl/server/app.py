@@ -123,6 +123,7 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
             tuner_id=tuner_id,
             name=request.name,
             recipe=request.recipe,
+            status=await services.tuner.get_tuner_status(tuner_id),
         )
     except HTTPException as e:
         raise e

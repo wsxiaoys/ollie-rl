@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional, Dict, Any
@@ -9,6 +10,18 @@ from openai.types.chat import (
 )
 
 from ollie_rl.cookbook import Recipe
+
+
+class TunerStatus(str, Enum):
+    """Dynamic lifecycle status of a tuner's backend training resource.
+
+    The value is deliberately not persisted: each trainer maps its backend's
+    authoritative state into this small service-level lifecycle.
+    """
+
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    CANCELLED = "CANCELLED"
 
 
 class ChatCompletionRequest(BaseModel):
@@ -37,6 +50,7 @@ class CreateTunerResponse(BaseModel):
     tuner_id: str
     name: str
     recipe: str
+    status: TunerStatus
 
 
 class PutRewardRequest(BaseModel):
@@ -208,6 +222,7 @@ class GetTunerResponse(BaseModel):
     name: str
     recipe: Recipe
     trainer: str
+    status: TunerStatus
     policy_generation: int
     trainer_state: Optional[Any] = None
     # Optional progress snapshots, each populated only when requested via the
@@ -228,6 +243,7 @@ class TunerItem(BaseModel):
     tuner_id: str
     name: str
     trainer: str
+    status: TunerStatus
     policy_generation: int
 
 

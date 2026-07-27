@@ -808,6 +808,7 @@ export interface components {
             name: string;
             /** Recipe */
             recipe: string;
+            status: components["schemas"]["TunerStatus"];
         };
         /**
          * Custom
@@ -1003,6 +1004,7 @@ export interface components {
             recipe: components["schemas"]["Recipe"];
             /** Trainer */
             trainer: string;
+            status: components["schemas"]["TunerStatus"];
             /** Policy Generation */
             policy_generation: number;
             /** Trainer State */
@@ -1423,6 +1425,7 @@ export interface components {
             name: string;
             /** Trainer */
             trainer: string;
+            status: components["schemas"]["TunerStatus"];
             /** Policy Generation */
             policy_generation: number;
         };
@@ -1438,6 +1441,15 @@ export interface components {
             train?: components["schemas"]["TrainingProgress"] | null;
             eval?: components["schemas"]["EvalProgress"] | null;
         };
+        /**
+         * TunerStatus
+         * @description Dynamic lifecycle status of a tuner's backend training resource.
+         *
+         *     The value is deliberately not persisted: each trainer maps its backend's
+         *     authoritative state into this small service-level lifecycle.
+         * @enum {string}
+         */
+        TunerStatus: "PENDING" | "IN_PROGRESS" | "CANCELLED";
         /** ValidationError */
         ValidationError: {
             /** Location */

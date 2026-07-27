@@ -33,6 +33,7 @@ from ollie_rl.service.tuner.locks import KeyedLocks
 from ollie_rl.service.tuner.state_store import DbStateStore
 from ollie_rl.trainer import Trainer
 from ollie_rl.trainer import factory as trainer_factory
+from ollie_rl.types import TunerStatus
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,11 @@ class TunerServiceBase:
     @property
     def async_session(self):
         return get_sessionmaker()
+
+    async def get_tuner_status(self, tuner_id: str) -> TunerStatus:
+        """Return the tuner's dynamic, backend-derived lifecycle status."""
+        trainer = await self._get_trainer(tuner_id)
+        return await trainer.get_status()
 
     async def _get_trainer(self, tuner_id: str) -> Trainer:
         """

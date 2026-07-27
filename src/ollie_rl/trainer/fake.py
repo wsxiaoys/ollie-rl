@@ -5,7 +5,7 @@ from typing import List, Optional
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 
-from ollie_rl.types import ChatCompletionRequest
+from ollie_rl.types import ChatCompletionRequest, TunerStatus
 from ollie_rl.trainer.types import (
     LIVE_POLICY_CHECKPOINT,
     Checkpoint,
@@ -60,6 +60,9 @@ class FakeTrainer(Trainer):
     @property
     def policy_generation(self) -> int:
         return self._train_step
+
+    async def get_status(self) -> TunerStatus:
+        return TunerStatus.IN_PROGRESS
 
     async def sample(
         self,

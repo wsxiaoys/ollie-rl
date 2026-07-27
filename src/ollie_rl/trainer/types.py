@@ -3,7 +3,7 @@ from typing import Generic, List, Optional, Protocol, TypeVar
 from pydantic import BaseModel
 from openai.types.chat import ChatCompletion
 
-from ollie_rl.types import ChatCompletionRequest
+from ollie_rl.types import ChatCompletionRequest, TunerStatus
 
 T = TypeVar("T")
 
@@ -126,6 +126,15 @@ class Trainer(Sampler):
     @property
     @abstractmethod
     def policy_generation(self) -> int: ...
+
+    async def get_status(self) -> TunerStatus:
+        """Return the backend resource's dynamic lifecycle status.
+
+        Trainers whose factories return only after the backend is usable can
+        inherit this default. Backends with asynchronous provisioning or a
+        remote terminal state should override it with an authoritative mapping.
+        """
+        return TunerStatus.IN_PROGRESS
 
     @abstractmethod
     async def sample(

@@ -20,7 +20,7 @@ import tinker
 from tinker_cookbook.model_info import get_recommended_renderer_name
 from tinker_cookbook.renderers import get_renderer, Message
 
-from ollie_rl.types import ChatCompletionRequest
+from ollie_rl.types import ChatCompletionRequest, TunerStatus
 from ollie_rl.trainer.types import (
     Checkpoint,
     Trainer,
@@ -366,6 +366,21 @@ class TinkerTrainer(Trainer):
     @property
     def policy_generation(self) -> int:
         return self.state.train_step
+
+    async def get_status(self) -> TunerStatus:
+        """Map Tinker's authoritative training-run health to tuner lifecycle.
+
+        The current Tinker API exposes whether a run is corrupted rather than
+        a richer lifecycle enum. A healthy, addressable run is in progress; a
+        corrupted run is terminal.
+        """
+        rest_client = self.service_client.create_rest_client()
+        training_run = await rest_client.get_training_run_async(
+            self._training_client.model_id
+        )
+        return (
+            TunerStatus.CANCELLED if training_run.corrupted else TunerStatus.IN_PROGRESS
+        )
 
     async def pending_train_op(self) -> Optional[TrainOp]:
         """The in-flight train op, if a train step is currently running.

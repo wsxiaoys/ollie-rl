@@ -225,8 +225,14 @@ async def _request_with_retry(
 async def dispense_run(
     client: httpx.AsyncClient,
     tuner_id: str,
-) -> tuple[str, str] | None:
-    """Return ``(run_id, datum_id)`` or ``None`` when the trainer is busy (204).
+) -> tuple[str, str]:
+    """Wait for and return the next ``(run_id, datum_id)`` assignment.
+
+    ``204 No Content`` means no run can currently be leased. This includes a
+    backend that is still ``PENDING`` as well as an in-progress tuner whose
+    datum groups are temporarily saturated. Honor the server's ``Retry-After``
+    header and retry without starting a Harbor sandbox; only a ``200`` response
+    represents an actual lease.
 
     Datum quarantine (unhealthy-finish-rate / success-rate filtering) is now
     configured on the tuner's recipe (``max_unhealthy_finish_ratio`` /
@@ -237,15 +243,22 @@ async def dispense_run(
     retried with backoff rather than crashing the driver; see
     :func:`_request_with_retry`.
     """
-    resp = await _request_with_retry(
-        f"dispense (tuner {tuner_id})",
-        lambda: client.post(f"/tuners/{tuner_id}/runs"),
-    )
-    if resp.status_code == 204:
-        return None
-    resp.raise_for_status()
-    body = resp.json()
-    return body["run_id"], body["datum_id"]
+    while True:
+        resp = await _request_with_retry(
+            f"dispense (tuner {tuner_id})",
+            lambda: client.post(f"/tuners/{tuner_id}/runs"),
+        )
+        if resp.status_code == 204:
+            try:
+                retry_after = max(0.0, float(resp.headers.get("Retry-After", "1")))
+            except ValueError:
+                retry_after = 1.0
+            await asyncio.sleep(retry_after)
+            continue
+
+        resp.raise_for_status()
+        body = resp.json()
+        return body["run_id"], body["datum_id"]
 
 
 async def submit_reward(
@@ -435,13 +448,10 @@ async def worker(
         except asyncio.QueueEmpty:
             return
 
-        # Phase 1: dispense a run assignment (204 => training barrier, back off).
-        assignment: tuple[str, str] | None = None
-        while assignment is None:
-            assignment = await dispense_run(client, tuner_id)
-            if assignment is None:
-                await asyncio.sleep(1.0)
-        run_id, datum_id = assignment
+        # Phase 1: wait for a run assignment. The helper handles 204 responses
+        # (including a backend that is still provisioning) and only returns
+        # after the server has created a real lease, so no sandbox starts early.
+        run_id, datum_id = await dispense_run(client, tuner_id)
 
         # Phase 2: execute the containerized Harbor trial.
         try:

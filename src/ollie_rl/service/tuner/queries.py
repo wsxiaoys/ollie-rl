@@ -200,6 +200,7 @@ class QueryMixin(TunerServiceBase):
             raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
 
         trainer = await self._get_trainer(tuner_id)
+        status = await trainer.get_status()
         policy_generation = trainer.policy_generation
 
         state_data = None
@@ -219,6 +220,7 @@ class QueryMixin(TunerServiceBase):
             name=record.name,
             recipe=Cookbook.get(record.recipe),
             trainer=record.trainer,
+            status=status,
             policy_generation=policy_generation,
             trainer_state=state_data,
             progress=tuner_progress,
@@ -493,6 +495,7 @@ class QueryMixin(TunerServiceBase):
                         tuner_id=record.id,
                         name=record.name,
                         trainer=record.trainer,
+                        status=await trainer.get_status(),
                         policy_generation=trainer.policy_generation,
                     )
                 )

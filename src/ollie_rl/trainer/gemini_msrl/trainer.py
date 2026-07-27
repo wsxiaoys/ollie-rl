@@ -20,7 +20,7 @@ from ollie_rl.trainer.types import (
     StateStore,
     Trainer,
 )
-from ollie_rl.types import ChatCompletionRequest
+from ollie_rl.types import ChatCompletionRequest, TunerStatus
 
 from .conversion import build_content_generation_parameters
 from .ops import GeminiMsrlSamplingOp, GeminiMsrlTrainOp
@@ -60,6 +60,29 @@ class GeminiMsrlTrainer(Trainer):
         # time, so we don't block create()/restore() on it; instead the first
         # operation that needs a running job awaits `_ensure_running()`.
         self._running_ready: Optional[asyncio.Task[None]] = None
+
+    async def get_status(self) -> TunerStatus:
+        """Map the authoritative Gemini tuning-job state to tuner lifecycle."""
+        job = await self.client.get_tuning_job(self.tuning_job_name)
+
+        if job.state == "JOB_STATE_RUNNING":
+            return TunerStatus.IN_PROGRESS
+        if job.state in {
+            "JOB_STATE_FAILED",
+            "JOB_STATE_CANCELLED",
+            "JOB_STATE_PAUSED",
+            "JOB_STATE_SUCCEEDED",
+            "JOB_STATE_PARTIALLY_SUCCEEDED",
+            "JOB_STATE_EXPIRED",
+        }:
+            # The service-level lifecycle has one terminal state. It means the
+            # backend can no longer serve this tuner, whether it was explicitly
+            # cancelled or ended for another terminal reason.
+            return TunerStatus.CANCELLED
+
+        # QUEUED/PENDING/CANCELLING/UPDATING/UNSPECIFIED and future states are
+        # not ready to receive a dispensed run.
+        return TunerStatus.PENDING
 
     async def _ensure_running(self) -> None:
         """Wait (at most once) for the tuning job to enter RUNNING state.

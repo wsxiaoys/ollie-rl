@@ -28,7 +28,7 @@ from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.base import TunerServiceBase
 from ollie_rl.service.tuner.constants import RUN_LEASE_SECONDS
 from ollie_rl.service.tuner.types import SchedulerScores
-from ollie_rl.types import DispenseRun
+from ollie_rl.types import DispenseRun, TunerStatus
 
 
 def scheduler_scores(
@@ -265,8 +265,14 @@ class DispenseMixin(TunerServiceBase):
         an unhealthy finish reason -- and a datum caught by either is excluded.
         The scheduler always uses the two-phase probe gate (see ``pick_datum``).
         """
-        # Ensure trainer is initialized.
-        _trainer = await self._get_trainer(tuner_id)
+        # Do not lease work to an external sandbox until the backend can serve
+        # it. This is a non-blocking readiness gate: a pending/cancelled tuner
+        # follows the existing no-work response path (204 + Retry-After), while
+        # sample/train keep their own final readiness barriers for race safety.
+        trainer = await self._get_trainer(tuner_id)
+        if await trainer.get_status() is not TunerStatus.IN_PROGRESS:
+            return None
+
         recipe = await self._recipe_for(tuner_id)
 
         # Serialize the read-pick-insert sequence: the scheduler decision in
