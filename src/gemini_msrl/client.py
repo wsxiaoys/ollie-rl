@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Self
@@ -67,6 +68,20 @@ class GeminiMsrlClient:
             broker_source = _HttpTokenSource(token_url)
             self._token_source = broker_source
             self._owned_token_source = broker_source
+        elif credentials_json := os.environ.get("GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON"):
+            try:
+                credentials_info = json.loads(credentials_json)
+            except json.JSONDecodeError:
+                raise ValueError(
+                    "GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON must contain valid JSON"
+                ) from None
+            if not isinstance(credentials_info, dict):
+                raise ValueError(
+                    "GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON must contain a JSON object"
+                )
+            self._token_source = GoogleAuthTokenSource.from_service_account_info(
+                credentials_info
+            )
         else:
             self._token_source = GoogleAuthTokenSource.default()
 

@@ -4,9 +4,9 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import google.auth
 import httpx
@@ -91,6 +91,27 @@ class GoogleAuthTokenSource:
 
         return cls(load)
 
+    @classmethod
+    def from_service_account_info(
+        cls,
+        info: Mapping[str, Any],
+        *,
+        scopes: Sequence[str] = (GOOGLE_CLOUD_PLATFORM_SCOPE,),
+    ) -> GoogleAuthTokenSource:
+        """Create a source backed by an in-memory service-account object."""
+        credential_info = dict(info)
+        if not credential_info:
+            raise ValueError("Service-account credential information must not be empty")
+        normalized_scopes = cls._normalize_scopes(scopes)
+
+        def load() -> Credentials:
+            return ServiceAccountCredentials.from_service_account_info(
+                credential_info,
+                scopes=normalized_scopes,
+            )
+
+        return cls(load)
+
     @staticmethod
     def _refresh(credentials: Credentials) -> None:
         credentials.refresh(Request())
@@ -120,7 +141,7 @@ class GoogleAuthTokenSource:
                 await asyncio.to_thread(self._refresh, self._credentials)
             except Exception as exc:
                 raise GeminiMsrlAuthError(
-                    "Failed to load or refresh Google Application Default Credentials"
+                    "Failed to load or refresh Google credentials"
                 ) from exc
 
             token = self._valid_token(self._credentials)

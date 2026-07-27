@@ -39,6 +39,36 @@ class TestGoogleAuthTokenSource(unittest.IsolatedAsyncioTestCase):
         )
         credentials.refresh.assert_called_once()
 
+    async def test_service_account_info_loads_lazily(self):
+        credentials = MagicMock()
+        credentials.valid = False
+        credentials.token = None
+
+        def refresh(_request):
+            credentials.token = "info-access-token"
+            credentials.valid = True
+
+        credentials.refresh.side_effect = refresh
+        info = {
+            "type": "service_account",
+            "client_email": "ollie-msrl-dev@example.invalid",
+            "private_key": "secret-key",
+        }
+
+        with patch(
+            "gemini_msrl.auth.ServiceAccountCredentials.from_service_account_info",
+            return_value=credentials,
+        ) as load:
+            source = GoogleAuthTokenSource.from_service_account_info(info)
+            load.assert_not_called()
+            self.assertEqual(await source.get_token(), "info-access-token")
+
+        load.assert_called_once_with(
+            info,
+            scopes=("https://www.googleapis.com/auth/cloud-platform",),
+        )
+        credentials.refresh.assert_called_once()
+
     async def test_default_uses_application_default_credentials(self):
         credentials = MagicMock()
         credentials.valid = False

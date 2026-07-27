@@ -32,9 +32,8 @@ services:
       # This deployment uses a trusted token broker for compatibility. Direct
       # Google API deployments can instead use ADC through an attached service
       # account, workload identity, or a securely mounted credential file.
-      GEMINI_MSRL_BASE_URL: ${GEMINI_MSRL_BASE_URL}
       GEMINI_MSRL_PROJECT_ID: ${GEMINI_MSRL_PROJECT_ID}
-      GEMINI_MSRL_TOKEN_URL: ${GEMINI_MSRL_TOKEN_URL}
+      GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON: ${GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/docs').status < 500 else 1)\""]
       interval: 30s

@@ -52,6 +52,49 @@ class TestGeminiMsrlClient(unittest.IsolatedAsyncioTestCase):
             "https://us-central1-aiplatform.googleapis.com",
         )
 
+    def test_init_uses_inline_service_account_json(self):
+        credentials_json = (
+            '{"type":"service_account","client_email":"ollie@example.invalid"}'
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GEMINI_MSRL_PROJECT_ID": "env-project",
+                    "GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON": credentials_json,
+                },
+                clear=True,
+            ),
+            patch(
+                "gemini_msrl.client.GoogleAuthTokenSource.from_service_account_info"
+            ) as factory,
+        ):
+            source = FakeTokenSource()
+            factory.return_value = source
+            client = GeminiMsrlClient()
+
+        factory.assert_called_once_with(
+            {
+                "type": "service_account",
+                "client_email": "ollie@example.invalid",
+            }
+        )
+        self.assertIs(client._token_source, source)
+
+    def test_init_rejects_malformed_inline_credentials(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GEMINI_MSRL_PROJECT_ID": "env-project",
+                    "GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON": "not-json",
+                },
+                clear=True,
+            ),
+            self.assertRaisesRegex(ValueError, "must contain valid JSON"),
+        ):
+            GeminiMsrlClient()
+
     def test_init_uses_application_default_credentials(self):
         with (
             patch.dict(

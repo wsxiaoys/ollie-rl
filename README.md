@@ -194,7 +194,8 @@ this order:
 
 1. An explicitly supplied `token_source`.
 2. The trusted custom broker configured by `GEMINI_MSRL_TOKEN_URL`.
-3. Google Application Default Credentials (ADC).
+3. Inline service-account JSON from `GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON`.
+4. Google Application Default Credentials (ADC).
 
 ADC produces short-lived OAuth access tokens with the Google Cloud Platform
 scope. It supports local developer credentials, `GOOGLE_APPLICATION_CREDENTIALS`,
@@ -212,6 +213,16 @@ or point ADC at a service-account JSON file:
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/secure/path/service-account.json
 ```
+
+For platforms such as Railway where mounting a credential file is inconvenient,
+store the minified JSON as a secret variable instead:
+
+```bash
+export GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON="$(jq -c . /secure/path/service-account.json)"
+```
+
+The JSON is parsed in memory and is not written to the container filesystem.
+Treat this variable as a secret and never expose it in logs or deployment output.
 
 An explicit source can also be injected:
 
@@ -234,8 +245,8 @@ service account or workload identity for production. The HTTP broker must
 likewise be a trusted HTTPS endpoint with constrained network access.
 
 The old `GEMINI_MSRL_ENV_FILE` / `GEMINI_MSRL_AUTH_TOKEN` mechanism is no longer
-supported. Migrate those deployments to ADC or the retained HTTP broker before
-upgrading.
+supported. Migrate those deployments to inline credentials, ADC, or the retained
+HTTP broker before upgrading.
 
 ## Status & Roadmap
 
