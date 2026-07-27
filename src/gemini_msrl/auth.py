@@ -152,6 +152,68 @@ class GoogleAuthTokenSource:
             return token
 
 
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """Parse the simple KEY=VALUE format used by token refresh scripts."""
+    values: dict[str, str] = {}
+    try:
+        with path.open() as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                values[key.strip()] = value
+    except FileNotFoundError:
+        pass
+    return values
+
+
+class _EnvFileTokenSource:
+    """Token source that reloads a token when its environment file changes."""
+
+    def __init__(self, env_path: str, key: str):
+        self._path = Path(env_path)
+        self._key = key
+        self._cached_token: str | None = None
+        self._cached_mtime_ns: int | None = None
+        self._lock = asyncio.Lock()
+
+    async def get_token(self, *, force_refresh: bool = False) -> str:
+        async with self._lock:
+            try:
+                mtime_ns = self._path.stat().st_mtime_ns
+            except FileNotFoundError:
+                mtime_ns = None
+
+            if force_refresh or mtime_ns != self._cached_mtime_ns:
+                values = _parse_env_file(self._path)
+                token = values.get(self._key)
+                if token:
+                    if token != self._cached_token:
+                        logger.info(
+                            "GeminiMsrlClient: refreshed %s from %s",
+                            self._key,
+                            self._path,
+                        )
+                    self._cached_token = token
+                elif self._cached_token is not None:
+                    logger.warning(
+                        "GeminiMsrlClient: %s not present in %s; keeping cached token",
+                        self._key,
+                        self._path,
+                    )
+                self._cached_mtime_ns = mtime_ns
+
+            if self._cached_token is None:
+                raise GeminiMsrlAuthError(
+                    f"{self._key} not found in environment file {self._path}"
+                )
+            return self._cached_token
+
+
 class _HttpTokenSource:
     """Compatibility token source backed by a trusted HTTP token broker."""
 

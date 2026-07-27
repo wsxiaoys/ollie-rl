@@ -194,8 +194,14 @@ this order:
 
 1. An explicitly supplied `token_source`.
 2. The trusted custom broker configured by `GEMINI_MSRL_TOKEN_URL`.
-3. Inline service-account JSON from `GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON`.
-4. Google Application Default Credentials (ADC).
+3. A rotating access token in the file configured by `GEMINI_MSRL_ENV_FILE`.
+4. Inline service-account JSON from `GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON`.
+5. Google Application Default Credentials (ADC).
+
+The environment file must contain `GEMINI_MSRL_AUTH_TOKEN=...`. It is re-read
+when its modification time changes, allowing an external token refresher to
+rotate credentials without restarting the server. The broker takes precedence
+when both `GEMINI_MSRL_TOKEN_URL` and `GEMINI_MSRL_ENV_FILE` are configured.
 
 ADC produces short-lived OAuth access tokens with the Google Cloud Platform
 scope. It supports local developer credentials, `GOOGLE_APPLICATION_CREDENTIALS`,
@@ -241,12 +247,8 @@ A service-account JSON file contains a long-lived private key. Store it in a
 secret manager, mount it read-only with restrictive permissions, use a
 least-privilege account, and rotate it regularly. Never commit it, bake it into
 an image, or expose its contents or generated tokens in logs. Prefer an attached
-service account or workload identity for production. The HTTP broker must
-likewise be a trusted HTTPS endpoint with constrained network access.
-
-The old `GEMINI_MSRL_ENV_FILE` / `GEMINI_MSRL_AUTH_TOKEN` mechanism is no longer
-supported. Migrate those deployments to inline credentials, ADC, or the retained
-HTTP broker before upgrading.
+service account or workload identity for production. The HTTP broker and token
+environment file must likewise be secured with constrained access.
 
 ## Status & Roadmap
 

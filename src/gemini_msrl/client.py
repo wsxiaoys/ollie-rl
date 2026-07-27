@@ -10,6 +10,7 @@ from .auth import (
     GeminiMsrlError,
     GoogleAuthTokenSource,
     TokenSource,
+    _EnvFileTokenSource,
     _HttpTokenSource,
 )
 from .types import (
@@ -68,6 +69,11 @@ class GeminiMsrlClient:
             broker_source = _HttpTokenSource(token_url)
             self._token_source = broker_source
             self._owned_token_source = broker_source
+        elif env_file := os.environ.get("GEMINI_MSRL_ENV_FILE"):
+            self._token_source = _EnvFileTokenSource(
+                env_file,
+                "GEMINI_MSRL_AUTH_TOKEN",
+            )
         elif credentials_json := os.environ.get("GEMINI_MSRL_GOOGLE_CREDENTIALS_JSON"):
             try:
                 credentials_info = json.loads(credentials_json)

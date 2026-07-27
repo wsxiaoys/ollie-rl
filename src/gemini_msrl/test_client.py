@@ -1,10 +1,12 @@
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 
 from gemini_msrl import GeminiMsrlClient, GeminiMsrlHttpError
+from gemini_msrl.auth import _EnvFileTokenSource
 
 
 class FakeTokenSource:
@@ -145,25 +147,23 @@ class TestGeminiMsrlClient(unittest.IsolatedAsyncioTestCase):
         self.assertIs(client._token_source, source)
         factory.assert_called_once_with()
 
-    def test_removed_env_file_auth_does_not_override_adc(self):
+    def test_init_uses_env_file_token_source_before_adc(self):
         with (
             patch.dict(
                 os.environ,
                 {
                     "GEMINI_MSRL_PROJECT_ID": "env-project",
-                    "GEMINI_MSRL_ENV_FILE": "/tmp/legacy.env",
-                    "GEMINI_MSRL_AUTH_TOKEN": "legacy-token",
+                    "GEMINI_MSRL_ENV_FILE": "/tmp/token.env",
                 },
                 clear=True,
             ),
             patch("gemini_msrl.client.GoogleAuthTokenSource.default") as factory,
         ):
-            source = FakeTokenSource()
-            factory.return_value = source
             client = GeminiMsrlClient()
 
-        self.assertIs(client._token_source, source)
-        factory.assert_called_once_with()
+        assert isinstance(client._token_source, _EnvFileTokenSource)
+        self.assertEqual(client._token_source._path, Path("/tmp/token.env"))
+        factory.assert_not_called()
 
     def test_init_missing_project_id_raises_error(self):
         with (
