@@ -61,6 +61,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",
     "pytest-env>=1.6.0",
+    "ruff==0.16.0",
     "ty>=0.0.52",
     "uvicorn>=0.49.0",
 ]
@@ -106,11 +107,11 @@ cmd = "uv run alembic revision --autogenerate"
 
 [tool.poe.tasks.lint]
 help = "Lint with ruff (no autofix)."
-cmd = "uvx ruff check ."
+cmd = "uv run ruff check . --select F401"
 
 [tool.poe.tasks.format]
 help = "Autofix lint + format the codebase."
-shell = "uvx ruff check . --select F401 --output-format concise --fix && uv format"
+shell = "uv run ruff check . --select F401 --output-format concise --fix && uv format"
 
 [tool.poe.tasks.docker-build]
 help = "Build the Docker image locally."

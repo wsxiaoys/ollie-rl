@@ -31,7 +31,7 @@ jobs:
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Ruff check
-        run: uvx ruff check . --output-format=github
+        run: uv run poe lint
 
       - name: Format check
         run: uv format --check
