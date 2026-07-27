@@ -13,6 +13,7 @@ import type { components } from "./schema";
 type Schemas = components["schemas"];
 
 export type TunerItem = Schemas["TunerItem"];
+export type TunerStatus = TunerItem["status"];
 export type ListTunersResponse = Schemas["ListTunersResponse"];
 export type ListDatumsResponse = Schemas["ListDatumsResponse"];
 export type Recipe = Schemas["Recipe"];

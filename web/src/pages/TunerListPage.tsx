@@ -1,7 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { tunersQuery } from "../api/queries";
+import type { TunerStatus } from "../api/types";
 import { Badge, Mono } from "../components/ui";
+
+const STATUS_TONE: Record<
+  TunerStatus,
+  "good" | "warn" | "danger"
+> = {
+  PENDING: "warn",
+  IN_PROGRESS: "good",
+  CANCELLED: "danger",
+};
+
+function formatStatus(status: TunerStatus): string {
+  return status.toLowerCase().replaceAll("_", " ");
+}
 
 export function TunerListPage() {
   const { data, isLoading, isError, error } = useQuery(tunersQuery);
@@ -35,6 +49,7 @@ export function TunerListPage() {
             <tr>
               <th>Name</th>
               <th>Tuner ID</th>
+              <th>Status</th>
               <th>Trainer</th>
               <th className="num">Policy gen</th>
             </tr>
@@ -53,6 +68,11 @@ export function TunerListPage() {
                 </td>
                 <td>
                   <Mono>{t.tuner_id}</Mono>
+                </td>
+                <td>
+                  <Badge tone={STATUS_TONE[t.status]}>
+                    {formatStatus(t.status)}
+                  </Badge>
                 </td>
                 <td>
                   <Badge tone="info">{t.trainer}</Badge>
