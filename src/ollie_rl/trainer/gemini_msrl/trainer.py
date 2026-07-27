@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import List, Optional
 
-from gemini_msrl import GeminiMsrlClient
+from gemini_msrl import GeminiMsrlClient, GeminiMsrlHttpError
 from gemini_msrl.types import (
     GenerateContentTuningScopeRequest,
     ReinforcementTuningTrainingData,
@@ -12,6 +12,7 @@ from gemini_msrl.types import (
     TrainStepRequest,
 )
 
+from ollie_rl.cache import AsyncTTLValue
 from ollie_rl.trainer.types import (
     LIVE_POLICY_CHECKPOINT,
     Checkpoint,
@@ -28,6 +29,11 @@ from .sampler import GeminiMsrlSampler
 from .state import GeminiMsrlTrainerConfig, GeminiMsrlTrainerState, PendingTrainOp
 
 logger = logging.getLogger(__name__)
+
+# Status is queried by run dispensing and dashboard endpoints. A short cache
+# prevents concurrent workers from turning one pending tuner into a burst of
+# Vertex AI resource-management requests.
+STATUS_CACHE_SECONDS = 5.0
 
 
 class GeminiMsrlTrainer(Trainer):
@@ -60,10 +66,33 @@ class GeminiMsrlTrainer(Trainer):
         # time, so we don't block create()/restore() on it; instead the first
         # operation that needs a running job awaits `_ensure_running()`.
         self._running_ready: Optional[asyncio.Task[None]] = None
+        self._status_cache = AsyncTTLValue[TunerStatus](STATUS_CACHE_SECONDS)
 
     async def get_status(self) -> TunerStatus:
-        """Map the authoritative Gemini tuning-job state to tuner lifecycle."""
-        job = await self.client.get_tuning_job(self.tuning_job_name)
+        """Map the Gemini job state to lifecycle without quota-heavy polling.
+
+        The TTL cache collapses concurrent dispense/dashboard refreshes into a
+        single Vertex resource-management request. A rate-limited refresh uses
+        the stale state (or PENDING before the first successful read), which
+        keeps run dispensing on its retryable 204 path instead of returning 500.
+        """
+        return await self._status_cache.get(self._fetch_status)
+
+    async def _fetch_status(self) -> TunerStatus:
+        try:
+            job = await self.client.get_tuning_job(self.tuning_job_name)
+        except GeminiMsrlHttpError as exc:
+            if exc.status_code != 429:
+                raise
+            fallback = self._status_cache.stale_or(TunerStatus.PENDING)
+            logger.warning(
+                "Gemini status refresh was rate-limited for '%s'; using %s",
+                self.tuning_job_name,
+                fallback.value,
+            )
+            # AsyncTTLValue caches this fallback, backing off all callers even
+            # when the first ever status read is rate-limited.
+            return fallback
 
         if job.state == "JOB_STATE_RUNNING":
             return TunerStatus.IN_PROGRESS
