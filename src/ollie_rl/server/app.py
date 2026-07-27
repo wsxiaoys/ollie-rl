@@ -489,15 +489,16 @@ async def dispense_run(
 
     try:
         run_response = await services.tuner.dispense_run(tuner_id)
-        if run_response is None:
-            raise HTTPException(204, headers={"Retry-After": "1"})
-
-        return run_response
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to dispense run for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))
+
+    if run_response is None:
+        raise HTTPException(204, headers={"Retry-After": "1"})
+
+    return run_response
 
 
 @app.put("/tuners/{tuner_id}/runs/{run_id}/reward")
