@@ -43,9 +43,9 @@ class PendingTrainOp(BaseModel):
     # Operation resource name of the in-flight train-step LRO.
     name: str
     # `skip_weight_sync` flag the op was submitted with. Needed so `wait()` can
-    # tell a promotion step that produced no `TunedModelCheckpoint` (attribute
-    # to the completed step id) apart from a non-promotion step (no new
-    # checkpoint at all).
+    # tell a promotion step that produced no checkpoint (attribute to the
+    # completed step id) apart from a non-promotion step (no new checkpoint at
+    # all).
     skip_weight_sync: bool = False
 
 

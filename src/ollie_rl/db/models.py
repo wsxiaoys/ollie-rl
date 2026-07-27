@@ -357,10 +357,10 @@ class CheckpointModel(BaseModel):
 
     The surrogate `id` (a single, globally-unique column) is what `runs`
     reference by FK; the backend's opaque handle lives in the separate `ref`
-    column, which today holds the `LIVE_POLICY_CHECKPOINT` sentinel (gemini's
-    `TunedModelCheckpoint` is null) and later a real handle (Tinker's sampler
-    path). Keeping our internal id off the backend lets `checkpoint_id` be a
-    clean single-column FK.
+    column, which can hold either the `LIVE_POLICY_CHECKPOINT` sentinel when a
+    backend omits a checkpoint or a real endpoint/sampler handle. Keeping our
+    internal id off the backend lets `checkpoint_id` be a clean single-column
+    FK.
     """
 
     __tablename__ = "checkpoints"

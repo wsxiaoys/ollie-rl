@@ -112,7 +112,7 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
         ``TrainStepResponse`` in ``last_train_op`` and clear ``pending_train_op``.
 
         Returns the :class:`Checkpoint` the step produced (using the deployed
-        ``TunedModelCheckpoint.endpoint`` when present, or the live-policy
+        ``TrainStepResponse.checkpoint.endpoint`` when present, or the live-policy
         sentinel for promotion steps that omit a checkpoint), or ``None`` when
         the completed op carried no ``completed_train_step_id``.
 
@@ -188,19 +188,19 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
                         ),
                     )
                 # The completed step yields a checkpoint. When Vertex returns a
-                # `TunedModelCheckpoint`, persist its endpoint resource name as
-                # the checkpoint ref. If this was a promotion step but Gemini
+                # `checkpoint`, persist its endpoint resource name as the
+                # checkpoint ref. If this was a promotion step but Gemini
                 # somehow omits the checkpoint entirely, fall back to the
                 # live-policy sentinel so eval still attributes to the promoted
                 # generation instead of losing the checkpoint.
-                tuned_checkpoint = response.tuned_model_checkpoint
-                if tuned_checkpoint is not None:
+                train_checkpoint = response.checkpoint
+                if train_checkpoint is not None:
                     # Vertex returned an addressable frozen checkpoint: persist
                     # the deployed endpoint as the ref and attribute the sample
                     # to the checkpoint's own required `step`.
                     checkpoint = Checkpoint(
-                        ref=tuned_checkpoint.endpoint,
-                        policy_generation=tuned_checkpoint.step,
+                        ref=train_checkpoint.endpoint,
+                        policy_generation=train_checkpoint.step,
                     )
                 elif not (
                     trainer.state.pending_train_op is not None

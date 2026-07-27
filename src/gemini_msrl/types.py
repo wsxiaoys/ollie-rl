@@ -214,14 +214,12 @@ class CandidateAudit(BaseModelConfig):
     rejected_candidates: Optional[List[RejectedCandidate]] = None
 
 
-class TunedModelCheckpoint(BaseModelConfig):
-    # Flexible container for TunedModelCheckpoint fields
+class TrainStepCheckpoint(BaseModelConfig):
+    # Flexible container for checkpoint fields returned by TrainStep.
     model_config = ConfigDict(extra="allow")
 
     # The ID of the checkpoint.
     checkpoint_id: str
-    # The epoch of the checkpoint.
-    epoch: int
     # The training step this checkpoint was produced at. Used as the
     # checkpoint's `policy_generation`. Vertex serializes int64 as a string,
     # so accept both and coerce to int.
@@ -232,8 +230,11 @@ class TunedModelCheckpoint(BaseModelConfig):
 
 
 class TrainStepMetric(BaseModelConfig):
-    # Flexible container for TrainStepMetric fields
+    # Flexible container for metrics returned by TrainStep.
     model_config = ConfigDict(extra="allow")
+
+    metric_name: str
+    value: float
 
 
 class TrainStepResponse(BaseModelConfig):
@@ -254,8 +255,8 @@ class TrainStepResponse(BaseModelConfig):
     )
     completed_train_step_id: Optional[str] = None
     candidate_audit: Optional[CandidateAudit] = None
-    tuned_model_checkpoint: Optional[TunedModelCheckpoint] = None
-    train_step_metric: Optional[TrainStepMetric] = None
+    checkpoint: Optional[TrainStepCheckpoint] = None
+    metrics: Optional[List[TrainStepMetric]] = None
 
 
 # --- General Operation Model ---

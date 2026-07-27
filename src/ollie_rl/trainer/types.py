@@ -30,9 +30,9 @@ class Sample(BaseModel):
     logprobs: Optional[List[float]] = None
 
 
-# Reserved ref: the step produced no usable frozen checkpoint (e.g. gemini's
-# TunedModelCheckpoint is null), so "sampling this checkpoint" means replay the
-# live policy rather than address frozen weights.
+# Reserved ref: the step produced no usable frozen checkpoint (e.g. Gemini's
+# train-step response omitted `checkpoint`), so "sampling this checkpoint"
+# means replay the live policy rather than address frozen weights.
 LIVE_POLICY_CHECKPOINT = "live"
 
 
