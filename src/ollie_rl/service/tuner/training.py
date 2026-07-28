@@ -5,7 +5,7 @@ import logging
 import math
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from ollie_rl.db import ChatCompletionModel, TunerModel
@@ -213,43 +213,47 @@ class TrainingMixin(TunerServiceBase):
         if not run_records:
             return [], []
 
-        # 1. Retrieve ChatCompletions for all candidate runs to check for staleness.
-        # Only project the columns actually consumed below; skip the large,
-        # blob-heavy `request`/`response` payloads and instead extract the
-        # single needed field (`response['id']`, the backend candidate id) via
-        # a JSON query.
+        # Retrieve only one generation scalar per candidate run for the
+        # staleness check. A run may contain many chat completions, and loading
+        # every completion's token/logprob payload here caused the periodic
+        # train loop to return thousands of rows before it even knew whether a
+        # batch was ready. Use the oldest completion generation so every turn
+        # in an accepted run is within the configured off-policy window.
         candidate_run_ids = [r.id for r in run_records]
         result = await session.execute(
             select(
-                ChatCompletionModel.id,
                 ChatCompletionModel.run_id,
-                ChatCompletionModel.policy_generation,
-                ChatCompletionModel.tokens,
-                ChatCompletionModel.logprobs,
-                ChatCompletionModel.response["id"].as_string().label("candidate_id"),
-            ).where(
+                func.min(ChatCompletionModel.policy_generation).label(
+                    "oldest_policy_generation"
+                ),
+            )
+            .where(
                 ChatCompletionModel.tuner_id == tuner_id,
                 ChatCompletionModel.run_id.in_(candidate_run_ids),
             )
+            .group_by(ChatCompletionModel.run_id)
         )
-        completions = result.all()
-        completion_by_run_id = {c.run_id: c for c in completions if c.run_id}
+        generation_by_run_id = {
+            row.run_id: row.oldest_policy_generation
+            for row in result.all()
+            if row.run_id
+        }
 
-        # 2. Filter out stale runs and requeue them (mark them as rejected)
+        # Filter out stale runs and requeue them (mark them as rejected).
         trainer_generation = trainer.policy_generation
         max_off_policy_generation = recipe.max_off_policy_generation
 
         stale_run_ids = []
         fresh_run_records = []
         for run in run_records:
-            completion = completion_by_run_id.get(run.id)
-            if completion is not None:
-                if (
-                    trainer_generation - completion.policy_generation
-                    > max_off_policy_generation
-                ):
-                    stale_run_ids.append(run.id)
-                    continue
+            oldest_policy_generation = generation_by_run_id.get(run.id)
+            if (
+                oldest_policy_generation is not None
+                and trainer_generation - oldest_policy_generation
+                > max_off_policy_generation
+            ):
+                stale_run_ids.append(run.id)
+                continue
             fresh_run_records.append(run)
 
         if stale_run_ids:
@@ -334,8 +338,24 @@ class TrainingMixin(TunerServiceBase):
 
         run_ids = list(run_advantages.keys())
 
-        # Filter completions to only include those in run_ids
-        completions = [c for c in completions if c.run_id in run_advantages]
+        # The batch shape is now known, so fetch the trainer payload only for
+        # runs that will actually be consumed. This bounds the expensive query
+        # to `group_size * num_groups_per_batch` runs instead of every pending
+        # run accumulated by the tuner.
+        result = await session.execute(
+            select(
+                ChatCompletionModel.id,
+                ChatCompletionModel.run_id,
+                ChatCompletionModel.policy_generation,
+                ChatCompletionModel.tokens,
+                ChatCompletionModel.logprobs,
+                ChatCompletionModel.response["id"].as_string().label("candidate_id"),
+            ).where(
+                ChatCompletionModel.tuner_id == tuner_id,
+                ChatCompletionModel.run_id.in_(run_ids),
+            )
+        )
+        completions = result.all()
 
         if not completions:
             logger.warning(
