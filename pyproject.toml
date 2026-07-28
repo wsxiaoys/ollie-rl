@@ -57,6 +57,7 @@ Changelog = "https://github.com/wsxiaoys/ollie-rl/releases"
 
 [dependency-groups]
 dev = [
+    "locust>=2.46.2",
     "poethepoet>=0.46.0",
     "pre-commit>=4.6.0",
     "pytest>=9.1.1",

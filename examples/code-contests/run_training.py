@@ -473,8 +473,7 @@ async def execute_run(
         # The trial crashed before the verifier could grade it. There is no
         # policy outcome to report, so let the lease expire for re-dispense.
         print(
-            f"[driver] run {run:04d} trial crashed ({datum_id}); "
-            f"skipping reward: {exc}"
+            f"[driver] run {run:04d} trial crashed ({datum_id}); skipping reward: {exc}"
         )
         return
 
