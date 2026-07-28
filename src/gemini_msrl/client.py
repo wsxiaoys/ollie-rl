@@ -25,6 +25,9 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_CONNECTIONS = 512
+DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 100
+
 
 class GeminiMsrlHttpError(GeminiMsrlError):
     """Exception raised when an API request returns an HTTP error status code."""
@@ -113,9 +116,18 @@ class GeminiMsrlClient:
 
         Note: Authorization is *not* set as a default header on the AsyncClient
         because the token may be refreshed between requests (see _request).
+        The larger active-connection pool prevents HTTPX's default 100-connection
+        limit from serializing high-concurrency rollout sampling, while the
+        smaller keep-alive cap avoids retaining every burst connection.
         """
         if self._client is None:
-            self._client = httpx.AsyncClient(headers=self.headers)
+            self._client = httpx.AsyncClient(
+                headers=self.headers,
+                limits=httpx.Limits(
+                    max_connections=DEFAULT_MAX_CONNECTIONS,
+                    max_keepalive_connections=DEFAULT_MAX_KEEPALIVE_CONNECTIONS,
+                ),
+            )
         return self._client
 
     async def close(self) -> None:
