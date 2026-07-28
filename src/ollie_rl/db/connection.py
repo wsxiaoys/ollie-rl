@@ -61,7 +61,7 @@ def get_engine():
                 url,
                 echo=False,
                 pool_size=20,  # steady connections held open
-                max_overflow=20,  # burst headroom -> 40 max
+                max_overflow=40,  # burst headroom -> 60 max
                 pool_timeout=10,  # fail fast instead of hanging ~30s
                 pool_pre_ping=True,  # drop connections the server already closed
                 pool_recycle=1800,  # recycle before the server's idle cutoff

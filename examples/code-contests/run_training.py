@@ -4,7 +4,8 @@ Each rollout runs as a containerized **Harbor trial**: a Terminus 2 agent is
 dropped into a sandbox to solve one competitive-programming task, and Harbor's
 verifier runs the task's unit tests to produce the reward. The driver just
 orchestrates the loop — dispense a run from ollie-rl, run the trial, report the
-reward — while ollie-rl handles the training.
+reward — while ollie-rl handles the training. Run assignments are leased in
+batches sized to the currently available Harbor concurrency.
 
 The agent samples through ollie-rl's OpenAI-compatible endpoint. Completions are
 attributed to the dispensed run via a path-addressed ``base_url``
@@ -222,31 +223,33 @@ async def _request_with_retry(
             attempt += 1
 
 
-async def dispense_run(
+async def dispense_runs(
     client: httpx.AsyncClient,
     tuner_id: str,
-) -> tuple[str, str]:
-    """Wait for and return the next ``(run_id, datum_id)`` assignment.
+    batch_size: int,
+) -> list[tuple[str, str]]:
+    """Wait for and return up to ``batch_size`` run assignments.
 
     ``204 No Content`` means no run can currently be leased. This includes a
     backend that is still ``PENDING`` as well as an in-progress tuner whose
     datum groups are temporarily saturated. Honor the server's ``Retry-After``
-    header and retry without starting a Harbor sandbox; only a ``200`` response
-    represents an actual lease.
+    header and retry without starting a Harbor sandbox; only a non-empty
+    ``200`` batch represents actual leases. Partial batches are accepted.
 
-    Datum quarantine (unhealthy-finish-rate / success-rate filtering) is now
-    configured on the tuner's recipe (``max_unhealthy_finish_ratio`` /
-    ``max_succeed_ratio``), not per request, so this call takes no quarantine
-    params.
-
-    Transient transport failures (server briefly unresponsive under load) are
-    retried with backoff rather than crashing the driver; see
-    :func:`_request_with_retry`.
+    Datum quarantine (unhealthy-finish-rate / success-rate filtering) is
+    configured on the tuner's recipe, not per request. Transient transport
+    failures are retried with backoff; see :func:`_request_with_retry`.
     """
+    if not 1 <= batch_size <= 1024:
+        raise ValueError("batch_size must be between 1 and 1024")
+
     while True:
         resp = await _request_with_retry(
-            f"dispense (tuner {tuner_id})",
-            lambda: client.post(f"/tuners/{tuner_id}/runs"),
+            f"batch dispense (tuner {tuner_id}, size {batch_size})",
+            lambda: client.post(
+                f"/tuners/{tuner_id}/runs",
+                params={"batch_size": batch_size},
+            ),
         )
         if resp.status_code == 204:
             try:
@@ -258,7 +261,20 @@ async def dispense_run(
 
         resp.raise_for_status()
         body = resp.json()
-        return body["run_id"], body["datum_id"]
+        if not isinstance(body, list) or not body:
+            raise ValueError("batch dispense response must be a non-empty list")
+        if len(body) > batch_size:
+            raise ValueError("batch dispense response exceeds requested size")
+
+        assignments = [(item["run_id"], item["datum_id"]) for item in body]
+        if any(
+            not isinstance(run_id, str) or not isinstance(datum_id, str)
+            for run_id, datum_id in assignments
+        ):
+            raise ValueError("batch dispense returned an invalid assignment")
+        if len({run_id for run_id, _ in assignments}) != len(assignments):
+            raise ValueError("batch dispense returned duplicate run IDs")
+        return assignments
 
 
 async def submit_reward(
@@ -434,69 +450,53 @@ def extract_reward(trial_result) -> float | None:
 # --------------------------------------------------------------------------
 # Driver loop
 # --------------------------------------------------------------------------
-async def worker(
-    name: int,
+async def execute_run(
+    run: int,
     client: httpx.AsyncClient,
     tuner_id: str,
-    budget: asyncio.Queue[int],
+    run_id: str,
+    datum_id: str,
     args: argparse.Namespace,
     stats: dict,
 ) -> None:
-    while True:
-        try:
-            run = budget.get_nowait()
-        except asyncio.QueueEmpty:
-            return
-
-        # Phase 1: wait for a run assignment. The helper handles 204 responses
-        # (including a backend that is still provisioning) and only returns
-        # after the server has created a real lease, so no sandbox starts early.
-        run_id, datum_id = await dispense_run(client, tuner_id)
-
-        # Phase 2: execute the containerized Harbor trial.
-        try:
-            reward = await run_rollout(
-                base=args.base_url,
-                tuner_id=tuner_id,
-                run_id=run_id,
-                datum_id=datum_id,
-                environment=args.environment,
-                agent_timeout_multiplier=args.agent_timeout_multiplier,
-            )
-        except Exception as exc:
-            # The trial crashed before the verifier could grade it (e.g. the
-            # inference endpoint dropped mid-run). There is no graded outcome to
-            # attribute to the policy, so DON'T fabricate a 0.0 reward — skip
-            # submission and let the run's lease expire for a clean re-dispense.
-            print(
-                f"[driver] run {run:04d} trial crashed ({datum_id}); "
-                f"skipping reward: {exc}"
-            )
-            continue
-
-        # A run with no policy signal (verifier never ran, or the agent hit its
-        # timeout budget so the rollout was truncated) comes back as None. Skip
-        # it rather than submit a spurious 0.0 and let the lease expire.
-        if reward is None:
-            print(
-                f"[driver] run {run:04d} task={datum_id} no policy signal "
-                f"(not graded or agent timed out); skipping reward"
-            )
-            continue
-
-        # Phase 3: report the reward; the server groups/advantages/trains.
-        # A rejected reward (409) is expected for malformed examples the server
-        # already finalized, so skip recording stats for it.
-        if not await submit_reward(client, tuner_id, run_id, reward):
-            continue
-
-        stats["rewards"].append(reward)
-        window = stats["rewards"][-32:]
-        avg = sum(window) / len(window)
-        print(
-            f"[driver] run {run:04d} task={datum_id:<20} "
-            f"reward={reward:+.1f} avg32={avg:.3f}"
+    """Execute and reward one previously dispensed assignment."""
+    try:
+        reward = await run_rollout(
+            base=args.base_url,
+            tuner_id=tuner_id,
+            run_id=run_id,
+            datum_id=datum_id,
+            environment=args.environment,
+            agent_timeout_multiplier=args.agent_timeout_multiplier,
         )
+    except Exception as exc:
+        # The trial crashed before the verifier could grade it. There is no
+        # policy outcome to report, so let the lease expire for re-dispense.
+        print(
+            f"[driver] run {run:04d} trial crashed ({datum_id}); "
+            f"skipping reward: {exc}"
+        )
+        return
+
+    if reward is None:
+        print(
+            f"[driver] run {run:04d} task={datum_id} no policy signal "
+            f"(not graded or agent timed out); skipping reward"
+        )
+        return
+
+    # A rejected reward (409) is expected for malformed examples the server
+    # already finalized, so skip recording stats for it.
+    if not await submit_reward(client, tuner_id, run_id, reward):
+        return
+
+    stats["rewards"].append(reward)
+    window = stats["rewards"][-32:]
+    avg = sum(window) / len(window)
+    print(
+        f"[driver] run {run:04d} task={datum_id:<20} "
+        f"reward={reward:+.1f} avg32={avg:.3f}"
+    )
 
 
 async def main() -> int:
@@ -595,17 +595,43 @@ async def main() -> int:
                 eval_datum_ids=eval_datum_ids,
             )
 
-        budget: asyncio.Queue[int] = asyncio.Queue()
-        for run in range(args.runs):
-            budget.put_nowait(run)
-
         stats: dict = {"rewards": []}
-        await asyncio.gather(
-            *(
-                worker(i, client, tuner_id, budget, args, stats)
-                for i in range(max(1, args.concurrency))
+        concurrency = max(1, args.concurrency)
+        next_run = 0
+        active: set[asyncio.Task[None]] = set()
+
+        # Dispense only enough leases to fill currently available execution
+        # slots. This gets the query/transaction savings of an initial batch
+        # without queueing long-running Harbor leases that could expire before
+        # a sandbox becomes available.
+        while next_run < args.runs or active:
+            capacity = concurrency - len(active)
+            if next_run < args.runs and capacity > 0:
+                requested = min(capacity, args.runs - next_run, 1024)
+                assignments = await dispense_runs(client, tuner_id, requested)
+                for run_id, datum_id in assignments:
+                    run = next_run
+                    next_run += 1
+                    active.add(
+                        asyncio.create_task(
+                            execute_run(
+                                run,
+                                client,
+                                tuner_id,
+                                run_id,
+                                datum_id,
+                                args,
+                                stats,
+                            )
+                        )
+                    )
+                continue
+
+            completed, active = await asyncio.wait(
+                active, return_when=asyncio.FIRST_COMPLETED
             )
-        )
+            for task in completed:
+                task.result()
 
     return 0
 
