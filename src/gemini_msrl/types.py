@@ -129,6 +129,10 @@ class TuningCandidate(BaseModelConfig):
 
 
 class UsageMetadata(BaseModelConfig):
+    # Response metadata grows as Vertex adds modalities and traffic reporting.
+    # Preserve the token counts Ollie consumes while tolerating those fields.
+    model_config = ConfigDict(extra="allow")
+
     prompt_token_count: int
     # Optional: absent when generation was cut off before a visible candidate
     # was produced (e.g. all tokens were consumed by reasoning/"thinking").

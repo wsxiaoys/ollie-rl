@@ -139,10 +139,15 @@ class GeminiMsrlClient:
         path: str,
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        *,
+        base_url: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> dict[str, Any]:
         """Helper to perform requests and handle errors."""
         client = await self.get_client()
-        url = f"{self.base_url}/{path.lstrip('/')}"
+        request_base_url = (base_url or self.base_url).rstrip("/")
+        url = f"{request_base_url}/{path.lstrip('/')}"
+        request_timeout = timeout if timeout is not None else client.timeout
 
         response: httpx.Response | None = None
         for attempt in range(2):
@@ -156,6 +161,7 @@ class GeminiMsrlClient:
                     json=json_data,
                     params=params,
                     headers=request_headers,
+                    timeout=request_timeout,
                 )
             except httpx.RequestError as exc:
                 logger.error("An error occurred while requesting %r.", exc.request.url)
@@ -281,6 +287,9 @@ class GeminiMsrlClient:
         """
         Performs standard content generation against a deployed endpoint.
 
+        Checkpoint endpoints are served by the location-specific replica API,
+        rather than the control-plane API used for tuning jobs and operations.
+
         Path: POST /v1beta1/{endpoint=projects/*/locations/*/endpoints/*}:generateContent
         """
         path = endpoint_name.lstrip("/")
@@ -288,6 +297,18 @@ class GeminiMsrlClient:
             path = f"v1beta1/{path}"
         if not path.endswith(":generateContent"):
             path += ":generateContent"
+
+        endpoint_parts = path.split("/")
+        try:
+            location = endpoint_parts[endpoint_parts.index("locations") + 1]
+        except ValueError, IndexError:
+            raise ValueError(
+                "endpoint_name must contain a projects/*/locations/*/endpoints/* "
+                "resource name"
+            ) from None
+        if not location:
+            raise ValueError("endpoint_name must contain a non-empty location")
+        endpoint_base_url = f"https://aiplatform.{location}.rep.googleapis.com"
 
         if isinstance(request, ContentGenerationParameters):
             # Standard endpoint generation accepts the generate-content body
@@ -298,7 +319,13 @@ class GeminiMsrlClient:
         else:
             json_data = request
 
-        response_data = await self._request("POST", path, json_data=json_data)
+        response_data = await self._request(
+            "POST",
+            path,
+            json_data=json_data,
+            base_url=endpoint_base_url,
+            timeout=60.0,
+        )
         return EndpointGenerateContentResponse.model_validate(response_data)
 
     # --- Operation & Polling Helpers ---
