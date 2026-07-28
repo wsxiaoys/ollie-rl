@@ -1,8 +1,8 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
-from typing import List, Literal, Optional, Dict, Any
+from pydantic import BaseModel, Field, SerializeAsAny, model_validator
+from typing import List, Literal, Optional, Dict, Any, cast
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionFunctionTool,
@@ -26,10 +26,20 @@ class TunerStatus(str, Enum):
 
 class ChatCompletionRequest(BaseModel):
     model: str
-    messages: List[ChatCompletionMessageParam]
+    messages: List[SerializeAsAny[ChatCompletionMessageParam]]
     max_tokens: Optional[int] = None
     tools: Optional[List[ChatCompletionFunctionTool]] = None
     stream: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def materialize_tool_calls(self) -> "ChatCompletionRequest":
+        """Make OpenAI's iterable tool calls safe for repeated consumption."""
+        for message in self.messages:
+            message_dict = cast(Dict[str, Any], message)
+            tool_calls = message_dict.get("tool_calls")
+            if tool_calls is not None:
+                message_dict["tool_calls"] = list(tool_calls)
+        return self
 
 
 class CreateTunerRequest(BaseModel):

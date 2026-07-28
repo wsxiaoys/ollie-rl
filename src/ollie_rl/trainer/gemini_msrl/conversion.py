@@ -129,16 +129,6 @@ def build_content_generation_parameters(
         if system_content:
             system_instruction = Content(parts=[Part(text=system_content)])
 
-    # OpenAI's assistant-message schema declares ``tool_calls`` as
-    # ``Iterable[...]`` which makes pydantic v2 expose it as a lazy
-    # ``ValidatorIterator`` -- safe to consume only once. Materialise it in
-    # place on every message we touch so subsequent passes see the same data.
-    for msg in other_messages:
-        if msg.get("role") == "assistant":
-            msg_any = cast(dict[str, Any], msg)
-            if msg_any.get("tool_calls") is not None:
-                msg_any["tool_calls"] = list(msg_any["tool_calls"])
-
     # Build a lookup of tool_call_id -> function name from prior assistant
     # messages so that we can rehydrate `tool` role messages into Gemini
     # FunctionResponse parts.

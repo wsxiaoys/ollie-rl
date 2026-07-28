@@ -84,6 +84,7 @@ class FakeTrainer(Trainer):
 
     def __init__(self):
         self._sample_op = _make_sample_op()
+        self.observed_tool_calls: list[object] = []
 
     @property
     def policy_generation(self) -> int:
@@ -95,6 +96,11 @@ class FakeTrainer(Trainer):
         *,
         restore_state: Optional[str] = None,
     ):
+        self.observed_tool_calls = [
+            tool_call
+            for message in request.messages
+            for tool_call in message.get("tool_calls") or []
+        ]
         return self._sample_op
 
     async def train_step(self, examples, *, sampler_promotion_every: int = 1):
@@ -421,6 +427,47 @@ class TestSample(TunerServiceTestCase):
         completion = await self.service.sample(tuner_id, self._make_request())
         self.assertIsNotNone(completion)
         self.assertEqual(completion.object, "chat.completion")
+
+    async def test_hashing_request_does_not_consume_tool_calls(self):
+        tuner_id = await self._create_tuner()
+        run = await self._add_run(tuner_id)
+        request = ChatCompletionRequest(
+            model="fake-model",
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-test",
+                            "type": "function",
+                            "function": {
+                                "name": "test_function",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+        await self.service.sample(tuner_id, request, run_id=run.id)
+
+        trainer = self.service.active_trainers[tuner_id]
+        assert isinstance(trainer, FakeTrainer)
+        self.assertEqual(
+            trainer.observed_tool_calls,
+            [
+                {
+                    "id": "call-test",
+                    "type": "function",
+                    "function": {
+                        "name": "test_function",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        )
 
     async def test_raises_for_unknown_run_id(self):
         tuner_id = await self._create_tuner()
