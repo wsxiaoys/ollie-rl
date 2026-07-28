@@ -108,6 +108,7 @@ class TuningJob(BaseModelConfig):
 
 class GenerationConfig(BaseModelConfig):
     max_output_tokens: Optional[int] = None
+    thinking_config: Optional[dict] = None  # HACK: {"thinking_level": "MINIMAL"}
 
 
 class ContentGenerationParameters(BaseModelConfig):
@@ -124,6 +125,7 @@ class GenerateContentTuningScopeRequest(BaseModelConfig):
 class TuningCandidate(BaseModelConfig):
     candidate_id: str
     candidate: Candidate
+    prompt_token_count: Optional[int] = None
     generation_token_count: Optional[int] = None
     thoughts_token_count: Optional[int] = None
 

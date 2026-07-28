@@ -248,7 +248,11 @@ class GeminiMsrlClient:
         because the token may be refreshed between requests (see _request).
         """
         if self._client is None:
-            self._client = httpx.AsyncClient(headers=self.headers)
+            self._client = httpx.AsyncClient(
+                headers=self.headers,
+                limits=httpx.Limits(max_connections=2048, max_keepalive_connections=512),
+                timeout=httpx.Timeout(600.0, connect=30.0, pool=60.0),  # SCALE
+            )
         return self._client
 
     async def close(self) -> None:

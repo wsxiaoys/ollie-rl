@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import time
 import uuid
 from typing import List, Optional, Any, cast
@@ -865,9 +866,29 @@ class GeminiMsrlTrainer(Trainer):
         # clamp to the documented max so we don't 400 on perfectly valid
         # OpenAI-style requests.
         VERTEX_MAX_OUTPUT_TOKENS = 32768
+        # Operating point is env-configurable so a deployment can pin a smaller
+        # generation budget without a code change. Precedence: an explicit
+        # request.max_tokens wins; otherwise fall back to OLLIE_MAX_OUTPUT_TOKENS
+        # (default 8192). Either way the value is clamped to Vertex's cap. This
+        # replaces a former hardcode that silently ignored request.max_tokens.
+        _default_max_tokens = int(os.environ.get("OLLIE_MAX_OUTPUT_TOKENS", "8192"))
         max_tokens = request.max_tokens
-        if max_tokens is None or max_tokens > VERTEX_MAX_OUTPUT_TOKENS:
+        if max_tokens is None:
+            max_tokens = _default_max_tokens
+        if max_tokens > VERTEX_MAX_OUTPUT_TOKENS:
             max_tokens = VERTEX_MAX_OUTPUT_TOKENS
+
+        # Thinking level is env-configurable (default MINIMAL, the current
+        # operating point). Set OLLIE_THINKING_LEVEL to "" / "none" / "off" to
+        # omit thinking_config entirely (backend default). Note the inner key is
+        # camelCase `thinkingLevel` on purpose -- the tuning-scope API rejects
+        # snake_case here.
+        _thinking_level = os.environ.get("OLLIE_THINKING_LEVEL", "MINIMAL").strip()
+        _thinking_config = (
+            {"thinkingLevel": _thinking_level}
+            if _thinking_level and _thinking_level.lower() not in ("none", "off")
+            else None
+        )
 
         tuning_job_id = self.tuning_job_name.split("/")[-1]
         scope_req = GenerateContentTuningScopeRequest(
@@ -875,6 +896,7 @@ class GeminiMsrlTrainer(Trainer):
                 contents=contents,
                 generation_config=GenerationConfig(
                     max_output_tokens=max_tokens,
+                    thinking_config=_thinking_config,
                 ),
                 system_instruction=system_instruction,
                 tools=gemini_tools,

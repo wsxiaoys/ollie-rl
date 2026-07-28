@@ -1,10 +1,13 @@
 from typing import Dict
 
-from .recipes import Recipe, GRPO_16x32, GRPO_4x8
+from .recipes import Recipe, GRPO_16x32, GRPO_4x8, GRPO_8x32, GRPO_16x8, GRPO_32x8
 
 RECIPES: Dict[str, Recipe] = {
     "grpo_16x32": GRPO_16x32,
     "grpo_4x8": GRPO_4x8,
+    "grpo_8x32": GRPO_8x32,
+    "grpo_16x8": GRPO_16x8,
+    "grpo_32x8": GRPO_32x8,
 }
 
 

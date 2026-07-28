@@ -329,6 +329,45 @@ class DispenseMixin(TunerServiceBase):
             expires_at=run_record.expires_at,
         )
 
+    async def release_run(self, tuner_id: str, run_id: str) -> str:
+        """Release an unrewarded run early by expiring its lease NOW.
+
+        Lever A: when the driver abandons a run (infra failure / NaN timeout /
+        unknown datum) it calls this instead of silently dropping it, so the
+        lease frees in seconds rather than squatting for RUN_LEASE_SECONDS.
+        Setting ``expires_at = now`` makes the run immediately past-lease:
+        excluded from ``in_flight``, re-dispensable, and classified ``lost``
+        (carries no reward, so no training signal is injected). Idempotent:
+        a missing run raises RunNotFoundError; an already-rewarded or
+        already-expired run is a no-op success. Returns a short status string.
+        """
+        from ollie_rl.db.models import RunModel
+        from ollie_rl.db.types import utcnow
+        from ollie_rl.service.tuner.errors import RunNotFoundError
+        from sqlalchemy import select
+
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(RunModel).where(
+                        RunModel.id == run_id,
+                        RunModel.tuner_id == tuner_id,
+                    )
+                )
+                record = result.scalar_one_or_none()
+                if record is None:
+                    raise RunNotFoundError(
+                        f"Run '{run_id}' not found under tuner '{tuner_id}'"
+                    )
+                now = utcnow()
+                if record.reward is not None:
+                    return "already_rewarded"
+                if record.expires_at <= now:
+                    return "already_expired"
+                record.expires_at = now
+                record.updated_at = now
+        return "released"
+
     async def _maybe_dispense_eval(
         self,
         tuner_id: str,

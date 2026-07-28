@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 Scheduler = Literal["fifo_epoch", "random"]
@@ -56,8 +56,8 @@ class Recipe(BaseModel, frozen=True):
     #     share one numerator: `(length + content_filter) / rewarded`.
     #   * `max_succeed_ratio`: quarantine when the success ratio (reward == 1.0
     #     over rewarded attempts) is >= this value (solved too reliably).
-    max_unhealthy_finish_ratio: float = 1.0
-    max_succeed_ratio: float = 1.0
+    max_unhealthy_finish_ratio: Optional[float] = 1.0
+    max_succeed_ratio: Optional[float] = 1.0
     # Number of rewarded attempts a datum must accumulate before the quarantine
     # verdict is trusted. Also sets the two-phase probe size: a started group is
     # dispensed up to `quarantine_min_samples` runs, then held for their rewards
@@ -76,4 +76,32 @@ GRPO_16x32 = Recipe(
 GRPO_4x8 = Recipe(
     group_size=4,
     num_groups_per_batch=8,
+)
+
+GRPO_8x32 = Recipe(
+    group_size=8,
+    num_groups_per_batch=32,
+    # Quarantine OFF: never exclude a datum from dispensing. Every datum keeps
+    # training regardless of how often it hits an unhealthy finish or how
+    # reliably it succeeds; degenerate/too-easy datums still train at their
+    # assigned (lowest_)reward instead of being dropped from the pool.
+    max_unhealthy_finish_ratio=None,
+    max_succeed_ratio=None,
+)
+
+GRPO_16x8 = Recipe(
+    group_size=16,
+    num_groups_per_batch=8,  # 16 x 8 = 128 rewarded rollouts per train step
+    # Quarantine OFF (matches grpo_8x32): never exclude a datum from dispensing.
+    max_unhealthy_finish_ratio=None,
+    max_succeed_ratio=None,
+)
+
+GRPO_32x8 = Recipe(
+    group_size=32,
+    num_groups_per_batch=8,  # 32 x 8 = 256 rewards/step; the 4999 group axis
+    # (4999 samples_per_task=32 IS the GRPO group size; tasks_per_train_step=8.)
+    # Quarantine OFF (matches grpo_8x32): never exclude a datum from dispensing.
+    max_unhealthy_finish_ratio=None,
+    max_succeed_ratio=None,
 )

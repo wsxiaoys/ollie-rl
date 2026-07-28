@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from ollie_rl.background import BackgroundJob
 from ollie_rl.cookbook import Cookbook, Recipe
@@ -25,6 +25,7 @@ from ollie_rl.db import (
 )
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
+from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.quarantine import quarantined_datums
 from ollie_rl.service.tuner.types import RewardedRun
 from ollie_rl.service.tuner.constants import RUN_EXPIRE_GENERATION_BUDGET_MS
@@ -154,8 +155,21 @@ class TunerServiceBase:
         # score maps (`if r.datum_id not in score: continue`).
         datum_pool = await self._load_datums(tuner_id, session, kind="train")
 
+        # SCALE (B1): load only runs the pure schedulers actually count --
+        # rewarded (reward IS NOT NULL) or pending (lease not expired). Both
+        # `scheduler_scores`/`pick_datum` and `pick_eval_datum` ignore
+        # unrewarded past-lease runs ("Expired-unrewarded attempts don't
+        # count"), so excluding them here is behaviour-preserving and keeps the
+        # dispense hot path O(live runs) instead of O(all runs ever) -- the
+        # 40k-row full-table scan that wedged dispense at >90s.
         runs_result = await session.execute(
-            select(RunModel).where(RunModel.tuner_id == tuner_id)
+            select(RunModel).where(
+                RunModel.tuner_id == tuner_id,
+                or_(
+                    RunModel.reward.is_not(None),
+                    RunModel.expires_at > utcnow(),
+                ),
+            )
         )
         runs = list(runs_result.scalars().all())
         return datum_pool, runs

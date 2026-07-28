@@ -72,6 +72,15 @@ class SamplingMixin(TunerServiceBase):
         and optionally record metadata if run_id is provided.
         """
         trainer = await self._get_trainer(tuner_id)
+        # FIX(tool_calls-iterator): OpenAI `tool_calls` is typed Iterable, so
+        # pydantic v2 exposes it as a single-consumption ValidatorIterator.
+        # hash_request()/model_dump() below would exhaust it before the trainer
+        # reads it, silently dropping multi-turn tool calls (MSRL then 400s on
+        # function_response.name). Materialize to a list ONCE up front so every
+        # downstream consumer sees the data.
+        for _m in request.messages:
+            if isinstance(_m, dict) and _m.get("tool_calls") is not None:
+                _m["tool_calls"] = list(_m["tool_calls"])
         if not trainer:
             raise TunerNotFoundError(
                 f"Tuner '{tuner_id}' not found or not initialized."

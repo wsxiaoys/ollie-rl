@@ -534,6 +534,28 @@ async def put_reward(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/tuners/{tuner_id}/runs/{run_id}/release")
+async def release_run(tuner_id: str, run_id: str) -> dict:
+    """Release an unrewarded run early (expire its lease now).
+
+    The driver calls this when a rollout can't yield a real reward so the
+    datum's lease frees immediately instead of squatting for the full lease
+    window. Idempotent: already-rewarded / already-expired runs return a no-op
+    success; a missing run is 404. Deliberately never 5xx on normal paths so
+    the driver can fire-and-forget.
+    """
+    from ollie_rl.service.tuner import RunNotFoundError
+
+    try:
+        status = await services.tuner.release_run(tuner_id=tuner_id, run_id=run_id)
+        return {"run_id": run_id, "status": status}
+    except RunNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to release run '{run_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Serve the built web dashboard at /app (no-op until `web/dist` is built).
 # Mounted last so it never shadows the API routes above.
 mount_webui(app)

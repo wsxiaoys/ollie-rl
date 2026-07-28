@@ -60,8 +60,8 @@ def get_engine():
             _engine = create_async_engine(
                 url,
                 echo=False,
-                pool_size=20,  # steady connections held open
-                max_overflow=20,  # burst headroom -> 40 max
+                pool_size=600,  # PGBOUNCER: client conns to pgbouncer (cap 2000), not PG
+                max_overflow=300,  # PGBOUNCER: burst headroom -> 900 max client conns
                 pool_timeout=10,  # fail fast instead of hanging ~30s
                 pool_pre_ping=True,  # drop connections the server already closed
                 pool_recycle=1800,  # recycle before the server's idle cutoff
