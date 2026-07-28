@@ -476,11 +476,14 @@ async def create_run_chat_completion(
 @app.post("/tuners/{tuner_id}/runs")
 async def dispense_run(
     tuner_id: str,
-) -> DispenseRun:
-    """
-    Dispense a run assignment for the tuner.
-    Returns 200 OK with run_id, datum_id, expires_at.
-    Or 204 No Content with Retry-After header if no run can be dispensed.
+    batch_size: Annotated[Optional[int], Query(ge=1, le=1024)] = None,
+) -> DispenseRun | list[DispenseRun]:
+    """Dispense run assignments for the tuner.
+
+    Without ``batch_size``, returns the existing single-run object. When the
+    query parameter is present, returns an array containing up to that many
+    runs; a partially fulfilled batch is successful. Both modes return 204 No
+    Content with Retry-After when no run can currently be dispensed.
 
     Datum quarantine (length-rate / success-rate filtering plus the two-phase
     probe gate) is configured on the tuner's recipe, not per request.
@@ -488,14 +491,19 @@ async def dispense_run(
     from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
-        run_response = await services.tuner.dispense_run(tuner_id)
+        if batch_size is None:
+            run_response = await services.tuner.dispense_run(tuner_id)
+        else:
+            run_response = await services.tuner.dispense_runs(
+                tuner_id, batch_size=batch_size
+            )
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to dispense run for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))
 
-    if run_response is None:
+    if not run_response:
         raise HTTPException(204, headers={"Retry-After": "1"})
 
     return run_response

@@ -119,9 +119,12 @@ export interface paths {
         put?: never;
         /**
          * Dispense Run
-         * @description Dispense a run assignment for the tuner.
-         *     Returns 200 OK with run_id, datum_id, expires_at.
-         *     Or 204 No Content with Retry-After header if no run can be dispensed.
+         * @description Dispense run assignments for the tuner.
+         *
+         *     Without ``batch_size``, returns the existing single-run object. When the
+         *     query parameter is present, returns an array containing up to that many
+         *     runs; a partially fulfilled batch is successful. Both modes return 204 No
+         *     Content with Retry-After when no run can currently be dispensed.
          *
          *     Datum quarantine (length-rate / success-rate filtering plus the two-phase
          *     probe gate) is configured on the tuner's recipe, not per request.
@@ -1741,7 +1744,9 @@ export interface operations {
     };
     dispense_run_tuners__tuner_id__runs_post: {
         parameters: {
-            query?: never;
+            query?: {
+                batch_size?: number | null;
+            };
             header?: never;
             path: {
                 tuner_id: string;
@@ -1756,7 +1761,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DispenseRun"];
+                    "application/json": components["schemas"]["DispenseRun"] | components["schemas"]["DispenseRun"][];
                 };
             };
             /** @description Validation Error */

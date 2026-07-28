@@ -241,149 +241,102 @@ class DispenseMixin(TunerServiceBase):
     """Serialized read-pick-insert dispensing of runs for a tuner."""
 
     async def dispense_run(self, tuner_id: str) -> Optional[DispenseRun]:
+        """Dispense one run while preserving the original service contract."""
+        runs = await self.dispense_runs(tuner_id, batch_size=1)
+        return runs[0] if runs else None
+
+    async def dispense_runs(self, tuner_id: str, batch_size: int) -> List[DispenseRun]:
+        """Dispense up to ``batch_size`` runs from one scheduler snapshot.
+
+        Quarantine is computed once because the newly leased runs have neither
+        rewards nor completion finish reasons. Each provisional run is appended
+        to the in-memory snapshot before the next pick so eval coverage,
+        two-phase probe gating, and group capacity match repeated scalar calls.
+        The batch is inserted atomically in the same transaction as its reads.
         """
-        Dispense a run for a tuner.
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero")
 
-        Quarantine is configured on the tuner's ``Recipe`` (all-time counts, no
-        recency window; each filter only takes effect once a datum has
-        accumulated at least ``recipe.quarantine_min_samples`` rewarded
-        attempts):
-
-        * ``recipe.max_unhealthy_finish_ratio`` -- skip datums whose rewarded
-          attempts too often end on an unhealthy finish reason: length-limited
-          (``"length"``) or malformed (``"content_filter"``). The two are summed
-          (``(length + content_filter) / rewarded``); both are auto-penalty
-          degenerate rollouts.
-        * ``recipe.max_succeed_ratio`` -- skip datums solved too reliably
-          (success ratio, reward ``== 1.0`` over rewarded attempts,
-          ``>= max_succeed_ratio``); considered too easy to yield a useful
-          learning signal (see ``quarantined_datums``).
-
-        The default ratios (1.0/1.0) fire only at the extreme: succeed
-        quarantines a datum whose every rewarded attempt succeeded, and
-        unhealthy-finish quarantines one whose every rewarded attempt ended on
-        an unhealthy finish reason -- and a datum caught by either is excluded.
-        The scheduler always uses the two-phase probe gate (see ``pick_datum``).
-        """
         # Do not lease work to an external sandbox until the backend can serve
-        # it. This is a non-blocking readiness gate: a pending/cancelled tuner
-        # follows the existing no-work response path (204 + Retry-After), while
-        # sample/train keep their own final readiness barriers for race safety.
+        # it. A pending/cancelled tuner follows the existing no-work path.
         trainer = await self._get_trainer(tuner_id)
         if await trainer.get_status() is not TunerStatus.IN_PROGRESS:
-            return None
+            return []
 
         recipe = await self._recipe_for(tuner_id)
+        run_records: List[RunModel] = []
 
-        # Serialize the read-pick-insert sequence: the scheduler decision in
-        # `pick_datum` depends on the current set of in-flight runs, so two
-        # concurrent dispenses that both read the pre-insert snapshot would
-        # otherwise pick the same datum and over-dispense it past
-        # `group_size` (the source of the inflated in_flight counts).
+        # Serialize the complete read-pick-insert sequence. The transaction and
+        # lock cover the full batch so no local dispenser can observe a partial
+        # scheduler decision.
         async with self._dispense_lock:
             async with self.async_session() as session:
-                datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
-
-                # ── Tier 0 (highest): eval the latest checkpoint ────────────
-                # As soon as a train step persists a checkpoint, eval its
-                # held-out datums -- up to `eval_group_size` runs per datum for
-                # that checkpoint -- ahead of all training work, so the
-                # per-checkpoint metric resolves before the policy drifts far.
-                # Inert when there is no checkpoint yet, `eval_group_size == 0`,
-                # the eval pool is empty, or every eval datum is already
-                # covered.
-                eval_run = await self._maybe_dispense_eval(
-                    tuner_id, session, runs, recipe
-                )
-                if eval_run is not None:
-                    return eval_run
-
-                # Filter the quarantined datums out of the training pool via
-                # the centralized helper (loads the rewarded/finish-reason stat
-                # maps and runs the pure `quarantined_datums` predicate), so the
-                # train pick, eval pick, and rejected-count bump all quarantine
-                # on identical logic. No-ops on an empty pool without querying.
-                excluded = await self._quarantined_datums(
-                    tuner_id, session, datum_pool, recipe
-                )
-                if excluded:
-                    datum_pool = [d for d in datum_pool if d not in excluded]
-
-            # `pick_datum` reads the same quarantine config off the recipe and
-            # dispenses started groups in two phases (probe up to
-            # `quarantine_min_samples`, hold for their rewards, then fill) so a
-            # datum that will be quarantined wastes at most that many rollouts
-            # instead of a full group.
-            datum_id = pick_datum(datum_pool, runs, recipe)
-            if datum_id is None:
-                return None
-
-            run_record = RunModel(
-                tuner_id=tuner_id,
-                datum_id=datum_id,
-                reward=None,
-                trained_count=0,
-                expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS),
-            )
-            async with self.async_session() as session:
                 async with session.begin():
-                    session.add(run_record)
+                    datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
 
-        return DispenseRun(
-            run_id=run_record.id,
-            datum_id=run_record.datum_id,
-            expires_at=run_record.expires_at,
-        )
+                    latest = None
+                    eval_pool: List[str] = []
+                    if recipe.eval_group_size > 0:
+                        latest = await self._latest_checkpoint(tuner_id, session)
+                        if latest is not None:
+                            eval_pool = await self._load_datums(
+                                tuner_id, session, kind="eval"
+                            )
 
-    async def _maybe_dispense_eval(
-        self,
-        tuner_id: str,
-        session,
-        runs: List[RunModel],
-        recipe: Recipe,
-    ) -> Optional[DispenseRun]:
-        """Dispense one held-out eval run for the latest checkpoint, if any is
-        due (dispense tier 0).
+                    train_pool: Optional[List[str]] = None
+                    for _ in range(batch_size):
+                        datum_id: Optional[str] = None
+                        checkpoint_id: Optional[str] = None
 
-        Returns a :class:`DispenseRun` (whose ``RunModel`` is tagged with the
-        checkpoint's id) when an eval datum is uncovered for the newest
-        checkpoint, else ``None`` -- in which case the caller falls through to
-        the ordinary training tiers. Eval-ness is not surfaced on the response:
-        a driver derives it from the datum id, and the server persists it on the
-        run row. Called inside the ``_dispense_lock`` critical section (the
-        passed ``session`` is used for reads only; the insert opens its own
-        transaction).
+                        # Eval remains the highest-priority tier on every pick.
+                        if latest is not None:
+                            datum_id = pick_eval_datum(
+                                eval_pool,
+                                runs,
+                                latest.id,
+                                recipe.eval_group_size,
+                            )
+                            if datum_id is not None:
+                                checkpoint_id = latest.id
 
-        Quarantine is intentionally *not* applied to the eval pool: held-out
-        datums are scored per checkpoint regardless of their training-signal
-        health, so every eval datum keeps getting dispensed.
-        """
-        if recipe.eval_group_size <= 0:
-            return None
+                        if datum_id is None:
+                            # Delay the all-history quarantine queries until the
+                            # batch actually needs its first training lease.
+                            if train_pool is None:
+                                excluded = await self._quarantined_datums(
+                                    tuner_id, session, datum_pool, recipe
+                                )
+                                train_pool = [
+                                    datum
+                                    for datum in datum_pool
+                                    if datum not in excluded
+                                ]
+                            datum_id = pick_datum(train_pool, runs, recipe)
 
-        latest = await self._latest_checkpoint(tuner_id, session)
-        if latest is None:
-            return None
+                        if datum_id is None:
+                            break
 
-        eval_pool = await self._load_datums(tuner_id, session, kind="eval")
-        eval_datum = pick_eval_datum(eval_pool, runs, latest.id, recipe.eval_group_size)
-        if eval_datum is None:
-            return None
+                        run_record = RunModel(
+                            tuner_id=tuner_id,
+                            datum_id=datum_id,
+                            checkpoint_id=checkpoint_id,
+                            reward=None,
+                            trained_count=0,
+                            rejected_count=0,
+                            expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS),
+                        )
+                        session.add(run_record)
+                        run_records.append(run_record)
+                        runs.append(run_record)
 
-        run_record = RunModel(
-            tuner_id=tuner_id,
-            datum_id=eval_datum,
-            checkpoint_id=latest.id,
-            reward=None,
-            trained_count=0,
-            expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS),
-        )
-        async with self.async_session() as insert_session:
-            async with insert_session.begin():
-                insert_session.add(run_record)
+                    # Materialize generated run IDs before constructing DTOs.
+                    await session.flush()
 
-        return DispenseRun(
-            run_id=run_record.id,
-            datum_id=run_record.datum_id,
-            expires_at=run_record.expires_at,
-        )
+        return [
+            DispenseRun(
+                run_id=run.id,
+                datum_id=run.datum_id,
+                expires_at=run.expires_at,
+            )
+            for run in run_records
+        ]
