@@ -47,7 +47,8 @@ class Recipe(BaseModel, frozen=True):
     # only at the extreme: `max_succeed_ratio = 1.0` quarantines a datum whose
     # every rewarded attempt succeeded, and `max_unhealthy_finish_ratio = 1.0`
     # quarantines one whose every rewarded attempt ended on an unhealthy finish
-    # reason (`length` or `content_filter`).
+    # reason (`length` or `content_filter`). Set either ratio to `None` to disable
+    # that quarantine condition; set both to `None` to disable quarantine.
     #
     #   * `max_unhealthy_finish_ratio`: quarantine when the fraction of rewarded
     #     attempts that ended on an unhealthy finish reason -- length-limited
@@ -56,8 +57,8 @@ class Recipe(BaseModel, frozen=True):
     #     share one numerator: `(length + content_filter) / rewarded`.
     #   * `max_succeed_ratio`: quarantine when the success ratio (reward == 1.0
     #     over rewarded attempts) is >= this value (solved too reliably).
-    max_unhealthy_finish_ratio: float = 1.0
-    max_succeed_ratio: float = 1.0
+    max_unhealthy_finish_ratio: float | None = 1.0
+    max_succeed_ratio: float | None = 1.0
     # Number of rewarded attempts a datum must accumulate before the quarantine
     # verdict is trusted. Also sets the two-phase probe size: a started group is
     # dispensed up to `quarantine_min_samples` runs, then held for their rewards

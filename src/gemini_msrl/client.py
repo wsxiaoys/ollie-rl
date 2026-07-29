@@ -25,9 +25,6 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_CONNECTIONS = 512
-DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 100
-
 
 class GeminiMsrlHttpError(GeminiMsrlError):
     """Exception raised when an API request returns an HTTP error status code."""
@@ -124,9 +121,10 @@ class GeminiMsrlClient:
             self._client = httpx.AsyncClient(
                 headers=self.headers,
                 limits=httpx.Limits(
-                    max_connections=DEFAULT_MAX_CONNECTIONS,
-                    max_keepalive_connections=DEFAULT_MAX_KEEPALIVE_CONNECTIONS,
+                    max_connections=512,
+                    max_keepalive_connections=100,
                 ),
+                timeout=httpx.Timeout(600, connect=30.0, pool=60.0)
             )
         return self._client
 

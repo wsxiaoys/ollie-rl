@@ -108,6 +108,7 @@ class TuningJob(BaseModelConfig):
 
 class GenerationConfig(BaseModelConfig):
     max_output_tokens: Optional[int] = None
+    thinking_config: Optional[dict] = None
 
 
 class ContentGenerationParameters(BaseModelConfig):
@@ -125,6 +126,7 @@ class TuningCandidate(BaseModelConfig):
     candidate_id: str
     candidate: Candidate
     generation_token_count: Optional[int] = None
+    prompt_token_count: Optional[int] = None
     thoughts_token_count: Optional[int] = None
 
 
