@@ -509,6 +509,25 @@ async def dispense_run(
     return run_response
 
 
+@app.post("/tuners/{tuner_id}/runs/{run_id}/release")
+async def release_run(tuner_id: str, run_id: str) -> dict:
+    """Release an unrewarded run early by expiring its lease immediately.
+
+    This endpoint is idempotent: rewarded and already-expired runs are
+    successful no-ops. A run that does not exist under the tuner returns 404.
+    """
+    from ollie_rl.service.tuner import RunNotFoundError
+
+    try:
+        status = await services.tuner.release_run(tuner_id=tuner_id, run_id=run_id)
+        return {"run_id": run_id, "status": status}
+    except RunNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to release run '{run_id}'")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.put("/tuners/{tuner_id}/runs/{run_id}/reward")
 async def put_reward(
     tuner_id: str,

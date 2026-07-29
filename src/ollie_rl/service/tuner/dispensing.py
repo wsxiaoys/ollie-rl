@@ -22,11 +22,14 @@ held-out datums are scored every checkpoint regardless of signal health.
 from datetime import timedelta
 from typing import Dict, List, Literal, Optional, Tuple
 
+from sqlalchemy import select
+
 from ollie_rl.cookbook import Recipe
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.base import TunerServiceBase
 from ollie_rl.service.tuner.constants import RUN_LEASE_SECONDS
+from ollie_rl.service.tuner.errors import RunNotFoundError
 from ollie_rl.service.tuner.types import SchedulerScores
 from ollie_rl.types import DispenseRun, TunerStatus
 
@@ -244,6 +247,39 @@ class DispenseMixin(TunerServiceBase):
         """Dispense one run while preserving the original service contract."""
         runs = await self.dispense_runs(tuner_id, batch_size=1)
         return runs[0] if runs else None
+
+    async def release_run(
+        self, tuner_id: str, run_id: str
+    ) -> Literal["released", "already_rewarded", "already_expired"]:
+        """Expire an unrewarded run's lease immediately.
+
+        Rewarded and already-expired runs are successful no-ops so callers can
+        safely fire-and-forget retries. Only an unknown run is an error.
+        """
+        async with self.async_session() as session:
+            async with session.begin():
+                record = await session.scalar(
+                    select(RunModel).where(
+                        RunModel.id == run_id,
+                        RunModel.tuner_id == tuner_id,
+                    )
+                )
+                if record is None:
+                    raise RunNotFoundError(
+                        f"Run '{run_id}' not found under tuner '{tuner_id}'"
+                    )
+
+                if record.reward is not None:
+                    return "already_rewarded"
+
+                now = utcnow()
+                if record.expires_at <= now:
+                    return "already_expired"
+
+                record.expires_at = now
+                record.updated_at = now
+
+        return "released"
 
     async def dispense_runs(self, tuner_id: str, batch_size: int) -> List[DispenseRun]:
         """Dispense up to ``batch_size`` runs from one scheduler snapshot.
