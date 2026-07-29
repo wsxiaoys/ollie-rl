@@ -43,7 +43,7 @@ class OllieAgent(BaseInstalledAgent):
             cli="--executor",
             type="enum",
             choices=["none", "local", "daytona"],
-            default="none",
+            default="daytona",
         ),
         CliFlag(
             "max_steps",

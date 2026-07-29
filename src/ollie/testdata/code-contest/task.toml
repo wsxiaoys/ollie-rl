@@ -1,0 +1,23 @@
+version = "1.0"
+artifacts = ["/workspace"]
+
+[environment]
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 300.0
+
+[verifier]
+timeout_sec = 60.0
+environment_mode = "separate"
+
+[verifier.environment]
+docker_image = "python:3.12-slim"
+workdir = "/workspace"
+
+[metadata]
+author_name = "Code Contests"
+author_email = "code-contests@deepmind.com"
+difficulty = "easy"
+category = "competitive-programming"
+tags = ["ollie", "harbor", "competitive-programming", "code-contests"]

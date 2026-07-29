@@ -1,0 +1,30 @@
+version = "1.0"
+artifacts = ["/workspace"]
+
+[environment]
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 300.0
+
+[verifier]
+timeout_sec = 60.0
+environment_mode = "separate"
+
+[verifier.environment]
+docker_image = "oven/bun:1.2"
+workdir = "/workspace"
+
+[metadata]
+author_name = "Code Contests"
+author_email = "code-contests@deepmind.com"
+difficulty = "easy"
+category = "competitive-programming"
+tags = [
+    "ollie",
+    "harbor",
+    "typescript",
+    "bun",
+    "delegate-task",
+    "code-contests",
+]
