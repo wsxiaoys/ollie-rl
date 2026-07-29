@@ -1,0 +1,23 @@
+version = "1.0"
+artifacts = ["/workspace"]
+
+[environment]
+workdir = "/workspace"
+
+[agent]
+timeout_sec = 300.0
+
+[verifier]
+timeout_sec = 30.0
+environment_mode = "separate"
+
+[verifier.environment]
+docker_image = "ubuntu:24.04"
+workdir = "/workspace"
+
+[metadata]
+author_name = "ollie-rl"
+author_email = "meng@tabbyml.com"
+difficulty = "easy"
+category = "smoke-test"
+tags = ["ollie", "harbor", "smoke-test"]
