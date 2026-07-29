@@ -124,7 +124,7 @@ class GeminiMsrlClient:
                     max_connections=512,
                     max_keepalive_connections=100,
                 ),
-                timeout=httpx.Timeout(600, connect=30.0, pool=60.0)
+                timeout=httpx.Timeout(600, connect=30.0, pool=60.0),
             )
         return self._client
 
