@@ -1,10 +1,6 @@
 from gemini_msrl import GeminiMsrlClient
 
-from .conversion import (
-    VERTEX_MAX_OUTPUT_TOKENS,
-    build_content_generation_parameters,
-    sample_from_candidates,
-)
+from .conversion import build_content_generation_parameters, sample_from_candidates
 from .factory import GeminiMsrlTrainerFactory
 from .ops import (
     GeminiMsrlEndpointSampleOp,
@@ -23,7 +19,6 @@ from .trainer import GeminiMsrlTrainer
 
 __all__ = [
     "GeminiMsrlClient",
-    "VERTEX_MAX_OUTPUT_TOKENS",
     "build_content_generation_parameters",
     "sample_from_candidates",
     "CompletedTrainOp",

@@ -11,6 +11,8 @@ class GeminiMsrlTrainerConfig(BaseModel):
     adapter_size: str = "ADAPTER_SIZE_SIXTEEN"
     checkpoint_interval: int = 10
     tuning_job_name: Optional[str] = None
+    thinking_level: str = "MINIMAL"
+    max_output_tokens: int = 32768
 
 
 class CompletedTrainOp(BaseModel):

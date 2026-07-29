@@ -21,10 +21,14 @@ class GeminiMsrlSampler(Sampler):
         client: GeminiMsrlClient,
         endpoint_name: str,
         policy_generation: int,
+        thinking_level: Optional[str] = None,
+        max_output_tokens: Optional[int] = None,
     ):
         self.client = client
         self.endpoint_name = endpoint_name
         self.policy_generation = policy_generation
+        self.thinking_level = thinking_level
+        self.max_output_tokens = max_output_tokens
 
     async def sample(
         self,
@@ -40,7 +44,11 @@ class GeminiMsrlSampler(Sampler):
             )
 
         async def _run():
-            params = build_content_generation_parameters(request)
+            params = build_content_generation_parameters(
+                request,
+                thinking_level=self.thinking_level,
+                max_output_tokens=self.max_output_tokens,
+            )
             response = await self.client.generate_content_endpoint(
                 self.endpoint_name,
                 params,
