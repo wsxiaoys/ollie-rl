@@ -34,7 +34,7 @@ from ollie.harbor_environment import OllieEnvironment
 class OllieAgent(BaseInstalledAgent):
     """Run Ollie using the required :class:`OllieEnvironment` adapter."""
 
-    _DEFAULT_VERSION = "0.2.4"
+    _DEFAULT_VERSION = "0.3.0"
     _OUTPUT_FILENAME = "ollie.ndjson"
     _STDERR_FILENAME = "ollie.stderr"
 
@@ -47,11 +47,6 @@ class OllieAgent(BaseInstalledAgent):
             default="daytona",
         ),
         CliFlag(
-            "workspace_path",
-            cli="--workspace-path",
-            type="str",
-        ),
-        CliFlag(
             "max_steps",
             cli="--max-steps",
             type="int",
@@ -59,11 +54,6 @@ class OllieAgent(BaseInstalledAgent):
         CliFlag(
             "command_timeout_ms",
             cli="--timeout",
-            type="int",
-        ),
-        CliFlag(
-            "max_output_bytes",
-            cli="--max-output",
             type="int",
         ),
     ]
@@ -87,9 +77,11 @@ class OllieAgent(BaseInstalledAgent):
         prompt_template_path: Path | str | None = None,
         version: str | None = None,
         extra_env: dict[str, str] | None = None,
+        workspace_path: str = "/workspace",
         **kwargs: Any,
     ) -> None:
         self._package_version = version or self._DEFAULT_VERSION
+        self._workspace_path = workspace_path
         super().__init__(
             logs_dir=logs_dir,
             prompt_template_path=prompt_template_path,
@@ -192,10 +184,15 @@ class OllieAgent(BaseInstalledAgent):
         environment = self._require_environment(environment)
         output_path = (self.logs_dir / self._OUTPUT_FILENAME).resolve()
         stderr_path = (self.logs_dir / self._STDERR_FILENAME).resolve()
+        workspace_path = self._workspace_path
         ollie_args = [
             "agent",
-            "--cwd",
-            ".",
+            "--workspace-path",
+            workspace_path,
+            "-v",
+            f"{environment.host_workdir.resolve()}:{workspace_path}",
+            "-v",
+            f"{environment.trial_paths.artifacts_dir.resolve()}:/logs/artifacts",
             *self._cli_args(),
             instruction,
         ]
