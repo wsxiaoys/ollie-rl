@@ -28,8 +28,7 @@ uv run harbor run \
   --env ollie.harbor_environment:OllieEnvironment \
   --environment-kwarg verifier_environment=daytona \
   --agent ollie.harbor_agent:OllieAgent \
-  --model openai/gpt-5.6 \
-  --agent-env OPENAI_API_KEY="$OPENAI_API_KEY" \
+  --model openai/gpt-5.4 \
   --verifier harbor.verifier.verifier:Verifier \
   --n-concurrent 1 \
   --yes
@@ -44,17 +43,20 @@ uv run harbor run \
   --env ollie.harbor_environment:OllieEnvironment \
   --environment-kwarg verifier_environment=daytona \
   --agent ollie.harbor_agent:OllieAgent \
-  --model openai/gpt-5.6 \
-  --agent-env OPENAI_API_KEY="$OPENAI_API_KEY" \
+  --model openai/gpt-5.4 \
   --verifier harbor.verifier.verifier:Verifier \
   --n-concurrent 1 \
   --yes
 ```
 
-`OllieEnvironment` launches the Ollie CLI from the Harbor trial's host-local
-workspace. It is **not a security boundary**, so use it only with trusted agent
-code. `OllieAgent` defaults to the Daytona executor, which makes remote
-execution available when the agent tries the TypeScript solution with Bun.
+`OllieEnvironment` launches the trusted Ollie coordinator from the Harbor
+trial's host-local workspace and inherits credentials such as `OPENAI_API_KEY`
+from the host environment, so the commands do not need `--agent-env`. Local
+environment commands run through Ollie's restricted `sandbox` interface with
+only their working directory mounted. `OllieAgent` defaults to the Daytona
+executor, which makes remote execution available when the agent tries the
+TypeScript solution with Bun; selecting its `local` executor uses the same
+restricted Ollie sandbox for tool commands.
 
 Each fixture declares the complete `/workspace` directory as an artifact so
 its separate verifier receives the submitted solution and all other workspace

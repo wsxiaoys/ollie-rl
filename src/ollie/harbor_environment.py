@@ -1,15 +1,15 @@
 """Hybrid Harbor environment for Ollie agents and isolated verifiers.
 
-Agent sessions run directly on the host in a trial-local workspace. Separate
-verifier sessions can be delegated to a built-in or custom Harbor environment,
-such as Daytona. Host execution is intended only for trusted agent commands and
-is not an isolation boundary.
+Local commands run through Ollie's restricted ``sandbox`` command with only the
+selected working directory mounted. Separate verifier sessions can be delegated
+to a built-in or custom Harbor environment, such as Daytona.
 """
 
 from __future__ import annotations
 
 import asyncio
 import getpass
+import json
 import os
 import re
 import shutil
@@ -34,10 +34,14 @@ class OllieEnvironment(BaseEnvironment):
 
     Harbor uses the same environment import path when it creates a separate
     verifier. Its verifier session IDs contain ``__verifier__``; those sessions
-    are returned as an instance of ``verifier_environment`` instead. Agent
-    sessions remain host-local and execute with the current user's permissions.
+    are returned as an instance of ``verifier_environment`` instead. Local
+    environment commands execute in an Ollie sandbox rooted at their working
+    directory. The trusted Ollie agent coordinator is launched separately on
+    the host and delegates its tool commands to its configured executor.
     """
 
+    _DEFAULT_OLLIE_VERSION = "0.2.4"
+    _HOST_OLLIE_COMMANDS: ClassVar[frozenset[str]] = frozenset({"--version", "agent"})
     _VERIFIER_SESSION_MARKER = "__verifier__"
     _RESERVED_PATHS: ClassVar[tuple[str, ...]] = (
         "/logs/agent",
@@ -301,45 +305,29 @@ class OllieEnvironment(BaseEnvironment):
         del user
         return self._virtual_to_host(path).is_file()
 
-    @override
-    async def exec(
-        self,
-        command: str,
-        cwd: str | None = None,
-        env: dict[str, str] | None = None,
-        timeout_sec: int | None = None,
-        user: str | int | None = None,
-    ) -> ExecResult:
+    def _validate_exec_user(self, user: str | int | None) -> None:
         effective_user = self._resolve_user(user)
         current_users = (None, "root", os.getuid(), os.geteuid(), getpass.getuser())
         if effective_user not in current_users:
             raise NotImplementedError(
                 f"OllieEnvironment cannot switch to user {effective_user!r}"
             )
-        if timeout_sec is not None and timeout_sec <= 0:
-            raise ValueError("timeout_sec must be positive")
 
-        host_cwd = self._virtual_to_host(cwd or self._virtual_workdir)
-        host_cwd.mkdir(parents=True, exist_ok=True)
-        process_env = os.environ.copy()
-        process_env.update(self._merge_env(env) or {})
-
-        process = await asyncio.create_subprocess_exec(
-            "/bin/bash",
-            "-lc",
-            command,
-            cwd=host_cwd,
-            env=process_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+    async def _communicate(
+        self,
+        process: asyncio.subprocess.Process,
+        *,
+        stdin: bytes | None,
+        timeout_sec: int | None,
+    ) -> tuple[bytes, bytes, bool]:
         try:
             if timeout_sec is None:
-                stdout_bytes, stderr_bytes = await process.communicate()
+                stdout, stderr = await process.communicate(stdin)
             else:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    process.communicate(), timeout=timeout_sec
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(stdin), timeout=timeout_sec
                 )
+            return stdout, stderr, False
         except asyncio.CancelledError:
             if process.returncode is None:
                 process.terminate()
@@ -352,33 +340,204 @@ class OllieEnvironment(BaseEnvironment):
         except TimeoutError:
             process.terminate()
             try:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                stdout, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=5
                 )
             except TimeoutError:
                 process.kill()
-                stdout_bytes, stderr_bytes = await process.communicate()
-            return ExecResult(
-                stdout=stdout_bytes.decode(errors="replace") or None,
-                stderr=(
-                    stderr_bytes.decode(errors="replace") + "\nCommand timed out"
-                ).strip(),
+                stdout, stderr = await process.communicate()
+            return stdout, stderr, True
+
+    async def _emit_output(self, result: ExecResult) -> None:
+        callback = self._output_callback()
+        if callback is None:
+            return
+        if result.stdout:
+            await callback(result.stdout, "stdout")
+        if result.stderr:
+            await callback(result.stderr, "stderr")
+
+    @override
+    async def exec(
+        self,
+        command: str,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        user: str | int | None = None,
+    ) -> ExecResult:
+        """Execute a command through Ollie's restricted local sandbox."""
+        self._validate_exec_user(user)
+        if timeout_sec is not None and timeout_sec <= 0:
+            raise ValueError("timeout_sec must be positive")
+
+        virtual_cwd = cwd or self._virtual_workdir
+        host_cwd = self._virtual_to_host(virtual_cwd).resolve(strict=False)
+        host_cwd.mkdir(parents=True, exist_ok=True)
+        process_env = os.environ.copy()
+        process_env.update(self._merge_env(env) or {})
+        package_spec = f"@getollie/cli@{self._DEFAULT_OLLIE_VERSION}"
+        npx = shutil.which("npx")
+        if npx is None:
+            raise RuntimeError("OllieEnvironment requires npx")
+        argv = [
+            npx,
+            "--yes",
+            package_spec,
+            "sandbox",
+            "--cwd",
+            str(host_cwd),
+            "--workspace-path",
+            virtual_cwd,
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=host_cwd,
+            env=process_env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        request = {
+            "id": 1,
+            "method": "exec",
+            "params": {"command": command},
+        }
+        stdin = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        stdout_bytes, stderr_bytes, timed_out = await self._communicate(
+            process,
+            stdin=stdin,
+            timeout_sec=timeout_sec,
+        )
+        stderr = stderr_bytes.decode(errors="replace") or None
+        if timed_out:
+            result = ExecResult(
+                stdout=None,
+                stderr=((stderr or "") + "\nCommand timed out").strip(),
                 return_code=124,
             )
+            await self._emit_output(result)
+            return result
+
+        response: dict[str, Any] | None = None
+        for line in stdout_bytes.decode(errors="replace").splitlines():
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and candidate.get("id") == 1:
+                response = candidate
+        if response is None:
+            result = ExecResult(
+                stdout=None,
+                stderr=stderr or "Ollie sandbox returned no response",
+                return_code=process.returncode or 1,
+            )
+        elif "error" in response:
+            error = response["error"]
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            result = ExecResult(stdout=None, stderr=message or stderr, return_code=1)
+        else:
+            payload = response.get("result")
+            if not isinstance(payload, dict):
+                result = ExecResult(
+                    stdout=None,
+                    stderr="Ollie sandbox returned an invalid response",
+                    return_code=1,
+                )
+            else:
+                result = ExecResult(
+                    stdout=payload.get("stdout") or None,
+                    stderr=payload.get("stderr") or stderr,
+                    return_code=int(payload.get("exitCode", 1)),
+                )
+        await self._emit_output(result)
+        return result
+
+    def _validate_host_output_path(self, path: Path | None) -> Path | None:
+        if path is None:
+            return None
+        resolved = path.resolve(strict=False)
+        try:
+            resolved.relative_to(self.trial_paths.trial_dir.resolve(strict=False))
+        except ValueError as error:
+            raise ValueError(
+                f"Host command output must stay within the trial directory: {path}"
+            ) from error
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+
+    async def exec_host(
+        self,
+        ollie_args: Sequence[str],
+        *,
+        ollie_version: str | None = None,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        stdout_path: Path | None = None,
+        stderr_path: Path | None = None,
+    ) -> ExecResult:
+        """Launch only the trusted Ollie CLI outside its command sandbox."""
+        if timeout_sec is not None and timeout_sec <= 0:
+            raise ValueError("timeout_sec must be positive")
+        if not ollie_args:
+            raise ValueError("ollie_args must not be empty")
+        if any(not isinstance(argument, str) for argument in ollie_args):
+            raise TypeError("ollie_args must contain only strings")
+        if ollie_args[0] not in self._HOST_OLLIE_COMMANDS:
+            raise ValueError(
+                "Host execution permits only Ollie CLI agent and version commands"
+            )
+
+        virtual_cwd = cwd or self._virtual_workdir
+        host_cwd = self._virtual_to_host(virtual_cwd).resolve(strict=False)
+        host_cwd.mkdir(parents=True, exist_ok=True)
+        version = ollie_version or self._DEFAULT_OLLIE_VERSION
+        if re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._-]*", version) is None:
+            raise ValueError(f"Invalid Ollie CLI version: {version!r}")
+        package_spec = f"@getollie/cli@{version}"
+        npx = shutil.which("npx")
+        if npx is None:
+            raise RuntimeError("OllieEnvironment requires npx")
+        argv = [npx, "--yes", package_spec, *ollie_args]
+        process_env = os.environ.copy()
+        process_env.update(self._merge_env(env) or {})
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=host_cwd,
+            env=process_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_bytes, stderr_bytes, timed_out = await self._communicate(
+            process,
+            stdin=None,
+            timeout_sec=timeout_sec,
+        )
+        output_file = self._validate_host_output_path(stdout_path)
+        if output_file is not None:
+            output_file.write_bytes(stdout_bytes)
+        error_file = self._validate_host_output_path(stderr_path)
+        if error_file is not None:
+            error_file.write_bytes(stderr_bytes)
 
         stdout = stdout_bytes.decode(errors="replace") or None
         stderr = stderr_bytes.decode(errors="replace") or None
-        callback = self._output_callback()
-        if callback is not None:
-            if stdout:
-                await callback(stdout, "stdout")
-            if stderr:
-                await callback(stderr, "stderr")
-        return ExecResult(
-            stdout=stdout,
-            stderr=stderr,
-            return_code=process.returncode or 0,
-        )
+        if timed_out:
+            result = ExecResult(
+                stdout=stdout,
+                stderr=((stderr or "") + "\nCommand timed out").strip(),
+                return_code=124,
+            )
+        else:
+            result = ExecResult(
+                stdout=stdout,
+                stderr=stderr,
+                return_code=process.returncode or 0,
+            )
+        await self._emit_output(result)
+        return result
 
     @staticmethod
     def _reject_symlink(path: Path) -> None:

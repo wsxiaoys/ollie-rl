@@ -22,6 +22,7 @@ from typing import Any, ClassVar, override
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
+    EnvVar,
     with_prompt_template,
 )
 from harbor.environments.base import BaseEnvironment
@@ -33,7 +34,7 @@ from ollie.harbor_environment import OllieEnvironment
 class OllieAgent(BaseInstalledAgent):
     """Run Ollie using the required :class:`OllieEnvironment` adapter."""
 
-    _DEFAULT_VERSION = "0.2.2"
+    _DEFAULT_VERSION = "0.2.4"
     _OUTPUT_FILENAME = "ollie.ndjson"
     _STDERR_FILENAME = "ollie.stderr"
 
@@ -44,6 +45,11 @@ class OllieAgent(BaseInstalledAgent):
             type="enum",
             choices=["none", "local", "daytona"],
             default="daytona",
+        ),
+        CliFlag(
+            "workspace_path",
+            cli="--workspace-path",
+            type="str",
         ),
         CliFlag(
             "max_steps",
@@ -59,6 +65,19 @@ class OllieAgent(BaseInstalledAgent):
             "max_output_bytes",
             cli="--max-output",
             type="int",
+        ),
+    ]
+
+    ENV_VARS: ClassVar[list[EnvVar]] = [
+        EnvVar(
+            kwarg="openai_base_url",
+            env="OPENAI_BASE_URL",
+            env_fallback="OPENAI_BASE_URL",
+        ),
+        EnvVar(
+            kwarg="openai_api_key",
+            env="OPENAI_API_KEY",
+            env_fallback="OPENAI_API_KEY",
         ),
     ]
 
@@ -95,6 +114,29 @@ class OllieAgent(BaseInstalledAgent):
     def _package_spec(self) -> str:
         return f"@getollie/cli@{self._package_version}"
 
+    async def _exec_coordinator(
+        self,
+        environment: OllieEnvironment,
+        ollie_args: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        stdout_path: Path | None = None,
+        stderr_path: Path | None = None,
+    ) -> None:
+        """Run the trusted Ollie CLI through the host allowlisted entrypoint."""
+        result = await environment.exec_host(
+            ollie_args,
+            ollie_version=self._package_version,
+            env=env,
+            timeout_sec=timeout_sec,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+        if result.return_code != 0:
+            command = shlex.join(["npx", "--yes", self._package_spec(), *ollie_args])
+            raise self._classify_exec_error(command, result)
+
     @override
     def get_version_command(self) -> str | None:
         argv = ["npx", "--yes", self._package_spec(), "--version"]
@@ -103,12 +145,9 @@ class OllieAgent(BaseInstalledAgent):
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         environment = self._require_environment(environment)
-        # npx resolves the package into npm's user cache. Nothing is installed
-        # globally and no root-level setup is performed.
-        await self.exec_as_agent(
-            environment,
-            command=self.get_version_command() or "false",
-        )
+        # The coordinator must run on the host so it can start its own local
+        # sandbox worker. npx only resolves the package into npm's user cache.
+        await self._exec_coordinator(environment, ["--version"])
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:
@@ -153,25 +192,21 @@ class OllieAgent(BaseInstalledAgent):
         environment = self._require_environment(environment)
         output_path = (self.logs_dir / self._OUTPUT_FILENAME).resolve()
         stderr_path = (self.logs_dir / self._STDERR_FILENAME).resolve()
-        argv = [
-            "npx",
-            "--yes",
-            self._package_spec(),
+        ollie_args = [
             "agent",
             "--cwd",
             ".",
             *self._cli_args(),
             instruction,
         ]
-        command = " ".join(shlex.quote(part) for part in argv)
+        provider_env = self.resolve_env_vars()
 
-        await self.exec_as_agent(
+        await self._exec_coordinator(
             environment,
-            command=(
-                "set -o pipefail; "
-                f"{command} 2> {shlex.quote(str(stderr_path))} "
-                f"| tee {shlex.quote(str(output_path))}"
-            ),
+            ollie_args,
+            env=provider_env or None,
+            stdout_path=output_path,
+            stderr_path=stderr_path,
         )
 
     @staticmethod
