@@ -27,6 +27,7 @@ from harbor.agents.installed.base import (
 )
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from harbor.trial.errors import AgentTimeoutError
 
 from ollie.harbor_environment import OllieEnvironment
 
@@ -34,7 +35,7 @@ from ollie.harbor_environment import OllieEnvironment
 class OllieAgent(BaseInstalledAgent):
     """Run Ollie using the required :class:`OllieEnvironment` adapter."""
 
-    _DEFAULT_VERSION = "0.3.1"
+    _DEFAULT_VERSION = "0.3.2"
     _OUTPUT_FILENAME = "ollie.ndjson"
     _STDERR_FILENAME = "ollie.stderr"
 
@@ -127,7 +128,10 @@ class OllieAgent(BaseInstalledAgent):
         )
         if result.return_code != 0:
             command = shlex.join(["npx", "--yes", self._package_spec(), *ollie_args])
-            raise self._classify_exec_error(command, result)
+            error = self._classify_exec_error(command, result)
+            if result.return_code == 124:
+                raise AgentTimeoutError(str(error)) from error
+            raise error
 
     @override
     def get_version_command(self) -> str | None:

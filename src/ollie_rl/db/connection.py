@@ -26,7 +26,7 @@ def resolve_database_url() -> str:
 
     Reads ``DATABASE_URL`` from the environment, falling back to
     :data:`DEFAULT_DATABASE_URL`. Kept as a standalone function so the Alembic
-    environment resolves the URL exactly the same way the application does.
+    # environment resolves the URL exactly the same way the application does.
     """
     return os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL
 
