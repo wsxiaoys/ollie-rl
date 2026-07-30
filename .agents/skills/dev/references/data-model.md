@@ -62,6 +62,7 @@ The lowest-level record: one LLM request/response. Persisted in the `chat_comple
 - `run_id` — the run this completion belongs to.
 - `datum_id` — the dataset item, derived from the run record on the server (client cannot lie).
 - `policy_generation` — stamped from `Sample.policy_generation` at completion-record time to track which model weight version produced the sample.
+- `sample_op_state` — optional durable state from `SampleOp.save_state()`, copied from the in-flight operation and retained after that short-lived row is cleared.
 
 ### Rollout (the group)
 `Rollout(runs)` is the in-memory representation of a GRPO group. It is built by `TunerService._collect_consumable_batch` and contains the K runs that share the same `datum_id`, each with its computed `advantage`.

@@ -187,6 +187,11 @@ class ChatCompletionModel(BaseModel):
     # sibling (which would fork the trajectory and pollute training). NULL for
     # rows written before this column existed.
     request_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Durable state returned by `SampleOp.save_state()`. The same value is
+    # stored on the short-lived in-flight row while generation is pending, then
+    # retained here after the completion has been recorded. NULL for
+    # non-resumable trainers and legacy rows.
+    sample_op_state: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     # Optional cached sample-time tensors written by trainers that need
     # to replay rollouts at train time (Tinker). Encoding/decoding is
     # handled transparently by the `_PackedIntList` / `_PackedFloatList`

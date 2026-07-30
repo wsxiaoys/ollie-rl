@@ -168,14 +168,15 @@ class SamplingMixin(TunerServiceBase):
                     "continuing to wait rather than resubmitting."
                 )
                 sample_op = await sampler.sample(request, restore_state=in_flight.state)
+                sample_op_state = in_flight.state
                 # End-to-end start is the original first-submit time so the
                 # recorded latency spans all re-attach cycles.
                 first_submit = in_flight.created_at
             else:
                 sample_op = await sampler.sample(request)
                 first_submit = utcnow()
-                state = sample_op.save_state()
-                if state is not None:
+                sample_op_state = sample_op.save_state()
+                if sample_op_state is not None:
                     # Resumable backend: persist resume state the moment the op
                     # is submitted so the next retry can re-attach. Stamp the
                     # trainer's current generation so a still-churning run can be
@@ -185,7 +186,7 @@ class SamplingMixin(TunerServiceBase):
                         tuner_id,
                         run_id,
                         request_hash,
-                        state,
+                        sample_op_state,
                         first_submit,
                         trainer.policy_generation,
                     )
@@ -223,6 +224,7 @@ class SamplingMixin(TunerServiceBase):
                 run_id=run_id,
                 datum_id=datum_id,
                 policy_generation=policy_generation,
+                sample_op_state=sample_op_state,
                 tokens=sample.tokens,
                 logprobs=sample.logprobs,
                 request=request,
@@ -422,6 +424,7 @@ class SamplingMixin(TunerServiceBase):
         request: ChatCompletionRequest,
         response: ChatCompletion,
         duration_ms: int,
+        sample_op_state: Optional[str] = None,
         tokens: Optional[List[int]] = None,
         logprobs: Optional[List[float]] = None,
         request_hash: Optional[str] = None,
@@ -431,6 +434,9 @@ class SamplingMixin(TunerServiceBase):
 
         `duration_ms` is the wall-clock generation latency in milliseconds,
         required so every recorded completion carries timing.
+
+        `sample_op_state` is the optional durable state returned by
+        `SampleOp.save_state()`, retained after the in-flight row is cleared.
 
         `tokens` and `logprobs` are optional sample-time tensors required
         by trainers (e.g. Tinker) that train on raw rollouts. They are
@@ -449,6 +455,7 @@ class SamplingMixin(TunerServiceBase):
                     run_id=run_id,
                     datum_id=datum_id,
                     policy_generation=policy_generation,
+                    sample_op_state=sample_op_state,
                     tokens=tokens,
                     logprobs=logprobs,
                     request=request.model_dump(mode="json"),
