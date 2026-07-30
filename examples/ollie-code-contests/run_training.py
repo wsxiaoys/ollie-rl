@@ -164,9 +164,7 @@ async def dispense_runs(
         )
         if response.status_code == 204:
             try:
-                retry_after = max(
-                    0.0, float(response.headers.get("Retry-After", "1"))
-                )
+                retry_after = max(0.0, float(response.headers.get("Retry-After", "1")))
             except ValueError:
                 retry_after = 1.0
             await asyncio.sleep(retry_after)

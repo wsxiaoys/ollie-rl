@@ -47,9 +47,7 @@ def extract_task(task_binary_b64: str, destination: Path) -> None:
         archive.extractall(destination, filter="data")
 
 
-def _set_toml_value(
-    source: str, *, section: str | None, key: str, value: str
-) -> str:
+def _set_toml_value(source: str, *, section: str | None, key: str, value: str) -> str:
     lines = source.splitlines()
     if section is None:
         start = 0
@@ -94,9 +92,7 @@ def adapt_task_for_ollie(task_dir: Path) -> None:
             f"{config_path} declares unsupported artifacts; refusing to overwrite them"
         )
 
-    source = _set_toml_value(
-        source, section=None, key="artifacts", value='["/app"]'
-    )
+    source = _set_toml_value(source, section=None, key="artifacts", value='["/app"]')
     source = _set_toml_value(
         source, section="environment", key="workdir", value='"/app"'
     )
@@ -167,9 +163,7 @@ def main() -> int:
                 extract_task(row["task_binary"], destination)
                 adapt_task_for_ollie(destination)
                 extracted += 1
-                print(
-                    f"[prepare] {extracted:04d}  {row['path']}  ->  {destination}"
-                )
+                print(f"[prepare] {extracted:04d}  {row['path']}  ->  {destination}")
             offset += len(rows)
 
     print(f"[prepare] done: {extracted} Ollie Harbor tasks under {TASKS_DIR}")
