@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 import { rewardDistributionQuery, tunerQuery } from "../api/queries";
-import type { NextPickTier } from "../api/types";
+import type { NextPickTier, TunerStatus } from "../api/types";
 import { DatumTable } from "../components/DatumTable";
 import { RewardDistribution } from "../components/RewardDistribution";
 import { Badge, Mono, Panel, ProgressBar, StatCard } from "../components/ui";
@@ -16,6 +16,16 @@ const TIER_TONE: Record<
   saturated: "good",
   none: "default",
 };
+
+const STATUS_TONE: Record<TunerStatus, "good" | "warn" | "danger"> = {
+  PENDING: "warn",
+  IN_PROGRESS: "good",
+  CANCELLED: "danger",
+};
+
+function formatStatus(status: TunerStatus): string {
+  return status.toLowerCase().replaceAll("_", " ");
+}
 
 /** Human-readable train op duration, e.g. 90.4 → "1m 30s", 7.2 → "7.2s". */
 function formatDuration(seconds: number): string {
@@ -60,6 +70,9 @@ export function TunerDetailPage() {
           <h1>{data.name}</h1>
           <div className="detail-header__meta">
             <Mono>{data.tuner_id}</Mono>
+            <Badge tone={STATUS_TONE[data.status]}>
+              {formatStatus(data.status)}
+            </Badge>
             <Badge tone="info">{data.trainer}</Badge>
             <Badge tone="good">
               gen {data.policy_generation}
