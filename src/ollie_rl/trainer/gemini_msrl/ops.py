@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+SAMPLE_POLL_INTERVAL_SECONDS = 5.0
+
 
 class GeminiMsrlOp:
     def __init__(
@@ -65,6 +67,7 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
     async def wait(self) -> Sample:
         completed_op = await self.client.wait_for_operation(
             self.op_name,
+            poll_interval=SAMPLE_POLL_INTERVAL_SECONDS,
         )
 
         response = completed_op.get_response_as(GenerateContentTuningScopeResponse)
