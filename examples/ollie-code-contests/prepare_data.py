@@ -106,17 +106,50 @@ def adapt_task_for_ollie(task_dir: Path) -> None:
         key="environment_mode",
         value='"separate"',
     )
+    source = _set_toml_value(
+        source,
+        section="verifier.environment",
+        key="docker_image",
+        value='"python:3.12-slim"',
+    )
+    source = _set_toml_value(
+        source,
+        section="verifier.environment",
+        key="workdir",
+        value='"/app"',
+    )
     tomllib.loads(source)
     config_path.write_text(source, encoding="utf-8")
+
+
+def repair_existing_tasks() -> int:
+    task_dirs = sorted(
+        path
+        for path in TASKS_DIR.iterdir()
+        if path.is_dir() and (path / "task.toml").exists()
+    )
+    for index, task_dir in enumerate(task_dirs, start=1):
+        adapt_task_for_ollie(task_dir)
+        print(f"[prepare] repaired {index:04d}  {task_dir.name}")
+    print(f"[prepare] done: repaired {len(task_dirs)} existing tasks")
+    return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=64)
     parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument(
+        "--repair-existing",
+        action="store_true",
+        help="Re-adapt downloaded tasks without fetching the dataset again.",
+    )
     args = parser.parse_args()
 
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    if args.repair_existing:
+        return repair_existing_tasks()
+
     extracted = 0
     offset = args.offset
     with httpx.Client(timeout=60.0) as client:

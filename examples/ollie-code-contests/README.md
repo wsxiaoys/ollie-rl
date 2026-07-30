@@ -29,7 +29,16 @@ Harbor task with:
 
 - `artifacts = ["/app"]`, so the Ollie workspace reaches the verifier;
 - `environment.workdir = "/app"`;
-- `verifier.environment_mode = "separate"`.
+- `verifier.environment_mode = "separate"`;
+- `verifier.environment.docker_image = "python:3.12-slim"`, so Harbor can
+  create the separate verifier and upload the task's tests to it.
+
+Tasks prepared by an older version can be updated without downloading them
+again:
+
+```bash
+uv run python examples/ollie-code-contests/prepare_data.py --repair-existing
+```
 
 ## Run training
 
@@ -37,7 +46,7 @@ Start the ollie-rl server first (`uv run poe dev`), then run:
 
 ```bash
 uv run python examples/ollie-code-contests/run_training.py \
-  --environment daytona \
+  --verifier-environment daytona \
   --runs 200 \
   --concurrency 8
 ```
@@ -62,7 +71,7 @@ verifier receives `/app` in a separate environment and reports the task reward.
 | `--ollie-executor` | `daytona` | Delegated executor: `none`, `local`, or `daytona`. |
 | `--ollie-max-steps` | unset | Optional model/tool step limit. |
 | `--ollie-command-timeout-ms` | unset | Optional delegated-command timeout. |
-| `--environment` | `docker` | Separate Harbor verifier backend. |
+| `--verifier-environment` | `docker` | Separate Harbor verifier backend (`--environment` is a compatibility alias). |
 | `--runs` | `200` | Number of run/score iterations. |
 | `--concurrency` | `8` | Parallel Harbor trials. |
 | `--tuner-id` | unset | Resume an existing tuner. |
