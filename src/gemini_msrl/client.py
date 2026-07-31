@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Self
+from typing import AbstractSet, Any, Self
 
 import httpx
 
@@ -152,6 +152,7 @@ class GeminiMsrlClient:
         *,
         base_url: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        quiet_error_statuses: AbstractSet[int] = frozenset(),
     ) -> dict[str, Any]:
         """Helper to perform requests and handle errors."""
         client = await self.get_client()
@@ -194,7 +195,8 @@ class GeminiMsrlClient:
                 error_msg = error.get("message", error_msg)
                 details = error.get("details")
 
-            logger.error("API Error %s: %s", response.status_code, error_msg)
+            if response.status_code not in quiet_error_statuses:
+                logger.error("API Error %s: %s", response.status_code, error_msg)
             raise GeminiMsrlHttpError(response.status_code, error_msg, details)
 
         return response.json()
@@ -222,7 +224,12 @@ class GeminiMsrlClient:
         response_data = await self._request("POST", path, json_data=json_data)
         return TuningJob.model_validate(response_data)
 
-    async def get_tuning_job(self, name: str) -> TuningJob:
+    async def get_tuning_job(
+        self,
+        name: str,
+        *,
+        quiet_error_statuses: AbstractSet[int] = frozenset(),
+    ) -> TuningJob:
         """
         Retrieves details of a tuning job.
 
@@ -230,7 +237,9 @@ class GeminiMsrlClient:
         """
         # Ensure name is a path relative to v1beta1
         path = name if name.startswith("v1beta1/") else f"v1beta1/{name}"
-        response_data = await self._request("GET", path)
+        response_data = await self._request(
+            "GET", path, quiet_error_statuses=quiet_error_statuses
+        )
         return TuningJob.model_validate(response_data)
 
     async def cancel_tuning_job(self, name: str) -> None:

@@ -80,8 +80,19 @@ class GeminiMsrlTrainer(Trainer):
 
     async def _fetch_status(self) -> TunerStatus:
         try:
-            job = await self.client.get_tuning_job(self.tuning_job_name)
+            job = await self.client.get_tuning_job(
+                self.tuning_job_name,
+                # Legacy tuners can remain valid in Ollie's database after
+                # access to their original Gemini project has been removed.
+                quiet_error_statuses={403},
+            )
         except GeminiMsrlHttpError as exc:
+            if exc.status_code == 403:
+                # Treat inaccessible legacy backends as terminal/read-only.
+                # Their persisted runs and metrics remain available through
+                # Ollie's query endpoints, while dispensing is disabled by the
+                # CANCELLED lifecycle status.
+                return TunerStatus.CANCELLED
             if exc.status_code != 429:
                 raise
             fallback = self._status_cache.stale_or(TunerStatus.PENDING)
