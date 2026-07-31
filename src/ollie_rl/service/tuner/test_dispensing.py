@@ -124,8 +124,8 @@ class TerminalStatsTestCase(unittest.TestCase):
     behavior-penalty runs (``"length"`` / ``"content_filter"``). It returns a
     ``TerminalStats(rewarded, length, succeeded, content_filter)`` per datum.
     ``rewarded`` counts every rewarded run (including content-filtered ones) and
-    is the shared quarantine denominator; the unhealthy-finish numerator
-    (``length + content_filter``) is summed by ``quarantined_datums``.
+    is the shared quarantine denominator; only ``length`` enters the
+    length-limited-finish numerator used by ``quarantined_datums``.
     """
 
     def test_empty_maps_are_all_zero(self):
@@ -170,8 +170,8 @@ class TerminalStatsTestCase(unittest.TestCase):
     def test_content_filter_counted_in_rewarded_on_own_axis(self):
         # d1: r1/r2 length-limited, r3 content-filtered (malformed). The
         # content-filtered run counts in `rewarded` (consistent with batch/group
-        # accounting) and is tracked on the `content_filter` axis; downstream the
-        # unhealthy-finish numerator sums `length + content_filter`.
+        # accounting) and is tracked on the `content_filter` axis, but downstream
+        # only `length` enters the length-limited-finish numerator.
         stats = terminal_stats(
             ["d1"],
             _rewarded(r1=("d1", -10.0), r2=("d1", -10.0), r3=("d1", -1.0)),
@@ -192,46 +192,43 @@ class TerminalStatsTestCase(unittest.TestCase):
         self.assertEqual(stats, {"d1": TerminalStats()})
 
 
-class QuarantinedDatumsUnhealthyFinishTestCase(unittest.TestCase):
-    """The unhealthy-finish filter of the pure quarantined_datums selector.
+class QuarantinedDatumsLengthLimitedFinishTestCase(unittest.TestCase):
+    """The length-limited-finish filter of ``quarantined_datums``.
 
-    The numerator sums both auto-penalty finish reasons (``length`` +
-    ``content_filter``) over the full ``rewarded`` denominator; the
-    ``min_samples`` gate is on ``rewarded`` too.
+    The numerator counts only ``length`` finishes over the full ``rewarded``
+    denominator; the ``min_samples`` gate is on ``rewarded`` too.
     """
 
     def test_no_datums_when_maps_empty(self):
         self.assertEqual(
             quarantined_datums(
-                ["d1", "d2"], {}, {}, min_samples=2, max_unhealthy_finish_ratio=0.5
+                ["d1", "d2"], {}, {}, min_samples=2, max_length_limited_finish_ratio=0.5
             ),
             set(),
         )
 
-    def test_quarantines_high_unhealthy_finish_rate(self):
+    def test_quarantines_high_length_limited_finish_rate(self):
         # d1: 2 length / 3 rewarded = 0.67 >= 0.5, samples 3 >= 2.
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(r1=("d1", 0.0), r2=("d1", 0.0), r3=("d1", 1.0)),
             {"r1": "length", "r2": "length"},
             min_samples=2,
-            max_unhealthy_finish_ratio=0.5,
+            max_length_limited_finish_ratio=0.5,
         )
         self.assertEqual(excluded, {"d1"})
 
-    def test_content_filter_counts_toward_unhealthy_numerator(self):
-        # d1: 2 length + 1 content-filtered (malformed). Both feed the
-        # unhealthy-finish numerator: (2 + 1) / 3 rewarded = 1.0 (>= 1.0), and
-        # rewarded 3 >= 2 min-samples -> quarantined. The malformed run no longer
-        # rescues the datum; it counts as another unhealthy finish.
+    def test_content_filter_is_excluded_from_numerator(self):
+        # d1: 2 length / 3 rewarded = 0.67 < 1.0. The content-filtered attempt
+        # remains in the denominator but does not count as a length-limited finish.
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(r1=("d1", -10.0), r2=("d1", -10.0), r3=("d1", -1.0)),
             {"r1": "length", "r2": "length", "r3": "content_filter"},
             min_samples=2,
-            max_unhealthy_finish_ratio=1.0,
+            max_length_limited_finish_ratio=1.0,
         )
-        self.assertEqual(excluded, {"d1"})
+        self.assertEqual(excluded, set())
 
     def test_not_quarantined_below_min_samples(self):
         # d1: 1 length / 1 rewarded = 1.0 rate, but only 1 sample < 2 samples.
@@ -240,29 +237,25 @@ class QuarantinedDatumsUnhealthyFinishTestCase(unittest.TestCase):
             _rewarded(r1=("d1", 0.0)),
             {"r1": "length"},
             min_samples=2,
-            max_unhealthy_finish_ratio=0.5,
+            max_length_limited_finish_ratio=0.5,
         )
         self.assertEqual(excluded, set())
 
     def test_content_filter_counts_toward_min_samples(self):
-        # d1: 2 length + 1 content-filtered. Every rewarded run is a sample, so
-        # rewarded 3 >= 3 min-samples meets the gate and (2 + 1) / 3 = 1.0
-        # (>= 1.0) -> quarantined. (content_filter is a genuine degenerate
-        # rewarded attempt, so it counts both as a sample and in the numerator.)
+        # Every rewarded run is a sample, so the content-filtered attempt helps
+        # meet the gate. With a 0.5 threshold, 2 length / 3 rewarded quarantines.
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(r1=("d1", -10.0), r2=("d1", -10.0), r3=("d1", -1.0)),
             {"r1": "length", "r2": "length", "r3": "content_filter"},
             min_samples=3,
-            max_unhealthy_finish_ratio=1.0,
+            max_length_limited_finish_ratio=0.5,
         )
         self.assertEqual(excluded, {"d1"})
 
-    def test_content_filter_and_length_combine_to_quarantine(self):
-        # Example: 3 length + 1 content-filtered run, min_samples=4. rewarded=4
-        # meets the gate and the unhealthy-finish numerator sums both reasons:
-        # (3 + 1) / 4 = 1.0 (>= 1.0) -> quarantined immediately (no extra
-        # dispense needed, since content_filter is a real degenerate sample).
+    def test_content_filter_does_not_combine_with_length(self):
+        # Three length finishes plus one content-filtered attempt produce a
+        # length-limited ratio of 3/4, not 1.0.
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(
@@ -278,9 +271,9 @@ class QuarantinedDatumsUnhealthyFinishTestCase(unittest.TestCase):
                 "r4": "content_filter",
             },
             min_samples=4,
-            max_unhealthy_finish_ratio=1.0,
+            max_length_limited_finish_ratio=1.0,
         )
-        self.assertEqual(excluded, {"d1"})
+        self.assertEqual(excluded, set())
 
     def test_mixed_reasons_below_min_samples_not_quarantined(self):
         # d1: 1 length + 1 content-filtered, rewarded=2 < 3 min-samples -> gate
@@ -290,7 +283,7 @@ class QuarantinedDatumsUnhealthyFinishTestCase(unittest.TestCase):
             _rewarded(r1=("d1", -10.0), r2=("d1", -1.0)),
             {"r1": "length", "r2": "content_filter"},
             min_samples=3,
-            max_unhealthy_finish_ratio=1.0,
+            max_length_limited_finish_ratio=1.0,
         )
         self.assertEqual(excluded, set())
 
@@ -306,15 +299,13 @@ class QuarantinedDatumsUnhealthyFinishTestCase(unittest.TestCase):
             ),
             {"r4": "length"},
             min_samples=2,
-            max_unhealthy_finish_ratio=0.5,
+            max_length_limited_finish_ratio=0.5,
         )
         self.assertEqual(excluded, set())
 
-    def test_combined_reasons_cross_rate_where_neither_alone_would(self):
-        # d1: 1 length + 1 content-filtered over 4 rewarded. Neither reason alone
-        # reaches 0.5 (each is 1/4 = 0.25), but summed the unhealthy-finish rate
-        # is (1 + 1) / 4 = 0.5 (>= 0.5) -> quarantined. Demonstrates the combined
-        # numerator.
+    def test_content_filter_cannot_push_length_ratio_over_threshold(self):
+        # d1: 1 length + 1 content-filtered over 4 rewarded. Only the length
+        # finish enters the numerator, so the ratio is 1/4 and remains below 0.5.
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(
@@ -325,9 +316,9 @@ class QuarantinedDatumsUnhealthyFinishTestCase(unittest.TestCase):
             ),
             {"r1": "length", "r2": "content_filter"},
             min_samples=4,
-            max_unhealthy_finish_ratio=0.5,
+            max_length_limited_finish_ratio=0.5,
         )
-        self.assertEqual(excluded, {"d1"})
+        self.assertEqual(excluded, set())
 
     def test_rate_and_samples_thresholds_are_inclusive(self):
         # d1: 2 length / 4 rewarded = exactly 0.5 and exactly 4 samples.
@@ -341,7 +332,7 @@ class QuarantinedDatumsUnhealthyFinishTestCase(unittest.TestCase):
             ),
             {"r3": "length", "r4": "length"},
             min_samples=4,
-            max_unhealthy_finish_ratio=0.5,
+            max_length_limited_finish_ratio=0.5,
         )
         self.assertEqual(excluded, {"d1"})
 
@@ -434,8 +425,8 @@ class QuarantinedDatumsSucceedTestCase(unittest.TestCase):
         # d1: 2 successes + 1 content-filtered (malformed). The success ratio
         # uses the full `rewarded` denominator and the malformed run is NOT a
         # success: 2/3 = 0.67 < 0.9 -> NOT quarantined by the too-easy filter.
-        # (With the unhealthy-finish filter disabled here, the malformed run only
-        # affects the denominator, never the success numerator.)
+        # (With the length-limited-finish filter disabled here, the malformed run
+        # only affects the denominator, never the success numerator.)
         excluded = quarantined_datums(
             ["d1"],
             _rewarded(r1=("d1", 1.0), r2=("d1", 1.0), r3=("d1", -1.0)),
@@ -470,8 +461,8 @@ class QuarantinedDatumsCombinedTestCase(unittest.TestCase):
     """Both filters together: a datum caught by either is excluded."""
 
     def test_union_of_both_filters(self):
-        # d1 too many unhealthy finishes (2/2 length), d2 too easy (2/2 success),
-        # d3 healthy (1/2 success, 0 unhealthy).
+        # d1 too many length-limited finishes (2/2), d2 too easy (2/2 success),
+        # d3 healthy (1/2 success, no length-limited finishes).
         excluded = quarantined_datums(
             ["d1", "d2", "d3"],
             _rewarded(
@@ -484,7 +475,7 @@ class QuarantinedDatumsCombinedTestCase(unittest.TestCase):
             ),
             {"l1": "length", "l2": "length"},
             min_samples=2,
-            max_unhealthy_finish_ratio=0.5,
+            max_length_limited_finish_ratio=0.5,
             max_succeed_ratio=0.9,
         )
         self.assertEqual(excluded, {"d1", "d2"})

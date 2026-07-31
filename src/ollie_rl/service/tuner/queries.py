@@ -358,7 +358,7 @@ class QueryMixin(TunerServiceBase):
             rewarded_by_run,
             finish_reason_by_run,
             min_samples=recipe.quarantine_min_samples,
-            max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
+            max_length_limited_finish_ratio=recipe.max_length_limited_finish_ratio,
             max_succeed_ratio=recipe.max_succeed_ratio,
         )
 
@@ -372,8 +372,8 @@ class QueryMixin(TunerServiceBase):
             trained_here = trained_by_datum.get(datum_id, 0)
             # `terminal_stats` gives per-datum (rewarded, length, succeeded,
             # content_filter). These let a client derive the active
-            # unhealthy-finish (`(length + content_filter) / rewarded`) and
-            # success quarantine ratios. Expired is counted separately for
+            # length-limited-finish (`length / rewarded`) and success quarantine
+            # ratios. Expired is counted separately for
             # run-status observability only.
             stats = stats_by_datum.get(datum_id, TerminalStats())
             expired_here = expired_by_datum.get(datum_id, 0)

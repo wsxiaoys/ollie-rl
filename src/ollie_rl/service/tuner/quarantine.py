@@ -26,8 +26,8 @@ dispense, rejected-count bump) stays in lock-step.
 # Quarantine accepts two optional thresholds (both from the tuner's recipe;
 # omit/None to disable each):
 #
-#   * `max_unhealthy_finish_ratio` -- quarantine datums whose rewarded attempts
-#     too often end on an unhealthy finish reason (length-limited or malformed).
+#   * `max_length_limited_finish_ratio` -- quarantine datums whose rewarded
+#     attempts too often end with the length-limited (`length`) finish reason.
 #   * `max_succeed_ratio` -- quarantine datums that are solved too reliably, so
 #     compute isn't wasted on datums the policy has already mastered (they no
 #     longer produce a useful learning signal).
@@ -44,8 +44,8 @@ dispense, rejected-count bump) stays in lock-step.
 #     behavior-penalty terminal `finish_reason`, that reason (`"length"` or
 #     `"content_filter"`). `terminal_stats` joins it to `_rewarded_datums`: both
 #     `length` and `content_filter` runs are tallied (each on its own axis) and
-#     both count in `rewarded`. The unhealthy-finish filter sums them
-#     (`length + content_filter`) over the full `rewarded` denominator.
+#     both count in `rewarded`. Only `length` feeds the length-limited-finish
+#     numerator; content-filtered runs remain in the full `rewarded` denominator.
 #   * Expired/lost status is tracked separately in tuner_service for progress
 #     and run-list observability, but is intentionally not a quarantine metric
 #     anymore.
@@ -67,19 +67,17 @@ dispense, rejected-count bump) stays in lock-step.
 #   * Content-filtered (malformed). A run with at least one completion whose
 #     `finish_reason` is `"content_filter"`, terminated with the recipe's
 #     `content_filter_penalty`. It counts as a real reward (in `rewarded`, like
-#     batch/group accounting) and, like `length`, as an unhealthy finish: both
-#     are auto-penalty degenerate rollouts (no verifier grade), so the
-#     unhealthy-finish filter sums them into one numerator.
+#     batch/group accounting), but is not a length-limited finish and therefore
+#     does not enter the length-limited-finish numerator.
 #   * Succeeded. A rewarded run with `reward == 1.0`; a subset of the rewarded
 #     runs, derived from `RewardedRun.reward`.
 #   * Quarantine denominators (expired/lost attempts never counted). Both
 #     filters share the full `rewarded` denominator and the `min_samples` gate
 #     (`rewarded >= min_samples`):
-#       - unhealthy-finish rate = (length + content_filter) / rewarded.
-#       - success ratio         = succeeded / rewarded.
-#     `content_filter` is no longer subtracted anywhere: a malformed run is a
-#     genuine (degenerate) rewarded attempt, so it counts both as a sample and
-#     in the unhealthy-finish numerator alongside `length`.
+#       - length-limited-finish rate = length / rewarded.
+#       - success ratio               = succeeded / rewarded.
+#     A malformed content-filtered run is a genuine rewarded attempt, so it
+#     counts as a sample in the denominator, but not as a length-limited finish.
 #   * All-time counting. Every rewarded attempt for a datum is counted -- there
 #     is no recency window, so all signals span the datum's entire history. A
 #     quarantined datum receives no new runs, so once it crosses a threshold
@@ -88,8 +86,8 @@ dispense, rejected-count bump) stays in lock-step.
 #   * Quarantine conditions (dispense passes `min_samples =
 #     recipe.quarantine_min_samples`). Both gate on rewarded >= min_samples,
 #     then:
-#       - unhealthy: rate  >= max_unhealthy_finish_ratio.
-#       - succeed:   ratio >= max_succeed_ratio.
+#       - length-limited: rate  >= max_length_limited_finish_ratio.
+#       - succeed:        ratio >= max_succeed_ratio.
 #
 # Observability: `get_progress` reuses `terminal_stats` to populate
 # `DatumProgress.length` / `rewarded` / `succeeded` (the raw tallies) so an
@@ -124,10 +122,10 @@ def terminal_stats(
       (malformed) run is tallied on its own ``content_filter`` axis.
 
     ``rewarded`` counts *every* rewarded run (including content-filtered ones),
-    matching ``scheduler_scores`` and batch/group accounting. The unhealthy-finish
-    quarantine filter sums ``length + content_filter`` over this full ``rewarded``
-    denominator (see :func:`quarantined_datums`); ``content_filter`` is not
-    subtracted anywhere.
+    matching ``scheduler_scores`` and batch/group accounting. The
+    length-limited-finish quarantine filter divides ``length`` by this full
+    ``rewarded`` denominator (see :func:`quarantined_datums`), excluding
+    ``content_filter`` from the numerator.
     """
     finish_reason_by_run = finish_reason_by_run or {}
     rewarded: Dict[str, int] = {d: 0 for d in datum_pool}
@@ -164,7 +162,7 @@ def quarantined_datums(
     finish_reason_by_run: Dict[str, str],
     *,
     min_samples: float,
-    max_unhealthy_finish_ratio: Optional[float] = None,
+    max_length_limited_finish_ratio: Optional[float] = None,
     max_succeed_ratio: Optional[float] = None,
 ) -> Set[str]:
     """Datums to exclude from dispense, per the enabled quarantine filters.
@@ -175,12 +173,10 @@ def quarantined_datums(
     other. Once the gate is met, a datum is quarantined when *either* enabled
     filter fires:
 
-    * unhealthy-finish (``max_unhealthy_finish_ratio``): rate ``(length +
-      content_filter) / rewarded >= max_unhealthy_finish_ratio`` -- its rewarded
-      attempts too often end on an unhealthy finish reason. ``length``
-      (length-limited) and ``content_filter`` (malformed) are both auto-penalty
-      degenerate rollouts (no verifier grade), so they're summed into one
-      numerator.
+    * length-limited finish (``max_length_limited_finish_ratio``): rate
+      ``length / rewarded >= max_length_limited_finish_ratio`` -- its rewarded
+      attempts too often exhaust the generation budget. Content-filtered
+      attempts count in ``rewarded`` but are excluded from the numerator.
     * too-easy (``max_succeed_ratio``): success ratio ``succeeded / rewarded >=
       max_succeed_ratio`` -- it is solved too reliably.
 
@@ -196,12 +192,11 @@ def quarantined_datums(
         # ones); both filters divide by the full `rewarded` count.
         if s.rewarded <= 0 or s.rewarded < min_samples:
             continue
-        # Unhealthy-finish filter: `length` (length-limited) and `content_filter`
-        # (malformed) are both auto-penalty degenerate rollouts with no verifier
-        # grade, so sum them into one numerator over the full `rewarded`.
+        # Length-limited-finish filter: content-filtered attempts remain in the
+        # rewarded denominator but are excluded from the numerator.
         if (
-            max_unhealthy_finish_ratio is not None
-            and (s.length + s.content_filter) / s.rewarded >= max_unhealthy_finish_ratio
+            max_length_limited_finish_ratio is not None
+            and s.length / s.rewarded >= max_length_limited_finish_ratio
         ):
             excluded.add(d)
             continue

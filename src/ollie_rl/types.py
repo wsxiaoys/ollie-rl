@@ -116,8 +116,8 @@ class DatumProgress(BaseModel):
     # Per-datum terminal-attempt tallies over the datum's entire history (no
     # recency window). Both POST /runs quarantine filters share the full
     # `rewarded` denominator and the `min_samples` gate:
-    #   * unhealthy-finish rate = (length + content_filter) / rewarded
-    #   * success ratio         = succeeded / rewarded
+    #   * length-limited-finish rate = length / rewarded
+    #   * success ratio               = succeeded / rewarded
     #
     # `expired`: all-time count of `expired` runs -- expired, unrewarded runs
     # that either still have a lingering in-flight op (the generation itself
@@ -130,13 +130,13 @@ class DatumProgress(BaseModel):
     # and content-filtered (malformed) runs (consistent with batch/group
     # accounting). It is the shared denominator for both quarantine filters and
     # the `min_samples` gate.
-    # `length`: the subset of rewarded runs with a length finish reason; part of
-    # the unhealthy-finish numerator.
+    # `length`: the subset of rewarded runs with a length finish reason; the
+    # numerator of the length-limited-finish ratio.
     # `succeeded`: the `reward == 1.0` subset of `rewarded`.
     # `content_filter`: the subset of rewarded runs whose completion was
     # content-filtered (malformed); carries the `content_filter_penalty` reward.
-    # Summed with `length` into the unhealthy-finish numerator (both are
-    # auto-penalty degenerate rollouts).
+    # It remains in the rewarded denominator but is excluded from the
+    # length-limited-finish numerator.
     length: int
     rewarded: int
     succeeded: int
@@ -282,9 +282,9 @@ class ListDatumsResponse(BaseModel):
 # `max_context_window` (prompt + completion + reasoning tokens) and was converted
 # to a cleared length sample. `content_filter` means at least one completion was
 # content-filtered (a malformed model output the server terminated with the
-# recipe's `content_filter_penalty`); like `length`, it is an unhealthy finish
-# reason, and both are summed into the `max_unhealthy_finish_ratio` quarantine
-# numerator. `expired` and `lost` both mean "reward is None and
+# recipe's `content_filter_penalty`). Content-filtered runs remain observable but
+# are excluded from the `max_length_limited_finish_ratio` quarantine numerator.
+# `expired` and `lost` both mean "reward is None and
 # the lease has passed"; they differ on *why*. `expired` means a compute-waste
 # signal fired: the run either still has a lingering `InFlightChatCompletionModel`
 # row (the generation itself stalled past the lease) or its summed completion
@@ -292,8 +292,7 @@ class ListDatumsResponse(BaseModel):
 # (crashed/abandoned worker, or ops all finished but no reward was ever posted).
 # Both are surfaced as their own aggregate counts (`RunProgress.expired` /
 # `RunProgress.lost`) and per-datum (`DatumProgress.expired`). Quarantine uses
-# rewarded unhealthy-finish (length + content_filter) samples instead of expired
-# runs.
+# rewarded length-limited finishes instead of expired runs.
 RunStatus = Literal[
     "in_flight",
     "expired",

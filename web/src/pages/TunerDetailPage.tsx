@@ -270,7 +270,7 @@ export function TunerDetailPage() {
                 items={progress.data.items}
                 groupSize={recipe.group_size}
                 quarantineMinSamples={recipe.quarantine_min_samples}
-                maxUnhealthyFinishRatio={recipe.max_unhealthy_finish_ratio}
+                maxLengthLimitedFinishRatio={recipe.max_length_limited_finish_ratio}
                 maxSucceedRatio={recipe.max_succeed_ratio}
                 hideExcluded={hideExcluded}
                 tunerId={data.tuner_id}

@@ -236,7 +236,7 @@ async def dispense_runs(
     header and retry without starting a Harbor sandbox; only a non-empty
     ``200`` batch represents actual leases. Partial batches are accepted.
 
-    Datum quarantine (unhealthy-finish-rate / success-rate filtering) is
+    Datum quarantine (length-limited-finish-rate / success-rate filtering) is
     configured on the tuner's recipe, not per request. Transient transport
     failures are retried with backoff; see :func:`_request_with_retry`.
     """

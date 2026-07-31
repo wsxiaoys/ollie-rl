@@ -252,9 +252,9 @@ class TunerServiceBase:
         # Both filters share the rewarded denominator: a rewarded run has no
         # in-flight row (deleted on success). Each `RewardedRun` carries its
         # datum_id + reward, so the success numerator (reward == 1.0) is derived
-        # from this same map -- no separate query. Behavior-penalty finish
-        # reasons (`length` / `content_filter`) feed the unhealthy-finish
-        # numerator (intersected with `rewarded_by_run` in the pure helper).
+        # from this same map -- no separate query. The `length` behavior-penalty
+        # finish reason feeds the length-limited-finish numerator; content-filtered
+        # runs remain only in the rewarded denominator.
         rewarded_by_run = await self._rewarded_datums(tuner_id, session)
         finish_reason_by_run = await self._finish_reason_datums(tuner_id, session)
         return quarantined_datums(
@@ -262,7 +262,7 @@ class TunerServiceBase:
             rewarded_by_run,
             finish_reason_by_run,
             min_samples=recipe.quarantine_min_samples,
-            max_unhealthy_finish_ratio=recipe.max_unhealthy_finish_ratio,
+            max_length_limited_finish_ratio=recipe.max_length_limited_finish_ratio,
             max_succeed_ratio=recipe.max_succeed_ratio,
         )
 
@@ -285,8 +285,8 @@ class TunerServiceBase:
         * ``list_runs``/``get_run`` derive the ``RunStatus == "length"`` and
           ``"content_filter"`` splits from the mapped value.
         * :func:`terminal_stats` uses it to count both ``length`` and
-          ``content_filter`` attempts; both are summed into the unhealthy-finish
-          quarantine numerator (``(length + content_filter) / rewarded``).
+          ``content_filter`` attempts. Only ``length`` enters the
+          length-limited-finish quarantine numerator (``length / rewarded``).
 
         A run terminates at its first behavior-penalty completion, so the two
         reasons are mutually exclusive in practice; if a run ever recorded both,

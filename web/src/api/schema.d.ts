@@ -1294,10 +1294,10 @@ export interface components {
              */
             max_context_window: number;
             /**
-             * Max Unhealthy Finish Ratio
+             * Max Length Limited Finish Ratio
              * @default 1
              */
-            max_unhealthy_finish_ratio: number;
+            max_length_limited_finish_ratio: number;
             /**
              * Max Succeed Ratio
              * @default 1

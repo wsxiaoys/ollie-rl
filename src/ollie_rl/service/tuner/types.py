@@ -34,14 +34,14 @@ class TerminalStats(BaseModel):
       batch/group accounting): ``length`` and ``content_filter`` are subsets of
       it. It is the shared denominator for both quarantine filters and the
       ``min_samples`` sample gate.
-    * ``length`` -- rewarded runs with at least one length-limited completion; a
-      subset of ``rewarded`` and part of the unhealthy-finish numerator.
+    * ``length`` -- rewarded runs with at least one length-limited completion;
+      the numerator of the length-limited-finish quarantine ratio.
     * ``succeeded`` -- rewarded runs with ``reward == 1.0`` (the success
       numerator); a subset of ``rewarded``.
     * ``content_filter`` -- rewarded runs whose completion was content-filtered
       (malformed); a subset of ``rewarded`` carrying the
-      ``content_filter_penalty`` reward. Summed with ``length`` into the
-      unhealthy-finish numerator; both are auto-penalty degenerate rollouts.
+      ``content_filter_penalty`` reward. It remains observable and in the
+      rewarded denominator, but is excluded from the length-limited numerator.
     """
 
     rewarded: int = 0
