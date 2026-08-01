@@ -9,14 +9,11 @@ most-full-first scheduler.
 from datetime import timedelta
 from typing import Dict, List, Literal, Optional, Tuple
 
-from sqlalchemy import select
-
 from ollie_rl.cookbook import Recipe
 from ollie_rl.db.models import RunModel
 from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.base import TunerServiceBase
 from ollie_rl.service.tuner.constants import RUN_LEASE_SECONDS
-from ollie_rl.service.tuner.errors import RunNotFoundError
 from ollie_rl.service.tuner.types import SchedulerScores
 from ollie_rl.types import DispenseRun, TunerStatus
 
@@ -164,86 +161,31 @@ class DispenseMixin(TunerServiceBase):
     """Serialized read-pick-insert dispensing of runs for a tuner."""
 
     async def dispense_run(self, tuner_id: str) -> Optional[DispenseRun]:
-        """Dispense one run while preserving the original service contract."""
-        runs = await self.dispense_runs(tuner_id, batch_size=1)
-        return runs[0] if runs else None
-
-    async def release_run(
-        self, tuner_id: str, run_id: str
-    ) -> Literal["released", "already_rewarded", "already_expired"]:
-        """Expire an unrewarded run's lease immediately.
-
-        Rewarded and already-expired runs are successful no-ops so callers can
-        safely fire-and-forget retries. Only an unknown run is an error.
-        """
-        async with self.async_session() as session:
-            async with session.begin():
-                record = await session.scalar(
-                    select(RunModel).where(
-                        RunModel.id == run_id,
-                        RunModel.tuner_id == tuner_id,
-                    )
-                )
-                if record is None:
-                    raise RunNotFoundError(
-                        f"Run '{run_id}' not found under tuner '{tuner_id}'"
-                    )
-
-                if record.reward is not None:
-                    return "already_rewarded"
-
-                now = utcnow()
-                if record.expires_at <= now:
-                    return "already_expired"
-
-                record.expires_at = now
-                record.updated_at = now
-
-        return "released"
-
-    async def dispense_runs(self, tuner_id: str, batch_size: int) -> List[DispenseRun]:
-        """Dispense up to ``batch_size`` runs from one scheduler snapshot.
-
-        Each provisional run is appended to the in-memory snapshot before the
-        next pick so eval coverage and group capacity match repeated scalar
-        calls. The batch is inserted atomically in the same transaction as its
-        reads.
-        """
-        if batch_size <= 0:
-            raise ValueError("batch_size must be greater than zero")
-
+        """Dispense one run assignment for a tuner."""
         # Do not lease work to an external sandbox until the backend can serve
         # it. A pending/cancelled tuner follows the existing no-work path.
         trainer = await self._get_trainer(tuner_id)
         if await trainer.get_status() is not TunerStatus.IN_PROGRESS:
-            return []
+            return None
 
         recipe = await self._recipe_for(tuner_id)
-        run_records: List[RunModel] = []
 
-        # Serialize the complete read-pick-insert sequence. The transaction and
-        # lock cover the full batch so no local dispenser can observe a partial
-        # scheduler decision.
+        # Serialize the complete read-pick-insert sequence so concurrent local
+        # dispensers cannot make decisions from the same scheduler snapshot.
         async with self._dispense_lock:
             async with self.async_session() as session:
                 async with session.begin():
                     datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
+                    datum_id: Optional[str] = None
+                    checkpoint_id: Optional[str] = None
 
-                    latest = None
-                    eval_pool: List[str] = []
+                    # Eval remains the highest-priority tier.
                     if recipe.eval_group_size > 0:
                         latest = await self._latest_checkpoint(tuner_id, session)
                         if latest is not None:
                             eval_pool = await self._load_datums(
                                 tuner_id, session, kind="eval"
                             )
-
-                    for _ in range(batch_size):
-                        datum_id: Optional[str] = None
-                        checkpoint_id: Optional[str] = None
-
-                        # Eval remains the highest-priority tier on every pick.
-                        if latest is not None:
                             datum_id = pick_eval_datum(
                                 eval_pool,
                                 runs,
@@ -253,33 +195,26 @@ class DispenseMixin(TunerServiceBase):
                             if datum_id is not None:
                                 checkpoint_id = latest.id
 
-                        if datum_id is None:
-                            datum_id = pick_datum(datum_pool, runs, recipe)
+                    if datum_id is None:
+                        datum_id = pick_datum(datum_pool, runs, recipe)
 
-                        if datum_id is None:
-                            break
+                    if datum_id is None:
+                        return None
 
-                        run_record = RunModel(
-                            tuner_id=tuner_id,
-                            datum_id=datum_id,
-                            checkpoint_id=checkpoint_id,
-                            reward=None,
-                            trained_count=0,
-                            rejected_count=0,
-                            expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS),
-                        )
-                        session.add(run_record)
-                        run_records.append(run_record)
-                        runs.append(run_record)
-
-                    # Materialize generated run IDs before constructing DTOs.
+                    run_record = RunModel(
+                        tuner_id=tuner_id,
+                        datum_id=datum_id,
+                        checkpoint_id=checkpoint_id,
+                        reward=None,
+                        trained_count=0,
+                        rejected_count=0,
+                        expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS),
+                    )
+                    session.add(run_record)
                     await session.flush()
 
-        return [
-            DispenseRun(
-                run_id=run.id,
-                datum_id=run.datum_id,
-                expires_at=run.expires_at,
-            )
-            for run in run_records
-        ]
+        return DispenseRun(
+            run_id=run_record.id,
+            datum_id=run_record.datum_id,
+            expires_at=run_record.expires_at,
+        )

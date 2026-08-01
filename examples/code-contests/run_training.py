@@ -228,28 +228,24 @@ async def dispense_runs(
     tuner_id: str,
     batch_size: int,
 ) -> list[tuple[str, str]]:
-    """Wait for and return up to ``batch_size`` run assignments.
+    """Wait for and return up to ``batch_size`` scalar run assignments.
 
-    ``204 No Content`` means no run can currently be leased. This includes a
-    backend that is still ``PENDING`` as well as an in-progress tuner whose
-    datum groups are temporarily saturated. Honor the server's ``Retry-After``
-    header and retry without starting a Harbor sandbox; only a non-empty
-    ``200`` batch represents actual leases. Partial batches are accepted.
-    Transient transport failures are retried with backoff; see
-    :func:`_request_with_retry`.
+    A 204 before any assignment is available is retried after the server's
+    requested delay. A 204 after at least one assignment returns the partial
+    collection so the caller can start work without waiting for more capacity.
     """
-    if not 1 <= batch_size <= 1024:
-        raise ValueError("batch_size must be between 1 and 1024")
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
 
-    while True:
+    assignments: list[tuple[str, str]] = []
+    while len(assignments) < batch_size:
         resp = await _request_with_retry(
-            f"batch dispense (tuner {tuner_id}, size {batch_size})",
-            lambda: client.post(
-                f"/tuners/{tuner_id}/runs",
-                params={"batch_size": batch_size},
-            ),
+            f"dispense run (tuner {tuner_id})",
+            lambda: client.post(f"/tuners/{tuner_id}/runs"),
         )
         if resp.status_code == 204:
+            if assignments:
+                return assignments
             try:
                 retry_after = max(0.0, float(resp.headers.get("Retry-After", "1")))
             except ValueError:
@@ -259,20 +255,15 @@ async def dispense_runs(
 
         resp.raise_for_status()
         body = resp.json()
-        if not isinstance(body, list) or not body:
-            raise ValueError("batch dispense response must be a non-empty list")
-        if len(body) > batch_size:
-            raise ValueError("batch dispense response exceeds requested size")
+        try:
+            assignment = (body["run_id"], body["datum_id"])
+        except (KeyError, TypeError) as error:
+            raise ValueError("dispense response must be a run assignment") from error
+        if not all(isinstance(value, str) for value in assignment):
+            raise ValueError("dispense returned an invalid assignment")
+        assignments.append(assignment)
 
-        assignments = [(item["run_id"], item["datum_id"]) for item in body]
-        if any(
-            not isinstance(run_id, str) or not isinstance(datum_id, str)
-            for run_id, datum_id in assignments
-        ):
-            raise ValueError("batch dispense returned an invalid assignment")
-        if len({run_id for run_id, _ in assignments}) != len(assignments):
-            raise ValueError("batch dispense returned duplicate run IDs")
-        return assignments
+    return assignments
 
 
 async def submit_reward(

@@ -119,13 +119,11 @@ export interface paths {
         put?: never;
         /**
          * Dispense Run
-         * @description Dispense run assignments for the tuner.
+         * @description Dispense one run assignment for the tuner.
          *
-         *     Without ``batch_size``, returns the existing single-run object. When the
-         *     query parameter is present, returns an array containing up to that many
-         *     runs; a partially fulfilled batch is successful. Both modes return 204 No
-         *     Content with Retry-After when no run can currently be dispensed, including
-         *     while the trainer is not ready or all on-policy groups are saturated.
+         *     Returns 204 No Content with Retry-After when no run can currently be
+         *     dispensed, including while the trainer is not ready or all on-policy groups
+         *     are saturated.
          */
         post: operations["dispense_run_tuners__tuner_id__runs_post"];
         delete?: never;
@@ -220,29 +218,6 @@ export interface paths {
          *     per-run completions easy to search in log aggregators (e.g. Railway).
          */
         post: operations["create_run_chat_completion_tuners__tuner_id__runs__run_id__openai_v1_chat_completions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tuners/{tuner_id}/runs/{run_id}/release": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Release Run
-         * @description Release an unrewarded run early by expiring its lease immediately.
-         *
-         *     This endpoint is idempotent: rewarded and already-expired runs are
-         *     successful no-ops. A run that does not exist under the tuner returns 404.
-         */
-        post: operations["release_run_tuners__tuner_id__runs__run_id__release_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1740,9 +1715,7 @@ export interface operations {
     };
     dispense_run_tuners__tuner_id__runs_post: {
         parameters: {
-            query?: {
-                batch_size?: number | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 tuner_id: string;
@@ -1757,7 +1730,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DispenseRun"] | components["schemas"]["DispenseRun"][];
+                    "application/json": components["schemas"]["DispenseRun"];
                 };
             };
             /** @description Validation Error */
@@ -1895,40 +1868,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    release_run_tuners__tuner_id__runs__run_id__release_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                tuner_id: string;
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
                 };
             };
             /** @description Validation Error */

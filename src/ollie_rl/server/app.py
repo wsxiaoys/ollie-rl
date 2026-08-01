@@ -474,56 +474,27 @@ async def create_run_chat_completion(
 
 
 @app.post("/tuners/{tuner_id}/runs")
-async def dispense_run(
-    tuner_id: str,
-    batch_size: Annotated[Optional[int], Query(ge=1, le=1024)] = None,
-) -> DispenseRun | list[DispenseRun]:
-    """Dispense run assignments for the tuner.
+async def dispense_run(tuner_id: str) -> DispenseRun:
+    """Dispense one run assignment for the tuner.
 
-    Without ``batch_size``, returns the existing single-run object. When the
-    query parameter is present, returns an array containing up to that many
-    runs; a partially fulfilled batch is successful. Both modes return 204 No
-    Content with Retry-After when no run can currently be dispensed, including
-    while the trainer is not ready or all on-policy groups are saturated.
+    Returns 204 No Content with Retry-After when no run can currently be
+    dispensed, including while the trainer is not ready or all on-policy groups
+    are saturated.
     """
     from ollie_rl.service.tuner import TunerNotFoundError
 
     try:
-        if batch_size is None:
-            run_response = await services.tuner.dispense_run(tuner_id)
-        else:
-            run_response = await services.tuner.dispense_runs(
-                tuner_id, batch_size=batch_size
-            )
+        run_response = await services.tuner.dispense_run(tuner_id)
     except TunerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to dispense run for tuner '{tuner_id}'")
         raise HTTPException(status_code=500, detail=str(e))
 
-    if not run_response:
+    if run_response is None:
         raise HTTPException(204, headers={"Retry-After": "1"})
 
     return run_response
-
-
-@app.post("/tuners/{tuner_id}/runs/{run_id}/release")
-async def release_run(tuner_id: str, run_id: str) -> dict:
-    """Release an unrewarded run early by expiring its lease immediately.
-
-    This endpoint is idempotent: rewarded and already-expired runs are
-    successful no-ops. A run that does not exist under the tuner returns 404.
-    """
-    from ollie_rl.service.tuner import RunNotFoundError
-
-    try:
-        status = await services.tuner.release_run(tuner_id=tuner_id, run_id=run_id)
-        return {"run_id": run_id, "status": status}
-    except RunNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.exception(f"Failed to release run '{run_id}'")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.put("/tuners/{tuner_id}/runs/{run_id}/reward")

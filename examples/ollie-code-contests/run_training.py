@@ -155,14 +155,15 @@ async def _request_with_retry(
 async def dispense_runs(
     client: httpx.AsyncClient, tuner_id: str, batch_size: int
 ) -> list[tuple[str, str]]:
-    while True:
+    assignments: list[tuple[str, str]] = []
+    while len(assignments) < batch_size:
         response = await _request_with_retry(
-            f"batch dispense (tuner {tuner_id}, size {batch_size})",
-            lambda: client.post(
-                f"/tuners/{tuner_id}/runs", params={"batch_size": batch_size}
-            ),
+            f"dispense run (tuner {tuner_id})",
+            lambda: client.post(f"/tuners/{tuner_id}/runs"),
         )
         if response.status_code == 204:
+            if assignments:
+                return assignments
             try:
                 retry_after = max(0.0, float(response.headers.get("Retry-After", "1")))
             except ValueError:
@@ -171,9 +172,8 @@ async def dispense_runs(
             continue
         response.raise_for_status()
         body = response.json()
-        if not isinstance(body, list) or not body:
-            raise ValueError("batch dispense response must be a non-empty list")
-        return [(item["run_id"], item["datum_id"]) for item in body]
+        assignments.append((body["run_id"], body["datum_id"]))
+    return assignments
 
 
 async def submit_reward(
