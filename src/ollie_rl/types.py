@@ -1,12 +1,19 @@
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, cast
 
-from pydantic import BaseModel, Field, SerializeAsAny, model_validator
-from typing import List, Literal, Optional, Dict, Any, cast
 from openai.types.chat import (
     ChatCompletion,
     ChatCompletionFunctionTool,
     ChatCompletionMessageParam,
+)
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializeAsAny,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
 )
 
 from ollie_rl.cookbook import Recipe
@@ -30,6 +37,43 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = None
     tools: Optional[List[ChatCompletionFunctionTool]] = None
     stream: Optional[bool] = None
+
+    @field_validator("messages", mode="wrap")
+    @classmethod
+    def preserve_extra_content(
+        cls, value: Any, handler: ValidatorFunctionWrapHandler
+    ) -> List[ChatCompletionMessageParam]:
+        """Retain OpenAI-compatible vendor extensions after SDK validation."""
+        messages = handler(value)
+        if not isinstance(value, list):
+            return messages
+
+        for raw_message, message in zip(value, messages):
+            if not isinstance(raw_message, dict):
+                continue
+
+            raw_message_dict = cast(Dict[str, Any], raw_message)
+            message_dict = cast(Dict[str, Any], message)
+            if "extra_content" in raw_message_dict:
+                message_dict["extra_content"] = raw_message_dict["extra_content"]
+
+            raw_tool_calls = raw_message_dict.get("tool_calls")
+            tool_calls = message_dict.get("tool_calls")
+            if not isinstance(raw_tool_calls, list) or tool_calls is None:
+                continue
+
+            validated_tool_calls = list(tool_calls)
+            for raw_tool_call, tool_call in zip(raw_tool_calls, validated_tool_calls):
+                if not isinstance(raw_tool_call, dict):
+                    continue
+                raw_tool_call_dict = cast(Dict[str, Any], raw_tool_call)
+                if "extra_content" in raw_tool_call_dict:
+                    cast(Dict[str, Any], tool_call)["extra_content"] = (
+                        raw_tool_call_dict["extra_content"]
+                    )
+            message_dict["tool_calls"] = validated_tool_calls
+
+        return messages
 
     @model_validator(mode="after")
     def materialize_tool_calls(self) -> "ChatCompletionRequest":

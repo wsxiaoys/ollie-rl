@@ -3,15 +3,18 @@ import unittest
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-from gemini_msrl.types import GenerateContentTuningScopeResponse
 from google.genai.types import Candidate, Content, FinishReason, FunctionCall, Part
 from openai.types.chat import ChatCompletionMessageToolCall
 
+from gemini_msrl.types import GenerateContentTuningScopeResponse
 from ollie_rl.trainer.gemini_msrl import (
-    GeminiMsrlTrainerConfig,
-    GeminiMsrlTrainerState,
     GeminiMsrlTrainer,
+    GeminiMsrlTrainerConfig,
     GeminiMsrlTrainerFactory,
+    GeminiMsrlTrainerState,
+)
+from ollie_rl.trainer.gemini_msrl.conversion import (
+    build_content_generation_parameters,
 )
 from ollie_rl.trainer.types import StateStore
 from ollie_rl.types import ChatCompletionRequest
@@ -30,6 +33,47 @@ class InMemoryStateStore(StateStore):
     async def save(self, trainer_state: str) -> None:
         self._state = trainer_state
         self.save_count += 1
+
+
+class TestGeminiRequestConversion(unittest.TestCase):
+    def test_preserves_tool_call_thought_signature(self):
+        request = ChatCompletionRequest.model_validate(
+            {
+                "model": "test-model",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "extra_content": {"google": {"thought_signature": "TVNH"}},
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "bash", "arguments": "{}"},
+                                "extra_content": {
+                                    "google": {"thought_signature": "U0lH"}
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        dumped_message = request.model_dump(mode="json")["messages"][0]
+        self.assertEqual(
+            dumped_message["extra_content"],
+            {"google": {"thought_signature": "TVNH"}},
+        )
+        self.assertEqual(
+            dumped_message["tool_calls"][0]["extra_content"],
+            {"google": {"thought_signature": "U0lH"}},
+        )
+
+        parameters = build_content_generation_parameters(request)
+        assert parameters.contents is not None
+        assert parameters.contents[0].parts is not None
+        self.assertEqual(parameters.contents[0].parts[0].thought_signature, b"SIG")
 
 
 class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
