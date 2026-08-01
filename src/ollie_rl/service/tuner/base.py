@@ -170,10 +170,12 @@ class TunerServiceBase:
         (held-out scoring pool).
         """
         result = await session.execute(
-            select(DatumRowModel.datum_id).where(
+            select(DatumRowModel.datum_id)
+            .where(
                 DatumRowModel.tuner_id == tuner_id,
                 DatumRowModel.kind == kind,
             )
+            .order_by(DatumRowModel.position.asc())
         )
         return list(result.scalars().all())
 

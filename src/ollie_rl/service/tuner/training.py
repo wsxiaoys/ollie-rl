@@ -5,7 +5,7 @@ import logging
 import math
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from ollie_rl.db import ChatCompletionModel, TunerModel
@@ -192,20 +192,29 @@ class TrainingMixin(TunerServiceBase):
     ) -> Tuple[List[Example], List[str]]:
         recipe = await self._recipe_for(tuner_id)
 
-        # Exclude eval runs: eval-ness is derived from the datum's kind, so
-        # anti-join against the tuner's eval datum set. A rewarded eval run
-        # must never enter a GRPO group (it scores a held-out datum only).
-        eval_datums = select(DatumRowModel.datum_id).where(
-            DatumRowModel.tuner_id == tuner_id,
-            DatumRowModel.kind == "eval",
-        )
+        # Join through the registered training corpus both to exclude held-out
+        # eval runs and to make corpus position—not reward or run arrival—the
+        # authoritative group order. Runs within one datum remain FIFO.
         result = await session.execute(
-            select(RunModel).where(
+            select(RunModel)
+            .join(
+                DatumRowModel,
+                and_(
+                    DatumRowModel.tuner_id == RunModel.tuner_id,
+                    DatumRowModel.datum_id == RunModel.datum_id,
+                ),
+            )
+            .where(
                 RunModel.tuner_id == tuner_id,
+                DatumRowModel.kind == "train",
                 RunModel.trained_count <= 0,
                 RunModel.rejected_count <= 0,
                 RunModel.reward != None,  # noqa: E711
-                RunModel.datum_id.not_in(eval_datums),
+            )
+            .order_by(
+                DatumRowModel.position.asc(),
+                RunModel.created_at.asc(),
+                RunModel.id.asc(),
             )
         )
         run_records = list(result.scalars().all())

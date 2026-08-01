@@ -69,19 +69,21 @@ class LifecycleMixin(TunerServiceBase):
                 )
                 session.add(tuner_record)
                 await session.flush()
-                for datum_id in train_datum_ids:
+                for position, datum_id in enumerate(train_datum_ids):
                     session.add(
                         DatumRowModel(
                             tuner_id=tuner_record.id,
                             datum_id=datum_id,
+                            position=position,
                             kind="train",
                         )
                     )
-                for datum_id in eval_datum_ids:
+                for position, datum_id in enumerate(eval_datum_ids):
                     session.add(
                         DatumRowModel(
                             tuner_id=tuner_record.id,
                             datum_id=datum_id,
+                            position=position,
                             kind="eval",
                         )
                     )

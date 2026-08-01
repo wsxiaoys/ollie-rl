@@ -433,10 +433,10 @@ class QueryMixin(TunerServiceBase):
         """Return the datum-id pool registered for ``tuner_id``.
 
         Used to populate the runs/datums filter dropdowns. The pool is the
-        static set of datums the tuner was created with, returned in a stable
-        (alphabetical) order so the dropdown listing is deterministic. Pass
-        ``split`` (``"train"`` / ``"eval"``) to restrict to that split; ``None``
-        (default) returns the full pool.
+        static set of datums the tuner was created with, returned in corpus
+        order. Pass ``split`` (``"train"`` / ``"eval"``) to restrict to that
+        split; ``None`` (default) returns train before eval, preserving corpus
+        order within each split.
         """
         async with self.async_session() as session:
             exists = await session.execute(
@@ -448,7 +448,7 @@ class QueryMixin(TunerServiceBase):
             stmt = (
                 select(DatumRowModel.datum_id)
                 .where(DatumRowModel.tuner_id == tuner_id)
-                .order_by(DatumRowModel.datum_id.asc())
+                .order_by(DatumRowModel.kind.desc(), DatumRowModel.position.asc())
             )
             if split is not None:
                 stmt = stmt.where(DatumRowModel.kind == split)

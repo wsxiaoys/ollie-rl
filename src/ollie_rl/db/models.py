@@ -319,10 +319,19 @@ class RunModel(BaseModel):
 class DatumRowModel(BaseModel):
     __tablename__ = "datum_rows"
 
+    __table_args__ = (
+        Index("ix_datum_rows_tuner_id_kind_position", "tuner_id", "kind", "position"),
+    )
+
     tuner_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("tuners.id"), primary_key=True
     )
     datum_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    # Zero-based position in the corpus supplied when the tuner was created.
+    # Keep this explicit: PostgreSQL has no SQLite-style `rowid`, and SQL does
+    # not guarantee insertion/physical row order. Batch collection must retain
+    # the caller's corpus order across both supported databases and migrations.
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
     # `kind in {"train", "eval"}`. Eval datums are held out: scored per
     # checkpoint but never grouped into a training batch. `server_default="train"`
     # backfills existing rows to training on migration, so today's tuners are
