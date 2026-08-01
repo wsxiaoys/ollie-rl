@@ -1,22 +1,9 @@
-"""Run dispensing: datum selection plus opt-in quarantine filtering.
+"""Run dispensing: pure datum selection plus database-backed leasing.
 
-This module holds both the *pure decision logic* behind ``POST
-/tuners/{id}/runs`` and the service mixin that wires it to the DB.
-
-The pure scheduler helpers (``scheduler_scores``, ``pick_tier``,
-``pick_datum``, ``pick_eval_datum``) are plain functions of their arguments --
-given the datum pool, the current runs, and the recipe they decide *which*
-datum to dispense next and *why*. They carry no service/DB state so they can be
-read and unit-tested in isolation. The complementary *which datums to skip*
-question -- the quarantine predicate (``terminal_stats`` /
-``quarantined_datums``) -- lives in the leaf module
-:mod:`ollie_rl.service.tuner.quarantine`, and is wired to the DB by
-:meth:`TunerServiceBase._quarantined_datums`.
-
-:class:`DispenseMixin` performs the DB reads (loading the pool and the runs)
-and then feeds them to those helpers, applying the centralized quarantine
-filter before the train pick. Eval picks are never quarantine-filtered:
-held-out datums are scored every checkpoint regardless of signal health.
+The scheduler helpers are plain functions of their arguments so selection and
+progress previews share one testable implementation. Eval remains the
+highest-priority tier; otherwise every training datum is eligible for the
+most-full-first scheduler.
 """
 
 from datetime import timedelta
@@ -40,28 +27,13 @@ def scheduler_scores(
 ) -> SchedulerScores:
     """Scheduler-view consumable tallies per datum (no staleness filter).
 
-    Returns a :class:`SchedulerScores` (``score`` / ``trained`` / ``rewarded``
-    maps; see its docstring for the semantics of each).
-
-    Shared by ``pick_datum`` (dispense decision) and the progress builder
-    (``next_pick`` labeling) so the two never drift.
-
-    Note: ``rewarded`` here intentionally counts *every* run with a reward set,
-    including content-filtered (malformed) runs -- unlike the quarantine
-    denominator in :func:`terminal_stats`, which excludes them. The two measure
-    different things: this is batch/group accounting, and a malformed run is a
-    first-class GRPO sample (it carries the ``content_filter_penalty`` reward
-    and trains with a negative advantage; see ``_collect_consumable_batch``), so
-    it must count toward ``group_size``. Excluding it here would leave any group
-    with a malformed run permanently short of ``group_size``, over-dispensing to
-    replace a sample that is actually trainable. Quarantine, by contrast, asks
-    whether the datum still yields a useful signal *distribution*, where a
-    malformed outcome is noise -- hence the deliberate mismatch.
+    Shared by ``pick_datum`` and the progress builder's ``next_pick`` labeling
+    so the two never drift. Rewarded and live pending runs both count toward a
+    group; trained, rejected, and expired runs do not.
     """
     now = utcnow()
     score = {d: 0 for d in datum_pool}
     trained = {d: 0 for d in datum_pool}
-    rewarded = {d: 0 for d in datum_pool}
     for r in runs:
         if r.datum_id not in score:
             continue
@@ -75,9 +47,7 @@ def scheduler_scores(
         is_pending = r.reward is None and r.expires_at > now
         if has_reward or is_pending:
             score[r.datum_id] += 1
-        if has_reward:
-            rewarded[r.datum_id] += 1
-    return SchedulerScores(score=score, trained=trained, rewarded=rewarded)
+    return SchedulerScores(score=score, trained=trained)
 
 
 def pick_tier(
@@ -121,80 +91,30 @@ def pick_datum(
 
     Tiers, highest priority first:
 
-    1. Started groups (0 < count < group_size) are filled via the two-phase
-       probe gate below, so the closest-to-complete (already-probed) group
-       finishes ASAP -- getting complete groups ready for training soonest.
-    2. Fresh datums (count == 0) come next, so we start new distinct groups
-       before over-producing existing ones. Among fresh datums the
-       least-trained one wins, so never-trained datums are sampled before
-       re-sampling datums that already contributed a trained group (better
-       dataset coverage).
-    3. Saturated datums (count >= group_size) come last, and only when
-       off-policy samples are allowed (``max_off_policy_generation > 0``):
-       the surplus runs can be consumed by a later train step within the
-       off-policy window. Among saturated datums we prefer the
-       least-saturated to spread the surplus. When off-policy is disabled
-       the surplus would just be requeued, so saturated datums are excluded
-       and ``None`` is returned if nothing else is available.
-
-    **Two-phase probe gate** (always active). The quarantine filters decide a
-    datum is problematic after just ``recipe.quarantine_min_samples`` rewarded
-    attempts, so filling a whole group before that verdict wastes rollouts on
-    datums that will be quarantined anyway. A started group is therefore
-    dispensed in two phases:
-
-    * **Probe** -- dispense at most ``probe = recipe.quarantine_min_samples``
-      runs, then *hold*: while the group has reached ``probe`` dispensed runs
-      but fewer than ``probe`` rewards have returned, the datum is not dispensed
-      again (the scheduler moves on to fresh datums / other probes). ``None`` is
-      returned only if every datum is held or saturated.
-    * **Fill** -- once ``probe`` rewards are back (and the datum was not
-      quarantined out of the pool upstream), the rest of the group is dispensed,
-      taking top priority so ready-to-train groups finish fast.
+    1. Started groups (0 < count < group_size), closest to complete first.
+    2. Fresh datums (count == 0), least prior training exposure first.
+    3. Saturated datums (count >= group_size), only when off-policy surplus is
+       enabled, least saturated first.
     """
     if not datum_pool:
         return None
 
     group_size = recipe.group_size
     allow_surplus = recipe.max_off_policy_generation > 0
-    # `quarantine_min_samples` rewarded attempts is enough to run the quarantine
-    # check (matches the dispenser's `min_samples`), so the probe phase caps
-    # dispensing at this many runs and holds for their rewards.
-    probe = recipe.quarantine_min_samples
-
     scores = scheduler_scores(datum_pool, runs)
 
     def priority(datum: str) -> Tuple[int, int]:
         count = scores.score[datum]
-        if count >= group_size:
-            # Saturated: the group is already complete, so any further runs are
-            # surplus. Only dispatchable as off-policy samples for a later train
-            # step; spread across the least-saturated.
-            if allow_surplus:
-                return (0, -count)
-            # Strictly on-policy: surplus would be requeued, so don't dispatch.
-            return (-2, 0)
-        if count == 0:
-            # Fresh: start new distinct groups before over-producing, and
-            # prefer the least-trained datum so never-trained ones go first.
-            return (1, -scores.trained[datum])
-        # Two-phase probe gate.
-        if scores.rewarded[datum] >= probe:
-            # Probe cleared quarantine (problematic datums are already filtered
-            # out of the pool upstream): fill the rest of the group, ahead of
-            # starting fresh ones.
-            return (3, count)
-        if count < probe:
-            # Still probing: keep dispensing up to `probe` runs.
+        if 0 < count < group_size:
             return (2, count)
-        # Probe capacity reached but not enough rewards are back yet: hold so we
-        # don't over-commit a datum that may still be quarantined.
+        if count == 0:
+            return (1, -scores.trained[datum])
+        if allow_surplus:
+            return (0, -count)
         return (-1, 0)
 
     best = max(datum_pool, key=priority)
     if priority(best)[0] < 0:
-        # Nothing dispensable: all datums are saturated (on-policy) or awaiting
-        # probe results.
         return None
     return best
 
@@ -284,11 +204,10 @@ class DispenseMixin(TunerServiceBase):
     async def dispense_runs(self, tuner_id: str, batch_size: int) -> List[DispenseRun]:
         """Dispense up to ``batch_size`` runs from one scheduler snapshot.
 
-        Quarantine is computed once because the newly leased runs have neither
-        rewards nor completion finish reasons. Each provisional run is appended
-        to the in-memory snapshot before the next pick so eval coverage,
-        two-phase probe gating, and group capacity match repeated scalar calls.
-        The batch is inserted atomically in the same transaction as its reads.
+        Each provisional run is appended to the in-memory snapshot before the
+        next pick so eval coverage and group capacity match repeated scalar
+        calls. The batch is inserted atomically in the same transaction as its
+        reads.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero")
@@ -319,7 +238,6 @@ class DispenseMixin(TunerServiceBase):
                                 tuner_id, session, kind="eval"
                             )
 
-                    train_pool: Optional[List[str]] = None
                     for _ in range(batch_size):
                         datum_id: Optional[str] = None
                         checkpoint_id: Optional[str] = None
@@ -336,18 +254,7 @@ class DispenseMixin(TunerServiceBase):
                                 checkpoint_id = latest.id
 
                         if datum_id is None:
-                            # Delay the all-history quarantine queries until the
-                            # batch actually needs its first training lease.
-                            if train_pool is None:
-                                excluded = await self._quarantined_datums(
-                                    tuner_id, session, datum_pool, recipe
-                                )
-                                train_pool = [
-                                    datum
-                                    for datum in datum_pool
-                                    if datum not in excluded
-                                ]
-                            datum_id = pick_datum(train_pool, runs, recipe)
+                            datum_id = pick_datum(datum_pool, runs, recipe)
 
                         if datum_id is None:
                             break

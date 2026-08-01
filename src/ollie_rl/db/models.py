@@ -154,17 +154,6 @@ class ChatCompletionModel(BaseModel):
             "run_id",
             "request_hash",
         ),
-        # Recent-generation scan for the dispenser's expiration-quarantine
-        # logic: both the rewarded-run lookup (DISTINCT run_id) and the
-        # expired-by-duration numerator (GROUP BY run_id, SUM(duration_ms)
-        # against the expiration duration threshold) filter
-        # `tuner_id = ? AND policy_generation >= ?`. This composite lets the DB
-        # range-scan just the recent window instead of the whole tuner history.
-        Index(
-            "ix_chat_completions_tuner_id_policy_generation",
-            "tuner_id",
-            "policy_generation",
-        ),
     )
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -220,16 +209,10 @@ class ChatCompletionModel(BaseModel):
     )
 
 
-# Length-limited-run scan (`_length_datums`, the hot path behind the frequently
-# polled progress snapshot) filters
-# `tuner_id = ? AND response->choices[0]->finish_reason = 'length'`. Every
-# recorded completion is single-choice, so this JSON-path extract is the length
-# signal. A functional index over the *extracted* finish reason lets the planner
-# evaluate the predicate from the index instead of reading and JSON-parsing each
-# (potentially large) `response` blob per row; `run_id` is carried as a trailing
-# key so the run-id listing is served from the index alone. The expression is
-# built from the ORM JSON accessor so it renders per-dialect (`JSON_EXTRACT` on
-# SQLite, `#>>` on Postgres) and matches the query expression exactly.
+# Run list/detail status scans filter by tuner and the JSON completion finish
+# reason. This functional index avoids reading and parsing each response blob;
+# run_id is carried as a trailing key so the run-id listing is index-backed.
+# The ORM JSON accessor renders the matching expression for each dialect.
 Index(
     "ix_chat_completions_tuner_id_finish_reason",
     ChatCompletionModel.tuner_id,
@@ -266,14 +249,6 @@ class InFlightChatCompletionModel(BaseModel):
     run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     request_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
 
-    # Trainer policy generation at first submit. Stamped from
-    # `trainer.policy_generation` the moment the op is created (the actual
-    # `sample.policy_generation` isn't known until the op completes). It places
-    # an in-flight run on the policy-generation timeline so the dispenser's
-    # expiration-quarantine window can treat a run that is still churning
-    # (recorded no completion yet) as recent "real work" rather than a lost
-    # job. NULL for rows written before this column existed.
-    policy_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # `op.save_state()` (the op resource name for gemini_msrl).
     state: Mapped[str] = mapped_column(String(512), nullable=False)
     # First-submit time, used as the start for end-to-end duration across any
@@ -349,9 +324,9 @@ class DatumRowModel(BaseModel):
     )
     datum_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     # `kind in {"train", "eval"}`. Eval datums are held out: scored per
-    # checkpoint but never grouped into a training batch nor counted toward
-    # datum quarantine. `server_default="train"` backfills existing rows to
-    # training on migration, so today's tuners are unchanged.
+    # checkpoint but never grouped into a training batch. `server_default="train"`
+    # backfills existing rows to training on migration, so today's tuners are
+    # unchanged.
     kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="train", server_default="train"
     )

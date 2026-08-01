@@ -235,10 +235,8 @@ async def dispense_runs(
     datum groups are temporarily saturated. Honor the server's ``Retry-After``
     header and retry without starting a Harbor sandbox; only a non-empty
     ``200`` batch represents actual leases. Partial batches are accepted.
-
-    Datum quarantine (length-limited-finish-rate / success-rate filtering) is
-    configured on the tuner's recipe, not per request. Transient transport
-    failures are retried with backoff; see :func:`_request_with_retry`.
+    Transient transport failures are retried with backoff; see
+    :func:`_request_with_retry`.
     """
     if not 1 <= batch_size <= 1024:
         raise ValueError("batch_size must be between 1 and 1024")
@@ -531,8 +529,6 @@ async def main() -> int:
             "Defaults to the task-defined timeout when omitted."
         ),
     )
-    # Datum quarantine (length-rate / success-rate filtering) is configured on
-    # the tuner's recipe now, not via CLI flags / query params.
     parser.add_argument(
         "--tuner-id",
         default=None,

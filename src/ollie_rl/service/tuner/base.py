@@ -2,15 +2,15 @@
 
 :class:`TunerServiceBase` holds the in-memory trainer registry, the various
 concurrency locks, and the DB-access helpers that more than one mixin depends
-on (trainer materialization, recipe lookup, and the pool/runs/quarantine
-queries). The concrete :class:`~ollie_rl.service.tuner.service.TunerService`
+on (trainer materialization, recipe lookup, and pool/run queries). The concrete
+:class:`~ollie_rl.service.tuner.service.TunerService`
 composes the feature mixins on top of this base.
 """
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
 
@@ -25,8 +25,6 @@ from ollie_rl.db import (
 )
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
-from ollie_rl.service.tuner.quarantine import quarantined_datums
-from ollie_rl.service.tuner.types import RewardedRun
 from ollie_rl.service.tuner.constants import RUN_EXPIRE_GENERATION_BUDGET_MS
 from ollie_rl.service.tuner.errors import TunerNotFoundError
 from ollie_rl.service.tuner.locks import KeyedLocks
@@ -155,9 +153,8 @@ class TunerServiceBase:
     ) -> Tuple[List[str], List[RunModel]]:
         # The training pool is train-only: eval datums are held out, so they
         # are excluded here. Any eval runs left in the `runs` list are then
-        # ignored by the pure schedulers (`scheduler_scores` / `pick_datum` /
-        # `quarantined_datums`) because their `datum_id` is absent from the
-        # score maps (`if r.datum_id not in score: continue`).
+        # ignored by the pure scheduler because their `datum_id` is absent from
+        # its score maps (`if r.datum_id not in score: continue`).
         datum_pool = await self._load_datums(tuner_id, session, kind="train")
 
         runs_result = await session.execute(
@@ -197,75 +194,6 @@ class TunerServiceBase:
         )
         return result.scalar_one_or_none()
 
-    async def _rewarded_datums(self, tuner_id: str, session) -> Dict[str, RewardedRun]:
-        """Per *rewarded* run, a :class:`RewardedRun` (datum id + reward).
-
-        Returns a ``run_id -> RewardedRun`` map used by the dispenser's
-        quarantine logic for the rewarded denominator. A rewarded run has no
-        lingering in-flight row -- it is deleted on success -- so it is located
-        via its completions. The join to ``RunModel`` keeps the map to exactly
-        the rewarded runs the quarantine algorithm consults (and carries each
-        run's ``datum_id`` + ``reward``, so ``terminal_stats`` can tally both the
-        rewarded denominator and the ``reward == 1.0`` success numerator without
-        the full run list or a second query). Every rewarded run for the tuner is
-        counted (no recency window).
-        """
-        result = await session.execute(
-            select(ChatCompletionModel.run_id, RunModel.datum_id, RunModel.reward)
-            .join(RunModel, RunModel.id == ChatCompletionModel.run_id)
-            .where(
-                ChatCompletionModel.tuner_id == tuner_id,
-                RunModel.reward.is_not(None),
-            )
-            .distinct()
-        )
-        return {
-            run_id: RewardedRun(datum_id=datum_id, reward=reward)
-            for run_id, datum_id, reward in result.all()
-            if run_id is not None
-        }
-
-    async def _quarantined_datums(
-        self,
-        tuner_id: str,
-        session,
-        datum_pool: List[str],
-        recipe: Recipe,
-    ) -> Set[str]:
-        """Datums in ``datum_pool`` to exclude for ``tuner_id``, per the recipe.
-
-        Centralizes the shared "load stat maps -> run the pure
-        :func:`~ollie_rl.service.tuner.quarantine.quarantined_datums` predicate"
-        wiring so every *decision* site stays in lock-step: the train dispense
-        pool (``DispenseMixin.dispense_run``) and the rejected-count bump
-        (``_collect_consumable_batch``). Returns an empty set for an empty pool
-        without touching the DB. Quarantine is deliberately *not* applied to the
-        eval dispense pool -- held-out datums are scored every checkpoint
-        regardless of training-signal health.
-
-        (``get_progress`` also does *not* route through this helper: it already
-        loads the same maps for its per-datum ``terminal_stats``, so it calls
-        the pure predicate directly to avoid re-issuing these queries.)
-        """
-        if not datum_pool:
-            return set()
-        # Both filters share the rewarded denominator: a rewarded run has no
-        # in-flight row (deleted on success). Each `RewardedRun` carries its
-        # datum_id + reward, so the success numerator (reward == 1.0) is derived
-        # from this same map -- no separate query. The `length` behavior-penalty
-        # finish reason feeds the length-limited-finish numerator; content-filtered
-        # runs remain only in the rewarded denominator.
-        rewarded_by_run = await self._rewarded_datums(tuner_id, session)
-        finish_reason_by_run = await self._finish_reason_datums(tuner_id, session)
-        return quarantined_datums(
-            datum_pool,
-            rewarded_by_run,
-            finish_reason_by_run,
-            min_samples=recipe.quarantine_min_samples,
-            max_length_limited_finish_ratio=recipe.max_length_limited_finish_ratio,
-            max_succeed_ratio=recipe.max_succeed_ratio,
-        )
-
     async def _finish_reason_datums(
         self,
         tuner_id: str,
@@ -280,15 +208,9 @@ class TunerServiceBase:
         oversized completion) or ``"content_filter"`` (a malformed model output
         the server terminated with the recipe's ``content_filter_penalty``).
 
-        One query serves every consumer:
-
-        * ``list_runs``/``get_run`` derive the ``RunStatus == "length"`` and
-          ``"content_filter"`` splits from the mapped value.
-        * :func:`terminal_stats` uses it to count both ``length`` and
-          ``content_filter`` attempts. Only ``length`` enters the
-          length-limited-finish quarantine numerator (``length / rewarded``).
-
-        A run terminates at its first behavior-penalty completion, so the two
+        Run list/detail queries use this map to derive ``RunStatus == "length"``
+        and ``"content_filter"``. A run terminates at its first behavior-penalty
+        completion, so the two
         reasons are mutually exclusive in practice; if a run ever recorded both,
         ``"length"`` wins (the dominant, more severe penalty).
         """
@@ -358,8 +280,7 @@ class TunerServiceBase:
         crashed/abandoned worker, or ops that all finished but no reward was ever
         posted). This is the single source of truth for the `expired` (vs
         `lost`) definition used by ``list_runs``/``get_run``'s run-status split
-        and by progress observability. Expiration is no longer a dispenser
-        quarantine metric.
+        and by progress observability. Expiration does not affect scheduling.
 
         Every expired, unrewarded run for the tuner is counted (no recency
         window).

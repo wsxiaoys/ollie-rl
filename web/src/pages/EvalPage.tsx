@@ -16,7 +16,7 @@ export function EvalPage() {
   const { tunerId } = useParams({ from: "/tuners/$tunerId/eval" });
   // Datums with no runs against the latest checkpoint (0 in-flight / 0
   // completed) are noise while a checkpoint is being scored; hide them by
-  // default the way the datum pool hides excluded rows.
+  // default for a compact view.
   const [hideIdle, setHideIdle] = useState(true);
 
   const evalDistQ = useQuery(

@@ -178,17 +178,13 @@ class SamplingMixin(TunerServiceBase):
                 sample_op_state = sample_op.save_state()
                 if sample_op_state is not None:
                     # Resumable backend: persist resume state the moment the op
-                    # is submitted so the next retry can re-attach. Stamp the
-                    # trainer's current generation so a still-churning run can be
-                    # placed on the policy-generation timeline before it records
-                    # any completion.
+                    # is submitted so the next retry can re-attach.
                     await self._record_in_flight_completion(
                         tuner_id,
                         run_id,
                         request_hash,
                         sample_op_state,
                         first_submit,
-                        trainer.policy_generation,
                     )
 
             try:
@@ -371,16 +367,12 @@ class SamplingMixin(TunerServiceBase):
         request_hash: str,
         state: str,
         created_at: datetime,
-        policy_generation: int,
     ) -> None:
         """Persist an op's resume state the moment it is submitted.
 
         Keyed by the turn identity so at most one in-flight op exists per turn;
         the composite PK plus the per-turn sample lock guarantee no duplicate
-        rows race in. ``policy_generation`` is the trainer's current generation
-        at submit time, stamped so the expiration-quarantine window can locate a
-        still-churning run on the policy-generation timeline before it records
-        any completion.
+        rows race in.
         """
         async with self.async_session() as session:
             async with session.begin():
@@ -391,7 +383,6 @@ class SamplingMixin(TunerServiceBase):
                         request_hash=request_hash,
                         state=state,
                         created_at=created_at,
-                        policy_generation=policy_generation,
                     )
                 )
 

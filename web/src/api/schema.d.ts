@@ -124,10 +124,8 @@ export interface paths {
          *     Without ``batch_size``, returns the existing single-run object. When the
          *     query parameter is present, returns an array containing up to that many
          *     runs; a partially fulfilled batch is successful. Both modes return 204 No
-         *     Content with Retry-After when no run can currently be dispensed.
-         *
-         *     Datum quarantine (length-rate / success-rate filtering plus the two-phase
-         *     probe gate) is configured on the tuner's recipe, not per request.
+         *     Content with Retry-After when no run can currently be dispensed, including
+         *     while the trainer is not ready or all on-policy groups are saturated.
          */
         post: operations["dispense_run_tuners__tuner_id__runs_post"];
         delete?: never;
@@ -222,6 +220,29 @@ export interface paths {
          *     per-run completions easy to search in log aggregators (e.g. Railway).
          */
         post: operations["create_run_chat_completion_tuners__tuner_id__runs__run_id__openai_v1_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tuners/{tuner_id}/runs/{run_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Run
+         * @description Release an unrewarded run early by expiring its lease immediately.
+         *
+         *     This endpoint is idempotent: rewarded and already-expired runs are
+         *     successful no-ops. A run that does not exist under the tuner returns 404.
+         */
+        post: operations["release_run_tuners__tuner_id__runs__run_id__release_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -834,8 +855,6 @@ export interface components {
             trained: number;
             /** Never Trained */
             never_trained: number;
-            /** Excluded */
-            excluded: number;
         };
         /**
          * DatumPool
@@ -859,14 +878,6 @@ export interface components {
             in_flight: number;
             /** Expired */
             expired: number;
-            /** Length */
-            length: number;
-            /** Rewarded */
-            rewarded: number;
-            /** Succeeded */
-            succeeded: number;
-            /** Content Filter */
-            content_filter: number;
             /** Trained */
             trained: number;
         };
@@ -1293,21 +1304,6 @@ export interface components {
              * @default 60000
              */
             max_context_window: number;
-            /**
-             * Max Length Limited Finish Ratio
-             * @default 1
-             */
-            max_length_limited_finish_ratio: number;
-            /**
-             * Max Succeed Ratio
-             * @default 1
-             */
-            max_succeed_ratio: number;
-            /**
-             * Quarantine Min Samples
-             * @default 4
-             */
-            quarantine_min_samples: number;
         };
         /**
          * RewardDistributionResponse
@@ -1899,6 +1895,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_run_tuners__tuner_id__runs__run_id__release_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tuner_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

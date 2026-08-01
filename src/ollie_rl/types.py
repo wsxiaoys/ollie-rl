@@ -49,9 +49,8 @@ class CreateTunerRequest(BaseModel):
     # Datums to train on (dispensed into GRPO groups, rewarded, consumed by a
     # train_step). Must be non-empty.
     train_datum_ids: List[str]
-    # Held-out datums scored per checkpoint but never trained on nor counted
-    # toward datum quarantine. Empty disables eval. Must not overlap
-    # `train_datum_ids`.
+    # Held-out datums scored per checkpoint but never trained on. Empty disables
+    # eval. Must not overlap `train_datum_ids`.
     eval_datum_ids: List[str] = []
     trainer_params: Optional[Dict[str, Any]] = None
 
@@ -113,34 +112,10 @@ class DatumProgress(BaseModel):
     datum_id: str
     consumable: int  # rewarded runs counting toward this group's group_size
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
-    # Per-datum terminal-attempt tallies over the datum's entire history (no
-    # recency window). Both POST /runs quarantine filters share the full
-    # `rewarded` denominator and the `min_samples` gate:
-    #   * length-limited-finish rate = length / rewarded
-    #   * success ratio               = succeeded / rewarded
-    #
-    # `expired`: all-time count of `expired` runs -- expired, unrewarded runs
-    # that either still have a lingering in-flight op (the generation itself
-    # stalled past the lease) or crossed the total-duration expiration
-    # threshold. The `lost` runs are excluded, matching the aggregate
-    # `RunProgress.expired`. This is observability-only and is not used for
-    # quarantine.
+    # All-time count of `expired` runs: expired, unrewarded runs that either
+    # still have a lingering in-flight op or crossed the total-duration
+    # expiration threshold. Lost runs are excluded, matching RunProgress.
     expired: int
-    # `rewarded`: every run that earned a reward, *including* both length-limited
-    # and content-filtered (malformed) runs (consistent with batch/group
-    # accounting). It is the shared denominator for both quarantine filters and
-    # the `min_samples` gate.
-    # `length`: the subset of rewarded runs with a length finish reason; the
-    # numerator of the length-limited-finish ratio.
-    # `succeeded`: the `reward == 1.0` subset of `rewarded`.
-    # `content_filter`: the subset of rewarded runs whose completion was
-    # content-filtered (malformed); carries the `content_filter_penalty` reward.
-    # It remains in the rewarded denominator but is excluded from the
-    # length-limited-finish numerator.
-    length: int
-    rewarded: int
-    succeeded: int
-    content_filter: int
     trained: int  # prior training exposure (fresh-tier tie-break)
 
 
@@ -165,7 +140,6 @@ class DatumCoverage(BaseModel):
     in_progress: int  # datums with >=1 consumable or in-flight run
     trained: int  # datums with >=1 trained run
     never_trained: int  # datums with no trained run yet
-    excluded: int  # datums quarantined out of the dispensable pool
 
 
 class DatumPool(BaseModel):
@@ -282,17 +256,15 @@ class ListDatumsResponse(BaseModel):
 # `max_context_window` (prompt + completion + reasoning tokens) and was converted
 # to a cleared length sample. `content_filter` means at least one completion was
 # content-filtered (a malformed model output the server terminated with the
-# recipe's `content_filter_penalty`). Content-filtered runs remain observable but
-# are excluded from the `max_length_limited_finish_ratio` quarantine numerator.
-# `expired` and `lost` both mean "reward is None and
+# recipe's `content_filter_penalty`). `expired` and `lost` both mean "reward is
+# None and
 # the lease has passed"; they differ on *why*. `expired` means a compute-waste
 # signal fired: the run either still has a lingering `InFlightChatCompletionModel`
 # row (the generation itself stalled past the lease) or its summed completion
 # duration crossed the expiration threshold. `lost` is the residual case
 # (crashed/abandoned worker, or ops all finished but no reward was ever posted).
 # Both are surfaced as their own aggregate counts (`RunProgress.expired` /
-# `RunProgress.lost`) and per-datum (`DatumProgress.expired`). Quarantine uses
-# rewarded length-limited finishes instead of expired runs.
+# `RunProgress.lost`) and per-datum (`DatumProgress.expired`).
 RunStatus = Literal[
     "in_flight",
     "expired",

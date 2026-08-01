@@ -257,32 +257,16 @@ class TrainingMixin(TunerServiceBase):
             fresh_run_records.append(run)
 
         if stale_run_ids:
-            # Don't requeue stale runs whose datum is quarantined. Quarantine
-            # blocks any fresh dispense for that datum, so its group can never be
-            # refilled -- bumping `rejected_count` would only mislabel the run as
-            # "requeued for retry" when no retry can ever happen. Reuse the exact
-            # quarantine machinery the dispenser applies (scoped to the affected
-            # datums). Stale runs are still excluded from *training* below
-            # regardless; this only governs the `rejected_count` bump.
-            datum_by_run = {r.id: r.datum_id for r in run_records}
-            stale_datums = list({datum_by_run[rid] for rid in stale_run_ids})
-            quarantined = await self._quarantined_datums(
-                tuner_id, session, stale_datums, recipe
+            logger.info(
+                f"Requeuing {len(stale_run_ids)} stale runs for tuner {tuner_id} "
+                f"(trainer_generation={trainer_generation}, max_off_policy_generation={max_off_policy_generation})"
             )
-            requeue_run_ids = [
-                rid for rid in stale_run_ids if datum_by_run[rid] not in quarantined
-            ]
-            if requeue_run_ids:
-                logger.info(
-                    f"Requeuing {len(requeue_run_ids)} stale runs for tuner {tuner_id} "
-                    f"(trainer_generation={trainer_generation}, max_off_policy_generation={max_off_policy_generation})"
-                )
-                await session.execute(
-                    update(RunModel)
-                    .where(RunModel.tuner_id == tuner_id)
-                    .where(RunModel.id.in_(requeue_run_ids))
-                    .values(rejected_count=RunModel.rejected_count + 1)
-                )
+            await session.execute(
+                update(RunModel)
+                .where(RunModel.tuner_id == tuner_id)
+                .where(RunModel.id.in_(stale_run_ids))
+                .values(rejected_count=RunModel.rejected_count + 1)
+            )
             run_records = fresh_run_records
 
         # Group rewards by datum_id

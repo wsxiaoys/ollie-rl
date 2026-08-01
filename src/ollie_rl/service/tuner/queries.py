@@ -22,8 +22,6 @@ from ollie_rl.service.tuner.dispensing import (
     pick_tier,
     scheduler_scores,
 )
-from ollie_rl.service.tuner.quarantine import quarantined_datums, terminal_stats
-from ollie_rl.service.tuner.types import RewardedRun, TerminalStats
 from ollie_rl.service.tuner.completion_helpers import context_tokens_from_response
 from ollie_rl.service.tuner.run_helpers import (
     build_run_item,
@@ -271,24 +269,11 @@ class QueryMixin(TunerServiceBase):
                     if run_id is not None
                 }
 
-            # Quarantine/progress inputs. Reuse the dispenser's own helpers so
-            # the dashboard's length/rewarded counts match exactly what the
-            # dispenser quarantines on. Expired, unrewarded runs are still loaded
-            # for progress/status observability, but expiration is no longer a
-            # quarantine metric.
-            # Kept separate from `generation_by_run_id` so the trainer-view
-            # consumable calc (which only cares about recorded completions) is
-            # unaffected.
-            rewarded_by_run: Dict[str, RewardedRun] = {}
+            # Expiration remains visible in aggregate and per-datum progress.
             expired_datum_by_run: Dict[str, str] = {}
-            finish_reason_by_run: Dict[str, str] = {}
             if runs:
-                rewarded_by_run = await self._rewarded_datums(tuner_id, session)
                 expired_datum_by_run = await self._expired_datums(
                     tuner_id, now, session
-                )
-                finish_reason_by_run = await self._finish_reason_datums(
-                    tuner_id, session
                 )
 
         group_size = recipe.group_size
@@ -329,38 +314,10 @@ class QueryMixin(TunerServiceBase):
                     if r.datum_id in consumable_by_datum:
                         consumable_by_datum[r.datum_id] += 1
 
-        # Terminal stats per datum, computed from the same rewarded/length maps
-        # the dispenser feeds `terminal_stats`, so the dashboard's length and
-        # rewarded counts match what the quarantine filters act on.
-        stats_by_datum = terminal_stats(
-            datum_pool,
-            rewarded_by_run,
-            finish_reason_by_run,
-        )
         expired_by_datum: Dict[str, int] = {d: 0 for d in datum_pool}
         for datum_id in expired_datum_by_run.values():
             if datum_id in expired_by_datum:
                 expired_by_datum[datum_id] += 1
-
-        # Datums quarantined out of the dispensable pool. Computed up front so
-        # the coverage counters below can net them out: a quarantined datum
-        # can't progress toward a future batch and won't be trained while
-        # excluded, so counting it as "in progress" or "never trained" would
-        # overstate the active/reachable pool.
-        #
-        # Unlike the dispense/rejected-count sites, this read-only path calls the
-        # pure `quarantined_datums` predicate directly rather than the
-        # `_quarantined_datums` helper: it already loaded `rewarded_by_run` /
-        # `finish_reason_by_run` above for the per-datum `terminal_stats`, so
-        # reusing them here avoids issuing those two queries a second time.
-        excluded = quarantined_datums(
-            datum_pool,
-            rewarded_by_run,
-            finish_reason_by_run,
-            min_samples=recipe.quarantine_min_samples,
-            max_length_limited_finish_ratio=recipe.max_length_limited_finish_ratio,
-            max_succeed_ratio=recipe.max_succeed_ratio,
-        )
 
         items: List[DatumProgress] = []
         groups_ready = 0
@@ -370,38 +327,21 @@ class QueryMixin(TunerServiceBase):
             count = consumable_by_datum[datum_id]
             pending = in_flight_by_datum.get(datum_id, 0)
             trained_here = trained_by_datum.get(datum_id, 0)
-            # `terminal_stats` gives per-datum (rewarded, length, succeeded,
-            # content_filter). These let a client derive the active
-            # length-limited-finish (`length / rewarded`) and success quarantine
-            # ratios. Expired is counted separately for
-            # run-status observability only.
-            stats = stats_by_datum.get(datum_id, TerminalStats())
             expired_here = expired_by_datum.get(datum_id, 0)
             # Surface any datum that has activity worth showing: a group
             # forming (rewarded runs counting toward the batch, or runs still
             # awaiting a reward) or one that has already contributed a trained
             # group. Without the trained check a datum whose group was fully
             # trained (consumable/in-flight back to 0) would silently vanish
-            # from the pool even though it carries training history. Expired and
-            # length-limited runs also count as activity worth surfacing.
-            if (
-                count <= 0
-                and pending <= 0
-                and trained_here <= 0
-                and expired_here <= 0
-                and stats.length <= 0
-                and stats.content_filter <= 0
-            ):
+            # from the pool even though it carries training history. Expired
+            # runs also count as activity worth surfacing.
+            if count <= 0 and pending <= 0 and trained_here <= 0 and expired_here <= 0:
                 continue
             # "in progress" and batch readiness only reflect datums with an
             # active (consumable or in-flight) group. A purely trained datum is
-            # listed for visibility but isn't forming a new group, so it must
-            # not inflate these counters. Quarantined (excluded) datums are left
-            # out of the `datums_in_progress` coverage count since they can no
-            # longer progress toward a future batch.
+            # listed for visibility but isn't forming a new group.
             if count > 0 or pending > 0:
-                if datum_id not in excluded:
-                    datums_in_progress += 1
+                datums_in_progress += 1
                 ready = count >= group_size
                 if ready:
                     groups_ready += 1
@@ -414,32 +354,16 @@ class QueryMixin(TunerServiceBase):
                     consumable=count,
                     in_flight=pending,
                     expired=expired_here,
-                    length=stats.length,
-                    rewarded=stats.rewarded,
-                    succeeded=stats.succeeded,
-                    content_filter=stats.content_filter,
                     trained=trained_here,
                 )
             )
         items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
 
-        # Datums with any training history (historical fact, so quarantined
-        # datums that were trained before exclusion still count).
         trained_datums = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) > 0)
-        # Reachable, still-untrained datums: exclude quarantined ones since they
-        # won't be trained while excluded.
-        never_trained = sum(
-            1
-            for d in datum_pool
-            if trained_by_datum.get(d, 0) == 0 and d not in excluded
-        )
+        never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
 
         scores = scheduler_scores(datum_pool, runs)
-        # Mirror the dispenser: quarantine is configured on the recipe, so the
-        # `next_pick` preview filters the same problematic datums out of the
-        # candidate pool and `pick_datum` applies the matching probe gate.
-        picked_pool = [d for d in datum_pool if d not in excluded]
-        picked = pick_datum(picked_pool, runs, recipe)
+        picked = pick_datum(datum_pool, runs, recipe)
         if picked is None:
             next_pick = NextPick(
                 datum_id=None,
@@ -469,7 +393,6 @@ class QueryMixin(TunerServiceBase):
                     in_progress=datums_in_progress,
                     trained=trained_datums,
                     never_trained=never_trained,
-                    excluded=len(excluded),
                 ),
                 items=items,
             ),
@@ -833,7 +756,7 @@ class QueryMixin(TunerServiceBase):
             # with either a lingering in-flight op or total duration past the
             # expiration threshold), so a past-lease unrewarded run can be split
             # into `expired` vs `lost`. Scoped to the page's run ids. Expiration
-            # is observability-only and no longer drives dispenser quarantine.
+            # is observability-only and does not drive dispensing.
             now = utcnow()
             expired_run_ids = set(
                 await self._expired_datums(

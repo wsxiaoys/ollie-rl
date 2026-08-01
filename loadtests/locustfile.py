@@ -66,7 +66,7 @@ def _retry_after(response: Any) -> float:
 
 
 def _reward_for(run_id: str) -> float:
-    """Return deterministic, non-quarantining, non-degenerate rewards."""
+    """Return deterministic, non-degenerate rewards."""
     return 0.5 if zlib.crc32(run_id.encode()) % 2 else 0.0
 
 

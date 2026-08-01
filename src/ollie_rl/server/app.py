@@ -483,10 +483,8 @@ async def dispense_run(
     Without ``batch_size``, returns the existing single-run object. When the
     query parameter is present, returns an array containing up to that many
     runs; a partially fulfilled batch is successful. Both modes return 204 No
-    Content with Retry-After when no run can currently be dispensed.
-
-    Datum quarantine (length-rate / success-rate filtering plus the two-phase
-    probe gate) is configured on the tuner's recipe, not per request.
+    Content with Retry-After when no run can currently be dispensed, including
+    while the trainer is not ready or all on-policy groups are saturated.
     """
     from ollie_rl.service.tuner import TunerNotFoundError
 

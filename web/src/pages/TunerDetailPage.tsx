@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useState } from "react";
 import { rewardDistributionQuery, tunerQuery } from "../api/queries";
 import type { NextPickTier, TunerStatus } from "../api/types";
 import { DatumTable } from "../components/DatumTable";
@@ -37,7 +36,6 @@ function formatDuration(seconds: number): string {
 
 export function TunerDetailPage() {
   const { tunerId } = useParams({ from: "/tuners/$tunerId" });
-  const [hideExcluded, setHideExcluded] = useState(true);
   const { data, isLoading, isError, error, isFetching } = useQuery(
     tunerQuery(tunerId),
   );
@@ -201,12 +199,6 @@ export function TunerDetailPage() {
                     </span>
                     <span className="muted">never trained</span>
                   </div>
-                  <div>
-                    <span className="big">
-                      {progress.data.coverage.excluded}
-                    </span>
-                    <span className="muted">excluded</span>
-                  </div>
                 </div>
               </div>
             </Panel>
@@ -250,29 +242,11 @@ export function TunerDetailPage() {
             )}
           </Panel>
 
-          <Panel
-            title="Datum pool"
-            right={
-              <div className="datum-pool-header">
-                <label className="datum-pool-toggle">
-                  <input
-                    type="checkbox"
-                    checked={hideExcluded}
-                    onChange={(e) => setHideExcluded(e.target.checked)}
-                  />
-                  Hide excluded
-                </label>
-              </div>
-            }
-          >
+          <Panel title="Datum pool">
             <div className="datum-pool-scrollable">
               <DatumTable
                 items={progress.data.items}
                 groupSize={recipe.group_size}
-                quarantineMinSamples={recipe.quarantine_min_samples}
-                maxLengthLimitedFinishRatio={recipe.max_length_limited_finish_ratio}
-                maxSucceedRatio={recipe.max_succeed_ratio}
-                hideExcluded={hideExcluded}
                 tunerId={data.tuner_id}
               />
             </div>

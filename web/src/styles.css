@@ -584,33 +584,6 @@ td.num {
   color: var(--text-muted);
 }
 
-/* Below-min-sample marker in the datum Audit column: a small outlined pill so
-   "not enough samples yet" reads clearly even without relying on text colour. */
-.datum-audit__gate {
-  display: inline-block;
-  margin-left: 4px;
-  padding: 0 5px;
-  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
-  border-radius: 999px;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--warn);
-  font-variant-numeric: tabular-nums;
-  vertical-align: middle;
-}
-
-/* Highlight the ratio that crossed its quarantine threshold, and flag the
-   whole datum as quarantined (no new runs dispensed) with a warn badge. */
-.datum-audit__hit {
-  color: var(--warn);
-  font-weight: 600;
-}
-
-.datum-audit__quarantine {
-  margin-left: 6px;
-  vertical-align: middle;
-}
-
 .batch-readiness__sub {
   margin-top: 8px;
   display: flex;
@@ -1226,27 +1199,6 @@ pretty-json {
 }
 
 /* ---- Datum pool scrollable ---- */
-.datum-pool-header {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.datum-pool-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-.datum-pool-toggle input {
-  cursor: pointer;
-  margin: 0;
-}
-
 .datum-pool-scrollable {
   max-height: 60vh;
   overflow: auto;
