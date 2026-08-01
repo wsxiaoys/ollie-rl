@@ -13,4 +13,4 @@ RUN_EXPIRE_GENERATION_BUDGET_MS = 2 * 60 * 1000
 # the deadline to `RUN_LEASE_SECONDS` from that completion's time. This keeps an
 # actively progressing multi-turn run alive turn-by-turn while still expiring
 # runs whose generation genuinely stalled or was abandoned.
-RUN_LEASE_SECONDS = 30 * 60
+RUN_LEASE_SECONDS = 15 * 60

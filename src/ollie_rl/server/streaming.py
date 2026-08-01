@@ -40,6 +40,9 @@ def simulate_stream(completion: ChatCompletion) -> AsyncIterator[bytes]:
             delta: dict = {}
             if choice.message.content is not None:
                 delta["content"] = choice.message.content
+            message_extra_content = getattr(choice.message, "extra_content", None)
+            if message_extra_content is not None:
+                delta["extra_content"] = message_extra_content
             if choice.message.tool_calls:
                 tool_calls = []
                 for idx, tc in enumerate(choice.message.tool_calls):
@@ -50,6 +53,9 @@ def simulate_stream(completion: ChatCompletion) -> AsyncIterator[bytes]:
                             "name": fn.name,
                             "arguments": fn.arguments,
                         }
+                    extra_content = getattr(tc, "extra_content", None)
+                    if extra_content is not None:
+                        entry["extra_content"] = extra_content
                     tool_calls.append(entry)
                 delta["tool_calls"] = tool_calls
             content_choices.append(
