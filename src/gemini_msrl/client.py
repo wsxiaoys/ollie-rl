@@ -363,7 +363,7 @@ class GeminiMsrlClient:
         self,
         operation_name: str,
         timeout_seconds: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = 10.0,
     ) -> Operation:
         """
         Polls a Long-Running Operation until it is done or timeout is reached.

@@ -27,8 +27,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SAMPLE_POLL_INTERVAL_SECONDS = 5.0
-
 
 class GeminiMsrlOp:
     def __init__(
@@ -65,10 +63,7 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         self.model_name = model_name
 
     async def wait(self) -> Sample:
-        completed_op = await self.client.wait_for_operation(
-            self.op_name,
-            poll_interval=SAMPLE_POLL_INTERVAL_SECONDS,
-        )
+        completed_op = await self.client.wait_for_operation(self.op_name)
 
         response = completed_op.get_response_as(GenerateContentTuningScopeResponse)
         if not response or not response.candidates:
@@ -119,46 +114,22 @@ class GeminiMsrlTrainOp(GeminiMsrlOp, TrainOp):
         sentinel for promotion steps that omit a checkpoint), or ``None`` when
         the completed op carried no ``completed_train_step_id``.
 
-        A train step can legitimately run much longer than a single
-        ``wait_for_operation`` budget, so we keep retrying on timeouts /
-        transient errors rather than giving up. Bailing out early is what
-        previously left ``pending_train_op`` permanently stuck even though the
-        underlying Vertex op had finished. Terminal errors are logged and
-        swallowed (never raised out of ``wait()``) so the service reconcile
-        loop is not killed.
+        A train step can legitimately run for an unbounded amount of time, so
+        the operation waiter is given an infinite timeout. Polling failures are
+        logged and swallowed (never raised out of ``wait()``) so the service
+        reconcile loop is not killed.
         """
-        # A short backoff between retries after a transient (non-timeout)
-        # failure so we don't spin tightly on a persistent error.
-        _RETRY_BACKOFF_SECONDS = 5.0
-
         trainer = self.trainer
         op_name = self.op_name
 
-        completed_op = None
-        while True:
-            try:
-                completed_op = await self.client.wait_for_operation(op_name)
-                break
-            except TimeoutError:
-                # Op is still running past the poll budget; keep waiting so the
-                # in-flight pointer eventually gets cleared once it completes.
-                logger.warning(
-                    "Train op %s still running; continuing to poll",
-                    op_name,
-                )
-                continue
-            except Exception as e:  # noqa: BLE001
-                # Transient failure (e.g. token refresh / network blip). Back
-                # off and retry rather than abandoning the poll, which would
-                # leave `pending_train_op` stuck.
-                logger.warning(
-                    "Error polling train op %s: %s; retrying in %.0fs",
-                    op_name,
-                    e,
-                    _RETRY_BACKOFF_SECONDS,
-                )
-                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-                continue
+        try:
+            completed_op = await self.client.wait_for_operation(
+                op_name,
+                timeout_seconds=float("inf"),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("Error polling train op %s: %s", op_name, e)
+            return None
 
         checkpoint: Optional[Checkpoint] = None
         try:
