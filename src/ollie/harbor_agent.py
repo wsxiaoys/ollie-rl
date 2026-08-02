@@ -35,7 +35,7 @@ from ollie.harbor_environment import OllieEnvironment
 class OllieAgent(BaseInstalledAgent):
     """Run Ollie using the required :class:`OllieEnvironment` adapter."""
 
-    _DEFAULT_VERSION = "0.3.2"
+    _DEFAULT_VERSION = "0.4.0"
     _OUTPUT_FILENAME = "ollie.ndjson"
     _STDERR_FILENAME = "ollie.stderr"
 
@@ -165,10 +165,13 @@ class OllieAgent(BaseInstalledAgent):
 
         if provider != "openai":
             raise ValueError(
-                "@getollie/cli currently supports only the openai provider; "
-                f"received {provider!r}"
+                "@getollie/cli currently supports only OpenAI-compatible models; "
+                f"received provider {provider!r}"
             )
-        return ["--provider", provider, "--model", model]
+        # Ollie 0.4 removed --provider and infers the OpenAI-compatible
+        # transport from its environment. Harbor's provider prefix is not part
+        # of the model ID passed to the CLI.
+        return ["--model", model]
 
     def _cli_args(self) -> list[str]:
         args = ["--ndjson", "--no-color", *self._model_args()]
