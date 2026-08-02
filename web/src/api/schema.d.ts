@@ -18,8 +18,12 @@ export interface paths {
         get: operations["list_tuners_tuners_get"];
         put?: never;
         /**
-         * Create Tuner
-         * @description Creates a new LoRA training client / model dynamically from a recipe template.
+         * Initialize a new training job
+         * @description Create and initialize a training job.
+         *
+         *     Registers the training and optional evaluation datum ids, selects the
+         *     recipe and trainer backend, and returns the tuner id used by every
+         *     subsequent run, completion, and reward request.
          */
         post: operations["create_tuner_tuners_post"];
         delete?: never;
@@ -118,12 +122,20 @@ export interface paths {
         get: operations["list_runs_tuners__tuner_id__runs_get"];
         put?: never;
         /**
-         * Dispense Run
-         * @description Dispense one run assignment for the tuner.
+         * Lease the next run assignment
+         * @description Lease the next training assignment to a worker.
          *
-         *     Returns 204 No Content with Retry-After when no run can currently be
-         *     dispensed, including while the trainer is not ready or all on-policy groups
-         *     are saturated.
+         *     A successful response contains the ``run_id``, assigned ``datum_id``, and
+         *     ``expires_at``. The initial lease lasts 15 minutes. Each successfully
+         *     recorded chat completion resets ``expires_at`` to 15 minutes from that
+         *     completion time (it does not add time to the previous deadline), keeping an
+         *     actively progressing multi-turn run alive one turn at a time. If no new
+         *     completion or final reward arrives before the deadline, the run expires and
+         *     its datum may be assigned again under a new run id; the expired run no longer
+         *     accepts completions or a reward.
+         *
+         *     Returns ``204 No Content`` with ``Retry-After: 1`` when work is temporarily
+         *     unavailable, such as during trainer warm-up or a training barrier.
          */
         post: operations["dispense_run_tuners__tuner_id__runs_post"];
         delete?: never;
@@ -174,31 +186,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/openai/v1/chat/completions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Chat Completion
-         * @description Generate a chat completion from the active policy of the requested model.
-         *
-         *     The tuner/run this completion is attributed to travel in the ``X-Tuner-Id``
-         *     / ``X-Run-Id`` headers. See the path-addressed twin
-         *     (``/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions``) for a
-         *     variant that carries the ids in the URL instead.
-         */
-        post: operations["create_chat_completion_openai_v1_chat_completions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions": {
         parameters: {
             query?: never;
@@ -209,13 +196,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Create Run Chat Completion
-         * @description Path-addressed twin of ``/openai/v1/chat/completions``.
+         * Sample the active policy for a run
+         * @description Generate and record an OpenAI-compatible completion for a training run.
          *
-         *     Behaves identically to the header-based endpoint but carries the tuner and
-         *     run ids in the URL instead of the ``X-Tuner-Id`` / ``X-Run-Id`` headers.
-         *     Encoding the ids in the path keeps them in the request line, which makes
-         *     per-run completions easy to search in log aggregators (e.g. Railway).
+         *     The tuner and run ids are encoded in the URL, making each request directly
+         *     attributable and easy to trace in logs. The run must be active and
+         *     unrewarded. ``stream=true`` is supported through a simulated SSE stream.
          */
         post: operations["create_run_chat_completion_tuners__tuner_id__runs__run_id__openai_v1_chat_completions_post"];
         delete?: never;
@@ -233,8 +219,13 @@ export interface paths {
         };
         get?: never;
         /**
-         * Put Reward
-         * @description Sets the reward for a specific run under a tuner.
+         * Submit a run's final reward
+         * @description Submit the final scalar reward for a completed run.
+         *
+         *     Rewards are write-once and must be submitted before the run lease expires.
+         *     The run must contain at least one recorded completion. Accepted rewards are
+         *     collected by the server's background training loop; clients do not trigger
+         *     a training step separately.
          */
         put: operations["put_reward_tuners__tuner_id__runs__run_id__reward_put"];
         post?: never;
@@ -1796,42 +1787,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatCompletionDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_chat_completion_openai_v1_chat_completions_post: {
-        parameters: {
-            query?: never;
-            header: {
-                "x-tuner-id": string;
-                "x-run-id"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatCompletionRequest-Input"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

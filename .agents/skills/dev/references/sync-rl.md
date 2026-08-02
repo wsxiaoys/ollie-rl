@@ -19,9 +19,9 @@ sequenceDiagram
             C->>API: POST /tuners/{id}/runs
             alt trainer is idle
                 API->>API: dispense_run() picks least-attempted datum
-                API->>DB: INSERT runs (expires_at = now + 20m)
+                API->>DB: INSERT runs (expires_at = now + 15m)
                 API-->>C: 200 { run_id, datum_id, expires_at }
-                C->>API: POST /openai/v1/chat/completions { x_tuner_id, x_run_id, ... }
+                C->>API: POST /tuners/{id}/runs/{run_id}/openai/v1/chat/completions
                 API->>DB: INSERT chat_completions (policy_generation)
                 API-->>C: ChatCompletion
                 C->>API: PUT /tuners/{id}/runs/{run_id}/reward { reward }
@@ -46,7 +46,7 @@ they all share the same `run_id`, reward, and advantage.
 | `POST /tuners`                                 | Create a tuner with a registered datum pool. |
 | `GET /tuners/{tuner_id}`                       | Retrieve tuner details and trainer state. |
 | `POST /tuners/{tuner_id}/runs`                 | Request a new run assignment.             |
-| `POST /openai/v1/chat/completions`             | Sample one LLM response inside a `run_id`.|
+| `POST /tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions` | Sample one LLM response inside a run. |
 | `PUT /tuners/{tuner_id}/runs/{run_id}/reward`  | Submit the scalar reward for a `run_id`.  |
 
 Training is applied implicitly by the server as rewards arrive (the
@@ -67,14 +67,15 @@ the background); the client does not need to trigger it explicitly.
 | `recipe`     | yes      | —              | Named recipe in the `Cookbook` registry (e.g. `grpo_16x32`). |
 | `trainer`    | yes      | —              | Named factory in the trainer registry (e.g. `gemini_msrl`, `fake`). |
 
-### Required headers on `/openai/v1/chat/completions`
+### Run-addressed chat completions
 
-| Header        | Required | Meaning                                                     |
-|---------------|----------|-------------------------------------------------------------|
-| `X-Tuner-Id`  | yes      | Which tuner / policy to sample from.                        |
-| `X-Run-Id`    | yes\*    | The run this completion belongs to.                         |
-
-\* `X-Run-Id` should be sent for **any request whose output affects the final result** the agent is being scored on (i.e. completions that participate in solving the task and will be used as training examples). Auxiliary requests that do not affect the result — for example generating a chat title, summarizing logs, or other side-channel calls that are not part of the task context — should **omit** the header so they are not recorded as training examples. Note that the server automatically maps the `run_id` to its assigned `datum_id` to prevent client-side tampering; clients never send `datum_id` in a header.
+The OpenAI-compatible base URL for an assigned run is
+`/tuners/{tuner_id}/runs/{run_id}/openai/v1`. Configure the agent with this
+base URL so its chat-completion requests are automatically attributed to the
+run. Every completion sent through this endpoint is recorded as training data;
+auxiliary model calls that should not affect training must use another model
+provider. The server maps the run to its assigned `datum_id`, so clients never
+supply the datum id themselves.
 
 ## One Training Step, Visualized
 
@@ -111,7 +112,7 @@ sequenceDiagram
     C->>API: POST /tuners/{id}/runs
     API-->>C: 200 { run_id, datum_id, expires_at }
     loop one or more turns per run
-        C->>API: POST /openai/v1/chat/completions<br/>X-Tuner-Id, X-Run-Id
+        C->>API: POST /tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions
         API-->>C: ChatCompletion
         Note over C: agent acts (tools, sub-agents, next turn…)
     end
@@ -128,9 +129,9 @@ The client simply continues the loop, requesting the next run assignment. The se
 ## Things a Sync-RL Client Must Get Right
 
 - **Never reuse a `run_id`.** The server allocates the `run_id` dynamically; always use the `run_id` dispensed by the server.
-- **Send `X-Run-Id` on result-affecting completions.** Without it, the completion is not recorded and the run cannot contribute to training. Conversely, omit it on auxiliary calls so they are not picked up as training examples.
-- **Submit rewards before the run expires.** Every run is leased with an expiration deadline (`expires_at`, default **20 minutes / 1200 s**, and each recorded chat completion pushes the deadline out by that much again — see `RUN_EXPIRE_SECONDS` / `dispense_run` in `tuner_service.py`). If a reward is posted after the lease expires, the server returns `409 Conflict` because the dispenser may have already re-issued that datum to another worker.
+- **Use the run-addressed OpenAI base URL.** Every completion under `/tuners/{tuner_id}/runs/{run_id}/openai/v1` is recorded for that run. Route auxiliary, non-training calls through another provider.
+- **Submit rewards before the run expires.** Every run starts with a **15-minute / 900-second** lease. Each successfully recorded chat completion resets `expires_at` to 15 minutes from that completion time; it does not add 15 minutes to the previous deadline. This keeps an active multi-turn run alive while allowing an abandoned run's datum to be re-issued under a fresh run id. Completions and rewards submitted after expiration are rejected with `403 Forbidden` (see `RUN_LEASE_SECONDS`).
 - **Rewards are write-once.** Once a reward has been submitted for a `run_id`, it cannot be changed. Subsequent `PUT /reward` calls on the same `run_id` return `409 Conflict`.
-- **Chat completions inside a run also respect the lease.** `POST /openai/v1/chat/completions` will return `409` if the run has already been rewarded or its lease has expired, and `400` if the `X-Run-Id` is unknown.
+- **Chat completions inside a run also respect the lease.** The run-addressed chat-completion endpoint rejects requests when the run has already been rewarded, its lease has expired, or its path contains an unknown run id.
 - **Pace yourself.** The server does not limit concurrent completions or rewards. A sync-RL driver should bound its own fan-out so the server is not overwhelmed by a flood of HTTP work.
 - **Expect `204 + Retry-After` during training barriers.** Implicit training is triggered fire-and-forget when a reward is posted. While a `train_step` is in flight on a tuner, `POST /tuners/{tuner_id}/runs` returns `204 No Content` with `Retry-After: 1`. Clients should treat this as a polite "come back in a second", not an error.

@@ -14,8 +14,7 @@ description: Development guide for the Ollie RL api server
   api server over its public HTTP surface for synchronous GRPO:
   bootstrapping a tuner via `POST /tuners`, iterating the dataset and
   fanning out agent runs (with bounded concurrency) via
-  `POST /openai/v1/chat/completions` using `X-Tuner-Id` and `X-Run-Id`
-  headers (the latter sent only on result-affecting completions), and
+  `POST /tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions`, and
   posting per-run rewards via
   `PUT /tuners/{tuner_id}/runs/{run_id}/reward`. Training is applied
   implicitly by the server as rewards arrive. Read this when changing

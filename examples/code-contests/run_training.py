@@ -7,12 +7,10 @@ orchestrates the loop — dispense a run from ollie-rl, run the trial, report th
 reward — while ollie-rl handles the training. Run assignments are leased in
 batches sized to the currently available Harbor concurrency.
 
-The agent samples through ollie-rl's OpenAI-compatible endpoint. Completions are
-attributed to the dispensed run via a path-addressed ``base_url``
-(``http://<ollie-host>/tuners/<tuner-id>/runs/<run-id>/openai/v1``) so the ids
-show up in the request line — which keeps per-run completions searchable in log
-aggregators (e.g. Railway) — instead of travelling in ``X-Tuner-Id`` /
-``X-Run-Id`` headers.
+The agent samples through ollie-rl's per-run OpenAI-compatible ``base_url``
+(``http://<ollie-host>/tuners/<tuner-id>/runs/<run-id>/openai/v1``). Encoding
+both ids in the request path attributes every completion to its dispensed run
+and keeps per-run requests searchable in log aggregators (e.g. Railway).
 
 Prerequisites
 -------------
@@ -301,11 +299,10 @@ async def submit_reward(
 # The rollout: one Harbor trial == one ollie-rl Run
 # --------------------------------------------------------------------------
 def run_openai_base_url(base: str, tuner_id: str, run_id: str) -> str:
-    """The per-run OpenAI-compatible endpoint (ids travel in the URL path).
+    """Return the run-addressed OpenAI-compatible endpoint.
 
-    Encoding the tuner/run ids in the path (rather than ``X-Tuner-Id`` /
-    ``X-Run-Id`` headers) keeps them in the request line, which makes each run's
-    completions easy to search in log aggregators (e.g. Railway).
+    Encoding both ids in the path attributes every completion to the run and
+    keeps its requests easy to search in log aggregators (e.g. Railway).
     """
     return f"{base}/tuners/{tuner_id}/runs/{run_id}/openai/v1"
 
@@ -339,8 +336,7 @@ async def run_rollout(
     """
     # Per-turn timeout: forwarded to litellm's ``acompletion(timeout=...)`` via
     # the agent's ``llm_kwargs``. Caps how long a single completion can hang.
-    # The tuner/run ids travel in the path-addressed ``api_base`` below, so no
-    # ``X-Tuner-Id`` / ``X-Run-Id`` headers are needed.
+    # The tuner/run ids travel in the path-addressed ``api_base`` below.
     llm_kwargs: dict = {
         "api_key": "ollie",
     }

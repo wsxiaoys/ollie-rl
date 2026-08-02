@@ -1,9 +1,9 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated, Literal, Optional
+from typing import Literal, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse, StreamingResponse
 
 from ollie_rl.types import (
@@ -29,6 +29,47 @@ from ollie_rl.server.webui import mount_webui
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+TRAINING_CLIENT_TAG = "Training"
+WEB_DASHBOARD_TAG = "Web"
+APP_DESCRIPTION = """
+📊 [Web dashboard](/app)
+
+## Core concepts
+
+- **Tuner** — one training job with its own policy, dataset, and trainer backend.
+- **Datum** — one prompt or task in the tuner's dataset, identified by an opaque
+  `datum_id`.
+- **Chat completion** — one model request/response (typically one agent turn).
+- **Trajectory** — a sequence of related chat completions reconstructed by
+  greedy longest-prefix matching over their message histories.
+- **Run** — one scored attempt at a datum and the unit that receives one final
+  **reward**. A run may contain multiple trajectories, such as a main-agent
+  trajectory plus subagent trajectories.
+- **Rollout** — in Ollie's data model, one GRPO **group**: `group_size` rewarded
+  runs for the same datum. Their rewards are compared within the group to derive
+  per-run advantages.
+- **Batch** — `num_groups_per_batch` completed rollouts consumed by one training
+  step.
+
+In short: **chat completions → trajectories → rewarded runs → GRPO rollout/group → training batch**.
+"""
+OPENAPI_TAGS = [
+    {
+        "name": TRAINING_CLIENT_TAG,
+        "description": (
+            "Endpoints used by training drivers to create tuners, dispense and "
+            "execute runs, and submit rewards."
+        ),
+    },
+    {
+        "name": WEB_DASHBOARD_TAG,
+        "description": (
+            "Read-only observability endpoints consumed by Ollie's built-in "
+            "web dashboard."
+        ),
+    },
+]
 
 
 class Services:
@@ -88,7 +129,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Ollie RL Server",
     version="0.1.0",
-    description="📊 [Web dashboard](/app)",
+    description=APP_DESCRIPTION,
+    openapi_tags=OPENAPI_TAGS,
     lifespan=lifespan,
 )
 
@@ -99,10 +141,17 @@ async def redirect_to_docs() -> RedirectResponse:
     return RedirectResponse("/docs")
 
 
-@app.post("/tuners")
+@app.post(
+    "/tuners",
+    tags=[TRAINING_CLIENT_TAG],
+    summary="Initialize a new training job",
+)
 async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
-    """
-    Creates a new LoRA training client / model dynamically from a recipe template.
+    """Create and initialize a training job.
+
+    Registers the training and optional evaluation datum ids, selects the
+    recipe and trainer backend, and returns the tuner id used by every
+    subsequent run, completion, and reward request.
     """
     try:
         # Datum-set validation (train non-empty, no train/eval overlap) lives
@@ -134,7 +183,7 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/tuners")
+@app.get("/tuners", tags=[WEB_DASHBOARD_TAG])
 async def list_tuners() -> ListTunersResponse:
     """
     Returns a list of all tuners, including id, name, recipe, trainer, and policy_generation.
@@ -147,7 +196,7 @@ async def list_tuners() -> ListTunersResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/tuners/{tuner_id}")
+@app.get("/tuners/{tuner_id}", tags=[WEB_DASHBOARD_TAG])
 async def get_tuner(
     tuner_id: str,
     progress: str = Query(
@@ -186,7 +235,11 @@ async def get_tuner(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/tuners/{tuner_id}/data", response_model=ListDatumsResponse)
+@app.get(
+    "/tuners/{tuner_id}/data",
+    response_model=ListDatumsResponse,
+    tags=[WEB_DASHBOARD_TAG],
+)
 async def list_data(
     tuner_id: str,
     split: Optional[Literal["train", "eval"]] = Query(
@@ -216,6 +269,7 @@ async def list_data(
 @app.get(
     "/tuners/{tuner_id}/reward-distribution",
     response_model=RewardDistributionResponse,
+    tags=[WEB_DASHBOARD_TAG],
 )
 async def reward_distribution(
     tuner_id: str,
@@ -255,7 +309,11 @@ async def reward_distribution(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/tuners/{tuner_id}/runs", response_model=ListRunsResponse)
+@app.get(
+    "/tuners/{tuner_id}/runs",
+    response_model=ListRunsResponse,
+    tags=[WEB_DASHBOARD_TAG],
+)
 async def list_runs(
     tuner_id: str,
     limit: Optional[int] = Query(
@@ -311,7 +369,11 @@ async def list_runs(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/tuners/{tuner_id}/runs/{run_id}", response_model=RunDetailResponse)
+@app.get(
+    "/tuners/{tuner_id}/runs/{run_id}",
+    response_model=RunDetailResponse,
+    tags=[WEB_DASHBOARD_TAG],
+)
 async def get_run(tuner_id: str, run_id: str) -> RunDetailResponse:
     """
     Return a single run and its chat completions (oldest first) so the full
@@ -331,6 +393,7 @@ async def get_run(tuner_id: str, run_id: str) -> RunDetailResponse:
 @app.get(
     "/tuners/{tuner_id}/runs/{run_id}/completions/{completion_id}",
     response_model=ChatCompletionDetailResponse,
+    tags=[WEB_DASHBOARD_TAG],
 )
 async def get_completion(
     tuner_id: str, run_id: str, completion_id: str
@@ -359,9 +422,9 @@ async def _generate_chat_completion(
     *,
     tuner_id: str,
     request: ChatCompletionRequest,
-    run_id: str | None,
+    run_id: str,
 ):
-    """Shared handler for the header- and path-addressed completion endpoints.
+    """Generate a completion attributed to a training run.
 
     Real token-by-token streaming is not supported. When ``stream=true`` is
     requested, the full completion is generated first and then replayed as a
@@ -433,38 +496,21 @@ async def _generate_chat_completion(
     return completion
 
 
-@app.post("/openai/v1/chat/completions")
-async def create_chat_completion(
-    request: ChatCompletionRequest,
-    x_tuner_id: Annotated[str, Header()],
-    x_run_id: Annotated[str | None, Header()] = None,
-):
-    """Generate a chat completion from the active policy of the requested model.
-
-    The tuner/run this completion is attributed to travel in the ``X-Tuner-Id``
-    / ``X-Run-Id`` headers. See the path-addressed twin
-    (``/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions``) for a
-    variant that carries the ids in the URL instead.
-    """
-    return await _generate_chat_completion(
-        tuner_id=x_tuner_id,
-        request=request,
-        run_id=x_run_id,
-    )
-
-
-@app.post("/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions")
+@app.post(
+    "/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions",
+    tags=[TRAINING_CLIENT_TAG],
+    summary="Sample the active policy for a run",
+)
 async def create_run_chat_completion(
     tuner_id: str,
     run_id: str,
     request: ChatCompletionRequest,
 ):
-    """Path-addressed twin of ``/openai/v1/chat/completions``.
+    """Generate and record an OpenAI-compatible completion for a training run.
 
-    Behaves identically to the header-based endpoint but carries the tuner and
-    run ids in the URL instead of the ``X-Tuner-Id`` / ``X-Run-Id`` headers.
-    Encoding the ids in the path keeps them in the request line, which makes
-    per-run completions easy to search in log aggregators (e.g. Railway).
+    The tuner and run ids are encoded in the URL, making each request directly
+    attributable and easy to trace in logs. The run must be active and
+    unrewarded. ``stream=true`` is supported through a simulated SSE stream.
     """
     return await _generate_chat_completion(
         tuner_id=tuner_id,
@@ -473,13 +519,25 @@ async def create_run_chat_completion(
     )
 
 
-@app.post("/tuners/{tuner_id}/runs")
+@app.post(
+    "/tuners/{tuner_id}/runs",
+    tags=[TRAINING_CLIENT_TAG],
+    summary="Lease the next run assignment",
+)
 async def dispense_run(tuner_id: str) -> DispenseRun:
-    """Dispense one run assignment for the tuner.
+    """Lease the next training assignment to a worker.
 
-    Returns 204 No Content with Retry-After when no run can currently be
-    dispensed, including while the trainer is not ready or all on-policy groups
-    are saturated.
+    A successful response contains the ``run_id``, assigned ``datum_id``, and
+    ``expires_at``. The initial lease lasts 15 minutes. Each successfully
+    recorded chat completion resets ``expires_at`` to 15 minutes from that
+    completion time (it does not add time to the previous deadline), keeping an
+    actively progressing multi-turn run alive one turn at a time. If no new
+    completion or final reward arrives before the deadline, the run expires and
+    its datum may be assigned again under a new run id; the expired run no longer
+    accepts completions or a reward.
+
+    Returns ``204 No Content`` with ``Retry-After: 1`` when work is temporarily
+    unavailable, such as during trainer warm-up or a training barrier.
     """
     from ollie_rl.service.tuner import TunerNotFoundError
 
@@ -497,14 +555,22 @@ async def dispense_run(tuner_id: str) -> DispenseRun:
     return run_response
 
 
-@app.put("/tuners/{tuner_id}/runs/{run_id}/reward")
+@app.put(
+    "/tuners/{tuner_id}/runs/{run_id}/reward",
+    tags=[TRAINING_CLIENT_TAG],
+    summary="Submit a run's final reward",
+)
 async def put_reward(
     tuner_id: str,
     run_id: str,
     request: PutRewardRequest,
 ) -> PutRewardResponse:
-    """
-    Sets the reward for a specific run under a tuner.
+    """Submit the final scalar reward for a completed run.
+
+    Rewards are write-once and must be submitted before the run lease expires.
+    The run must contain at least one recorded completion. Accepted rewards are
+    collected by the server's background training loop; clients do not trigger
+    a training step separately.
     """
     from ollie_rl.service.tuner import (
         RunNotFoundError,

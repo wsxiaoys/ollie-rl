@@ -311,11 +311,3 @@ For `gemini_msrl`, the candidate is held server-side under
   the penalty by coincidence). Adding a column is cheap and makes
   later metric/dashboard queries trivial. Recommend yes in the
   same PR that adds `Recipe.malformed_penalty`.
-- **Interaction with the multi-turn `X-Run-Id`-on-result-only
-  pattern from `sync-rl.md`.** If the agent's "scratchpad" turn
-  (no `X-Run-Id`) emits malformed output, there is no run to
-  terminate. That call should fall back to returning the completion
-  as-is with `finish_reason="stop"` and an empty/raw body — the
-  rollout's later result-affecting turn still gets a chance to
-  produce a clean sample. Document this asymmetry in `sync-rl.md`
-  when the change lands.

@@ -76,9 +76,8 @@ class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
                 ],
             }
             res = await client.post(
-                "/openai/v1/chat/completions",
+                f"/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions",
                 json=completion_payload,
-                headers={"X-Tuner-Id": tuner_id, "X-Run-Id": run_id},
             )
             self.assertEqual(res.status_code, 200)
             comp_data = res.json()

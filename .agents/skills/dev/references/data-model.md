@@ -10,7 +10,8 @@ advantage). Read this before working on `TunerService`, `RunModel`,
 ```
 Batch          = num_groups_per_batch Rollouts consumed by one train_step
 Rollout        = a GRPO group: group_size runs that share the same datum_id
-Run            = one attempt at a datum_id; identified by run_id (RunModel)
+Run            = one rewarded attempt; may contain multiple trajectories (RunModel)
+Trajectory     = related completions grouped by greedy longest-prefix matching
 ChatCompletion = a single LLM request/response inside a run (ChatCompletionModel)
 Reward         = scalar score attached to (tuner_id, run_id) by the client
 Advantage      = per-run value derived from rewards within the same Rollout
@@ -45,17 +46,17 @@ flowchart TD
 A registered list of datum_ids representing the corpus/dataset for a tuner. Treat `datum_id` as opaque. Populated at `POST /tuners` creation time from the request body (`datum_ids`). Note that `recipe` (the named recipe) and `trainer` (the named trainer factory) are also required fields in the request body. A tuner is useless without a corpus, so registering it upfront is required.
 
 ### Run (`RunModel`)
-A single attempt at a `datum_id` under a particular tuner. It is the canonical run record and contains the reward and training bookkeeping:
+A single rewarded attempt at a `datum_id` under a particular tuner. A run can contain multiple trajectories—for example, a main-agent trajectory and one or more subagent trajectories—which all share the run's scalar reward and advantage. It is the canonical run record and contains the reward and training bookkeeping:
 
 - `id` (run_id) — server-allocated unique identifier dispensed via `POST /tuners/{id}/runs`.
 - `tuner_id` — the tuner this run belongs to.
 - `datum_id` — the dataset item being attempted.
 - `reward` — scalar float score written by the client via `PUT /reward`.
 - `trained_count` — number of times the run has already been included in a training batch. New runs start at 0; after a batch they are bumped to 1, which excludes them from future batches via the `trained_count <= 0` filter in `_collect_consumable_batch`.
-- `expires_at` — lease deadline for redispense (default **2 hours**, set as `now + timedelta(seconds=7200)` in `dispense_run`). If a run has `reward IS NULL` and `expires_at <= NOW()`, its lease is expired and the dispenser is free to re-dispense that `datum_id` under a fresh `run_id`.
+- `expires_at` — renewable worker-lease deadline. A run starts with 15 minutes (`now + RUN_LEASE_SECONDS`), and every successfully recorded chat completion resets the deadline to 15 minutes from that completion time. If a run has `reward IS NULL` and `expires_at <= NOW()`, its lease is expired and the dispenser is free to re-dispense that `datum_id` under a fresh `run_id`.
 
 ### ChatCompletion (`ChatCompletionModel`)
-The lowest-level record: one LLM request/response. Persisted in the `chat_completions` table with:
+The lowest-level record: one LLM request/response, usually one turn within a trajectory. Related completions inside a run are reconstructed into trajectories using greedy longest-prefix matching over their prompt/response histories (messages for dashboard presentation, tokens for trainer accumulation). Persisted in the `chat_completions` table with:
 
 - `id` — unique completion ID (mirrors the upstream provider's `id`).
 - `tuner_id` — the tuner this completion belongs to.
@@ -137,11 +138,11 @@ sequenceDiagram
     else trainer idle
         TS->>DB: SELECT datum_ids, runs WHERE tuner_id=…
         TS->>TS: pick datum with fewest pending+completed runs
-        TS->>DB: INSERT runs (expires_at = NOW() + 2h)
+        TS->>DB: INSERT runs (expires_at = NOW() + 15m)
         API-->>Client: 200 { run_id, datum_id, expires_at }
     end
 
-    Client->>API: POST /openai/v1/chat/completions<br/>X-Tuner-Id, X-Run-Id
+    Client->>API: POST /tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions
     API->>TS: sample(tuner_id, request, run_id)
     TS->>DB: SELECT runs WHERE id=run_id (validate lease + reward)
     TS->>T: sample(request)

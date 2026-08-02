@@ -56,12 +56,8 @@ adding one provider block to `opencode.json`:
       "npm": "@ai-sdk/openai-compatible",
       "name": "ollie-rl",
       "options": {
-        "baseURL": "http://localhost:8000/openai/v1",
-        "apiKey": "any-key",
-        "headers": {
-          "X-Tuner-Id": "{env:TUNER_ID}",
-          "X-Run-Id":   "{env:RUN_ID}"
-        }
+        "baseURL": "http://localhost:8000/tuners/{env:TUNER_ID}/runs/{env:RUN_ID}/openai/v1",
+        "apiKey": "any-key"
       },
       "models": { "tinker": {} }
     }
@@ -113,7 +109,7 @@ sequenceDiagram
         C->>API: POST /tuners/{id}/runs
         API-->>C: 200 { run_id, datum_id }  or  204 + Retry-After
         loop one or more LLM turns
-            C->>API: POST /openai/v1/chat/completions<br/>X-Tuner-Id, X-Run-Id
+            C->>API: POST /tuners/{id}/runs/{run_id}/openai/v1/chat/completions
             API->>T: sample(...)
             T-->>API: ChatCompletion
             API-->>C: ChatCompletion
@@ -126,7 +122,8 @@ sequenceDiagram
 Concepts the server hides for you:
 
 - **Tuner** — one live training job; owns a policy and a `datum_pool`.
-- **Run** — one attempt at a `datum_id`; carries the scalar reward.
+- **Run** — one rewarded attempt at a `datum_id`; it may contain multiple
+  trajectories (for example, main-agent and subagent trajectories).
 - **Rollout** — a GRPO group of K runs sharing the same `datum_id`.
 - **Recipe** — declarative knobs (`group_size`, `num_groups_per_batch`).
 - **Trainer** — the pluggable backend (`tinker`, or your own).
