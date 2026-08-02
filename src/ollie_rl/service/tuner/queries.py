@@ -468,9 +468,10 @@ class QueryMixin(TunerServiceBase):
         Powers the dashboard's reward-distribution panels. ``kind`` selects
         which runs contribute and how each is attributed to a generation:
 
-        - ``"train"`` (default): rewarded runs with at least one recorded
-          completion, labelled with the max ``policy_generation`` across their
-          completions (mirroring how ``list_runs`` derives a run's generation).
+        - ``"train"`` (default): rewarded training runs (those without a
+          ``checkpoint_id``) with at least one recorded completion, labelled
+          with the max ``policy_generation`` across their completions (mirroring
+          how ``list_runs`` derives a run's generation).
         - ``"eval"``: held-out *eval* runs only -- those carrying a
           ``checkpoint_id`` (set solely by the eval dispense tier) with a reward
           recorded -- bucketed by the ``policy_generation`` of the checkpoint
@@ -516,6 +517,7 @@ class QueryMixin(TunerServiceBase):
                     .where(
                         ChatCompletionModel.tuner_id == tuner_id,
                         RunModel.tuner_id == tuner_id,
+                        RunModel.checkpoint_id.is_(None),
                         RunModel.reward.is_not(None),
                     )
                     .group_by(RunModel.id)
