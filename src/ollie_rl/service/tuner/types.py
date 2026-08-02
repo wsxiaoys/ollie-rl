@@ -16,8 +16,8 @@ class SchedulerScores(BaseModel):
     * ``score`` -- runs still consumable by a future train step from the
       scheduler's point of view (not yet trained, not requeued, and either
       rewarded or still pending/not expired).
-    * ``trained`` -- accumulated prior training exposure, used for the
-      fresh-tier tie-break.
+    * ``trained`` -- accumulated prior training exposure, used as the primary
+      ordering for unsaturated training datums.
     """
 
     score: Dict[str, int]

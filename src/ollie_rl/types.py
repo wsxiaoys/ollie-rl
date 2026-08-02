@@ -160,7 +160,7 @@ class DatumProgress(BaseModel):
     # still have a lingering in-flight op or crossed the total-duration
     # expiration threshold. Lost runs are excluded, matching RunProgress.
     expired: int
-    trained: int  # prior training exposure (fresh-tier tie-break)
+    trained: int  # prior training exposure (scheduler's primary ordering)
 
 
 class NextPick(BaseModel):

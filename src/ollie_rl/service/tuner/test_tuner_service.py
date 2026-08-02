@@ -314,15 +314,11 @@ class TestDispenseRun(TunerServiceTestCase):
         self.assertTrue(result.run_id.startswith("run_"))
         self.assertGreater(result.expires_at, utcnow())
 
-    async def test_finishes_started_group_before_fresh_datum(self):
-        """A started-but-incomplete group is preferred over a fresh datum.
-
-        The scheduler is greedy "most-full-first": it drives an in-progress
-        group to completion before starting a new distinct group.
-        """
+    async def test_prioritizes_corpus_order_over_group_completion(self):
+        """An earlier fresh datum is preferred over a later started datum."""
         tuner_id = await self._create_tuner(datum_ids=["d1", "d2"])
-        # d1 already has a pending run (started group); d2 has none.
-        await self._add_run(tuner_id, datum_id="d1")
+        # d2 is closer to completion, but d1 comes first in training order.
+        await self._add_run(tuner_id, datum_id="d2")
 
         result = await self.service.dispense_run(tuner_id)
         self.assertIsNotNone(result)

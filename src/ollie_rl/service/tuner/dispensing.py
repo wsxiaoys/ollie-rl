@@ -2,8 +2,8 @@
 
 The scheduler helpers are plain functions of their arguments so selection and
 progress previews share one testable implementation. Eval remains the
-highest-priority tier; otherwise every training datum is eligible for the
-most-full-first scheduler.
+highest-priority tier; training datums are prioritized by prior training
+exposure and then by their persisted corpus order.
 """
 
 from datetime import timedelta
@@ -35,7 +35,7 @@ def scheduler_scores(
         if r.datum_id not in score:
             continue
         if r.trained_count > 0:
-            # Track prior training exposure for the fresh-tier tie-break.
+            # Track prior exposure so new groups follow training-epoch order.
             trained[r.datum_id] += r.trained_count
             continue
         if r.rejected_count > 0:
@@ -52,15 +52,16 @@ def pick_tier(
 ) -> Tuple[Literal["incomplete", "fresh", "saturated", "none"], str]:
     """Label the scheduler tier (+ human reason) for a candidate datum.
 
-    Mirrors the tiers in ``pick_datum.priority`` so a dispense preview can
-    explain *why* a datum would be chosen next.
+    Mirrors ``pick_datum`` so a dispense preview can explain *why* a datum
+    would be chosen next.
     """
     count = score.get(datum, 0)
     group_size = recipe.group_size
     if 0 < count < group_size:
-        return "incomplete", f"closest-to-complete group ({count}/{group_size})"
+        reason = f"continuing the next group in training order ({count}/{group_size})"
+        return "incomplete", reason
     if count == 0:
-        return "fresh", "starting a new group from a fresh (least-trained) datum"
+        return "fresh", "starting the next group in training order"
     if recipe.max_off_policy_generation > 0:
         return (
             "saturated",
@@ -79,41 +80,32 @@ def pick_datum(
     Pure scheduling helper (no service/DB state) so it can be reasoned about
     and unit-tested in isolation.
 
-    Uses a greedy "most-full-first" strategy via tiered priority. Only runs
-    that are still *consumable* by a future train step are counted, i.e.
-    not yet trained (``trained_count <= 0``), not requeued
-    (``rejected_count <= 0``), and either rewarded or pending (not expired).
-    This mirrors ``TunerService._collect_consumable_batch`` so a datum whose
-    group was already trained resets to "fresh" for the next generation.
+    Unsaturated datums are selected in training order: least prior training
+    exposure first, then their order in ``datum_pool`` (which is loaded from
+    the persisted corpus position). A group's current fill level does not
+    affect that ordering. Only runs that are still *consumable* by a future
+    train step are counted, i.e. not yet trained (``trained_count <= 0``), not
+    requeued (``rejected_count <= 0``), and either rewarded or pending (not
+    expired). This mirrors ``TunerService._collect_consumable_batch`` so a
+    datum whose group was already trained resets to "fresh" for the next
+    generation.
 
-    Tiers, highest priority first:
-
-    1. Started groups (0 < count < group_size), closest to complete first.
-    2. Fresh datums (count == 0), least prior training exposure first.
-    3. Saturated datums (count >= group_size), only when off-policy surplus is
-       enabled, least saturated first.
+    Saturated datums are excluded when strictly on-policy. When off-policy
+    surplus is enabled and every datum is saturated, the least-saturated datum
+    wins, with corpus order breaking ties.
     """
     if not datum_pool:
         return None
 
     group_size = recipe.group_size
-    allow_surplus = recipe.max_off_policy_generation > 0
     scores = scheduler_scores(datum_pool, runs)
+    unsaturated = [d for d in datum_pool if scores.score[d] < group_size]
+    if unsaturated:
+        return min(unsaturated, key=lambda d: scores.trained[d])
 
-    def priority(datum: str) -> Tuple[int, int]:
-        count = scores.score[datum]
-        if 0 < count < group_size:
-            return (2, count)
-        if count == 0:
-            return (1, -scores.trained[datum])
-        if allow_surplus:
-            return (0, -count)
-        return (-1, 0)
-
-    best = max(datum_pool, key=priority)
-    if priority(best)[0] < 0:
+    if recipe.max_off_policy_generation <= 0:
         return None
-    return best
+    return min(datum_pool, key=lambda d: scores.score[d])
 
 
 def pick_eval_datum(

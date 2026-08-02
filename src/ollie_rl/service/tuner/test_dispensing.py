@@ -32,14 +32,14 @@ class PickDatumTestCase(unittest.TestCase):
         recipe = Recipe(group_size=4, max_off_policy_generation=4)
         self.assertIsNone(pick_datum([], [], recipe))
 
-    def test_prefers_closest_to_complete_group(self):
+    def test_corpus_order_beats_closest_to_complete_group(self):
         recipe = Recipe(group_size=4, max_off_policy_generation=4)
         runs = [_pick_run("d1"), _pick_run("d2"), _pick_run("d2")]
-        self.assertEqual(pick_datum(["d1", "d2"], runs, recipe), "d2")
+        self.assertEqual(pick_datum(["d1", "d2"], runs, recipe), "d1")
 
-    def test_started_group_beats_fresh_datum_without_rewards(self):
+    def test_fresh_earlier_datum_beats_started_later_datum(self):
         recipe = Recipe(group_size=8, max_off_policy_generation=4)
-        runs = [_pick_run("d1") for _ in range(4)]
+        runs = [_pick_run("d2") for _ in range(4)]
         self.assertEqual(pick_datum(["d1", "d2"], runs, recipe), "d1")
 
     def test_started_group_can_fill_without_reward_wait(self):
