@@ -269,7 +269,7 @@ async def submit_reward(
 ) -> bool:
     """Report a run's reward. Returns ``False`` when the server rejects it.
 
-    A ``409 Conflict`` is expected and non-fatal: it happens when the run has
+    A ``403 Forbidden`` is expected and non-fatal: it happens when the run has
     expired, already had its reward set (e.g. a malformed example the server
     already finalized), or produced no chat completions at all (a crashed trial
     that never sampled — a reward for it carries no training signal, so the
@@ -285,9 +285,9 @@ async def submit_reward(
             f"/tuners/{tuner_id}/runs/{run_id}/reward", json={"reward": reward}
         ),
     )
-    if resp.status_code == 409:
+    if resp.status_code == 403:
         print(
-            f"[driver] run {run_id} reward rejected (409 Conflict; likely a "
+            f"[driver] run {run_id} reward rejected (403 Forbidden; likely a "
             f"malformed example): {resp.json().get('detail', resp.text)}"
         )
         return False
@@ -469,7 +469,7 @@ async def execute_run(
         )
         return
 
-    # A rejected reward (409) is expected for malformed examples the server
+    # A rejected reward (403) is expected for malformed examples the server
     # already finalized, so skip recording stats for it.
     if not await submit_reward(client, tuner_id, run_id, reward):
         return

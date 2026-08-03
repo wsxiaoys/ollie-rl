@@ -185,7 +185,7 @@ async def submit_reward(
             f"/tuners/{tuner_id}/runs/{run_id}/reward", json={"reward": reward}
         ),
     )
-    if response.status_code in (403, 409):
+    if response.status_code == 403:
         try:
             detail = response.json().get("detail", response.text)
         except ValueError:
