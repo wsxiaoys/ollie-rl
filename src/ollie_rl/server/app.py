@@ -4,7 +4,8 @@ from contextlib import asynccontextmanager
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ollie_rl.types import (
     ChatCompletionRequest,
@@ -131,8 +132,47 @@ app = FastAPI(
     version="0.1.0",
     description=APP_DESCRIPTION,
     openapi_tags=OPENAPI_TAGS,
+    docs_url=None,
     lifespan=lifespan,
 )
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_ui() -> HTMLResponse:
+    """Render Swagger UI with the dashboard-only endpoints collapsed."""
+    response = get_swagger_ui_html(
+        openapi_url=app.openapi_url or "/openapi.json",
+        title=f"{app.title} - Swagger UI",
+        swagger_ui_parameters={"defaultModelsExpandDepth": 0},
+    )
+    collapse_web_tag = f"""
+<script>
+window.addEventListener("load", () => {{
+  const collapseWebTag = () => {{
+    const tag = document.querySelector('.opblock-tag[data-tag="{WEB_DASHBOARD_TAG}"]');
+    const section = tag?.closest(".opblock-tag-section");
+    if (!section) return false;
+    if (section.classList.contains("is-open")) tag.click();
+    return true;
+  }};
+
+  if (collapseWebTag()) return;
+  const observer = new MutationObserver(() => {{
+    if (collapseWebTag()) observer.disconnect();
+  }});
+  observer.observe(document.getElementById("swagger-ui"), {{
+    childList: true,
+    subtree: true,
+  }});
+}});
+</script>
+"""
+    html = (
+        bytes(response.body)
+        .decode("utf-8")
+        .replace("</body>", f"{collapse_web_tag}</body>")
+    )
+    return HTMLResponse(html)
 
 
 @app.get("/", include_in_schema=False)
