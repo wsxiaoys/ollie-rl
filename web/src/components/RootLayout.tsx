@@ -89,7 +89,9 @@ export function RootLayout() {
         onClick={() => setMenuOpen(false)}
       />
       <aside className="sidebar">
-        <div className="brand brand--sidebar">🛹 ollie-rl</div>
+        <Link to="/tuners" className="brand brand--sidebar">
+          🛹 ollie-rl
+        </Link>
 
         <div className="tuner-picker">
           <label htmlFor="sidebar-tuner">Tuner</label>
