@@ -35,7 +35,7 @@ from ollie.harbor_environment import OllieEnvironment
 class OllieAgent(BaseInstalledAgent):
     """Run Ollie using the required :class:`OllieEnvironment` adapter."""
 
-    _DEFAULT_VERSION = "0.4.0"
+    _DEFAULT_VERSION = "0.4.1"
     _OUTPUT_FILENAME = "ollie.ndjson"
     _STDERR_FILENAME = "ollie.stderr"
 
