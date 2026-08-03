@@ -51,12 +51,11 @@ uv run harbor run \
 
 `OllieEnvironment` launches the trusted Ollie coordinator from the Harbor
 trial's host-local workspace and inherits credentials such as `OPENAI_API_KEY`
-from the host environment, so the commands do not need `--agent-env`. Local
-environment commands run through Ollie's restricted `sandbox` interface with
-only their working directory mounted. `OllieAgent` defaults to the Daytona
-executor, which makes remote execution available when the agent tries the
-TypeScript solution with Bun; selecting its `local` executor uses the same
-restricted Ollie sandbox for tool commands.
+from the host environment, so the commands do not need `--agent-env`. Generic
+Harbor environment command execution is unsupported. `OllieAgent` defaults to
+the Daytona executor, which makes remote execution available when the agent
+tries the TypeScript solution with Bun; selecting its `local` executor lets the
+Ollie coordinator manage local tool execution internally.
 
 Each fixture declares the complete `/workspace` directory as an artifact so
 its separate verifier receives the submitted solution and all other workspace

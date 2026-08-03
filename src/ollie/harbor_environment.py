@@ -1,15 +1,13 @@
 """Hybrid Harbor environment for Ollie agents and isolated verifiers.
 
-Local commands run through Ollie's restricted ``sandbox`` command with only the
-selected working directory mounted. Separate verifier sessions can be delegated
-to a built-in or custom Harbor environment, such as Daytona.
+The trusted Ollie coordinator runs on the host and delegates tool commands to
+its configured executor. Separate verifier sessions can be delegated to a
+built-in or custom Harbor environment, such as Daytona.
 """
 
 from __future__ import annotations
 
 import asyncio
-import getpass
-import json
 import os
 import re
 import shutil
@@ -34,10 +32,10 @@ class OllieEnvironment(BaseEnvironment):
 
     Harbor uses the same environment import path when it creates a separate
     verifier. Its verifier session IDs contain ``__verifier__``; those sessions
-    are returned as an instance of ``verifier_environment`` instead. Local
-    environment commands execute in an Ollie sandbox rooted at their working
-    directory. The trusted Ollie agent coordinator is launched separately on
-    the host and delegates its tool commands to its configured executor.
+    are returned as an instance of ``verifier_environment`` instead. Generic
+    environment command execution is unsupported. The trusted Ollie agent
+    coordinator is launched separately on the host and delegates its tool
+    commands to its configured executor.
     """
 
     _DEFAULT_OLLIE_VERSION = "0.2.4"
@@ -305,14 +303,6 @@ class OllieEnvironment(BaseEnvironment):
         del user
         return self._virtual_to_host(path).is_file()
 
-    def _validate_exec_user(self, user: str | int | None) -> None:
-        effective_user = self._resolve_user(user)
-        current_users = (None, "root", os.getuid(), os.geteuid(), getpass.getuser())
-        if effective_user not in current_users:
-            raise NotImplementedError(
-                f"OllieEnvironment cannot switch to user {effective_user!r}"
-            )
-
     async def _communicate(
         self,
         process: asyncio.subprocess.Process,
@@ -366,93 +356,11 @@ class OllieEnvironment(BaseEnvironment):
         timeout_sec: int | None = None,
         user: str | int | None = None,
     ) -> ExecResult:
-        """Execute a command through Ollie's restricted local sandbox."""
-        self._validate_exec_user(user)
-        if timeout_sec is not None and timeout_sec <= 0:
-            raise ValueError("timeout_sec must be positive")
-
-        virtual_cwd = cwd or self._virtual_workdir
-        host_cwd = self._virtual_to_host(virtual_cwd).resolve(strict=False)
-        host_cwd.mkdir(parents=True, exist_ok=True)
-        process_env = os.environ.copy()
-        process_env.update(self._merge_env(env) or {})
-        package_spec = f"@getollie/cli@{self._DEFAULT_OLLIE_VERSION}"
-        npx = shutil.which("npx")
-        if npx is None:
-            raise RuntimeError("OllieEnvironment requires npx")
-        argv = [
-            npx,
-            "--yes",
-            package_spec,
-            "sandbox",
-            "--cwd",
-            str(host_cwd),
-            "--workspace-path",
-            virtual_cwd,
-        ]
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=host_cwd,
-            env=process_env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        """Reject Harbor's unsupported generic environment execution API."""
+        del command, cwd, env, timeout_sec, user
+        raise NotImplementedError(
+            "OllieEnvironment does not support generic command execution"
         )
-        request = {
-            "id": 1,
-            "method": "exec",
-            "params": {"command": command},
-        }
-        stdin = (json.dumps(request, separators=(",", ":")) + "\n").encode()
-        stdout_bytes, stderr_bytes, timed_out = await self._communicate(
-            process,
-            stdin=stdin,
-            timeout_sec=timeout_sec,
-        )
-        stderr = stderr_bytes.decode(errors="replace") or None
-        if timed_out:
-            result = ExecResult(
-                stdout=None,
-                stderr=((stderr or "") + "\nCommand timed out").strip(),
-                return_code=124,
-            )
-            await self._emit_output(result)
-            return result
-
-        response: dict[str, Any] | None = None
-        for line in stdout_bytes.decode(errors="replace").splitlines():
-            try:
-                candidate = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(candidate, dict) and candidate.get("id") == 1:
-                response = candidate
-        if response is None:
-            result = ExecResult(
-                stdout=None,
-                stderr=stderr or "Ollie sandbox returned no response",
-                return_code=process.returncode or 1,
-            )
-        elif "error" in response:
-            error = response["error"]
-            message = error.get("message") if isinstance(error, dict) else str(error)
-            result = ExecResult(stdout=None, stderr=message or stderr, return_code=1)
-        else:
-            payload = response.get("result")
-            if not isinstance(payload, dict):
-                result = ExecResult(
-                    stdout=None,
-                    stderr="Ollie sandbox returned an invalid response",
-                    return_code=1,
-                )
-            else:
-                result = ExecResult(
-                    stdout=payload.get("stdout") or None,
-                    stderr=payload.get("stderr") or stderr,
-                    return_code=int(payload.get("exitCode", 1)),
-                )
-        await self._emit_output(result)
-        return result
 
     def _validate_host_output_path(self, path: Path | None) -> Path | None:
         if path is None:
@@ -467,7 +375,7 @@ class OllieEnvironment(BaseEnvironment):
         resolved.parent.mkdir(parents=True, exist_ok=True)
         return resolved
 
-    async def exec_host(
+    async def exec_ollie(
         self,
         ollie_args: Sequence[str],
         *,

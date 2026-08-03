@@ -114,7 +114,7 @@ class OllieAgent(BaseInstalledAgent):
         stderr_path: Path | None = None,
     ) -> None:
         """Run the trusted Ollie CLI through the host allowlisted entrypoint."""
-        result = await environment.exec_host(
+        result = await environment.exec_ollie(
             ollie_args,
             ollie_version=self._package_version,
             env=env,
