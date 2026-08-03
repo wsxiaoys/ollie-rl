@@ -3,6 +3,7 @@ import type {
   EvalProgress,
   GetTunerResponse,
   ListDatumsResponse,
+  ListInFlightChatCompletionsResponse,
   ListRunsResponse,
   ListTunersResponse,
   RewardDistributionData,
@@ -61,6 +62,21 @@ export function listData(
   const qs = params.toString();
   return get<ListDatumsResponse>(
     `/tuners/${encodeURIComponent(tunerId)}/data${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export function listInFlightChatCompletions(
+  tunerId: string,
+  opts: { limit?: number; cursor?: string | null } = {},
+): Promise<ListInFlightChatCompletionsResponse> {
+  const params = new URLSearchParams();
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  const qs = params.toString();
+  return get<ListInFlightChatCompletionsResponse>(
+    `/tuners/${encodeURIComponent(tunerId)}/in-flight-chat-completions${
+      qs ? `?${qs}` : ""
+    }`,
   );
 }
 

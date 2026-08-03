@@ -13,6 +13,12 @@ class InvalidRunCursorError(Exception):
     pass
 
 
+class InvalidWorkloadCursorError(Exception):
+    """Raised when a workload pagination cursor cannot be decoded."""
+
+    pass
+
+
 class RunNotFoundError(Exception):
     pass
 

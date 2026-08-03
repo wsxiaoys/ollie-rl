@@ -102,6 +102,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tuners/{tuner_id}/in-flight-chat-completions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List In Flight Chat Completions
+         * @description List durable resumable chat-completion operations tracked for a tuner.
+         */
+        get: operations["list_in_flight_chat_completions_tuners__tuner_id__in_flight_chat_completions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tuners/{tuner_id}/runs": {
         parameters: {
             query?: never;
@@ -1013,6 +1033,39 @@ export interface components {
              */
             detail?: "auto" | "low" | "high";
         };
+        /**
+         * InFlightChatCompletionItem
+         * @description A resumable backend chat-completion operation tracked for a tuner.
+         */
+        InFlightChatCompletionItem: {
+            /** Run Id */
+            run_id: string;
+            /** Datum Id */
+            datum_id: string;
+            /** Request Hash */
+            request_hash: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "train" | "eval";
+            /** Checkpoint Generation */
+            checkpoint_generation?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Run Expires At
+             * Format: date-time
+             */
+            run_expires_at: string;
+            /** Lease Expired */
+            lease_expired: boolean;
+            /** Recorded Completion Count */
+            recorded_completion_count: number;
+        };
         /** InputAudio */
         InputAudio: {
             /** Data */
@@ -1033,6 +1086,21 @@ export interface components {
         ListDatumsResponse: {
             /** Datum Ids */
             datum_ids: string[];
+        };
+        /** ListInFlightChatCompletionsResponse */
+        ListInFlightChatCompletionsResponse: {
+            /** Items */
+            items: components["schemas"]["InFlightChatCompletionItem"][];
+            /** Total */
+            total: number;
+            /** Active Lease Count */
+            active_lease_count: number;
+            /** Past Lease Count */
+            past_lease_count: number;
+            /** Oldest Created At */
+            oldest_created_at?: string | null;
+            /** Next Cursor */
+            next_cursor?: string | null;
         };
         /** ListRunsResponse */
         ListRunsResponse: {
@@ -1651,6 +1719,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RewardDistributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_in_flight_chat_completions_tuners__tuner_id__in_flight_chat_completions_get: {
+        parameters: {
+            query?: {
+                /** @description Max operations to return per page. Omit to return all. */
+                limit?: number | null;
+                /** @description Opaque forward cursor from the previous workload page. */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                tuner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListInFlightChatCompletionsResponse"];
                 };
             };
             /** @description Validation Error */

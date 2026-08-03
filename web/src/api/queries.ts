@@ -6,12 +6,14 @@ import {
   getRun,
   getTuner,
   listData,
+  listInFlightChatCompletions,
   listRuns,
   listTuners,
 } from "./client";
 
-/** Page size for the cursor-paginated runs list. */
+/** Page sizes for cursor-paginated dashboard lists. */
 export const RUNS_PAGE_SIZE = 25;
+export const WORKLOAD_PAGE_SIZE = 25;
 
 // The server exposes only a live snapshot (no history), so we poll.
 export const tunersQuery = queryOptions({
@@ -24,6 +26,19 @@ export const tunerQuery = (tunerId: string) =>
   queryOptions({
     queryKey: ["tuner", tunerId],
     queryFn: () => getTuner(tunerId),
+    refetchInterval: 2000,
+  });
+
+export const inFlightChatCompletionsQuery = (tunerId: string) =>
+  infiniteQueryOptions({
+    queryKey: ["in-flight-chat-completions", tunerId],
+    queryFn: ({ pageParam }) =>
+      listInFlightChatCompletions(tunerId, {
+        limit: WORKLOAD_PAGE_SIZE,
+        cursor: pageParam,
+      }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     refetchInterval: 2000,
   });
 

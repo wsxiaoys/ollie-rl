@@ -49,12 +49,12 @@ export function RootLayout() {
   // `/tuners/$tunerId/runs/...`, so they count as "Runs" rather than "General".
   const onDatums = pathname.startsWith("/datums");
   const onEval = /^\/tuners\/[^/]+\/eval/.test(pathname);
+  const onWorkload = /^\/tuners\/[^/]+\/workload/.test(pathname);
   const onRuns =
     pathname.startsWith("/runs") || /^\/tuners\/[^/]+\/runs/.test(pathname);
   const onGeneral = /^\/tuners\/[^/]+$/.test(pathname);
 
-  // Switching tuner keeps you in the same section (General vs Runs vs Datums
-  // vs Eval).
+  // Switching tuner keeps you in the same section.
   const onSelectTuner = (e: ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     if (!id) return;
@@ -62,6 +62,8 @@ export function RootLayout() {
       navigate({ to: "/datums", search: { tuner: id } });
     } else if (onEval) {
       navigate({ to: "/tuners/$tunerId/eval", params: { tunerId: id } });
+    } else if (onWorkload) {
+      navigate({ to: "/tuners/$tunerId/workload", params: { tunerId: id } });
     } else if (onRuns) {
       navigate({ to: "/runs", search: { tuner: id } });
     } else {
@@ -135,6 +137,15 @@ export function RootLayout() {
                 Runs
               </Link>
               <Link
+                to="/tuners/$tunerId/workload"
+                params={{ tunerId: activeTunerId }}
+                className={
+                  "nav-link" + (onWorkload ? " nav-link--active" : "")
+                }
+              >
+                Workload
+              </Link>
+              <Link
                 to="/datums"
                 search={{ tuner: activeTunerId }}
                 className={"nav-link" + (onDatums ? " nav-link--active" : "")}
@@ -146,6 +157,7 @@ export function RootLayout() {
             <>
               <span className="nav-link nav-link--disabled">General</span>
               <span className="nav-link nav-link--disabled">Runs</span>
+              <span className="nav-link nav-link--disabled">Workload</span>
               <span className="nav-link nav-link--disabled">Datums</span>
               <span className="nav-link nav-link--disabled">Eval</span>
             </>

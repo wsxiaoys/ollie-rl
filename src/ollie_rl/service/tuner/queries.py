@@ -13,6 +13,7 @@ from ollie_rl.db import (
     ChatCompletionModel,
     CheckpointModel,
     DatumRowModel,
+    InFlightChatCompletionModel,
     TunerModel,
 )
 from ollie_rl.db.models import RunModel
@@ -28,6 +29,10 @@ from ollie_rl.service.tuner.run_helpers import (
     decode_run_cursor,
     encode_run_cursor,
     last_train_op_duration_seconds,
+)
+from ollie_rl.service.tuner.workload_helpers import (
+    decode_workload_cursor,
+    encode_workload_cursor,
 )
 from ollie_rl.service.tuner.base import TunerServiceBase
 from ollie_rl.service.tuner.errors import (
@@ -47,7 +52,9 @@ from ollie_rl.types import (
     EvalProgress,
     GenerationRewardStats,
     GetTunerResponse,
+    InFlightChatCompletionItem,
     ListDatumsResponse,
+    ListInFlightChatCompletionsResponse,
     ListRunsResponse,
     NextPick,
     RewardDistributionResponse,
@@ -625,6 +632,144 @@ class QueryMixin(TunerServiceBase):
             eval_group_size=recipe.eval_group_size,
             total=len(eval_datums),
             items=items,
+        )
+
+    async def list_in_flight_chat_completions(
+        self,
+        tuner_id: str,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> ListInFlightChatCompletionsResponse:
+        """List the tuner's durable resumable chat-completion operations."""
+        if limit is not None and limit < 0:
+            limit = 0
+        cursor_key = decode_workload_cursor(cursor) if cursor else None
+
+        async with self.async_session() as session:
+            tuner_result = await session.execute(
+                select(TunerModel.id).where(TunerModel.id == tuner_id)
+            )
+            if tuner_result.scalar_one_or_none() is None:
+                raise TunerNotFoundError(f"Tuner '{tuner_id}' not found.")
+
+            now = utcnow()
+            summary_result = await session.execute(
+                select(
+                    func.count(),
+                    func.coalesce(
+                        func.sum(case((RunModel.expires_at > now, 1), else_=0)), 0
+                    ),
+                    func.min(InFlightChatCompletionModel.created_at),
+                )
+                .select_from(InFlightChatCompletionModel)
+                .join(
+                    RunModel,
+                    (RunModel.tuner_id == InFlightChatCompletionModel.tuner_id)
+                    & (RunModel.id == InFlightChatCompletionModel.run_id),
+                )
+                .where(InFlightChatCompletionModel.tuner_id == tuner_id)
+            )
+            total, active_lease_count, oldest_created_at = summary_result.one()
+            total = int(total)
+            active_lease_count = int(active_lease_count)
+
+            completion_counts = (
+                select(
+                    ChatCompletionModel.tuner_id.label("tuner_id"),
+                    ChatCompletionModel.run_id.label("run_id"),
+                    func.count().label("completion_count"),
+                )
+                .where(ChatCompletionModel.tuner_id == tuner_id)
+                .group_by(
+                    ChatCompletionModel.tuner_id,
+                    ChatCompletionModel.run_id,
+                )
+                .subquery()
+            )
+            workload_stmt = (
+                select(
+                    InFlightChatCompletionModel,
+                    RunModel,
+                    CheckpointModel.policy_generation,
+                    func.coalesce(completion_counts.c.completion_count, 0),
+                )
+                .join(
+                    RunModel,
+                    (RunModel.tuner_id == InFlightChatCompletionModel.tuner_id)
+                    & (RunModel.id == InFlightChatCompletionModel.run_id),
+                )
+                .outerjoin(
+                    CheckpointModel,
+                    CheckpointModel.id == RunModel.checkpoint_id,
+                )
+                .outerjoin(
+                    completion_counts,
+                    (completion_counts.c.tuner_id == RunModel.tuner_id)
+                    & (completion_counts.c.run_id == RunModel.id),
+                )
+                .where(InFlightChatCompletionModel.tuner_id == tuner_id)
+                .order_by(
+                    InFlightChatCompletionModel.created_at.desc(),
+                    InFlightChatCompletionModel.run_id.desc(),
+                    InFlightChatCompletionModel.request_hash.desc(),
+                )
+            )
+            if cursor_key is not None:
+                cursor_created_at, cursor_run_id, cursor_request_hash = cursor_key
+                workload_stmt = workload_stmt.where(
+                    (InFlightChatCompletionModel.created_at < cursor_created_at)
+                    | (
+                        (InFlightChatCompletionModel.created_at == cursor_created_at)
+                        & (
+                            (InFlightChatCompletionModel.run_id < cursor_run_id)
+                            | (
+                                (InFlightChatCompletionModel.run_id == cursor_run_id)
+                                & (
+                                    InFlightChatCompletionModel.request_hash
+                                    < cursor_request_hash
+                                )
+                            )
+                        )
+                    )
+                )
+            if limit is not None:
+                workload_stmt = workload_stmt.limit(limit + 1)
+
+            result = await session.execute(workload_stmt)
+            rows = list(result.all())
+
+        has_more = limit is not None and len(rows) > limit
+        if has_more:
+            rows = rows[:limit]
+        next_cursor = None
+        if has_more and rows:
+            last_operation = rows[-1][0]
+            next_cursor = encode_workload_cursor(
+                last_operation.created_at,
+                last_operation.run_id,
+                last_operation.request_hash,
+            )
+
+        return ListInFlightChatCompletionsResponse(
+            items=[
+                InFlightChatCompletionItem(
+                    run_id=operation.run_id,
+                    datum_id=run.datum_id,
+                    request_hash=operation.request_hash,
+                    kind="eval" if run.checkpoint_id is not None else "train",
+                    checkpoint_generation=checkpoint_generation,
+                    created_at=operation.created_at,
+                    run_expires_at=run.expires_at,
+                    lease_expired=run.expires_at <= now,
+                    recorded_completion_count=int(completion_count),
+                )
+                for operation, run, checkpoint_generation, completion_count in rows
+            ],
+            total=total,
+            active_lease_count=active_lease_count,
+            past_lease_count=total - active_lease_count,
+            oldest_created_at=oldest_created_at,
+            next_cursor=next_cursor,
         )
 
     async def list_runs(

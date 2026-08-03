@@ -232,7 +232,6 @@ async def run_rollout(
     agent_model: str,
     ollie_executor: str,
     ollie_max_steps: int | None,
-    ollie_command_timeout_ms: int | None,
     agent_timeout_multiplier: float | None,
 ) -> float | None:
     environment_kwargs: dict = {}
@@ -248,13 +247,8 @@ async def run_rollout(
         "executor": ollie_executor,
         "workspace_path": DEFAULT_OLLIE_WORKSPACE_PATH,
     }
-    optional_kwargs = {
-        "max_steps": ollie_max_steps,
-        "command_timeout_ms": ollie_command_timeout_ms,
-    }
-    agent_kwargs.update(
-        {key: value for key, value in optional_kwargs.items() if value is not None}
-    )
+    if ollie_max_steps is not None:
+        agent_kwargs["max_steps"] = ollie_max_steps
 
     config = TrialConfig(
         task=TaskConfig(path=TASKS_DIR / datum_id),
@@ -335,7 +329,6 @@ async def execute_run(
             agent_model=args.agent_model,
             ollie_executor=args.ollie_executor,
             ollie_max_steps=args.ollie_max_steps,
-            ollie_command_timeout_ms=args.ollie_command_timeout_ms,
             agent_timeout_multiplier=args.agent_timeout_multiplier,
         )
     except Exception as error:
@@ -377,7 +370,6 @@ async def main() -> int:
         default=DEFAULT_OLLIE_EXECUTOR,
     )
     parser.add_argument("--ollie-max-steps", type=int, default=None)
-    parser.add_argument("--ollie-command-timeout-ms", type=int, default=None)
     parser.add_argument(
         "--verifier-environment",
         "--environment",
@@ -394,10 +386,8 @@ async def main() -> int:
     parser.add_argument("--tuner-id", default=None)
     args = parser.parse_args()
 
-    for option in ("ollie_max_steps", "ollie_command_timeout_ms"):
-        value = getattr(args, option)
-        if value is not None and value <= 0:
-            parser.error(f"--{option.replace('_', '-')} must be positive")
+    if args.ollie_max_steps is not None and args.ollie_max_steps <= 0:
+        parser.error("--ollie-max-steps must be positive")
 
     if ":" not in args.verifier_environment:
         try:

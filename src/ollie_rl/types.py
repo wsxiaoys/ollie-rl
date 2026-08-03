@@ -357,6 +357,29 @@ class ListRunsResponse(BaseModel):
     next_cursor: Optional[str] = None
 
 
+class InFlightChatCompletionItem(BaseModel):
+    """A resumable backend chat-completion operation tracked for a tuner."""
+
+    run_id: str
+    datum_id: str
+    request_hash: str
+    kind: Literal["train", "eval"]
+    checkpoint_generation: Optional[int] = None
+    created_at: datetime
+    run_expires_at: datetime
+    lease_expired: bool
+    recorded_completion_count: int
+
+
+class ListInFlightChatCompletionsResponse(BaseModel):
+    items: List[InFlightChatCompletionItem]
+    total: int
+    active_lease_count: int
+    past_lease_count: int
+    oldest_created_at: Optional[datetime] = None
+    next_cursor: Optional[str] = None
+
+
 class GenerationRewardStats(BaseModel):
     """Reward summary for all rewarded runs at a single policy generation."""
 

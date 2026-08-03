@@ -69,8 +69,7 @@ verifier receives `/app` in a separate environment and reports the task reward.
 | `--trainer` | `fake` | Trainer factory. |
 | `--agent-model` | `openai/ollie` | Provider/model passed to OllieAgent. |
 | `--ollie-executor` | `daytona` | Delegated executor: `none`, `local`, or `daytona`. |
-| `--ollie-max-steps` | unset | Optional model/tool step limit. |
-| `--ollie-command-timeout-ms` | unset | Optional delegated-command timeout. |
+| `--ollie-max-steps` | `64` | Model/tool step limit. |
 | `--verifier-environment` | `docker` | Separate Harbor verifier backend (`--environment` is a compatibility alias). |
 | `--runs` | `200` | Number of run/score iterations. |
 | `--concurrency` | `8` | Parallel Harbor trials. |

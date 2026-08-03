@@ -10,6 +10,7 @@ import { TunerDetailPage } from "./pages/TunerDetailPage";
 import { RunListPage } from "./pages/RunListPage";
 import { DatumsPage } from "./pages/DatumsPage";
 import { EvalPage } from "./pages/EvalPage";
+import { WorkloadPage } from "./pages/WorkloadPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
 import { CompletionDetailPage } from "./pages/CompletionDetailPage";
 
@@ -68,6 +69,12 @@ const evalRoute = createRoute({
   component: EvalPage,
 });
 
+const workloadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tuners/$tunerId/workload",
+  component: WorkloadPage,
+});
+
 const runDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tuners/$tunerId/runs/$runId",
@@ -87,6 +94,7 @@ const routeTree = rootRoute.addChildren([
   runListRoute,
   datumsRoute,
   evalRoute,
+  workloadRoute,
   runDetailRoute,
   completionDetailRoute,
 ]);

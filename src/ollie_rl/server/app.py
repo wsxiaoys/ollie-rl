@@ -17,6 +17,7 @@ from ollie_rl.types import (
     GetTunerResponse,
     ListTunersResponse,
     ListDatumsResponse,
+    ListInFlightChatCompletionsResponse,
     ListRunsResponse,
     RewardDistributionResponse,
     RunDetailResponse,
@@ -345,6 +346,45 @@ async def reward_distribution(
     except Exception as e:
         logger.exception(
             f"Failed to compute reward distribution for tuner '{tuner_id}'"
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/tuners/{tuner_id}/in-flight-chat-completions",
+    response_model=ListInFlightChatCompletionsResponse,
+    tags=[WEB_DASHBOARD_TAG],
+)
+async def list_in_flight_chat_completions(
+    tuner_id: str,
+    limit: Optional[int] = Query(
+        default=None,
+        ge=1,
+        le=500,
+        description="Max operations to return per page. Omit to return all.",
+    ),
+    cursor: Optional[str] = Query(
+        default=None,
+        description="Opaque forward cursor from the previous workload page.",
+    ),
+) -> ListInFlightChatCompletionsResponse:
+    """List durable resumable chat-completion operations tracked for a tuner."""
+    from ollie_rl.service.tuner import (
+        InvalidWorkloadCursorError,
+        TunerNotFoundError,
+    )
+
+    try:
+        return await services.tuner.list_in_flight_chat_completions(
+            tuner_id, limit=limit, cursor=cursor
+        )
+    except TunerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except InvalidWorkloadCursorError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception(
+            f"Failed to list in-flight chat completions for tuner '{tuner_id}'"
         )
         raise HTTPException(status_code=500, detail=str(e))
 

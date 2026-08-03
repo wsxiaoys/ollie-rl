@@ -32,6 +32,10 @@ export type GetTunerResponse = Schemas["GetTunerResponse"];
 export type RunItem = Schemas["RunItem"];
 export type RunStatus = RunItem["status"];
 export type ListRunsResponse = Schemas["ListRunsResponse"];
+export type InFlightChatCompletionItem =
+  Schemas["InFlightChatCompletionItem"];
+export type ListInFlightChatCompletionsResponse =
+  Schemas["ListInFlightChatCompletionsResponse"];
 export type GenerationRewardStats = Schemas["GenerationRewardStats"];
 export type RewardDistributionData = Schemas["RewardDistributionResponse"];
 export type ChatCompletionItem = Schemas["ChatCompletionItem"];
