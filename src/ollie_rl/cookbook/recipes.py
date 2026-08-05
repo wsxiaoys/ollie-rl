@@ -1,8 +1,4 @@
-from typing import Literal
-
 from pydantic import BaseModel
-
-Scheduler = Literal["fifo_epoch", "random"]
 
 
 class Recipe(BaseModel, frozen=True):
@@ -36,8 +32,8 @@ class Recipe(BaseModel, frozen=True):
 
     # ---- Context window guard ------------------------------------------
     # Hard cap on prompt + completion + reasoning tokens. Samples that
-    # exceed this are overridden to the `length` finish reason and have their
-    # response cleared.
+    # exceed this are overridden to the `length` finish reason, causing
+    # `length_penalty` to be applied, and have their response cleared.
     max_context_window: int = 60_000
 
 
