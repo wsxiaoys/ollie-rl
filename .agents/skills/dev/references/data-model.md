@@ -43,7 +43,7 @@ flowchart TD
 ## Core Entities
 
 ### Datum Pool (`DatumRowModel`)
-A registered list of datum_ids representing the corpus/dataset for a tuner. Treat `datum_id` as opaque. Populated at `POST /tuners` creation time from the request body (`datum_ids`). Note that `recipe` (the named recipe) and `trainer` (the named trainer factory) are also required fields in the request body. A tuner is useless without a corpus, so registering it upfront is required.
+A registered list of datum ids representing the corpus/dataset for a tuner. Treat `datum_id` as opaque. Populated at `POST /tuners` creation time from the request body's required `train_datum_ids` and optional `eval_datum_ids`. The `recipe` and named `trainer` factory are also required. A tuner is useless without a training corpus, so registering it upfront is required.
 
 ### Run (`RunModel`)
 A single rewarded attempt at a `datum_id` under a particular tuner. A run can contain multiple trajectories—for example, a main-agent trajectory and one or more subagent trajectories—which all share the run's scalar reward and advantage. It is the canonical run record and contains the reward and training bookkeeping:
@@ -80,15 +80,15 @@ class Rollout(BaseModel):
 
 ### Recipe (`Recipe` in `ollie_rl.cookbook.recipes`)
 Group / batch shape is **not** hardcoded in `TunerService` — it lives on the
-`Recipe` the tuner was created with, and is looked up via the `Cookbook`
-registry:
+immutable `Recipe` snapshot persisted for the tuner:
 
 - `recipe.group_size` — runs required for a `Rollout` to be "ready". Default in `GRPO_16x32`: **16**.
 - `recipe.num_groups_per_batch` — number of ready Rollouts required before `_collect_consumable_batch` returns a batch. Default in `GRPO_16x32`: **32**.
 
-To change these, register a new `Recipe(...)` constant in
-`src/ollie_rl/cookbook/recipes.py` and wire it into the `RECIPES` dict in
-`src/ollie_rl/cookbook/__init__.py`.
+At creation, `recipe` may be a cookbook preset string or an object containing
+fields layered over the built-in `Recipe` defaults. The complete result is
+persisted, so editing defaults or a cookbook preset cannot change an existing
+tuner's behavior.
 
 ### Batch
 A batch is what the trainer actually consumes in one `train_step`:

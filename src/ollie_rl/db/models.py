@@ -107,7 +107,9 @@ class TunerModel(BaseModel):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    recipe: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Immutable, fully resolved recipe snapshot. Runtime behavior never
+    # re-resolves the original request through Cookbook.
+    recipe: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False)
     trainer: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     # `trainer_state` is populated by the Tuner itself via its StateStore. It is

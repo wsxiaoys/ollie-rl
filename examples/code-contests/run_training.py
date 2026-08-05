@@ -541,7 +541,7 @@ async def main() -> int:
                 details = resp.json()
                 print(
                     f"[driver] adapting to existing tuner {tuner_id} "
-                    f"(name={details['name']!r}, recipe={details['recipe']['name']!r})"
+                    f"(name={details['name']!r})"
                 )
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 404:

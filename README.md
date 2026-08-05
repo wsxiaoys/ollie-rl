@@ -72,7 +72,7 @@ a run, let the agent solve the task, and score it:
 # One-time: create a tuner over your task list
 TUNER_ID=$(curl -s -X POST http://localhost:8000/tuners \
   -H 'Content-Type: application/json' \
-  -d '{"name":"my-policy","recipe":"grpo_16x32","trainer":"tinker","datum_ids":["task-1","task-2","task-3"]}' \
+  -d '{"name":"my-policy","recipe":"grpo_16x32","trainer":"tinker","train_datum_ids":["task-1","task-2","task-3"]}' \
   | jq -r .tuner_id)
 
 # Per run: request a run assignment
@@ -102,8 +102,8 @@ sequenceDiagram
     participant API as ollie-rl
     participant T as Trainer backend
 
-    C->>API: POST /tuners { name, recipe, trainer, datum_ids }
-    API-->>C: { tuner_id }
+    C->>API: POST /tuners { name, recipe, trainer, train_datum_ids }
+    API-->>C: { tuner_id, resolved recipe }
 
     loop training step
         C->>API: POST /tuners/{id}/runs
@@ -125,7 +125,21 @@ Concepts the server hides for you:
 - **Run** — one rewarded attempt at a `datum_id`; it may contain multiple
   trajectories (for example, main-agent and subagent trajectories).
 - **Rollout** — a GRPO group of K runs sharing the same `datum_id`.
-- **Recipe** — declarative knobs (`group_size`, `num_groups_per_batch`).
+- **Recipe** — immutable, tuner-level algorithm knobs such as `group_size` and
+  `num_groups_per_batch`. Pass a preset name, or an object containing fields to
+  override from the built-in defaults:
+
+  ```json
+  {
+    "recipe": {
+      "group_size": 8,
+      "num_groups_per_batch": 16
+    }
+  }
+  ```
+
+  Ollie persists the fully resolved recipe, so later default or preset changes
+  do not alter an existing tuner.
 - **Trainer** — the pluggable backend (`tinker`, or your own).
 
 For the full data model, see
@@ -163,20 +177,6 @@ uv run poe dev
 `ollie-rl` is not a replacement for `trl` — it's the **sidecar layer above
 it**. You can imagine plugging `trl`, `verl`, or any custom trainer in behind
 the `Trainer` protocol.
-
-## Architecture
-
-```
-src/ollie_rl/
-├── server/      FastAPI HTTP surface
-├── service/     TunerService — dispense_run, advantage math, maybe_train
-├── trainer/     Pluggable Trainer / TrainerFactory protocol
-│   ├── types.py    The plugin contract
-│   └── factory.py  Registry of registered TrainerFactories
-├── cookbook/    Declarative `Recipe`s (group_size, num_groups_per_batch, …)
-├── db/          SQLAlchemy async models (SQLite by default, Postgres-ready)
-└── types.py     HTTP DTOs
-```
 
 ## Configuration
 

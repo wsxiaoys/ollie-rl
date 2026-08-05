@@ -3,7 +3,7 @@
 import logging
 from typing import List, Optional
 
-from ollie_rl.cookbook import Cookbook
+from ollie_rl.cookbook import Cookbook, RecipeSpec
 from ollie_rl.db import DatumRowModel, TunerModel
 from ollie_rl.service.tuner.base import TunerServiceBase
 from ollie_rl.service.tuner.state_store import DbStateStore
@@ -17,7 +17,7 @@ class LifecycleMixin(TunerServiceBase):
 
     async def create_tuner(
         self,
-        recipe: str,
+        recipe: RecipeSpec,
         name: str,
         train_datum_ids: List[str],
         trainer: str,
@@ -25,7 +25,7 @@ class LifecycleMixin(TunerServiceBase):
         trainer_params: Optional[dict] = None,
     ) -> str:
         """
-        Create and initialize a tuner using the Cookbook and register it.
+        Resolve an immutable tuner-level recipe and initialize the tuner.
 
         ``train_datum_ids`` become the training pool (dispensed, rewarded,
         consumed by train steps); ``eval_datum_ids`` are held out for
@@ -34,7 +34,7 @@ class LifecycleMixin(TunerServiceBase):
         two sets overlap (the single source of truth for this validation; the
         API layer maps it to a 400).
         """
-        recipe_config = Cookbook.get(recipe)
+        recipe_config = Cookbook.resolve(recipe)
         eval_datum_ids = eval_datum_ids or []
         if not train_datum_ids:
             raise ValueError("train_datum_ids must be non-empty")
@@ -63,7 +63,7 @@ class LifecycleMixin(TunerServiceBase):
             async with session.begin():
                 tuner_record = TunerModel(
                     name=name,
-                    recipe=recipe,
+                    recipe=recipe_config.model_dump(mode="json"),
                     trainer=trainer,
                     trainer_state=None,
                 )

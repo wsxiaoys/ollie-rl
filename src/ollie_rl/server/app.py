@@ -206,14 +206,17 @@ async def create_tuner(request: CreateTunerRequest) -> CreateTunerResponse:
             trainer_params=request.trainer_params,
         )
 
+        details = await services.tuner.get_tuner_details(tuner_id)
         logger.info(
-            f"Dynamically created and initialized tuner: {tuner_id} (name: {request.name}) using recipe template: {request.recipe}"
+            "Dynamically created and initialized tuner: %s (name: %s)",
+            tuner_id,
+            request.name,
         )
         return CreateTunerResponse(
             tuner_id=tuner_id,
             name=request.name,
-            recipe=request.recipe,
-            status=await services.tuner.get_tuner_status(tuner_id),
+            recipe=details.recipe,
+            status=details.status,
         )
     except HTTPException as e:
         raise e

@@ -89,12 +89,14 @@ shortest path to a new backend is:
 
 See `gemini_msrl.py` for a worked example.
 
-### A new recipe
+### A new recipe preset
 
 Recipes are declarative knobs the `TunerService` consults to form batches.
-Add a frozen `Recipe(...)` constant in
-[`src/ollie_rl/cookbook/recipes.py`](./src/ollie_rl/cookbook/recipes.py)
-and reference it by name from `POST /tuners`.
+Clients can configure them per tuner in `POST /tuners`; reusable presets are
+frozen `Recipe(...)` constants in
+[`src/ollie_rl/cookbook/recipes.py`](./src/ollie_rl/cookbook/recipes.py) and
+registered in the cookbook. Preset changes affect only newly created tuners
+because each tuner persists its resolved recipe snapshot.
 
 ## Commit style
 

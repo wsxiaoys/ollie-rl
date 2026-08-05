@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from openai.types.chat import ChatCompletion
 from sqlalchemy import case, func, select
 
-from ollie_rl.cookbook import Cookbook
+from ollie_rl.cookbook import Recipe
 from ollie_rl.db import (
     ChatCompletionModel,
     CheckpointModel,
@@ -223,7 +223,7 @@ class QueryMixin(TunerServiceBase):
         return GetTunerResponse(
             tuner_id=record.id,
             name=record.name,
-            recipe=Cookbook.get(record.recipe),
+            recipe=Recipe.model_validate(record.recipe),
             trainer=record.trainer,
             status=status,
             policy_generation=policy_generation,

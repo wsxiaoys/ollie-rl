@@ -411,10 +411,9 @@ async def main() -> int:
                 response = await client.get(f"/tuners/{tuner_id}")
                 response.raise_for_status()
                 details = response.json()
-                recipe_name = details.get("recipe", {}).get("name", "unknown")
                 print(
                     f"[driver] adapting to existing tuner {tuner_id} "
-                    f"(name={details.get('name')!r}, recipe={recipe_name!r})"
+                    f"(name={details.get('name')!r})"
                 )
             except httpx.HTTPStatusError as error:
                 if error.response.status_code == 404:

@@ -37,7 +37,8 @@ class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
             self.assertIn("tuner_id", tuner_data)
             tuner_id = tuner_data["tuner_id"]
             self.assertEqual(tuner_data["name"], "integration-test-policy")
-            self.assertEqual(tuner_data["recipe"], "grpo_16x32")
+            self.assertEqual(tuner_data["recipe"]["group_size"], 16)
+            self.assertEqual(tuner_data["recipe"]["num_groups_per_batch"], 32)
 
             # 1.5 Get tuner details
             res = await client.get(f"/tuners/{tuner_id}")

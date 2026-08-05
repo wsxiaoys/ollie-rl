@@ -795,16 +795,13 @@ export interface components {
             /** Name */
             name: string;
             /** Recipe */
-            recipe: string;
+            recipe: string | components["schemas"]["RecipeInput"];
             /** Trainer */
             trainer: string;
             /** Train Datum Ids */
             train_datum_ids: string[];
-            /**
-             * Eval Datum Ids
-             * @default []
-             */
-            eval_datum_ids: string[];
+            /** Eval Datum Ids */
+            eval_datum_ids?: string[];
             /** Trainer Params */
             trainer_params?: {
                 [key: string]: unknown;
@@ -816,8 +813,7 @@ export interface components {
             tuner_id: string;
             /** Name */
             name: string;
-            /** Recipe */
-            recipe: string;
+            recipe: components["schemas"]["Recipe"];
             status: components["schemas"]["TunerStatus"];
         };
         /**
@@ -1338,6 +1334,28 @@ export interface components {
              * @default 60000
              */
             max_context_window: number;
+        };
+        /**
+         * RecipeInput
+         * @description Tuner-specific recipe fields layered over the Recipe defaults.
+         */
+        RecipeInput: {
+            /** Group Size */
+            group_size?: number | null;
+            /** Num Groups Per Batch */
+            num_groups_per_batch?: number | null;
+            /** Max Off Policy Generation */
+            max_off_policy_generation?: number | null;
+            /** Sampler Promotion Every */
+            sampler_promotion_every?: number | null;
+            /** Eval Group Size */
+            eval_group_size?: number | null;
+            /** Content Filter Penalty */
+            content_filter_penalty?: number | null;
+            /** Length Penalty */
+            length_penalty?: number | null;
+            /** Max Context Window */
+            max_context_window?: number | null;
         };
         /**
          * RewardDistributionResponse

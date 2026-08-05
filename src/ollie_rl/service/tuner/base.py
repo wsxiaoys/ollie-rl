@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import func, select
 
 from ollie_rl.background import BackgroundJob
-from ollie_rl.cookbook import Cookbook, Recipe
+from ollie_rl.cookbook import Recipe
 from ollie_rl.db import (
     ChatCompletionModel,
     CheckpointModel,
@@ -146,7 +146,7 @@ class TunerServiceBase:
                 raise TunerNotFoundError(
                     f"Tuner '{tuner_id}' not found or not initialized."
                 )
-            return Cookbook.get(record.recipe)
+            return Recipe.model_validate(record.recipe)
 
     async def _load_pool_and_runs(
         self, tuner_id: str, session

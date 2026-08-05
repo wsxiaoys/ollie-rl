@@ -11,8 +11,8 @@ sequenceDiagram
     participant API as Ollie RL API
     participant DB as DB
 
-    C->>API: POST /tuners { name, recipe, trainer, datum_ids: [...] }
-    API-->>C: { tuner_id, name, recipe }
+    C->>API: POST /tuners { name, recipe, trainer, train_datum_ids: [...] }
+    API-->>C: { tuner_id, name, resolved recipe }
 
     loop each training step
         loop fan out N samplers (parallel)
@@ -60,12 +60,17 @@ the background); the client does not need to trigger it explicitly.
 
 ### `POST /tuners` body
 
-| Field        | Required | Default        | Meaning                                   |
-|--------------|----------|----------------|-------------------------------------------|
-| `name`       | yes      | —              | Display name for the tuned model.         |
-| `datum_ids`  | yes      | —              | Non-empty list of opaque dataset item ids.|
-| `recipe`     | yes      | —              | Named recipe in the `Cookbook` registry (e.g. `grpo_16x32`). |
-| `trainer`    | yes      | —              | Named factory in the trainer registry (e.g. `gemini_msrl`, `fake`). |
+| Field             | Required | Default | Meaning |
+|-------------------|----------|---------|---------|
+| `name`            | yes      | —       | Display name for the tuned model. |
+| `train_datum_ids` | yes      | —       | Non-empty list of opaque training item ids. |
+| `eval_datum_ids`  | no       | `[]`    | Held-out item ids scored per checkpoint. |
+| `recipe`          | yes      | —       | A preset string, or an object containing fields layered over the `Recipe` defaults. |
+| `trainer`         | yes      | —       | Named factory in the trainer registry (e.g. `gemini_msrl`, `fake`). |
+
+Recipe objects resolve built-in defaults followed by their explicit fields. The
+server validates and persists the complete immutable snapshot. Both create and
+detail responses return that snapshot as `recipe`.
 
 ### Run-addressed chat completions
 
@@ -83,8 +88,10 @@ A single sync-RL step has three phases visible to the client.
 
 ### Phase 0 — bootstrap (once per training job)
 
-`POST /tuners` with `name`, `recipe`, `trainer`, and `datum_ids` (non-empty) to create a tuner.
-The server returns `{ tuner_id, name, recipe }`. Persist `tuner_id` somewhere durable — it is the only handle to the policy on the server.
+`POST /tuners` with `name`, `recipe`, `trainer`, and non-empty
+`train_datum_ids` to create a tuner. The server returns the tuner identity and
+resolved recipe snapshot. Persist `tuner_id` somewhere durable — it is the only
+handle to the policy on the server.
 
 ### Phase 1 — request run assignments
 

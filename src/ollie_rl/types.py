@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from ollie_rl.cookbook import Recipe
+from ollie_rl.cookbook import Cookbook, Recipe, RecipeInput
 
 
 class TunerStatus(str, Enum):
@@ -88,21 +88,29 @@ class ChatCompletionRequest(BaseModel):
 
 class CreateTunerRequest(BaseModel):
     name: str
-    recipe: str
+    recipe: str | RecipeInput
     trainer: str
     # Datums to train on (dispensed into GRPO groups, rewarded, consumed by a
     # train_step). Must be non-empty.
     train_datum_ids: List[str]
     # Held-out datums scored per checkpoint but never trained on. Empty disables
     # eval. Must not overlap `train_datum_ids`.
-    eval_datum_ids: List[str] = []
+    eval_datum_ids: List[str] = Field(default_factory=list)
     trainer_params: Optional[Dict[str, Any]] = None
+
+    @field_validator("recipe")
+    @classmethod
+    def validate_recipe(cls, recipe: str | RecipeInput) -> str | RecipeInput:
+        # Validate named recipe lookup at the HTTP boundary so malformed
+        # creation requests consistently produce FastAPI's 422 response.
+        Cookbook.resolve(recipe)
+        return recipe
 
 
 class CreateTunerResponse(BaseModel):
     tuner_id: str
     name: str
-    recipe: str
+    recipe: Recipe
     status: TunerStatus
 
 
