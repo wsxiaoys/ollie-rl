@@ -161,6 +161,8 @@ class GeminiMsrlTrainer(Trainer):
             client=self.client,
             endpoint_name=checkpoint.ref,
             policy_generation=checkpoint.policy_generation,
+            thinking_level=self.config.thinking_level,
+            max_output_tokens=self.config.max_output_tokens,
         )
 
     @property
@@ -203,7 +205,11 @@ class GeminiMsrlTrainer(Trainer):
 
         tuning_job_id = self.tuning_job_name.split("/")[-1]
         scope_req = GenerateContentTuningScopeRequest(
-            content_generation_parameters=build_content_generation_parameters(request)
+            content_generation_parameters=build_content_generation_parameters(
+                request,
+                thinking_level=self.config.thinking_level,
+                max_output_tokens=self.config.max_output_tokens,
+            )
         )
 
         # 2. Trigger Generation LRO

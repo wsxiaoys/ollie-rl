@@ -65,11 +65,6 @@ _UNSUPPORTED_SCHEMA_KEYS = frozenset(
     ]
 )
 
-# Vertex caps max_output_tokens at 32768 for tuning-scope and endpoint
-# generations. OpenAI clients (e.g. cloudcode) often send larger values
-# (64000+); clamp to avoid 400s on otherwise valid OpenAI-style requests.
-VERTEX_MAX_OUTPUT_TOKENS = 32768
-
 
 def _sanitize_json_schema(node):
     """Best-effort recursive strip of JSON-Schema keywords not supported by
@@ -117,6 +112,9 @@ def _set_extra_content(obj: Any, thought_signature: str) -> None:
 
 def build_content_generation_parameters(
     request: ChatCompletionRequest,
+    *,
+    thinking_level: str | None = None,
+    max_output_tokens: int | None = None,
 ) -> ContentGenerationParameters:
     system_messages = [msg for msg in request.messages if msg["role"] == "system"]
     other_messages = [msg for msg in request.messages if msg["role"] != "system"]
@@ -298,13 +296,23 @@ def build_content_generation_parameters(
         if function_declarations:
             gemini_tools = [Tool(function_declarations=function_declarations)]
 
-    max_tokens = request.max_tokens
-    if max_tokens is None or max_tokens > VERTEX_MAX_OUTPUT_TOKENS:
-        max_tokens = VERTEX_MAX_OUTPUT_TOKENS
+    # A trainer-level value is an explicit policy for every rollout and takes
+    # precedence over the OpenAI-compatible per-request value. Without it, keep
+    # honoring max_tokens supplied by the caller.
+    effective_max_output_tokens = (
+        max_output_tokens if max_output_tokens is not None else request.max_tokens
+    )
+
+    thinking_config = None
+    if thinking_level is not None:
+        thinking_config = {"thinkingLevel": thinking_level}
 
     return ContentGenerationParameters(
         contents=contents,
-        generation_config=GenerationConfig(max_output_tokens=max_tokens),
+        generation_config=GenerationConfig(
+            max_output_tokens=effective_max_output_tokens,
+            thinking_config=thinking_config,
+        ),
         system_instruction=system_instruction,
         tools=gemini_tools,
     )
