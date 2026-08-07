@@ -4,11 +4,12 @@ import asyncio
 import logging
 import uuid
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 
 from openai.types.chat import ChatCompletion
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select
 
 from ollie_rl.db import (
     ChatCompletionModel,
@@ -60,6 +61,95 @@ class SamplingMixin(TunerServiceBase):
         # load weights.
         self._samplers: Dict[str, "OrderedDict[str, Sampler]"] = {}
         self._sampler_locks = KeyedLocks()
+
+    @asynccontextmanager
+    async def hold_run_lease(self, tuner_id: str, run_id: str) -> AsyncGenerator[None]:
+        """Keep a run leased for the lifetime of an HTTP completion request.
+
+        Entry validates that the run is still usable and renews its deadline. A
+        heartbeat keeps moving that deadline forward while the API call remains
+        active; on exit, one final renewal starts a full lease window from the
+        moment the request stopped being in flight. Expiration therefore
+        requires both no active completion request and 15 minutes of inactivity,
+        including when generation fails or the client disconnects.
+        """
+        await self._extend_run_lease(tuner_id, run_id, validate=True)
+        stopped = asyncio.Event()
+        heartbeat = asyncio.create_task(
+            self._heartbeat_run_lease(tuner_id, run_id, stopped)
+        )
+        try:
+            yield
+        finally:
+            stopped.set()
+            await heartbeat
+            try:
+                await asyncio.shield(self._extend_run_lease(tuner_id, run_id))
+            except Exception:
+                # Do not replace the request result with a best-effort cleanup
+                # failure. The preceding heartbeat still leaves most of a lease
+                # window in which a retry can arrive.
+                logger.exception(
+                    "Failed to renew run lease after completion request "
+                    "(tuner=%s run=%s)",
+                    tuner_id,
+                    run_id,
+                )
+
+    async def _heartbeat_run_lease(
+        self, tuner_id: str, run_id: str, stopped: asyncio.Event
+    ) -> None:
+        """Renew a lease periodically until its HTTP request finishes."""
+        interval = RUN_LEASE_SECONDS / 3
+        while True:
+            try:
+                await asyncio.wait_for(stopped.wait(), timeout=interval)
+                return
+            except TimeoutError:
+                pass
+
+            try:
+                renewed = await self._extend_run_lease(tuner_id, run_id)
+                if not renewed:
+                    return
+            except Exception:
+                # A transient database failure should not cancel an otherwise
+                # healthy model request. Retry on the next heartbeat.
+                logger.exception(
+                    "Failed to heartbeat run lease (tuner=%s run=%s)",
+                    tuner_id,
+                    run_id,
+                )
+
+    async def _extend_run_lease(
+        self, tuner_id: str, run_id: str, *, validate: bool = False
+    ) -> bool:
+        """Move an unrewarded run's deadline to one lease window from now."""
+        async with self.async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(RunModel).where(
+                        RunModel.tuner_id == tuner_id,
+                        RunModel.id == run_id,
+                    )
+                )
+                run = result.scalar_one_or_none()
+                if run is None:
+                    if validate:
+                        raise RunNotFoundError(f"Unknown run_id {run_id}")
+                    return False
+                if run.reward is not None:
+                    if validate:
+                        raise RewardAlreadySetError(
+                            f"Reward already set for run '{run_id}'"
+                        )
+                    return False
+
+                now = utcnow()
+                if validate and run.expires_at <= now:
+                    raise RunExpiredError(f"Run '{run_id}' has expired")
+                run.expires_at = now + timedelta(seconds=RUN_LEASE_SECONDS)
+                return True
 
     async def sample(
         self,
@@ -455,20 +545,6 @@ class SamplingMixin(TunerServiceBase):
                     duration_ms=duration_ms,
                 )
                 session.add(db_completion)
-
-                # Extend the run's lease: each recorded completion pushes the
-                # deadline out to `RUN_LEASE_SECONDS` from the completion time,
-                # so an actively-progressing multi-turn run isn't expired
-                # mid-flight. A genuinely stalled/abandoned run records no new
-                # completion and so still lapses at its last deadline.
-                await session.execute(
-                    update(RunModel)
-                    .where(
-                        RunModel.tuner_id == tuner_id,
-                        RunModel.id == run_id,
-                    )
-                    .values(expires_at=utcnow() + timedelta(seconds=RUN_LEASE_SECONDS))
-                )
 
     async def update_reward(self, tuner_id: str, run_id: str, reward: float) -> None:
         """

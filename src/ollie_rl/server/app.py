@@ -1,9 +1,9 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Literal, Optional
+from typing import AsyncIterator, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
@@ -579,10 +579,30 @@ async def _generate_chat_completion(
     return completion
 
 
+async def _hold_completion_request_lease(
+    tuner_id: str, run_id: str
+) -> AsyncIterator[None]:
+    """Keep the run alive for the full HTTP request/response lifecycle."""
+    from ollie_rl.service.tuner import (
+        RewardAlreadySetError,
+        RunExpiredError,
+        RunNotFoundError,
+    )
+
+    try:
+        async with services.tuner.hold_run_lease(tuner_id, run_id):
+            yield
+    except RunNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (RunExpiredError, RewardAlreadySetError) as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
 @app.post(
     "/tuners/{tuner_id}/runs/{run_id}/openai/v1/chat/completions",
     tags=[TRAINING_CLIENT_TAG],
     summary="Sample the active policy for a run",
+    dependencies=[Depends(_hold_completion_request_lease)],
 )
 async def create_run_chat_completion(
     tuner_id: str,
@@ -611,13 +631,13 @@ async def dispense_run(tuner_id: str) -> DispenseRun:
     """Lease the next training assignment to a worker.
 
     A successful response contains the ``run_id``, assigned ``datum_id``, and
-    ``expires_at``. The initial lease lasts 15 minutes. Each successfully
-    recorded chat completion resets ``expires_at`` to 15 minutes from that
-    completion time (it does not add time to the previous deadline), keeping an
-    actively progressing multi-turn run alive one turn at a time. If no new
-    completion or final reward arrives before the deadline, the run expires and
-    its datum may be assigned again under a new run id; the expired run no longer
-    accepts completions or a reward.
+    ``expires_at``. The initial lease lasts 15 minutes. While a run's chat
+    completion HTTP request is active, the server heartbeats its deadline; when
+    that request ends, successfully or otherwise, a fresh 15-minute window
+    begins. A run therefore expires only after it has had no in-flight
+    completion request for 15 minutes, at which point its datum may be assigned
+    under a new run id and the expired run no longer accepts completions or a
+    reward.
 
     Returns ``204 No Content`` with ``Retry-After: 1`` when work is temporarily
     unavailable, such as during trainer warm-up or a training barrier.

@@ -53,7 +53,7 @@ A single rewarded attempt at a `datum_id` under a particular tuner. A run can co
 - `datum_id` — the dataset item being attempted.
 - `reward` — scalar float score written by the client via `PUT /reward`.
 - `trained_count` — number of times the run has already been included in a training batch. New runs start at 0; after a batch they are bumped to 1, which excludes them from future batches via the `trained_count <= 0` filter in `_collect_consumable_batch`.
-- `expires_at` — renewable worker-lease deadline. A run starts with 15 minutes (`now + RUN_LEASE_SECONDS`), and every successfully recorded chat completion resets the deadline to 15 minutes from that completion time. If a run has `reward IS NULL` and `expires_at <= NOW()`, its lease is expired and the dispenser is free to re-dispense that `datum_id` under a fresh `run_id`.
+- `expires_at` — renewable worker-lease deadline. A run starts with 15 minutes (`now + RUN_LEASE_SECONDS`). While a chat-completion HTTP request is active, the server heartbeats the deadline, and request exit starts a fresh 15-minute window even on failure or disconnect. If a run has `reward IS NULL`, no request has remained in flight, and `expires_at <= NOW()`, its lease is expired and the dispenser is free to re-dispense that `datum_id` under a fresh `run_id`.
 
 ### ChatCompletion (`ChatCompletionModel`)
 The lowest-level record: one LLM request/response, usually one turn within a trajectory. Related completions inside a run are reconstructed into trajectories using greedy longest-prefix matching over their prompt/response histories (messages for dashboard presentation, tokens for trainer accumulation). Persisted in the `chat_completions` table with:

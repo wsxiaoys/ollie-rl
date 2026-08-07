@@ -9,8 +9,8 @@
 RUN_EXPIRE_GENERATION_BUDGET_MS = 2 * 60 * 1000
 
 # Time budget (seconds) granted to a run's lease. A run is dispensed with a
-# deadline of `now + RUN_LEASE_SECONDS`, and every recorded completion extends
-# the deadline to `RUN_LEASE_SECONDS` from that completion's time. This keeps an
-# actively progressing multi-turn run alive turn-by-turn while still expiring
-# runs whose generation genuinely stalled or was abandoned.
+# deadline of `now + RUN_LEASE_SECONDS`. Active HTTP completion requests
+# heartbeat the deadline, then start a fresh full window when the request ends.
+# A run can therefore expire only after no completion request has been in flight
+# for this full interval.
 RUN_LEASE_SECONDS = 15 * 60
