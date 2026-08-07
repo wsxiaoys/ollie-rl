@@ -139,7 +139,21 @@ Concepts the server hides for you:
   ```
 
   Ollie persists the fully resolved recipe, so later default or preset changes
-  do not alter an existing tuner.
+  do not alter an existing tuner. To prevent workers from producing rollout
+  data that would become stale before training can consume it, run dispensing
+  is capped at:
+
+  ```text
+  max outstanding runs =
+      (max_off_policy_generation + 1)
+      * group_size
+      * num_groups_per_batch
+  ```
+
+  Outstanding runs include active leases and rewarded-but-untrained runs;
+  expired, rejected, trained, and evaluation runs do not consume this budget.
+  Once the limit is reached, the run endpoint returns `204` with
+  `Retry-After` until capacity becomes available.
 - **Trainer** — the pluggable backend (`tinker`, or your own).
 
 For the full data model, see
