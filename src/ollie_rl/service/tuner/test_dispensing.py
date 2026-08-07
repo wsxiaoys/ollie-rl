@@ -71,6 +71,19 @@ class PickDatumTestCase(unittest.TestCase):
         ]
         self.assertEqual(pick_datum(["d1", "d2"], runs, recipe), "d2")
 
+    def test_off_policy_dispatch_stops_at_outstanding_run_budget(self):
+        recipe = Recipe(
+            group_size=2,
+            num_groups_per_batch=2,
+            max_off_policy_generation=1,
+        )
+        # (1 current + 1 off-policy generation) * 2 runs * 2 groups = 8.
+        runs = [_pick_run("d1", reward=1.0) for _ in range(8)]
+        self.assertIsNone(pick_datum(["d1"], runs, recipe))
+
+        runs[0].trained_count = 1
+        self.assertEqual(pick_datum(["d1"], runs, recipe), "d1")
+
     def test_saturated_returns_none_when_strictly_on_policy(self):
         recipe = Recipe(group_size=2, max_off_policy_generation=0)
         runs = [_pick_run("d1", reward=1.0), _pick_run("d1", reward=1.0)]

@@ -92,13 +92,30 @@ def pick_datum(
 
     Saturated datums are excluded when strictly on-policy. When off-policy
     surplus is enabled and every datum is saturated, the least-saturated datum
-    wins, with corpus order breaking ties.
+    wins, with corpus order breaking ties. Dispensing stops once outstanding
+    rewarded/untrained runs plus active leases fill the policy-valid horizon:
+    ``(max_off_policy_generation + 1) * group_size * num_groups_per_batch``.
     """
     if not datum_pool:
         return None
 
     group_size = recipe.group_size
     scores = scheduler_scores(datum_pool, runs)
+
+    # Bound rollout production by the complete policy-valid training horizon.
+    # The current generation plus `max_off_policy_generation` older generations
+    # may each contribute one batch. Counting both rewarded/untrained runs and
+    # active leases prevents workers from reserving unbounded work that would
+    # later be rejected as stale. Expired, rejected, trained, and eval runs are
+    # already excluded by `scheduler_scores`.
+    max_outstanding_runs = (
+        (recipe.max_off_policy_generation + 1)
+        * recipe.group_size
+        * recipe.num_groups_per_batch
+    )
+    if sum(scores.score.values()) >= max_outstanding_runs:
+        return None
+
     unsaturated = [d for d in datum_pool if scores.score[d] < group_size]
     if unsaturated:
         return min(unsaturated, key=lambda d: scores.trained[d])
