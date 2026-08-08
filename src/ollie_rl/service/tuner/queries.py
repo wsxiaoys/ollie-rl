@@ -599,9 +599,7 @@ class QueryMixin(TunerServiceBase):
             )
             latest = checkpoint_rows[0] if checkpoint_rows else None
             latest_checkpoint_id = latest.id if latest is not None else None
-            latest_generation = (
-                latest.policy_generation if latest is not None else None
-            )
+            latest_generation = latest.policy_generation if latest is not None else None
 
             runs: List[RunModel] = []
             if eval_datums and latest_checkpoint_id is not None:
