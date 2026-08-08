@@ -175,7 +175,7 @@ class NextPick(BaseModel):
     """What pick_datum would dispense next, with reasoning (dynamic)."""
 
     datum_id: Optional[str]
-    tier: Literal["incomplete", "fresh", "saturated", "none"]
+    tier: Literal["incomplete", "fresh", "saturated", "budget", "none"]
     reason: str
 
 
