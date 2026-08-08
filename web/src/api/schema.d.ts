@@ -732,6 +732,23 @@ export interface components {
             /** Name */
             name?: string;
         };
+        /**
+         * CheckpointInfo
+         * @description Persisted checkpoint metadata exposed in the eval progress view.
+         */
+        CheckpointInfo: {
+            /** Id */
+            id: string;
+            /** Ref */
+            ref: string;
+            /** Policy Generation */
+            policy_generation: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** Choice */
         Choice: {
             /**
@@ -901,7 +918,8 @@ export interface components {
          *     count in `items` is scoped to it. `eval_group_size` is the target number of
          *     eval attempts per datum per checkpoint (the progress-bar denominator, from
          *     the recipe). `items` covers every registered eval datum, including ones with
-         *     no runs against the latest checkpoint yet.
+         *     no runs against the latest checkpoint yet. `checkpoints` lists the persisted
+         *     checkpoint records newest-first.
          */
         EvalProgress: {
             /** Latest Checkpoint Generation */
@@ -912,6 +930,8 @@ export interface components {
             total: number;
             /** Items */
             items: components["schemas"]["EvalDatumProgress"][];
+            /** Checkpoints */
+            checkpoints: components["schemas"]["CheckpointInfo"][];
         };
         /**
          * File

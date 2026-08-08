@@ -65,7 +65,11 @@ def _mount_dev_proxy(app: FastAPI, target: str) -> None:
     from starlette.requests import Request
     from starlette.responses import RedirectResponse, Response, StreamingResponse
 
-    client = httpx.AsyncClient(base_url=target, timeout=None)
+    # The dev server is always a directly reachable local process. Ignoring
+    # environment/system proxy settings is important on macOS, where HTTPX can
+    # otherwise route localhost through the configured system proxy and return
+    # a synthetic 502 instead of reaching Vite.
+    client = httpx.AsyncClient(base_url=target, timeout=None, trust_env=False)
 
     @app.get("/app", include_in_schema=False)
     async def _web_root() -> RedirectResponse:

@@ -26,6 +26,7 @@ export function EvalPage() {
 
   const progress = evalProgressQ.data;
   const items = progress?.items ?? [];
+  const checkpoints = progress?.checkpoints ?? [];
   const evalGroupSize = progress?.eval_group_size ?? 0;
   const visibleItems = hideIdle
     ? items.filter((it) => it.in_flight > 0 || it.completed > 0)
@@ -41,33 +42,75 @@ export function EvalPage() {
         </p>
       </header>
 
+      <Panel title="Checkpoints">
+        {evalProgressQ.isError ? (
+          <div className="placeholder placeholder--inset placeholder--error">
+            Failed to load checkpoints: {(evalProgressQ.error as Error).message}
+          </div>
+        ) : !progress ? (
+          <div className="placeholder placeholder--inset">
+            Loading checkpoints…
+          </div>
+        ) : checkpoints.length === 0 ? (
+          <div className="placeholder placeholder--inset">
+            No checkpoints have been produced yet.
+          </div>
+        ) : (
+          <div className="table-scroll">
+            <table className="table table--dense">
+              <thead>
+                <tr>
+                  <th className="num">Generation</th>
+                  <th>Checkpoint ID</th>
+                  <th>Backend reference</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {checkpoints.map((checkpoint) => (
+                  <tr key={checkpoint.id}>
+                    <td className="num">{checkpoint.policy_generation}</td>
+                    <td>
+                      <Mono>{checkpoint.id}</Mono>
+                    </td>
+                    <td>
+                      <Mono>{checkpoint.ref}</Mono>
+                    </td>
+                    <td>{new Date(checkpoint.created_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
       <Panel
         title="Held-out eval reward by checkpoint"
-            right={
-              evalDistQ.isFetching ? (
-                <span className="live-dot">● live</span>
-              ) : undefined
-            }
-          >
-            {evalDistQ.isError ? (
-              <div className="placeholder placeholder--inset placeholder--error">
-                Failed to load eval reward: {(evalDistQ.error as Error).message}
-              </div>
-            ) : !evalDistQ.data ? (
-              <div className="placeholder placeholder--inset">
-                Loading eval reward…
-              </div>
-            ) : evalDistQ.data.total === 0 ? (
-              <div className="placeholder placeholder--inset">
-                No held-out eval runs scored yet — configure{" "}
-                <code>eval_datum_ids</code> when creating the tuner, and eval
-                scores will appear here once each checkpoint's eval split is
-                rewarded.
-              </div>
-            ) : (
-              <RewardDistribution dist={evalDistQ.data} />
-            )}
-          </Panel>
+        right={
+          evalDistQ.isFetching ? (
+            <span className="live-dot">● live</span>
+          ) : undefined
+        }
+      >
+        {evalDistQ.isError ? (
+          <div className="placeholder placeholder--inset placeholder--error">
+            Failed to load eval reward: {(evalDistQ.error as Error).message}
+          </div>
+        ) : !evalDistQ.data ? (
+          <div className="placeholder placeholder--inset">
+            Loading eval reward…
+          </div>
+        ) : evalDistQ.data.total === 0 ? (
+          <div className="placeholder placeholder--inset">
+            No held-out eval runs scored yet — configure{" "}
+            <code>eval_datum_ids</code> when creating the tuner, and eval scores
+            will appear here once each checkpoint's eval split is rewarded.
+          </div>
+        ) : (
+          <RewardDistribution dist={evalDistQ.data} />
+        )}
+      </Panel>
 
           <Panel
             title="Eval datums"

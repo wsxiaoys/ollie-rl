@@ -45,6 +45,7 @@ from ollie_rl.types import (
     ChatCompletionDetailResponse,
     ChatCompletionItem,
     ChatCompletionRequest,
+    CheckpointInfo,
     DatumCoverage,
     DatumPool,
     DatumProgress,
@@ -580,17 +581,27 @@ class QueryMixin(TunerServiceBase):
 
             # The eval tier always targets the highest-generation checkpoint, so
             # scope per-datum progress to that one checkpoint (by id, not just
-            # generation -- a generation could in principle have multiple).
-            latest = (
-                await session.execute(
-                    select(CheckpointModel.id, CheckpointModel.policy_generation)
-                    .where(CheckpointModel.tuner_id == tuner_id)
-                    .order_by(CheckpointModel.policy_generation.desc())
-                    .limit(1)
+            # generation). Return the same persisted rows for the dashboard's
+            # checkpoint table rather than reconstructing metadata from runs.
+            checkpoint_rows = list(
+                (
+                    await session.execute(
+                        select(CheckpointModel)
+                        .where(CheckpointModel.tuner_id == tuner_id)
+                        .order_by(
+                            CheckpointModel.policy_generation.desc(),
+                            CheckpointModel.created_at.desc(),
+                        )
+                    )
                 )
-            ).first()
-            latest_checkpoint_id = latest[0] if latest is not None else None
-            latest_generation = latest[1] if latest is not None else None
+                .scalars()
+                .all()
+            )
+            latest = checkpoint_rows[0] if checkpoint_rows else None
+            latest_checkpoint_id = latest.id if latest is not None else None
+            latest_generation = (
+                latest.policy_generation if latest is not None else None
+            )
 
             runs: List[RunModel] = []
             if eval_datums and latest_checkpoint_id is not None:
@@ -608,6 +619,15 @@ class QueryMixin(TunerServiceBase):
                     .all()
                 )
 
+        checkpoints = [
+            CheckpointInfo(
+                id=checkpoint.id,
+                ref=checkpoint.ref,
+                policy_generation=checkpoint.policy_generation,
+                created_at=checkpoint.created_at,
+            )
+            for checkpoint in checkpoint_rows
+        ]
         in_flight_by_datum: Dict[str, int] = {d: 0 for d in eval_datums}
         completed_by_datum: Dict[str, int] = {d: 0 for d in eval_datums}
         for r in runs:
@@ -632,6 +652,7 @@ class QueryMixin(TunerServiceBase):
             eval_group_size=recipe.eval_group_size,
             total=len(eval_datums),
             items=items,
+            checkpoints=checkpoints,
         )
 
     async def list_in_flight_chat_completions(

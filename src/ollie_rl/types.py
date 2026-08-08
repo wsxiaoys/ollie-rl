@@ -224,6 +224,15 @@ class EvalDatumProgress(BaseModel):
     completed: int  # eval runs that have been rewarded
 
 
+class CheckpointInfo(BaseModel):
+    """Persisted checkpoint metadata exposed in the eval progress view."""
+
+    id: str
+    ref: str
+    policy_generation: int
+    created_at: datetime
+
+
 class EvalProgress(BaseModel):
     """Per-eval-datum held-out status rollup for a tuner.
 
@@ -232,13 +241,15 @@ class EvalProgress(BaseModel):
     count in `items` is scoped to it. `eval_group_size` is the target number of
     eval attempts per datum per checkpoint (the progress-bar denominator, from
     the recipe). `items` covers every registered eval datum, including ones with
-    no runs against the latest checkpoint yet.
+    no runs against the latest checkpoint yet. `checkpoints` lists the persisted
+    checkpoint records newest-first.
     """
 
     latest_checkpoint_generation: Optional[int]
     eval_group_size: int  # target attempts per datum per checkpoint
     total: int  # number of registered eval datums
     items: List[EvalDatumProgress]
+    checkpoints: List[CheckpointInfo]
 
 
 class TunerProgress(BaseModel):
