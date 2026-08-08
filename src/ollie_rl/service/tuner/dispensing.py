@@ -1,9 +1,10 @@
 """Run dispensing: pure datum selection plus database-backed leasing.
 
-The scheduler helpers are plain functions of their arguments so selection and
-progress previews share one testable implementation. Eval remains the
-highest-priority tier; training datums are prioritized by prior training
-exposure and then by their persisted corpus order.
+The selection helpers are plain functions of already-computed per-datum
+tallies, so selection and progress previews share one testable implementation
+and neither has to load the run table. Eval remains the highest-priority tier;
+training datums are prioritized by prior training exposure and then by their
+persisted corpus order.
 """
 
 from datetime import timedelta
@@ -18,43 +19,41 @@ from ollie_rl.service.tuner.types import SchedulerScores
 from ollie_rl.types import DispenseRun, TunerStatus
 
 
-def scheduler_scores(
-    datum_pool: List[str],
-    runs: List[RunModel],
-) -> SchedulerScores:
-    """Scheduler-view consumable tallies per datum (no staleness filter).
+def outstanding_run_budget(recipe: Recipe) -> int:
+    """How many runs may be outstanding across the whole training pool.
 
-    Shared by ``pick_datum`` and the progress builder's ``next_pick`` labeling
-    so the two never drift. Rewarded and live pending runs both count toward a
-    group; trained, rejected, and expired runs do not.
+    The current generation plus ``max_off_policy_generation`` older ones may
+    each contribute one batch, so anything beyond that horizon is work that
+    would be rejected as stale before it could be trained on.
     """
-    now = utcnow()
-    score = {d: 0 for d in datum_pool}
-    trained = {d: 0 for d in datum_pool}
-    for r in runs:
-        if r.datum_id not in score:
-            continue
-        if r.trained_count > 0:
-            # Track prior exposure so new groups follow training-epoch order.
-            trained[r.datum_id] += r.trained_count
-            continue
-        if r.rejected_count > 0:
-            continue
-        has_reward = r.reward is not None
-        is_pending = r.reward is None and r.expires_at > now
-        if has_reward or is_pending:
-            score[r.datum_id] += 1
-    return SchedulerScores(score=score, trained=trained)
+    return (
+        (recipe.max_off_policy_generation + 1)
+        * recipe.group_size
+        * recipe.num_groups_per_batch
+    )
 
 
 def pick_tier(
-    datum: str, score: Dict[str, int], recipe: Recipe
-) -> Tuple[Literal["incomplete", "fresh", "saturated", "none"], str]:
+    datum: str,
+    score: Dict[str, int],
+    recipe: Recipe,
+) -> Tuple[Literal["incomplete", "fresh", "saturated", "budget", "none"], str]:
     """Label the scheduler tier (+ human reason) for a candidate datum.
 
     Mirrors ``pick_datum`` so a dispense preview can explain *why* a datum
-    would be chosen next.
+    would be chosen next -- including the tuner-wide horizon budget, which
+    outranks every per-datum tier. Leaving that out made the preview attribute
+    a budget stall to saturation, which is a different problem with a different
+    fix (one clears when the trainer catches up, the other needs more datums).
     """
+    outstanding = sum(score.values())
+    budget = outstanding_run_budget(recipe)
+    if outstanding >= budget:
+        return (
+            "budget",
+            f"outstanding runs fill the policy-valid horizon "
+            f"({outstanding}/{budget}); waiting for a train step",
+        )
     count = score.get(datum, 0)
     group_size = recipe.group_size
     if 0 < count < group_size:
@@ -72,23 +71,24 @@ def pick_tier(
 
 def pick_datum(
     datum_pool: List[str],
-    runs: List[RunModel],
+    scores: SchedulerScores,
     recipe: Recipe,
 ) -> Optional[str]:
     """Pick the next datum to dispense a run for.
 
     Pure scheduling helper (no service/DB state) so it can be reasoned about
-    and unit-tested in isolation.
+    and unit-tested in isolation. ``scores`` comes from
+    ``TunerServiceBase._scheduler_scores``, which counts only runs still
+    *consumable* by a future train step -- not yet trained
+    (``trained_count <= 0``), not requeued (``rejected_count <= 0``), and
+    either rewarded or pending (not expired). That mirrors
+    ``TunerService._collect_consumable_batch`` so a datum whose group was
+    already trained resets to "fresh" for the next generation.
 
     Unsaturated datums are selected in training order: least prior training
     exposure first, then their order in ``datum_pool`` (which is loaded from
     the persisted corpus position). A group's current fill level does not
-    affect that ordering. Only runs that are still *consumable* by a future
-    train step are counted, i.e. not yet trained (``trained_count <= 0``), not
-    requeued (``rejected_count <= 0``), and either rewarded or pending (not
-    expired). This mirrors ``TunerService._collect_consumable_batch`` so a
-    datum whose group was already trained resets to "fresh" for the next
-    generation.
+    affect that ordering.
 
     Saturated datums are excluded when strictly on-policy. When off-policy
     surplus is enabled and every datum is saturated, the least-saturated datum
@@ -100,20 +100,14 @@ def pick_datum(
         return None
 
     group_size = recipe.group_size
-    scores = scheduler_scores(datum_pool, runs)
 
     # Bound rollout production by the complete policy-valid training horizon.
     # The current generation plus `max_off_policy_generation` older generations
     # may each contribute one batch. Counting both rewarded/untrained runs and
     # active leases prevents workers from reserving unbounded work that would
     # later be rejected as stale. Expired, rejected, trained, and eval runs are
-    # already excluded by `scheduler_scores`.
-    max_outstanding_runs = (
-        (recipe.max_off_policy_generation + 1)
-        * recipe.group_size
-        * recipe.num_groups_per_batch
-    )
-    if sum(scores.score.values()) >= max_outstanding_runs:
+    # already excluded from `scores`.
+    if sum(scores.score.values()) >= outstanding_run_budget(recipe):
         return None
 
     unsaturated = [d for d in datum_pool if scores.score[d] < group_size]
@@ -127,41 +121,27 @@ def pick_datum(
 
 def pick_eval_datum(
     eval_pool: List[str],
-    runs: List[RunModel],
-    checkpoint_id: str,
+    covered: Dict[str, int],
     group_size: int,
 ) -> Optional[str]:
-    """First eval datum with fewer than ``group_size`` live attempts against
-    ``checkpoint_id``.
+    """First eval datum with fewer than ``group_size`` live attempts.
 
-    An attempt "counts" for a datum/checkpoint when it is a ``RunModel`` whose
-    ``checkpoint_id`` equals the target and is either rewarded or still pending
-    (reward ``None``, lease not expired). Expired-unrewarded attempts don't
-    count, so a dropped eval rollout is re-dispensed. Among under-filled datums
-    the least-covered wins (spread coverage). Returns ``None`` when every eval
-    datum already has ``group_size`` live attempts for this checkpoint, when the
-    pool is empty, or when ``group_size <= 0``.
+    ``covered`` comes from ``TunerServiceBase._eval_coverage``, which counts a
+    datum's attempts against one checkpoint when they are rewarded or still
+    pending (reward ``None``, lease not expired). Expired-unrewarded attempts
+    don't count, so a dropped eval rollout is re-dispensed. Among under-filled
+    datums the least-covered wins (spread coverage). Returns ``None`` when
+    every eval datum already has ``group_size`` live attempts for this
+    checkpoint, when the pool is empty, or when ``group_size <= 0``.
 
     Pure helper (no service/DB state), mirroring :func:`pick_datum`.
     """
     if not eval_pool or group_size <= 0:
         return None
 
-    now = utcnow()
-    covered = {d: 0 for d in eval_pool}
-    for r in runs:
-        if r.checkpoint_id != checkpoint_id:
-            continue
-        if r.datum_id not in covered:
-            continue
-        has_reward = r.reward is not None
-        is_pending = r.reward is None and r.expires_at > now
-        if has_reward or is_pending:
-            covered[r.datum_id] += 1
-
     # Least-covered under-filled datum wins; None when all are full.
-    best = min(eval_pool, key=lambda d: covered[d])
-    if covered[best] >= group_size:
+    best = min(eval_pool, key=lambda d: covered.get(d, 0))
+    if covered.get(best, 0) >= group_size:
         return None
     return best
 
@@ -181,10 +161,15 @@ class DispenseMixin(TunerServiceBase):
 
         # Serialize the complete read-pick-insert sequence so concurrent local
         # dispensers cannot make decisions from the same scheduler snapshot.
+        # Everything inside this lock is on the critical path of every worker,
+        # so it reads only per-datum aggregates -- never the run rows
+        # themselves (see `_scheduler_scores`).
         async with self._dispense_lock:
             async with self.async_session() as session:
                 async with session.begin():
-                    datum_pool, runs = await self._load_pool_and_runs(tuner_id, session)
+                    datum_pool = await self._load_datums(
+                        tuner_id, session, kind="train"
+                    )
                     datum_id: Optional[str] = None
                     checkpoint_id: Optional[str] = None
 
@@ -195,17 +180,22 @@ class DispenseMixin(TunerServiceBase):
                             eval_pool = await self._load_datums(
                                 tuner_id, session, kind="eval"
                             )
+                            covered = await self._eval_coverage(
+                                tuner_id, eval_pool, latest.id, session
+                            )
                             datum_id = pick_eval_datum(
                                 eval_pool,
-                                runs,
-                                latest.id,
+                                covered,
                                 recipe.eval_group_size,
                             )
                             if datum_id is not None:
                                 checkpoint_id = latest.id
 
                     if datum_id is None:
-                        datum_id = pick_datum(datum_pool, runs, recipe)
+                        scores = await self._scheduler_scores(
+                            tuner_id, datum_pool, session
+                        )
+                        datum_id = pick_datum(datum_pool, scores, recipe)
 
                     if datum_id is None:
                         return None

@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, or_, select
 
 from ollie_rl.background import BackgroundJob
 from ollie_rl.cookbook import Recipe
@@ -25,10 +25,12 @@ from ollie_rl.db import (
 )
 from ollie_rl.db.connection import get_sessionmaker
 from ollie_rl.db.models import RunModel
+from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.constants import RUN_EXPIRE_GENERATION_BUDGET_MS
 from ollie_rl.service.tuner.errors import TunerNotFoundError
 from ollie_rl.service.tuner.locks import KeyedLocks
 from ollie_rl.service.tuner.state_store import DbStateStore
+from ollie_rl.service.tuner.types import SchedulerScores
 from ollie_rl.trainer import Trainer
 from ollie_rl.trainer import factory as trainer_factory
 from ollie_rl.types import TunerStatus
@@ -148,13 +150,100 @@ class TunerServiceBase:
                 )
             return Recipe.model_validate(record.recipe)
 
+    async def _scheduler_scores(
+        self, tuner_id: str, datum_pool: List[str], session
+    ) -> SchedulerScores:
+        """Per-datum scheduler tallies, aggregated in SQL.
+
+        * ``score`` -- runs still consumable by a future train step (not yet
+          trained, not requeued, and either rewarded or still pending).
+        * ``trained`` -- accumulated prior training exposure, the primary
+          ordering for unsaturated training datums.
+
+        This is the hot path: ``dispense_run`` recomputes it inside a
+        serialized critical section on every dispense, so its cost has to stay
+        flat in the tuner's run count. Hydrating a ``RunModel`` per row instead
+        put one dispense at ``3.4ms + 14.4us * runs`` -- 4ms at 50 runs, 95ms
+        at 6.4k -- i.e. a ceiling decaying from 240 to 10 dispenses/second
+        while a training run's demand for them stays constant. Crossing that
+        line does not recover on its own: dispenses begin timing out, clients
+        retry an endpoint that is not idempotent, and the resulting extra runs
+        make the next scan slower still.
+        """
+        now = utcnow()
+        consumable = case(
+            (
+                and_(
+                    RunModel.trained_count <= 0,
+                    RunModel.rejected_count <= 0,
+                    or_(RunModel.reward.is_not(None), RunModel.expires_at > now),
+                ),
+                1,
+            ),
+            else_=0,
+        )
+        # A trained run counts toward exposure and is excluded from `score`
+        # whatever its reward/lease state, so the two branches never overlap.
+        exposure = case((RunModel.trained_count > 0, RunModel.trained_count), else_=0)
+        result = await session.execute(
+            select(
+                RunModel.datum_id,
+                func.coalesce(func.sum(consumable), 0),
+                func.coalesce(func.sum(exposure), 0),
+            )
+            .where(RunModel.tuner_id == tuner_id)
+            .group_by(RunModel.datum_id)
+        )
+        score = {d: 0 for d in datum_pool}
+        trained = {d: 0 for d in datum_pool}
+        for datum_id, consumable_count, exposure_count in result.all():
+            # Eval datums are held out of the training pool, so their rows are
+            # absent from the maps and skipped here.
+            if datum_id not in score:
+                continue
+            score[datum_id] = int(consumable_count)
+            trained[datum_id] = int(exposure_count)
+        return SchedulerScores(score=score, trained=trained)
+
+    async def _eval_coverage(
+        self, tuner_id: str, eval_pool: List[str], checkpoint_id: str, session
+    ) -> Dict[str, int]:
+        """Live attempts per eval datum against ``checkpoint_id``, aggregated in SQL.
+
+        An attempt counts when it is rewarded or still pending; an expired
+        unrewarded attempt does not, so a dropped eval rollout is re-dispensed.
+        Same hot-path rationale as :meth:`_scheduler_scores`.
+        """
+        now = utcnow()
+        result = await session.execute(
+            select(RunModel.datum_id, func.count())
+            .where(
+                RunModel.tuner_id == tuner_id,
+                RunModel.checkpoint_id == checkpoint_id,
+                or_(RunModel.reward.is_not(None), RunModel.expires_at > now),
+            )
+            .group_by(RunModel.datum_id)
+        )
+        covered = {d: 0 for d in eval_pool}
+        for datum_id, count in result.all():
+            if datum_id not in covered:
+                continue
+            covered[datum_id] = int(count)
+        return covered
+
     async def _load_pool_and_runs(
         self, tuner_id: str, session
     ) -> Tuple[List[str], List[RunModel]]:
+        """Training pool plus every run row, for the progress snapshot.
+
+        Only ``get_progress`` uses this. Dispensing deliberately does not: it
+        needs per-datum tallies, not run objects, and gets them from
+        :meth:`_scheduler_scores` without loading the table.
+        """
         # The training pool is train-only: eval datums are held out, so they
         # are excluded here. Any eval runs left in the `runs` list are then
-        # ignored by the pure scheduler because their `datum_id` is absent from
-        # its score maps (`if r.datum_id not in score: continue`).
+        # ignored by the scheduler because their `datum_id` is absent from its
+        # score maps.
         datum_pool = await self._load_datums(tuner_id, session, kind="train")
 
         runs_result = await session.execute(

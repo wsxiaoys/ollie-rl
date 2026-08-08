@@ -21,7 +21,6 @@ from ollie_rl.db.types import utcnow
 from ollie_rl.service.tuner.dispensing import (
     pick_datum,
     pick_tier,
-    scheduler_scores,
 )
 from ollie_rl.service.tuner.completion_helpers import context_tokens_from_response
 from ollie_rl.service.tuner.run_helpers import (
@@ -284,6 +283,10 @@ class QueryMixin(TunerServiceBase):
                     tuner_id, now, session
                 )
 
+            # `next_pick` reports the scheduler view, so it must come from the
+            # same tallies dispensing uses rather than being recomputed here.
+            scores = await self._scheduler_scores(tuner_id, datum_pool, session)
+
         group_size = recipe.group_size
 
         in_flight = expired = lost = rewarded = trained = rejected = 0
@@ -370,14 +373,13 @@ class QueryMixin(TunerServiceBase):
         trained_datums = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) > 0)
         never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
 
-        scores = scheduler_scores(datum_pool, runs)
-        picked = pick_datum(datum_pool, runs, recipe)
+        picked = pick_datum(datum_pool, scores, recipe)
         if picked is None:
-            next_pick = NextPick(
-                datum_id=None,
-                tier="none",
-                reason="no datum dispensable (pool empty or all groups saturated on-policy)",
-            )
+            if datum_pool:
+                tier, reason = pick_tier(datum_pool[0], scores.score, recipe)
+            else:
+                tier, reason = "none", "no datum dispensable (pool empty)"
+            next_pick = NextPick(datum_id=None, tier=tier, reason=reason)
         else:
             tier, reason = pick_tier(picked, scores.score, recipe)
             next_pick = NextPick(datum_id=picked, tier=tier, reason=reason)
