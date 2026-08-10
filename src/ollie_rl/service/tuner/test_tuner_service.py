@@ -729,6 +729,67 @@ class TestMaybeTrain(TunerServiceTestCase):
 
         self.assertEqual(called, [])
 
+    async def test_waits_for_next_groups_in_corpus_order(self):
+        from ollie_rl.cookbook import RECIPES
+        from ollie_rl.cookbook.recipes import Recipe
+
+        RECIPES["test_strict_order_2x2"] = Recipe(
+            group_size=2,
+            num_groups_per_batch=2,
+        )
+        tuner_id = await self.service.create_tuner(
+            recipe="test_strict_order_2x2",
+            name="test-strict-order",
+            train_datum_ids=["d1", "d2", "d3"],
+            trainer=_TRAINER_KIND,
+        )
+        trainer = self.service.active_trainers[tuner_id]
+        assert isinstance(trainer, FakeTrainer)
+
+        called_examples = []
+        original_train_step = trainer.train_step
+
+        async def spy_train_step(examples, *, sampler_promotion_every: int = 1):
+            called_examples.extend(examples)
+            return await original_train_step(
+                examples, sampler_promotion_every=sampler_promotion_every
+            )
+
+        trainer.train_step = spy_train_step  # type: ignore
+
+        async def complete_group(datum_id: str) -> None:
+            for i in range(2):
+                run = await self._add_run(tuner_id, datum_id=datum_id)
+                completion_id = f"cmpl-{datum_id}-{i}"
+                await self.service.record_chat_completion(
+                    completion_id=completion_id,
+                    tuner_id=tuner_id,
+                    run_id=run.id,
+                    datum_id=datum_id,
+                    policy_generation=0,
+                    request=ChatCompletionRequest(
+                        model="fake-model",
+                        messages=[{"role": "user", "content": "hello"}],
+                    ),
+                    response=_make_chat_completion(completion_id=completion_id),
+                    duration_ms=0,
+                )
+                await self.service.update_reward(tuner_id, run.id, 1.0)
+
+        # d3 is ready, but the first batch must wait for d1 and d2.
+        await complete_group("d2")
+        await complete_group("d3")
+        await self.service._maybe_train(tuner_id)
+        self.assertEqual(called_examples, [])
+
+        await complete_group("d1")
+        await self.service._maybe_train(tuner_id)
+
+        self.assertEqual(
+            {example.chat_completion_id for example in called_examples},
+            {"cmpl-d1-0", "cmpl-d1-1", "cmpl-d2-0", "cmpl-d2-1"},
+        )
+
     async def test_train_step_receives_policy_generation(self):
         from ollie_rl.cookbook import RECIPES
         from ollie_rl.cookbook.recipes import Recipe
