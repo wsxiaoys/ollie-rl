@@ -33,6 +33,7 @@ DEFAULT_RECIPE = "grpo_4x8"
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-word-puzzle-ollie"
 DEFAULT_AGENT_MODEL = "ollie"
+GEMINI_MSRL_THINKING_LEVEL = "HIGH"
 OLLIE_MAX_STEPS = 100
 EVAL_FRACTION = 0.05
 EVAL_SPLIT_SEED = 0xBADBEEF
@@ -149,6 +150,11 @@ async def create_tuner(
             "name": name,
             "recipe": recipe,
             "trainer": trainer,
+            "trainer_params": (
+                {"thinking_level": GEMINI_MSRL_THINKING_LEVEL}
+                if trainer == "gemini_msrl"
+                else None
+            ),
             "train_datum_ids": train_datum_ids,
             "eval_datum_ids": eval_datum_ids,
         },
