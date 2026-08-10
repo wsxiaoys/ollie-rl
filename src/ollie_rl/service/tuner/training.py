@@ -278,19 +278,52 @@ class TrainingMixin(TunerServiceBase):
             )
             run_records = fresh_run_records
 
-        # Group rewards by datum_id
-        grouped_runs: Dict[str, List[RunModel]] = {}
-        for reward in run_records:
-            if reward.datum_id not in grouped_runs:
-                grouped_runs[reward.datum_id] = []
-            if len(grouped_runs[reward.datum_id]) < recipe.group_size:
-                grouped_runs[reward.datum_id].append(reward)
+        # Choose the exact next batch in corpus order. Prior training exposure
+        # identifies the current position in the cyclic corpus: least-exposed
+        # datums come first, while the persisted pool order breaks ties. Do not
+        # let a later completed group overtake an earlier incomplete one.
+        datum_pool = await self._load_datums(tuner_id, session, kind="train")
+        scheduler_scores = await self._scheduler_scores(tuner_id, datum_pool, session)
+        expected_datum_ids = sorted(
+            datum_pool,
+            key=lambda datum_id: scheduler_scores.trained[datum_id],
+        )[: recipe.num_groups_per_batch]
+        if len(expected_datum_ids) < recipe.num_groups_per_batch:
+            logger.debug(
+                f"Not enough training datums registered under tuner {tuner_id} "
+                f"(got {len(expected_datum_ids)}, need {recipe.num_groups_per_batch})"
+            )
+            return [], []
 
-        # Process only completed groups (size == group_size)
-        rollouts: List[Rollout] = []
-        for group in grouped_runs.values():
-            if len(group) != recipe.group_size:
+        # Keep the first FIFO group of fresh rewarded runs for each expected
+        # datum. Runs are already ordered by corpus position, creation time,
+        # and run id by the query above.
+        expected_datum_set = set(expected_datum_ids)
+        grouped_runs: Dict[str, List[RunModel]] = {
+            datum_id: [] for datum_id in expected_datum_ids
+        }
+        for run in run_records:
+            if run.datum_id not in expected_datum_set:
                 continue
+            group = grouped_runs[run.datum_id]
+            if len(group) < recipe.group_size:
+                group.append(run)
+
+        incomplete_datum_ids = [
+            datum_id
+            for datum_id in expected_datum_ids
+            if len(grouped_runs[datum_id]) != recipe.group_size
+        ]
+        if incomplete_datum_ids:
+            logger.debug(
+                f"Waiting for the next corpus-ordered training groups under "
+                f"tuner {tuner_id} (incomplete={incomplete_datum_ids})"
+            )
+            return [], []
+
+        rollouts: List[Rollout] = []
+        for datum_id in expected_datum_ids:
+            group = grouped_runs[datum_id]
 
             # Calculate mean and std of rewards for this group
             rewards = [
@@ -312,16 +345,6 @@ class TrainingMixin(TunerServiceBase):
                     )
                 )
             rollouts.append(Rollout(runs=rollout_runs))
-
-        if len(rollouts) < recipe.num_groups_per_batch:
-            logger.debug(
-                f"Not enough groups ready for training under tuner {tuner_id} "
-                f"(got {len(rollouts)}, need at least {recipe.num_groups_per_batch})"
-            )
-            return [], []
-
-        # If there are more than num_groups_per_batch groups, only pick the first num_groups_per_batch
-        rollouts = rollouts[: recipe.num_groups_per_batch]
 
         # Map run advantages
         run_advantages: Dict[str, float] = {}
