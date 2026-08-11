@@ -146,13 +146,13 @@ export interface paths {
          * @description Lease the next training assignment to a worker.
          *
          *     A successful response contains the ``run_id``, assigned ``datum_id``, and
-         *     ``expires_at``. The initial lease lasts 15 minutes. Each successfully
-         *     recorded chat completion resets ``expires_at`` to 15 minutes from that
-         *     completion time (it does not add time to the previous deadline), keeping an
-         *     actively progressing multi-turn run alive one turn at a time. If no new
-         *     completion or final reward arrives before the deadline, the run expires and
-         *     its datum may be assigned again under a new run id; the expired run no longer
-         *     accepts completions or a reward.
+         *     ``expires_at``. The initial lease lasts 15 minutes. While a run's chat
+         *     completion HTTP request is active, the server heartbeats its deadline; when
+         *     that request ends, successfully or otherwise, a fresh 15-minute window
+         *     begins. A run therefore expires only after it has had no in-flight
+         *     completion request for 15 minutes, at which point its datum may be assigned
+         *     under a new run id and the expired run no longer accepts completions or a
+         *     reward.
          *
          *     Returns ``204 No Content`` with ``Retry-After: 1`` when work is temporarily
          *     unavailable, such as during trainer warm-up or a training barrier.
@@ -300,7 +300,7 @@ export interface components {
         };
         /**
          * BatchProgress
-         * @description Readiness toward the next train_step.
+         * @description Readiness of the strict corpus-ordered groups for the next train_step.
          */
         BatchProgress: {
             /** Groups Ready */
@@ -871,6 +871,8 @@ export interface components {
         DatumProgress: {
             /** Datum Id */
             datum_id: string;
+            /** Next Batch Position */
+            next_batch_position: number | null;
             /** Consumable */
             consumable: number;
             /** In Flight */
@@ -1280,7 +1282,7 @@ export interface components {
              * Tier
              * @enum {string}
              */
-            tier: "incomplete" | "fresh" | "saturated" | "none";
+            tier: "incomplete" | "fresh" | "saturated" | "budget" | "none";
             /** Reason */
             reason: string;
         };

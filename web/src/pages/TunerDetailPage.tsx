@@ -13,6 +13,7 @@ const TIER_TONE: Record<
   incomplete: "warn",
   fresh: "info",
   saturated: "good",
+  budget: "warn",
   none: "default",
 };
 
@@ -242,7 +243,14 @@ export function TunerDetailPage() {
             )}
           </Panel>
 
-          <Panel title="Datum pool">
+          <Panel
+            title="Datum pool"
+            right={
+              <span className="muted">
+                strict order · waiting rows block later groups
+              </span>
+            }
+          >
             <div className="datum-pool-scrollable">
               <DatumTable
                 items={progress.data.items}

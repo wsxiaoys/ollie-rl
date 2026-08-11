@@ -22,12 +22,27 @@ export function DatumTable({
   groupSize: number;
   tunerId: string;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "consumable", desc: true },
-  ]);
+  // The API returns the trainer's exact corpus order. Preserve it by default;
+  // users can still sort any column to inspect the pool another way.
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   const columns = useMemo(
     () => [
+      columnHelper.accessor("next_batch_position", {
+        header: "Next batch",
+        cell: (info) => {
+          const position = info.getValue();
+          if (position == null) return <span className="muted">—</span>;
+          const ready = info.row.original.consumable >= groupSize;
+          return (
+            <span
+              className={`next-batch-position next-batch-position--${ready ? "ready" : "waiting"}`}
+            >
+              #{position} · {ready ? "ready" : "waiting"}
+            </span>
+          );
+        },
+      }),
       columnHelper.accessor("datum_id", {
         header: "Datum ID",
         cell: (info) => (

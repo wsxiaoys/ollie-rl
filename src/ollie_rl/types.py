@@ -162,6 +162,9 @@ class DatumProgress(BaseModel):
     """Per-datum group ('Rollout') coverage, trainer view (dynamic)."""
 
     datum_id: str
+    # One-based position in the exact corpus-ordered group set required by the
+    # next train step. None means this datum cannot enter the next batch yet.
+    next_batch_position: Optional[int]
     consumable: int  # rewarded runs counting toward this group's group_size
     in_flight: int  # runs awaiting a reward (reward None, lease not expired)
     # All-time count of `expired` runs: expired, unrewarded runs that either
@@ -180,10 +183,10 @@ class NextPick(BaseModel):
 
 
 class BatchProgress(BaseModel):
-    """Readiness toward the next train_step."""
+    """Readiness of the strict corpus-ordered groups for the next train_step."""
 
-    groups_ready: int  # groups already at group_size
-    groups_in_progress: int  # not-yet-ready groups with >=1 consumable or in-flight run
+    groups_ready: int  # required next-batch groups already at group_size
+    groups_in_progress: int  # required groups with consumable or in-flight runs
 
 
 class DatumCoverage(BaseModel):

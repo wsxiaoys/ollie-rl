@@ -330,45 +330,64 @@ class QueryMixin(TunerServiceBase):
             if datum_id in expired_by_datum:
                 expired_by_datum[datum_id] += 1
 
+        # Mirror `_collect_consumable_batch`: the least-trained datums come
+        # first and persisted corpus order breaks ties. The first N entries are
+        # the exact groups required by the next train step; a completed later
+        # group cannot overtake an incomplete entry in this prefix.
+        training_order = sorted(
+            datum_pool,
+            key=lambda datum_id: scores.trained[datum_id],
+        )
+        next_batch_positions = {
+            datum_id: position
+            for position, datum_id in enumerate(
+                training_order[: recipe.num_groups_per_batch], start=1
+            )
+        }
+
         items: List[DatumProgress] = []
         groups_ready = 0
         groups_in_progress = 0
         datums_in_progress = 0
-        for datum_id in consumable_by_datum:
+        for datum_id in training_order:
             count = consumable_by_datum[datum_id]
             pending = in_flight_by_datum.get(datum_id, 0)
             trained_here = trained_by_datum.get(datum_id, 0)
             expired_here = expired_by_datum.get(datum_id, 0)
-            # Surface any datum that has activity worth showing: a group
-            # forming (rewarded runs counting toward the batch, or runs still
-            # awaiting a reward) or one that has already contributed a trained
-            # group. Without the trained check a datum whose group was fully
-            # trained (consumable/in-flight back to 0) would silently vanish
-            # from the pool even though it carries training history. Expired
-            # runs also count as activity worth surfacing.
-            if count <= 0 and pending <= 0 and trained_here <= 0 and expired_here <= 0:
+            next_batch_position = next_batch_positions.get(datum_id)
+            # Always surface the exact next-batch prefix, including entries
+            # with no activity: those empty groups are blockers. Outside that
+            # prefix, retain the compact activity/history view.
+            if (
+                next_batch_position is None
+                and count <= 0
+                and pending <= 0
+                and trained_here <= 0
+                and expired_here <= 0
+            ):
                 continue
-            # "in progress" and batch readiness only reflect datums with an
-            # active (consumable or in-flight) group. A purely trained datum is
-            # listed for visibility but isn't forming a new group.
+            # Coverage reflects activity across the pool, while batch
+            # readiness is scoped to the strict next-batch prefix only.
             if count > 0 or pending > 0:
                 datums_in_progress += 1
-                ready = count >= group_size
-                if ready:
-                    groups_ready += 1
-                else:
-                    # Not-yet-ready group with >=1 consumable or in-flight run.
-                    groups_in_progress += 1
+                if next_batch_position is not None:
+                    ready = count >= group_size
+                    if ready:
+                        groups_ready += 1
+                    else:
+                        # Required group has at least one consumable or
+                        # in-flight run, but is not ready yet.
+                        groups_in_progress += 1
             items.append(
                 DatumProgress(
                     datum_id=datum_id,
+                    next_batch_position=next_batch_position,
                     consumable=count,
                     in_flight=pending,
                     expired=expired_here,
                     trained=trained_here,
                 )
             )
-        items.sort(key=lambda g: (g.consumable, g.in_flight), reverse=True)
 
         trained_datums = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) > 0)
         never_trained = sum(1 for d in datum_pool if trained_by_datum.get(d, 0) == 0)
