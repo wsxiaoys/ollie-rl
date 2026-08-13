@@ -3,9 +3,14 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 
 from ollie_rl.types import (
     ChatCompletionRequest,
@@ -81,14 +86,9 @@ class Services:
 services = Services()
 
 
-def _train_loop_disabled() -> bool:
-    """Return True when the background train loop is disabled via env var.
-
-    Set ``OLLIE_DISABLE_TRAIN_LOOP`` to a truthy value (``1``, ``true``,
-    ``yes``, or ``on``) to prevent the server from starting the background
-    train loop.
-    """
-    value = os.environ.get("OLLIE_DISABLE_TRAIN_LOOP", "")
+def _read_only_enabled() -> bool:
+    """Return True when this instance should reject all mutating requests."""
+    value = os.environ.get("OLLIE_READ_ONLY", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -101,14 +101,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to initialize database during startup")
 
-    # Start the background train loop that periodically triggers train steps,
-    # unless it has been disabled via the OLLIE_DISABLE_TRAIN_LOOP env var.
-    train_loop_enabled = not _train_loop_disabled()
+    # A read-only instance must not mutate training state in the background.
+    train_loop_enabled = not _read_only_enabled()
     if train_loop_enabled:
         services.tuner.start_train_loop()
     else:
         logger.info(
-            "Train loop disabled via OLLIE_DISABLE_TRAIN_LOOP; "
+            "Read-only mode enabled via OLLIE_READ_ONLY; "
             "skipping background train loop startup"
         )
 
@@ -136,6 +135,17 @@ app = FastAPI(
     docs_url=None,
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def enforce_read_only(request: Request, call_next):
+    """Reject state-changing requests when this instance is a read-only demo."""
+    if _read_only_enabled() and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "This Ollie RL instance is read-only."},
+        )
+    return await call_next(request)
 
 
 @app.get("/docs", include_in_schema=False)

@@ -197,6 +197,11 @@ the `Trainer` protocol.
 | Env var | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | `sqlite+aiosqlite:///./data/db.sqlite` | SQLAlchemy async URL. Switch to `postgresql+asyncpg://...` for prod. |
+| `OLLIE_READ_ONLY` | `false` | Run as a read-only demo: allow the dashboard, docs, and other reads while rejecting state-changing HTTP requests with `403` and disabling background training. |
+
+Set `OLLIE_READ_ONLY` to `1`, `true`, `yes`, or `on` (case-insensitive) to
+enable it. The mode is disabled by default, so existing deployments retain their
+normal training behavior.
 
 ### Gemini MSRL authentication
 

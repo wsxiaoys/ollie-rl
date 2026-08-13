@@ -28,6 +28,8 @@ services:
       # Connect to the Postgres service defined below (matches Railway prod,
       # which uses postgresql+asyncpg against its managed Postgres instance).
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-prod}
+      # Set to true to serve the dashboard and docs without allowing mutations.
+      OLLIE_READ_ONLY: ${OLLIE_READ_ONLY:-false}
       # Gemini MSRL cookbook configuration (override in your .env file).
       # This deployment uses a trusted token broker for compatibility. Direct
       # Google API deployments can instead use ADC through an attached service
