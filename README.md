@@ -16,6 +16,13 @@
 
 ---
 
+## Live demo
+
+Explore the [`tuning-code-contests` demo](https://demo.ollie-rl.tabbyml.com),
+a read-only deployment backed by a completed training run. The dashboard,
+API documentation, and training results are available to browse; state-changing
+requests and background training are disabled.
+
 ## Train your agent. Not your training loop.
 
 Your agent already speaks one universal protocol — `POST /v1/chat/completions` —
