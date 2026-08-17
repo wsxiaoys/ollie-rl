@@ -14,9 +14,9 @@ import { Mono, Panel, ProgressBar } from "../components/ui";
  */
 export function EvalPage() {
   const { tunerId } = useParams({ from: "/tuners/$tunerId/eval" });
-  // Datums with no runs against the latest checkpoint (0 in-flight / 0
-  // completed) are noise while a checkpoint is being scored; hide them by
-  // default for a compact view.
+  // Datums with no runs against the latest eval-eligible checkpoint
+  // (0 in-flight / 0 completed) are noise while a checkpoint is being scored;
+  // hide them by default for a compact view.
   const [hideIdle, setHideIdle] = useState(true);
 
   const evalDistQ = useQuery(
@@ -27,6 +27,9 @@ export function EvalPage() {
   const progress = evalProgressQ.data;
   const items = progress?.items ?? [];
   const checkpoints = progress?.checkpoints ?? [];
+  const latestEvalCheckpoint = checkpoints.find(
+    (checkpoint) => checkpoint.eval_datums != null,
+  );
   const evalGroupSize = progress?.eval_group_size ?? 0;
   const visibleItems = hideIdle
     ? items.filter((it) => it.in_flight > 0 || it.completed > 0)
@@ -61,6 +64,7 @@ export function EvalPage() {
               <thead>
                 <tr>
                   <th className="num">Generation</th>
+                  <th className="num">Eval datums</th>
                   <th>Checkpoint ID</th>
                   <th>Backend reference</th>
                   <th>Created</th>
@@ -70,6 +74,11 @@ export function EvalPage() {
                 {checkpoints.map((checkpoint) => (
                   <tr key={checkpoint.id}>
                     <td className="num">{checkpoint.policy_generation}</td>
+                    <td className="num">
+                      {checkpoint.eval_datums == null
+                        ? "—"
+                        : `${checkpoint.eval_datums.completed} / ${checkpoint.eval_datums.completed + checkpoint.eval_datums.pending}`}
+                    </td>
                     <td>
                       <Mono>{checkpoint.id}</Mono>
                     </td>
@@ -105,7 +114,7 @@ export function EvalPage() {
           <div className="placeholder placeholder--inset">
             No held-out eval runs scored yet — configure{" "}
             <code>eval_datum_ids</code> when creating the tuner, and eval scores
-            will appear here once each checkpoint's eval split is rewarded.
+            will appear here once an eligible checkpoint's eval split is rewarded.
           </div>
         ) : (
           <RewardDistribution dist={evalDistQ.data} />
@@ -125,9 +134,9 @@ export function EvalPage() {
                   Hide idle
                 </label>
                 <span className="muted">
-                  {progress?.latest_checkpoint_generation != null
-                    ? `latest checkpoint gen ${progress.latest_checkpoint_generation}`
-                    : "no checkpoint yet"}
+                  {latestEvalCheckpoint != null
+                    ? `latest eval checkpoint gen ${latestEvalCheckpoint.policy_generation}`
+                    : "no eligible checkpoint yet"}
                 </span>
               </div>
             }
@@ -144,9 +153,9 @@ export function EvalPage() {
               </div>
             ) : visibleItems.length === 0 ? (
               <div className="placeholder placeholder--inset">
-                {progress?.latest_checkpoint_generation != null
-                  ? "No eval runs against the latest checkpoint yet. Toggle “Hide idle” to view every eval datum."
-                  : "No checkpoint has been produced yet, so there are no eval runs. Toggle “Hide idle” to view every eval datum."}
+                {latestEvalCheckpoint != null
+                  ? "No eval runs against the latest eligible checkpoint yet. Toggle “Hide idle” to view every eval datum."
+                  : "No eval-eligible checkpoint has been produced yet, so there are no eval runs. Toggle “Hide idle” to view every eval datum."}
               </div>
             ) : (
               <div className="table-scroll">

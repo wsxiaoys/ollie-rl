@@ -48,6 +48,7 @@ from ollie_rl.types import (
     DatumCoverage,
     DatumPool,
     DatumProgress,
+    EvalDatumCounts,
     EvalDatumProgress,
     EvalProgress,
     GenerationRewardStats,
@@ -569,12 +570,11 @@ class QueryMixin(TunerServiceBase):
         Lists every registered eval datum (``DatumRowModel.kind == "eval"``),
         including ones with no runs yet. Each datum's ``in_flight`` (reward not
         yet set, lease unexpired) and ``completed`` (rewarded) counts are scoped
-        to the *latest checkpoint* -- the newest checkpoint the eval tier is
-        currently targeting (``latest_checkpoint_generation``; ``None`` before
-        any checkpoint exists) -- mirroring how a training datum's ``consumable``
-        counts toward the current group rather than all-time. ``eval_group_size``
-        is the recipe's per-datum-per-checkpoint attempt target (the progress
-        denominator).
+        to the *latest eligible checkpoint* -- the newest checkpoint selected by
+        ``eval_every_n_checkpoints``. This mirrors how a training datum's
+        ``consumable`` counts toward the current group rather than all-time.
+        ``eval_group_size`` is the recipe's per-datum-per-checkpoint
+        attempt target (the progress denominator).
         """
         now = utcnow()
         recipe = await self._recipe_for(tuner_id)
@@ -600,10 +600,9 @@ class QueryMixin(TunerServiceBase):
                 .all()
             )
 
-            # The eval tier always targets the highest-generation checkpoint, so
-            # scope per-datum progress to that one checkpoint (by id, not just
-            # generation). Return the same persisted rows for the dashboard's
-            # checkpoint table rather than reconstructing metadata from runs.
+            # Scope progress to the same newest cadence-eligible checkpoint the
+            # dispenser targets. Return every persisted row separately for the
+            # dashboard's checkpoint table.
             checkpoint_rows = list(
                 (
                     await session.execute(
@@ -612,15 +611,19 @@ class QueryMixin(TunerServiceBase):
                         .order_by(
                             CheckpointModel.policy_generation.desc(),
                             CheckpointModel.created_at.desc(),
+                            CheckpointModel.id.desc(),
                         )
                     )
                 )
                 .scalars()
                 .all()
             )
-            latest = checkpoint_rows[0] if checkpoint_rows else None
+            latest = await self._latest_eval_checkpoint(
+                tuner_id,
+                recipe.eval_every_n_checkpoints,
+                session,
+            )
             latest_checkpoint_id = latest.id if latest is not None else None
-            latest_generation = latest.policy_generation if latest is not None else None
 
             runs: List[RunModel] = []
             if eval_datums and latest_checkpoint_id is not None:
@@ -638,12 +641,53 @@ class QueryMixin(TunerServiceBase):
                     .all()
                 )
 
+            # Checkpoint rows are newest-first; reverse them to apply the same
+            # 1-based persisted-checkpoint cadence as the dispenser. A disabled
+            # or empty eval split has no scheduled checkpoint summaries.
+            eligible_checkpoint_ids = (
+                {
+                    checkpoint.id
+                    for ordinal, checkpoint in enumerate(
+                        reversed(checkpoint_rows), start=1
+                    )
+                    if ordinal % recipe.eval_every_n_checkpoints == 0
+                }
+                if eval_datums and recipe.eval_group_size > 0
+                else set()
+            )
+            completed_eval_datums: Dict[str, int] = {
+                checkpoint_id: 0 for checkpoint_id in eligible_checkpoint_ids
+            }
+            if eligible_checkpoint_ids:
+                completed_result = await session.execute(
+                    select(RunModel.checkpoint_id, RunModel.datum_id)
+                    .where(
+                        RunModel.tuner_id == tuner_id,
+                        RunModel.checkpoint_id.in_(eligible_checkpoint_ids),
+                        RunModel.datum_id.in_(eval_datums),
+                        RunModel.reward.is_not(None),
+                    )
+                    .group_by(RunModel.checkpoint_id, RunModel.datum_id)
+                    .having(func.count(RunModel.id) >= recipe.eval_group_size)
+                )
+                for checkpoint_id, _datum_id in completed_result.all():
+                    if checkpoint_id is not None:
+                        completed_eval_datums[checkpoint_id] += 1
+
         checkpoints = [
             CheckpointInfo(
                 id=checkpoint.id,
                 ref=checkpoint.ref,
                 policy_generation=checkpoint.policy_generation,
                 created_at=checkpoint.created_at,
+                eval_datums=(
+                    EvalDatumCounts(
+                        completed=completed_eval_datums[checkpoint.id],
+                        pending=len(eval_datums) - completed_eval_datums[checkpoint.id],
+                    )
+                    if checkpoint.id in eligible_checkpoint_ids
+                    else None
+                ),
             )
             for checkpoint in checkpoint_rows
         ]
@@ -667,7 +711,6 @@ class QueryMixin(TunerServiceBase):
         ]
 
         return EvalProgress(
-            latest_checkpoint_generation=latest_generation,
             eval_group_size=recipe.eval_group_size,
             total=len(eval_datums),
             items=items,

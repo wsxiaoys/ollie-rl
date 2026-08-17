@@ -150,6 +150,14 @@ Concepts the server hides for you:
   each group as `(reward - mean) / std`. Use `"centering"` to compute
   `reward - mean` without changing the reward scale.
 
+  Held-out evaluation normally runs for every persisted checkpoint. Set
+  `eval_every_n_checkpoints` to a larger positive integer to evaluate only every
+  Nth checkpoint, which reduces eval overhead when each training step is small.
+  Checkpoints are numbered from 1 in policy-generation order; the default is `1`.
+  In `GET /tuners/{id}?progress=eval`, each checkpoint reports
+  `eval_datums: { completed, pending }` when scheduled, or `null` when skipped;
+  evaluation is finished for that generation when `pending` reaches zero.
+
   Ollie persists the fully resolved recipe, so later default or preset changes
   do not alter an existing tuner. To prevent workers from producing rollout
   data that would become stale before training can consume it, run dispensing

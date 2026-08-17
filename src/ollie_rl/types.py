@@ -214,12 +214,12 @@ class TrainingProgress(BaseModel):
 
 
 class EvalDatumProgress(BaseModel):
-    """Held-out status for a single eval datum against the latest checkpoint.
+    """Held-out status for one eval datum against the latest eligible checkpoint.
 
-    Both counts are scoped to the newest checkpoint the eval tier is currently
-    targeting (`EvalProgress.latest_checkpoint_generation`) -- mirroring how a
-    training datum's `consumable` counts toward the *current* group rather than
-    all-time -- so the numbers describe progress toward scoring that checkpoint.
+    Both counts are scoped to the newest checkpoint selected by the recipe's
+    eval cadence. This mirrors how a training datum's `consumable` counts toward
+    the *current* group rather than all-time, so the numbers describe progress
+    toward scoring that checkpoint.
     """
 
     datum_id: str
@@ -227,28 +227,39 @@ class EvalDatumProgress(BaseModel):
     completed: int  # eval runs that have been rewarded
 
 
+class EvalDatumCounts(BaseModel):
+    """Checkpoint-level completion counts across the held-out eval dataset."""
+
+    completed: int  # datums with the required number of rewarded attempts
+    pending: int  # datums that have not reached the required attempt count
+
+
 class CheckpointInfo(BaseModel):
-    """Persisted checkpoint metadata exposed in the eval progress view."""
+    """Persisted checkpoint metadata exposed in the eval progress view.
+
+    ``eval_datums`` is ``None`` when the checkpoint is not selected by the eval
+    cadence. Otherwise, evaluation is finished when ``pending == 0``.
+    """
 
     id: str
     ref: str
     policy_generation: int
     created_at: datetime
+    eval_datums: Optional[EvalDatumCounts]
 
 
 class EvalProgress(BaseModel):
     """Per-eval-datum held-out status rollup for a tuner.
 
-    `latest_checkpoint_generation` is the newest checkpoint the eval tier is
-    currently targeting (None before any checkpoint exists); every per-datum
-    count in `items` is scoped to it. `eval_group_size` is the target number of
-    eval attempts per datum per checkpoint (the progress-bar denominator, from
-    the recipe). `items` covers every registered eval datum, including ones with
-    no runs against the latest checkpoint yet. `checkpoints` lists the persisted
-    checkpoint records newest-first.
+    Every per-datum count in `items` is scoped to the newest checkpoint selected
+    by the recipe's eval cadence. `eval_group_size` is the target number of eval
+    attempts per datum per eligible checkpoint (the progress-bar denominator,
+    from the recipe). `items` covers every registered eval datum, including ones
+    with no runs against the target checkpoint yet. `checkpoints` lists all
+    persisted checkpoint records newest-first and gives each cadence-eligible
+    checkpoint's completed/pending eval-datum counts.
     """
 
-    latest_checkpoint_generation: Optional[int]
     eval_group_size: int  # target attempts per datum per checkpoint
     total: int  # number of registered eval datums
     items: List[EvalDatumProgress]

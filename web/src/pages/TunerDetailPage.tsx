@@ -93,6 +93,10 @@ export function TunerDetailPage() {
               off-policy ≤ {recipe.max_off_policy_generation}
             </span>
             <span className="chip">
+              eval every {recipe.eval_every_n_checkpoints} checkpoint
+              {recipe.eval_every_n_checkpoints === 1 ? "" : "s"}
+            </span>
+            <span className="chip">
               content_filter {recipe.content_filter_penalty}
             </span>
             <span className="chip">length {recipe.length_penalty}</span>

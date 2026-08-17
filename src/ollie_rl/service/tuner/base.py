@@ -268,19 +268,36 @@ class TunerServiceBase:
         )
         return list(result.scalars().all())
 
-    async def _latest_checkpoint(
-        self, tuner_id: str, session
+    async def _latest_eval_checkpoint(
+        self, tuner_id: str, every_n: int, session
     ) -> Optional[CheckpointModel]:
-        """The newest persisted checkpoint for ``tuner_id`` (highest
-        generation, newest-first tie-break), or ``None`` when the tuner has
-        produced no checkpoints yet."""
+        """Newest checkpoint eligible for the tuner's eval cadence.
+
+        Checkpoints are numbered from 1 in ascending policy-generation order;
+        every ``every_n``-th row is eligible. Counting persisted checkpoints,
+        rather than applying modulo to backend generation numbers, keeps the
+        cadence stable when generations are sparse (for example, when sampler
+        promotion happens only every few train steps).
+        """
+        count_result = await session.execute(
+            select(func.count())
+            .select_from(CheckpointModel)
+            .where(CheckpointModel.tuner_id == tuner_id)
+        )
+        checkpoint_count = int(count_result.scalar_one())
+        eligible_ordinal = checkpoint_count - checkpoint_count % every_n
+        if eligible_ordinal == 0:
+            return None
+
         result = await session.execute(
             select(CheckpointModel)
             .where(CheckpointModel.tuner_id == tuner_id)
             .order_by(
-                CheckpointModel.policy_generation.desc(),
-                CheckpointModel.created_at.desc(),
+                CheckpointModel.policy_generation.asc(),
+                CheckpointModel.created_at.asc(),
+                CheckpointModel.id.asc(),
             )
+            .offset(eligible_ordinal - 1)
             .limit(1)
         )
         return result.scalar_one_or_none()
