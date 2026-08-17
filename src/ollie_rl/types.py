@@ -217,10 +217,9 @@ class EvalDatumProgress(BaseModel):
     """Held-out status for one eval datum against the latest eligible checkpoint.
 
     Both counts are scoped to the newest checkpoint selected by the recipe's
-    eval cadence (`EvalProgress.latest_checkpoint_generation`) -- mirroring how
-    a training datum's `consumable` counts toward the *current* group rather
-    than all-time -- so the numbers describe progress toward scoring that
-    checkpoint.
+    eval cadence. This mirrors how a training datum's `consumable` counts toward
+    the *current* group rather than all-time, so the numbers describe progress
+    toward scoring that checkpoint.
     """
 
     datum_id: str
@@ -252,17 +251,15 @@ class CheckpointInfo(BaseModel):
 class EvalProgress(BaseModel):
     """Per-eval-datum held-out status rollup for a tuner.
 
-    `latest_checkpoint_generation` is the newest checkpoint selected by the
-    recipe's eval cadence (None before the first eligible checkpoint exists);
-    every per-datum count in `items` is scoped to it. `eval_group_size` is the
-    target number of eval attempts per datum per eligible checkpoint (the
-    progress-bar denominator, from the recipe). `items` covers every registered
-    eval datum, including ones with no runs against the target checkpoint yet.
-    `checkpoints` lists all persisted checkpoint records newest-first and gives
-    each cadence-eligible checkpoint's completed/pending eval-datum counts.
+    Every per-datum count in `items` is scoped to the newest checkpoint selected
+    by the recipe's eval cadence. `eval_group_size` is the target number of eval
+    attempts per datum per eligible checkpoint (the progress-bar denominator,
+    from the recipe). `items` covers every registered eval datum, including ones
+    with no runs against the target checkpoint yet. `checkpoints` lists all
+    persisted checkpoint records newest-first and gives each cadence-eligible
+    checkpoint's completed/pending eval-datum counts.
     """
 
-    latest_checkpoint_generation: Optional[int]
     eval_group_size: int  # target attempts per datum per checkpoint
     total: int  # number of registered eval datums
     items: List[EvalDatumProgress]

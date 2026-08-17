@@ -571,10 +571,9 @@ class QueryMixin(TunerServiceBase):
         including ones with no runs yet. Each datum's ``in_flight`` (reward not
         yet set, lease unexpired) and ``completed`` (rewarded) counts are scoped
         to the *latest eligible checkpoint* -- the newest checkpoint selected by
-        ``eval_every_n_checkpoints`` (``latest_checkpoint_generation``; ``None``
-        before the first eligible checkpoint exists) -- mirroring how a training
-        datum's ``consumable`` counts toward the current group rather than
-        all-time. ``eval_group_size`` is the recipe's per-datum-per-checkpoint
+        ``eval_every_n_checkpoints``. This mirrors how a training datum's
+        ``consumable`` counts toward the current group rather than all-time.
+        ``eval_group_size`` is the recipe's per-datum-per-checkpoint
         attempt target (the progress denominator).
         """
         now = utcnow()
@@ -625,7 +624,6 @@ class QueryMixin(TunerServiceBase):
                 session,
             )
             latest_checkpoint_id = latest.id if latest is not None else None
-            latest_generation = latest.policy_generation if latest is not None else None
 
             runs: List[RunModel] = []
             if eval_datums and latest_checkpoint_id is not None:
@@ -713,7 +711,6 @@ class QueryMixin(TunerServiceBase):
         ]
 
         return EvalProgress(
-            latest_checkpoint_generation=latest_generation,
             eval_group_size=recipe.eval_group_size,
             total=len(eval_datums),
             items=items,

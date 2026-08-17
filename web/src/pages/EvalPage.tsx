@@ -27,6 +27,9 @@ export function EvalPage() {
   const progress = evalProgressQ.data;
   const items = progress?.items ?? [];
   const checkpoints = progress?.checkpoints ?? [];
+  const latestEvalCheckpoint = checkpoints.find(
+    (checkpoint) => checkpoint.eval_datums != null,
+  );
   const evalGroupSize = progress?.eval_group_size ?? 0;
   const visibleItems = hideIdle
     ? items.filter((it) => it.in_flight > 0 || it.completed > 0)
@@ -131,8 +134,8 @@ export function EvalPage() {
                   Hide idle
                 </label>
                 <span className="muted">
-                  {progress?.latest_checkpoint_generation != null
-                    ? `latest eval checkpoint gen ${progress.latest_checkpoint_generation}`
+                  {latestEvalCheckpoint != null
+                    ? `latest eval checkpoint gen ${latestEvalCheckpoint.policy_generation}`
                     : "no eligible checkpoint yet"}
                 </span>
               </div>
@@ -150,7 +153,7 @@ export function EvalPage() {
               </div>
             ) : visibleItems.length === 0 ? (
               <div className="placeholder placeholder--inset">
-                {progress?.latest_checkpoint_generation != null
+                {latestEvalCheckpoint != null
                   ? "No eval runs against the latest eligible checkpoint yet. Toggle “Hide idle” to view every eval datum."
                   : "No eval-eligible checkpoint has been produced yet, so there are no eval runs. Toggle “Hide idle” to view every eval datum."}
               </div>
