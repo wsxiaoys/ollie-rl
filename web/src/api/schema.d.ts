@@ -735,6 +735,9 @@ export interface components {
         /**
          * CheckpointInfo
          * @description Persisted checkpoint metadata exposed in the eval progress view.
+         *
+         *     ``eval_datums`` is ``None`` when the checkpoint is not selected by the eval
+         *     cadence. Otherwise, evaluation is finished when ``pending == 0``.
          */
         CheckpointInfo: {
             /** Id */
@@ -748,6 +751,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            eval_datums: components["schemas"]["EvalDatumCounts"] | null;
         };
         /** Choice */
         Choice: {
@@ -895,13 +899,24 @@ export interface components {
             expires_at: string;
         };
         /**
+         * EvalDatumCounts
+         * @description Checkpoint-level completion counts across the held-out eval dataset.
+         */
+        EvalDatumCounts: {
+            /** Completed */
+            completed: number;
+            /** Pending */
+            pending: number;
+        };
+        /**
          * EvalDatumProgress
-         * @description Held-out status for a single eval datum against the latest checkpoint.
+         * @description Held-out status for one eval datum against the latest eligible checkpoint.
          *
-         *     Both counts are scoped to the newest checkpoint the eval tier is currently
-         *     targeting (`EvalProgress.latest_checkpoint_generation`) -- mirroring how a
-         *     training datum's `consumable` counts toward the *current* group rather than
-         *     all-time -- so the numbers describe progress toward scoring that checkpoint.
+         *     Both counts are scoped to the newest checkpoint selected by the recipe's
+         *     eval cadence (`EvalProgress.latest_checkpoint_generation`) -- mirroring how
+         *     a training datum's `consumable` counts toward the *current* group rather
+         *     than all-time -- so the numbers describe progress toward scoring that
+         *     checkpoint.
          */
         EvalDatumProgress: {
             /** Datum Id */
@@ -915,13 +930,14 @@ export interface components {
          * EvalProgress
          * @description Per-eval-datum held-out status rollup for a tuner.
          *
-         *     `latest_checkpoint_generation` is the newest checkpoint the eval tier is
-         *     currently targeting (None before any checkpoint exists); every per-datum
-         *     count in `items` is scoped to it. `eval_group_size` is the target number of
-         *     eval attempts per datum per checkpoint (the progress-bar denominator, from
-         *     the recipe). `items` covers every registered eval datum, including ones with
-         *     no runs against the latest checkpoint yet. `checkpoints` lists the persisted
-         *     checkpoint records newest-first.
+         *     `latest_checkpoint_generation` is the newest checkpoint selected by the
+         *     recipe's eval cadence (None before the first eligible checkpoint exists);
+         *     every per-datum count in `items` is scoped to it. `eval_group_size` is the
+         *     target number of eval attempts per datum per eligible checkpoint (the
+         *     progress-bar denominator, from the recipe). `items` covers every registered
+         *     eval datum, including ones with no runs against the target checkpoint yet.
+         *     `checkpoints` lists all persisted checkpoint records newest-first and gives
+         *     each cadence-eligible checkpoint's completed/pending eval-datum counts.
          */
         EvalProgress: {
             /** Latest Checkpoint Generation */
@@ -1332,10 +1348,21 @@ export interface components {
              */
             max_off_policy_generation: number;
             /**
+             * Reward Normalizer
+             * @default grpo
+             * @enum {string}
+             */
+            reward_normalizer: "grpo" | "centering";
+            /**
              * Sampler Promotion Every
              * @default 4
              */
             sampler_promotion_every: number;
+            /**
+             * Eval Every N Checkpoints
+             * @default 1
+             */
+            eval_every_n_checkpoints: number;
             /**
              * Eval Group Size
              * @default 4
@@ -1368,8 +1395,12 @@ export interface components {
             num_groups_per_batch?: number | null;
             /** Max Off Policy Generation */
             max_off_policy_generation?: number | null;
+            /** Reward Normalizer */
+            reward_normalizer?: ("grpo" | "centering") | null;
             /** Sampler Promotion Every */
             sampler_promotion_every?: number | null;
+            /** Eval Every N Checkpoints */
+            eval_every_n_checkpoints?: number | null;
             /** Eval Group Size */
             eval_group_size?: number | null;
             /** Content Filter Penalty */

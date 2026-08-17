@@ -173,9 +173,14 @@ class DispenseMixin(TunerServiceBase):
                     datum_id: Optional[str] = None
                     checkpoint_id: Optional[str] = None
 
-                    # Eval remains the highest-priority tier.
+                    # Eval remains the highest-priority tier, but only every
+                    # configured Nth persisted checkpoint is eligible.
                     if recipe.eval_group_size > 0:
-                        latest = await self._latest_checkpoint(tuner_id, session)
+                        latest = await self._latest_eval_checkpoint(
+                            tuner_id,
+                            recipe.eval_every_n_checkpoints,
+                            session,
+                        )
                         if latest is not None:
                             eval_pool = await self._load_datums(
                                 tuner_id, session, kind="eval"

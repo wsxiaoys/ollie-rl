@@ -30,10 +30,15 @@ class Recipe(BaseModel, frozen=True):
     sampler_promotion_every: PositiveInt = 4
 
     # ---- Evaluation ----------------------------------------------------
-    # Rollouts to dispense per eval datum per checkpoint. Averaging K attempts
-    # smooths per-checkpoint eval variance the same way `group_size` does for a
-    # training group. Only matters when the tuner has eval datums; 1 = a single
-    # attempt per datum per checkpoint, 0 disables the eval dispense tier.
+    # Evaluate every Nth persisted checkpoint, numbered from 1 in policy-
+    # generation order. 1 evaluates every checkpoint; larger values reduce
+    # eval overhead when each train step is small.
+    eval_every_n_checkpoints: PositiveInt = 1
+
+    # Rollouts to dispense per eval datum per eligible checkpoint. Averaging K
+    # attempts smooths checkpoint eval variance the same way `group_size` does
+    # for a training group. Only matters when the tuner has eval datums; 1 = a
+    # single attempt per datum, 0 disables the eval dispense tier.
     eval_group_size: NonNegativeInt = 4
 
     # ---- Behavior penalties ----
@@ -57,6 +62,7 @@ class RecipeInput(BaseModel):
     max_off_policy_generation: Optional[NonNegativeInt] = None
     reward_normalizer: Optional[RewardNormalizer] = None
     sampler_promotion_every: Optional[PositiveInt] = None
+    eval_every_n_checkpoints: Optional[PositiveInt] = None
     eval_group_size: Optional[NonNegativeInt] = None
     content_filter_penalty: Optional[FiniteFloat] = None
     length_penalty: Optional[FiniteFloat] = None
