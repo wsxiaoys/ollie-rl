@@ -1,10 +1,11 @@
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+RewardNormalizer = Literal["grpo", "centering"]
 
 
 class Recipe(BaseModel, frozen=True):
@@ -19,6 +20,7 @@ class Recipe(BaseModel, frozen=True):
     group_size: PositiveInt = 16
     num_groups_per_batch: PositiveInt = 32
     max_off_policy_generation: NonNegativeInt = 4
+    reward_normalizer: RewardNormalizer = "grpo"
 
     # ---- Sampler promotion cadence -------------------------------------
     # Publish a fresh sampler snapshot every N train steps. On steps that
@@ -53,6 +55,7 @@ class RecipeInput(BaseModel):
     group_size: Optional[PositiveInt] = None
     num_groups_per_batch: Optional[PositiveInt] = None
     max_off_policy_generation: Optional[NonNegativeInt] = None
+    reward_normalizer: Optional[RewardNormalizer] = None
     sampler_promotion_every: Optional[PositiveInt] = None
     eval_group_size: Optional[NonNegativeInt] = None
     content_filter_penalty: Optional[FiniteFloat] = None

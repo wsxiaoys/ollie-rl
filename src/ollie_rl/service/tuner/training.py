@@ -325,25 +325,32 @@ class TrainingMixin(TunerServiceBase):
         for datum_id in expected_datum_ids:
             group = grouped_runs[datum_id]
 
-            # Calculate mean and std of rewards for this group
             rewards = [
                 reward_model.reward if reward_model.reward is not None else 0.0
                 for reward_model in group
             ]
             mean = sum(rewards) / len(rewards)
-            variance = sum((r - mean) ** 2 for r in rewards) / len(rewards)
-            std = math.sqrt(variance)
 
-            rollout_runs = []
-            for record_item, reward in zip(group, rewards):
-                advantage = (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
-                rollout_runs.append(
-                    RolloutRun(
-                        id=record_item.id,
-                        reward=reward,
-                        advantage=advantage,
-                    )
+            if recipe.reward_normalizer == "grpo":
+                variance = sum((reward - mean) ** 2 for reward in rewards) / len(
+                    rewards
                 )
+                std = math.sqrt(variance)
+                advantages = [
+                    (reward - mean) / (std + 1e-8) if std > 1e-8 else 0.0
+                    for reward in rewards
+                ]
+            else:
+                advantages = [reward - mean for reward in rewards]
+
+            rollout_runs = [
+                RolloutRun(
+                    id=record_item.id,
+                    reward=reward,
+                    advantage=advantage,
+                )
+                for record_item, reward, advantage in zip(group, rewards, advantages)
+            ]
             rollouts.append(Rollout(runs=rollout_runs))
 
         # Map run advantages

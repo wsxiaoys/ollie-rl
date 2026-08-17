@@ -140,10 +140,15 @@ Concepts the server hides for you:
   {
     "recipe": {
       "group_size": 8,
-      "num_groups_per_batch": 16
+      "num_groups_per_batch": 16,
+      "reward_normalizer": "centering"
     }
   }
   ```
+
+  `reward_normalizer` defaults to `"grpo"`, which standardizes rewards within
+  each group as `(reward - mean) / std`. Use `"centering"` to compute
+  `reward - mean` without changing the reward scale.
 
   Ollie persists the fully resolved recipe, so later default or preset changes
   do not alter an existing tuner. To prevent workers from producing rollout
