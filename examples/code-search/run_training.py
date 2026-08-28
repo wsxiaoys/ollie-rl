@@ -219,10 +219,8 @@ def expected_targets(
         file = change["file"]
         changes = change["changes"]
         files.add(file)
-        for key in ("added_modules", "edited_modules"):
-            modules.update(changes.get(key) or ())
-        for key in ("added_entities", "edited_entities"):
-            entities.update(changes.get(key) or ())
+        modules.update(changes.get("edited_modules") or ())
+        entities.update(changes.get("edited_entities") or ())
     return files, modules, entities
 
 
