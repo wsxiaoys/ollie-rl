@@ -1,4 +1,4 @@
-"""Prepare SWE-rebench code-search instances and repository snapshots.
+"""Prepare SWE-smith Python code-search instances and repository snapshots.
 
 Usage from the repository root::
 
@@ -34,8 +34,8 @@ import httpx
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DEFAULT_PREPARED_DIR = EXAMPLE_DIR / "prepared"
-DATASET = "OpenHands/SWE-rebench-code-search"
-DATASET_REVISION = "b4e0432105eef4bf7b2f4cfad41b9167af3f418c"
+DATASET = "OpenHands/SWE-smith-py-code-search"
+DATASET_REVISION = "b1e6864f1c847455ea64c7ebdb4164da2b902bb6"
 CONFIG = "default"
 SPLIT = "train"
 ROWS_URL = "https://datasets-server.huggingface.co/rows"
@@ -113,7 +113,7 @@ def validate_component(value: str, *, label: str) -> str:
     return value
 
 
-def validate_row(row: dict[str, Any]) -> tuple[str, str, str, str]:
+def validate_row(row: dict[str, Any]) -> tuple[str, str, str, str | None]:
     instance_id = validate_component(str(row["instance_id"]), label="instance_id")
 
     repo_parts = str(row["repo"]).split("/")
@@ -122,8 +122,9 @@ def validate_row(row: dict[str, Any]) -> tuple[str, str, str, str]:
     org = validate_component(repo_parts[0], label="repository organization")
     repo = validate_component(repo_parts[1], label="repository name")
 
-    base_commit = str(row["base_commit"]).lower()
-    if not COMMIT_SHA.fullmatch(base_commit):
+    raw_base_commit = row["base_commit"]
+    base_commit = None if raw_base_commit is None else str(raw_base_commit).lower()
+    if base_commit is not None and not COMMIT_SHA.fullmatch(base_commit):
         raise ValueError(f"invalid base_commit for {instance_id}: {base_commit!r}")
 
     if not isinstance(row["problem_statement"], str):
@@ -158,6 +159,14 @@ def commit_exists(git_dir: Path, base_commit: str) -> bool:
         capture_output=True,
     )
     return result.returncode == 0
+
+
+def resolve_remote_head(git_dir: Path) -> str:
+    result = run_git(f"--git-dir={git_dir}", "ls-remote", "origin", "HEAD")
+    fields = result.stdout.split()
+    if len(fields) != 2 or fields[1] != "HEAD" or not COMMIT_SHA.fullmatch(fields[0]):
+        raise RuntimeError(f"could not resolve remote HEAD for {git_dir}")
+    return fields[0].lower()
 
 
 def fetch_commit(git_dir: Path, base_commit: str) -> None:
@@ -239,10 +248,17 @@ def write_json(path: Path, payload: Any) -> None:
     os.replace(temporary, path)
 
 
-def instance_payload(row: dict[str, Any]) -> dict[str, Any]:
+def instance_payload(
+    row: dict[str, Any], *, resolved_base_commit: str | None = None
+) -> dict[str, Any]:
+    base_commit = row["base_commit"]
+    if base_commit is None:
+        base_commit = resolved_base_commit
+    elif isinstance(base_commit, str):
+        base_commit = base_commit.lower()
     return {
         "repo": row["repo"],
-        "base_commit": str(row["base_commit"]).lower(),
+        "base_commit": base_commit,
         "problem_statement": row["problem_statement"],
         "file_changes": row["file_changes"],
     }
@@ -347,9 +363,9 @@ def main() -> int:
         verify_dataset_revision(client)
         rows = load_or_build_index(client, prepared_dir)
 
-    rows_by_repository: dict[tuple[str, str], list[tuple[dict[str, Any], str, str]]] = (
-        defaultdict(list)
-    )
+    rows_by_repository: dict[
+        tuple[str, str], list[tuple[dict[str, Any], str, str | None]]
+    ] = defaultdict(list)
     seen_instance_ids: set[str] = set()
     for row in rows:
         instance_id, org, repo, base_commit = validate_row(row)
@@ -368,28 +384,46 @@ def main() -> int:
         )
 
     repositories: dict[tuple[str, str], set[str]] = defaultdict(set)
-    validated_rows: list[tuple[dict[str, Any], str]] = []
-    for org, repo in selected_repository_keys:
-        for row, instance_id, base_commit in rows_by_repository[(org, repo)]:
-            repositories[(org, repo)].add(base_commit)
-            validated_rows.append((row, instance_id))
+    repositories_needing_head: set[tuple[str, str]] = set()
+    validated_rows: list[
+        tuple[dict[str, Any], str, tuple[str, str], str | None]
+    ] = []
+    for repository_key in selected_repository_keys:
+        for row, instance_id, base_commit in rows_by_repository[repository_key]:
+            if base_commit is None:
+                repositories_needing_head.add(repository_key)
+            else:
+                repositories[repository_key].add(base_commit)
+            validated_rows.append((row, instance_id, repository_key, base_commit))
 
+    resolved_repository_heads: dict[tuple[str, str], str] = {}
     github_dir = prepared_dir / "github.com"
     for repo_index, (org, repo) in enumerate(selected_repository_keys, start=1):
-        commits = repositories[(org, repo)]
+        repository_key = (org, repo)
+        commits = repositories[repository_key]
         repo_root = github_dir / org / repo
+        git_dir = prepare_git_repository(repo_root, org, repo)
+        if repository_key in repositories_needing_head:
+            resolved_head = resolve_remote_head(git_dir)
+            resolved_repository_heads[repository_key] = resolved_head
+            commits.add(resolved_head)
         print(
-            f"[prepare] repository {repo_index}/{len(repositories)}: "
+            f"[prepare] repository {repo_index}/{len(selected_repository_keys)}: "
             f"{org}/{repo} ({len(commits)} commits)"
         )
-        git_dir = prepare_git_repository(repo_root, org, repo)
         for base_commit in sorted(commits):
             fetch_commit(git_dir, base_commit)
             materialize_snapshot(repo_root, git_dir, base_commit)
 
     instances_dir = prepared_dir / "instances"
-    for row, instance_id in validated_rows:
-        write_json(instances_dir / f"{instance_id}.json", instance_payload(row))
+    for row, instance_id, repository_key, base_commit in validated_rows:
+        resolved_base_commit = (
+            base_commit or resolved_repository_heads[repository_key]
+        )
+        write_json(
+            instances_dir / f"{instance_id}.json",
+            instance_payload(row, resolved_base_commit=resolved_base_commit),
+        )
 
     write_json(
         prepared_dir / "manifest.json",

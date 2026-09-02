@@ -1,4 +1,4 @@
-"""Train the Ollie agent on prepared SWE-rebench code-localization tasks.
+"""Train the Ollie agent on prepared SWE-smith Python code-localization tasks.
 
 Prepare repositories first, start ollie-rl, then run from the repository root::
 

@@ -2,8 +2,8 @@
 
 This example trains the Ollie agent to localize files, classes, and functions
 that need modification for an issue. It uses
-`OpenHands/SWE-rebench-code-search` for problem statements and multi-level
-localization labels.
+`OpenHands/SWE-smith-py-code-search` for Python problem statements and
+multi-level localization labels.
 
 ## Prepare data
 
