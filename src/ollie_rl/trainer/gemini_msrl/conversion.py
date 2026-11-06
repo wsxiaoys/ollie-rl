@@ -7,7 +7,12 @@ import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from gemini_msrl.types import ContentGenerationParameters, GenerationConfig
+from gemini_msrl.types import (
+    ContentGenerationParameters,
+    GenerationConfig,
+    TuningCandidate,
+    UsageMetadata,
+)
 from google.genai.types import (
     Candidate,
     Content,
@@ -315,6 +320,36 @@ def build_content_generation_parameters(
         ),
         system_instruction=system_instruction,
         tools=gemini_tools,
+    )
+
+
+def usage_from_tuning_candidate(
+    tuning_candidate: TuningCandidate,
+) -> UsageMetadata | None:
+    """Build OpenAI-style usage from one ``tuningCandidates`` entry.
+
+    The tuning-scope proto has no response-level ``usageMetadata`` (it was
+    reserved out); the counts ride on each candidate instead. Per the proto's
+    token-count contract ``generationTokenCount`` is the *total* for that
+    candidate including thinking, with ``thoughtsTokenCount`` as the subset, so
+    the OpenAI ``completion_tokens`` / ``reasoning_tokens`` split falls out
+    directly.
+
+    Returns ``None`` when the entry carries no counts at all, so callers can
+    fall back to a response-level ``usageMetadata`` if one ever shows up.
+    """
+    prompt_tokens = tuning_candidate.prompt_token_count
+    generation_tokens = tuning_candidate.generation_token_count
+    if prompt_tokens is None and generation_tokens is None:
+        return None
+
+    prompt_tokens = prompt_tokens or 0
+    generation_tokens = generation_tokens or 0
+    return UsageMetadata(
+        prompt_token_count=prompt_tokens,
+        candidates_token_count=generation_tokens,
+        total_token_count=prompt_tokens + generation_tokens,
+        thoughts_token_count=tuning_candidate.thoughts_token_count,
     )
 
 

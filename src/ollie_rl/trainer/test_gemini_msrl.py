@@ -143,10 +143,6 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         response" (the tuning-scope proto has no response-level candidates
         map).
         """
-        candidate = Candidate(
-            content=Content(role="model", parts=[Part(text="hello from the wire")]),
-            finish_reason=FinishReason.STOP,
-        )
         response_payload = GenerateContentTuningScopeResponse.model_validate(
             {
                 "trainStepId": "72",
@@ -183,6 +179,14 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         completion = sample_res.completion
         self.assertEqual(completion.id, "cand-7")
         self.assertEqual(completion.choices[0].message.content, "hello from the wire")
+
+        # The wire has no response-level usageMetadata; the counts ride on the
+        # tuning candidate and must be surfaced on the completion.
+        usage = completion.usage
+        assert usage is not None
+        self.assertEqual(usage.prompt_tokens, 34)
+        self.assertEqual(usage.completion_tokens, 12)
+        self.assertEqual(usage.total_tokens, 46)
 
     async def test_sample_tool_call_response(self):
         # Mock LRO response with a function call

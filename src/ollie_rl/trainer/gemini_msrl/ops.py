@@ -21,7 +21,7 @@ from ollie_rl.trainer.types import (
     TrainOp,
 )
 
-from .conversion import sample_from_candidates
+from .conversion import sample_from_candidates, usage_from_tuning_candidate
 from .state import CompletedTrainOp
 
 if TYPE_CHECKING:
@@ -79,12 +79,20 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         # the tuning-scope proto). The older keyed `candidates` map is still
         # what fixtures (and the endpoint sampler) produce, so accept both.
         candidates: Mapping[str, Candidate] | Sequence[Candidate]
+        usage_metadata = response.usage_metadata
         if response.tuning_candidates:
             candidates = {
                 tuning_candidate.candidate_id
                 or f"cand_{idx}": tuning_candidate.candidate
                 for idx, tuning_candidate in enumerate(response.tuning_candidates)
             }
+            # `sample_from_candidates` keeps the first entry, so take the token
+            # counts from that same candidate (see
+            # `usage_from_tuning_candidate`).
+            usage_metadata = (
+                usage_from_tuning_candidate(response.tuning_candidates[0])
+                or usage_metadata
+            )
         else:
             candidates = response.candidates
 
@@ -95,7 +103,7 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
 
         return sample_from_candidates(
             candidates=candidates,
-            usage_metadata=response.usage_metadata,
+            usage_metadata=usage_metadata,
             model_name=self.model_name,
             policy_generation=int(response.train_step_id),
         )
