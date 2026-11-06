@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Optional, TYPE_CHECKING
 
 from gemini_msrl import GeminiMsrlClient
 from gemini_msrl.types import (
+    Candidate,
     GenerateContentTuningScopeResponse,
     GenericMetadata,
     TrainStepResponse,
@@ -66,13 +68,33 @@ class GeminiMsrlSamplingOp(GeminiMsrlOp, SampleOp):
         completed_op = await self.client.wait_for_operation(self.op_name)
 
         response = completed_op.get_response_as(GenerateContentTuningScopeResponse)
-        if not response or not response.candidates:
+        if not response:
+            raise RuntimeError(
+                "Failed to retrieve generated candidates from tuning scope response"
+            )
+
+        # The live service returns candidates as a repeated `tuningCandidates`
+        # list, where each entry carries its own candidate id (plus its own
+        # token counts, since the response-level `usageMetadata` is not part of
+        # the tuning-scope proto). The older keyed `candidates` map is still
+        # what fixtures (and the endpoint sampler) produce, so accept both.
+        candidates: Mapping[str, Candidate] | Sequence[Candidate]
+        if response.tuning_candidates:
+            candidates = {
+                tuning_candidate.candidate_id
+                or f"cand_{idx}": tuning_candidate.candidate
+                for idx, tuning_candidate in enumerate(response.tuning_candidates)
+            }
+        else:
+            candidates = response.candidates
+
+        if not candidates:
             raise RuntimeError(
                 "Failed to retrieve generated candidates from tuning scope response"
             )
 
         return sample_from_candidates(
-            candidates=response.candidates,
+            candidates=candidates,
             usage_metadata=response.usage_metadata,
             model_name=self.model_name,
             policy_generation=int(response.train_step_id),
