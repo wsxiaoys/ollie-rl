@@ -53,7 +53,11 @@ class TestAppSqlite(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("max_length_limited_finish_ratio", tuner_details["recipe"])
             self.assertEqual(tuner_details["trainer"], "fake")
             self.assertEqual(tuner_details["policy_generation"], 0)
-            self.assertIsNone(tuner_details["trainer_state"])
+            # The fake backend must persist its (trivial) state blob: a non-null
+            # `trainer_state` is what makes a tuner listable and trainable
+            # (`list_tuners` / `_train_all_pending` filter on it).
+            self.assertEqual(tuner_details["trainer_state"]["trainer"], "fake")
+            self.assertEqual(tuner_details["trainer_state"]["train_step"], 0)
 
             # Test 404 for non-existent tuner
             res = await client.get("/tuners/non-existent-id")

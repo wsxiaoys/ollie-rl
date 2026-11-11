@@ -38,7 +38,7 @@ uv run python examples/code-search/run_training.py \
 ```
 
 The driver creates or resumes an ollie-rl tuner, dispenses run-addressed model
-endpoints, and launches `@getollie/cli@0.7.1` for every assignment. Each base
+endpoints, and launches `@getollie/cli@0.7.2` for every assignment. Each base
 commit snapshot is mounted at `/workspace` with `:ro`, so concurrent agents
 cannot alter prepared data.
 
@@ -47,6 +47,18 @@ function locations in a structured `localization_result` element. The driver
 computes separate set-F1 rewards for files, modules/classes, and entities, sums
 them, and submits the resulting scalar reward to ollie-rl.
 
-Useful options include `--recipe`, `--trainer`, `--agent-model`,
-`--ollie-executor`, `--ollie-max-steps`, and `--tuner-id`. The default executor
-is `none`; `daytona` and `vercel` are also accepted by Ollie CLI 0.7.1.
+`--recipe` accepts either a named recipe or an inline JSON object of per-tuner
+overrides. Unspecified fields retain their server defaults. For example:
+
+```bash
+uv run python examples/code-search/run_training.py \
+  --recipe '{"group_size":32,"num_groups_per_batch":8,"sampler_promotion_every":2}' \
+  --trainer gemini_msrl \
+  --ollie-max-steps 10 \
+  --runs 30720 \
+  --concurrency 1024
+```
+
+Other useful options include `--agent-model`, `--ollie-executor`, and
+`--tuner-id`. The default executor is `none`; `daytona` and `vercel` are also
+accepted by Ollie CLI 0.7.2.

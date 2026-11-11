@@ -28,7 +28,7 @@ DEFAULT_RECIPE = "grpo_4x8"
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-code-search-ollie"
 DEFAULT_AGENT_MODEL = "ollie"
-OLLIE_CLI_VERSION = "0.7.1"
+OLLIE_CLI_VERSION = "0.7.2"
 OLLIE_MAX_STEPS = 100
 EVAL_FRACTION = 0.05
 EVAL_SPLIT_SEED = 0xBADBEEF
@@ -66,6 +66,21 @@ class Reward:
     file: float
     module: float
     entity: float
+
+
+RecipeSpec = str | dict[str, Any]
+
+
+def parse_recipe(value: str) -> RecipeSpec:
+    if not value.lstrip().startswith("{"):
+        return value
+    try:
+        recipe = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise argparse.ArgumentTypeError(f"invalid recipe JSON: {error.msg}") from error
+    if not isinstance(recipe, dict):
+        raise argparse.ArgumentTypeError("recipe JSON must be an object")
+    return recipe
 
 
 def load_instances(prepared_dir: Path) -> dict[str, CodeSearchInstance]:
@@ -263,7 +278,7 @@ async def create_tuner(
     client: httpx.AsyncClient,
     *,
     name: str,
-    recipe: str,
+    recipe: RecipeSpec,
     trainer: str,
     train_datum_ids: list[str],
     eval_datum_ids: list[str],
@@ -292,7 +307,7 @@ async def resolve_tuner(
     *,
     tuner_id: str | None,
     name: str,
-    recipe: str,
+    recipe: RecipeSpec,
     trainer: str,
     train_datum_ids: list[str],
     eval_datum_ids: list[str],
@@ -332,6 +347,7 @@ async def resolve_tuner(
 
 
 async def dispense_run(client: httpx.AsyncClient, tuner_id: str) -> tuple[str, str]:
+    waiting = False
     while True:
         response = await client.post(f"/tuners/{tuner_id}/runs")
         if response.status_code == 204:
@@ -339,10 +355,18 @@ async def dispense_run(client: httpx.AsyncClient, tuner_id: str) -> tuple[str, s
                 delay = max(0.0, float(response.headers.get("Retry-After", "1")))
             except ValueError:
                 delay = 1.0
+            if not waiting:
+                print(
+                    f"[driver] waiting for a runnable assignment; retrying in {delay:g}s",
+                    flush=True,
+                )
+                waiting = True
             await asyncio.sleep(delay)
             continue
         response.raise_for_status()
         body = response.json()
+        if waiting:
+            print("[driver] assignment available; resuming runs", flush=True)
         return body["run_id"], body["datum_id"]
 
 
@@ -425,6 +449,10 @@ async def execute_run(
     args: argparse.Namespace,
     rewards: list[float],
 ) -> None:
+    print(
+        f"[driver] run {number:04d} task={instance.datum_id} started",
+        flush=True,
+    )
     try:
         result = await run_ollie_agent(
             base_url=args.base_url,
@@ -500,7 +528,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--prepared-dir", type=Path, default=DEFAULT_PREPARED_DIR)
-    parser.add_argument("--recipe", default=DEFAULT_RECIPE)
+    parser.add_argument(
+        "--recipe",
+        type=parse_recipe,
+        default=DEFAULT_RECIPE,
+        help="Named recipe or an inline JSON object of recipe overrides.",
+    )
     parser.add_argument("--trainer", default=DEFAULT_TRAINER)
     parser.add_argument("--name", default=DEFAULT_TUNER_NAME)
     parser.add_argument("--agent-model", default=DEFAULT_AGENT_MODEL)

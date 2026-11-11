@@ -143,10 +143,15 @@ class GeminiMsrlTrainer(Trainer):
         logger.info(
             f"Waiting for tuning job '{self.tuning_job_name}' to enter RUNNING state..."
         )
+        # Provisioning a real MSRL job takes ~10-15 minutes (measured:
+        # 12 min for gemini-3.5-flash on us-central1). A short timeout here
+        # fails the very first sample/train call instead of blocking until the
+        # backend is actually usable; the wait is shared by all concurrent
+        # callers, so a generous budget costs nothing extra.
         await self.client.wait_for_tuning_job_running(
             self.tuning_job_name,
-            timeout_seconds=5.0,
-            poll_interval=1.0,
+            timeout_seconds=900.0,
+            poll_interval=5.0,
         )
         logger.info("Gemini MSRL Tuning Job is successfully running.")
 

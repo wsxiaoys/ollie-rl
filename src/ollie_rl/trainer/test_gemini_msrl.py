@@ -135,6 +135,59 @@ class TestGeminiMsrlTrainer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice.message.role, "assistant")
         self.assertIsNone(choice.message.tool_calls)
 
+    async def test_sample_reads_tuning_candidates_wire_shape(self):
+        """The live service sends `tuningCandidates`, not the keyed map.
+
+        Reading only the legacy `candidates` map made every real rollout fail
+        with "Failed to retrieve generated candidates from tuning scope
+        response" (the tuning-scope proto has no response-level candidates
+        map).
+        """
+        response_payload = GenerateContentTuningScopeResponse.model_validate(
+            {
+                "trainStepId": "72",
+                "tuningCandidates": [
+                    {
+                        "candidateId": "cand-7",
+                        "candidate": {
+                            "content": {"parts": [{"text": "hello from the wire"}]},
+                            "finishReason": "STOP",
+                        },
+                        "generationTokenCount": 12,
+                        "promptTokenCount": 34,
+                    }
+                ],
+            }
+        )
+        mock_op = MagicMock()
+        mock_op.name = "operation-wire"
+        self.mock_client.generate_content_tuning_scope.return_value = mock_op
+
+        mock_completed_op = MagicMock()
+        mock_completed_op.get_response_as.return_value = response_payload
+        self.mock_client.wait_for_operation.return_value = mock_completed_op
+
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hi"}],
+            max_tokens=100,
+        )
+
+        sample_res = await (await self.job.sample(request)).wait()
+
+        self.assertEqual(sample_res.policy_generation, 72)
+        completion = sample_res.completion
+        self.assertEqual(completion.id, "cand-7")
+        self.assertEqual(completion.choices[0].message.content, "hello from the wire")
+
+        # The wire has no response-level usageMetadata; the counts ride on the
+        # tuning candidate and must be surfaced on the completion.
+        usage = completion.usage
+        assert usage is not None
+        self.assertEqual(usage.prompt_tokens, 34)
+        self.assertEqual(usage.completion_tokens, 12)
+        self.assertEqual(usage.total_tokens, 46)
+
     async def test_sample_tool_call_response(self):
         # Mock LRO response with a function call
         candidate = Candidate(

@@ -1,3 +1,4 @@
+import json
 import uuid
 import logging
 from typing import List, Optional
@@ -51,15 +52,43 @@ class FakeSampleOp(SampleOp):
 
 
 class FakeTrainer(Trainer):
-    def __init__(self):
+    def __init__(
+        self,
+        state_store: Optional[StateStore] = None,
+        train_step: int = 0,
+    ):
         # Monotonic step counter advanced on each `train_step`, so the fake
         # backend emits a checkpoint per completed step (with the live-policy
         # sentinel ref, since it has no frozen weights to address).
-        self._train_step = 0
+        self._train_step = train_step
+        # Optional: when present, every step is mirrored into the DB state blob
+        # so `policy_generation` survives a process restart.
+        self._state_store = state_store
 
     @property
     def policy_generation(self) -> int:
         return self._train_step
+
+    async def _persist(self) -> None:
+        """Write the (trivial) fake trainer state blob.
+
+        A non-null `trainer_state` is the service's "backend is provisioned"
+        marker: `list_tuners` and `_train_all_pending` filter on it, and
+        `_materialize` refuses to restore without it. Persisting here keeps
+        fake tuners visible, trainable and restart-surviving instead of
+        looking like unprovisioned zombie rows.
+        """
+        if self._state_store is None:
+            return
+        await self._state_store.save(
+            json.dumps(
+                {
+                    "trainer": "fake",
+                    "version": 1,
+                    "train_step": self._train_step,
+                }
+            )
+        )
 
     async def get_status(self) -> TunerStatus:
         return TunerStatus.IN_PROGRESS
@@ -103,6 +132,7 @@ class FakeTrainer(Trainer):
     ) -> TrainOp:
         logger.info(f"FakeTrainer training step with {len(examples)} examples.")
         self._train_step += 1
+        await self._persist()
         return FakeTrainOp(self._train_step)
 
     async def create_sampler(self, checkpoint: Checkpoint) -> Sampler:
@@ -119,14 +149,39 @@ class FakeTrainerFactory(TrainerFactory):
         state_store: StateStore,
         trainer_params: Optional[dict] = None,
     ) -> Trainer:
-        return FakeTrainer()
+        trainer = FakeTrainer(state_store=state_store)
+        await trainer._persist()
+        return trainer
 
     async def restore(
         self,
         name: str,
         state_store: StateStore,
     ) -> Trainer:
-        return FakeTrainer()
+        trainer = FakeTrainer(
+            state_store=state_store,
+            train_step=_load_train_step(await state_store.load()),
+        )
+        # Re-save so a row left with a null blob (pre-fix tuners) is repaired
+        # on first materialize rather than staying permanently invisible.
+        await trainer._persist()
+        return trainer
+
+
+def _load_train_step(raw: Optional[str]) -> int:
+    """Best-effort read of the persisted step counter; 0 when absent/garbled.
+
+    A corrupt or legacy blob must not make the tuner unrestorable -- the step
+    counter is cosmetic for the fake backend (it only advances checkpoint
+    numbering), so falling back to 0 is safe.
+    """
+    if not raw:
+        return 0
+    try:
+        value = json.loads(raw).get("train_step", 0)
+    except AttributeError, TypeError, ValueError:
+        return 0
+    return value if isinstance(value, int) and value >= 0 else 0
 
 
 factory.register("fake", FakeTrainerFactory())
