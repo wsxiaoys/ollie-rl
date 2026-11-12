@@ -152,8 +152,9 @@ you are confident enough to bet that this is a real defect introduced by the
 PR; use "minor" for a plausible but unconfirmed one. Prefer fewer, sharper
 findings over guesses.
 
-Every finding needs `path` (repository-relative, no leading "./"), `line` (in
-the post-PR file), `title` (one line), and `body` (mechanism + condition).
+Every finding is an object with exactly these keys: `severity` ("major" or
+"minor"), `path` (repository-relative, no leading "./"), `line` (in the post-PR
+file), `title` (one line), and `body` (mechanism + condition).
 
 Your final response must contain a `<review_findings>` element whose contents
 are one JSON array of finding objects. Do not include explanation outside that
@@ -523,19 +524,23 @@ uv run python examples/bug-unleashed/run_training.py --runs 2000 \
   examples, `quiet` = fraction of clean examples with no major.
 - A failed rollout (agent crash, judge error, expired lease) is logged and left
   unrewarded; the lease expires and the server re-dispenses the datum.
+  `--run-timeout` (default 1 hour, `0` disables) kills a CLI that stops making
+  model calls but never exits — without it that worker slot and its group are
+  stuck forever, because the tuner cannot complete a group it never sees.
 - `--judge-votes 3` for eval runs (see Matching → Judge).
 - `--base-model` sets `trainer_params.base_model` (MSRL only; the other
   trainers ignore it).
 
 #### Smoke test against MSRL
 
-The smallest end-to-end run: `gemini-3.5-flash-lite` as the tuning base model
-and the smallest batch MSRL can train on — 2 datums × 2 rollouts.
+The smallest end-to-end run: `gemini-3.5-flash` (the only base model the
+multi-step RL tuning API accepts today) and the smallest batch MSRL can train
+on — 2 datums × 2 rollouts.
 
 ```bash
 uv run python examples/bug-unleashed/run_training.py \
   --base-url https://ollie-rl-production.up.railway.app \
-  --trainer gemini_msrl --base-model gemini-3.5-flash-lite \
+  --trainer gemini_msrl --base-model gemini-3.5-flash \
   --recipe '{"group_size": 2, "num_groups_per_batch": 2,
              "max_off_policy_generation": 0, "sampler_promotion_every": 1,
              "eval_group_size": 1, "eval_every_n_checkpoints": 1,
@@ -548,8 +553,7 @@ uv run python examples/bug-unleashed/run_training.py \
 What it proves, in order:
 
 1. `POST /tuners` creates the Vertex MSRL job (`--base-model` is the only
-   trainer-specific knob the driver sends). A wrong model id fails here with
-   Vertex's list of accepted base models.
+   trainer-specific knob the driver sends).
 2. Dispensing returns 204 while the job warms up, then hands out 2 datums ×
    2 runs — the minimum that completes one group per datum.
 3. Each rollout is a real agent run whose model turns are recorded as tuning
@@ -564,7 +568,16 @@ What it proves, in order:
 `group_size × num_groups_per_batch = 4`, so the driver paces itself against
 training instead of racing ahead. The cost of that: a failed rollout leaves its
 group incomplete until the 15-minute run lease expires, so watch the
-`failed:` lines and re-run if a group stalls.
+`failed:` lines and re-run if a group stalls. Pass `--run-timeout 900` so a
+hung CLI is killed instead of holding the slot for an hour.
+
+Neither Flash-Lite model works here yet: `gemini-3.5-flash-lite` and
+`gemini-3.1-flash-lite` are both rejected by `POST /tuners` with
+`Base model ... is not supported for multi-step reinforcement tuning.` The
+published reinforcement-tuning model list covers the dataset-based
+`reinforcementTuningSpec` API, not the scope-based multi-step API this trainer
+drives (`generateContentTuningScope` / `trainStep`), so `gemini-3.5-flash` is
+currently the only accepted base model.
 
 ## Sampling and splits
 

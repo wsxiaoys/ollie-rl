@@ -38,6 +38,11 @@ DEFAULT_TUNER_NAME = "tuning-bug-unleashed-ollie"
 DEFAULT_AGENT_MODEL = "ollie"
 OLLIE_CLI_VERSION = "0.7.2"
 OLLIE_MAX_STEPS = 80
+# Backstop for a CLI that stops making model calls but never exits: it would
+# hold a worker slot forever and its group could never complete. The server's
+# 15-minute run lease already makes such a run unrewardable, so this only
+# decides when the driver stops waiting on it.
+DEFAULT_RUN_TIMEOUT = 60 * 60
 # Prepared diffs: p50 ~10k characters, p90 ~49k. The tail is truncated with a
 # note; the agent can read the rest from the read-only checkout.
 DEFAULT_MAX_DIFF_CHARS = 60_000
@@ -57,8 +62,9 @@ you are confident enough to bet that this is a real defect introduced by the
 PR; use "minor" for a plausible but unconfirmed one. Prefer fewer, sharper
 findings over guesses.
 
-Every finding needs `path` (repository-relative, no leading "./"), `line` (in
-the post-PR file), `title` (one line), and `body` (mechanism + condition).
+Every finding is an object with exactly these keys: `severity` ("major" or
+"minor"), `path` (repository-relative, no leading "./"), `line` (in the post-PR
+file), `title` (one line), and `body` (mechanism + condition).
 
 Your final response must contain a `<review_findings>` element whose contents
 are one JSON array of finding objects. Do not include explanation outside that
@@ -351,6 +357,7 @@ async def run_ollie_agent(
     model: str,
     executor: str,
     max_steps: int,
+    timeout: float | None = None,
 ) -> tuple[tuple[reward.Finding, ...], tuple[str, ...]]:
     """Run one Ollie CLI agent and parse its `<review_findings>` payload."""
     # A trailing slash on --base-url would otherwise produce a `//tuners/...`
@@ -389,7 +396,15 @@ async def run_ollie_agent(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+    except TimeoutError:
+        # A hung CLI (no more model calls, process still alive) keeps this
+        # worker slot forever and its group can never complete, so the tuner
+        # stops dispensing. Kill it and let the run lease expire server-side.
+        process.kill()
+        await process.wait()
+        raise RuntimeError(f"Ollie agent timed out after {timeout:.0f}s") from None
 
     output = stdout.decode(errors="replace")
     findings, errors = reward.parse_findings(output)
@@ -445,6 +460,7 @@ async def execute_run(
             model=args.agent_model,
             executor=args.ollie_executor,
             max_steps=args.ollie_max_steps,
+            timeout=args.run_timeout or None,
         )
         result = await reward.score_example(task.example, findings, judge)
         await submit_reward(client, tuner_id, run_id, result.total)
@@ -571,6 +587,12 @@ def parse_args() -> argparse.Namespace:
         help="Sandbox executor; 'none' runs the sandbox locally.",
     )
     parser.add_argument("--ollie-max-steps", type=int, default=OLLIE_MAX_STEPS)
+    parser.add_argument(
+        "--run-timeout",
+        type=float,
+        default=DEFAULT_RUN_TIMEOUT,
+        help="Seconds before a rollout is killed; 0 disables the backstop.",
+    )
     parser.add_argument("--max-diff-chars", type=int, default=DEFAULT_MAX_DIFF_CHARS)
     parser.add_argument("--runs", type=int, default=2000)
     parser.add_argument("--concurrency", type=int, default=8)
