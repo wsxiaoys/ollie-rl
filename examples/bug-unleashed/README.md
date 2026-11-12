@@ -581,10 +581,18 @@ hung CLI is killed instead of holding the slot for an hour.
 Neither Flash-Lite model works here yet: `gemini-3.5-flash-lite` and
 `gemini-3.1-flash-lite` are both rejected by `POST /tuners` with
 `Base model ... is not supported for multi-step reinforcement tuning.` The
-published reinforcement-tuning model list covers the dataset-based
-`reinforcementTuningSpec` API, not the scope-based multi-step API this trainer
-drives (`generateContentTuningScope` / `trainStep`), so `gemini-3.5-flash` is
-currently the only accepted base model.
+rejection comes from Vertex itself, not from the driver: posting
+`multiStepReinforcementTuningSpec` straight to
+`projects/{p}/locations/us-central1/tuningJobs` fails the same way for every
+adapter size (`FOUR`/`EIGHT`/`SIXTEEN`) and for the `@default` model form, and
+`v1alpha1` has no such endpoint. The published reinforcement-tuning model list
+does cover Gemini 3.1 Flash-Lite, but that is the dataset-based
+`reinforcementTuningSpec` API — the same model id is accepted there (Vertex
+only complains that `training_dataset` is missing) — not the scope-based
+multi-step API this trainer drives (`generateContentTuningScope` /
+`trainStep`). So `gemini-3.5-flash` is currently the only accepted base model
+for this loop; Flash-Lite would need a different trainer built around an
+offline prompt dataset and reward functions.
 
 ## Sampling and splits
 
