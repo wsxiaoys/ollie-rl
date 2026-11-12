@@ -31,8 +31,10 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -315,10 +317,37 @@ def assign_splits(cases: list[dict[str, Any]]) -> dict[str, Any]:
 # --- Git and GitHub ----------------------------------------------------------
 
 
+# Git LFS would otherwise download the real binaries: `git archive` runs the
+# smudge filter, so a 133-byte pointer blob becomes a 36 MB asset on disk. A
+# reviewer only needs the source tree, so keep the pointers.
+GIT_ENV = {
+    **os.environ,
+    "GIT_LFS_SKIP_SMUDGE": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
+# Belt and braces: disable the LFS filter for the archive itself, in case the
+# environment variable is not honoured by the installed git-lfs version.
+LFS_FILTER_OVERRIDES = (
+    "-c",
+    "filter.lfs.process=",
+    "-c",
+    "filter.lfs.smudge=",
+    "-c",
+    "filter.lfs.clean=",
+    "-c",
+    "filter.lfs.required=false",
+)
+
+
 def run_git(*args: str) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
-            ["git", *args], check=True, text=True, capture_output=True
+            ["git", *args],
+            check=True,
+            text=True,
+            capture_output=True,
+            env=GIT_ENV,
         )
     except subprocess.CalledProcessError as error:
         stderr = error.stderr.strip() if error.stderr else ""
@@ -375,6 +404,24 @@ def fetch_commit(git_dir: Path, commit: str) -> None:
     )
 
 
+def snapshot_member_filter(skipped: list[str]) -> Any:
+    """Extraction filter that drops entries the `data` filter rejects.
+
+    Some trees (e.g. next.js test fixtures) contain symlinks to absolute host
+    paths. They are meaningless inside a snapshot, so skip them instead of
+    failing the whole case.
+    """
+
+    def filter_member(member: tarfile.TarInfo, destination: str) -> Any:
+        try:
+            return tarfile.data_filter(member, destination)
+        except tarfile.FilterError:
+            skipped.append(member.name)
+            return None
+
+    return filter_member
+
+
 def materialize_snapshot(repo_root: Path, git_dir: Path, commit: str) -> Path:
     snapshot_dir = repo_root / commit
     if snapshot_dir.is_dir():
@@ -384,14 +431,18 @@ def materialize_snapshot(repo_root: Path, git_dir: Path, commit: str) -> Path:
     archive_path = temporary.with_suffix(".tar")
     try:
         run_git(
+            *LFS_FILTER_OVERRIDES,
             f"--git-dir={git_dir}",
             "archive",
             "--format=tar",
             f"--output={archive_path}",
             commit,
         )
+        skipped: list[str] = []
         with tarfile.open(archive_path, mode="r:") as archive:
-            archive.extractall(temporary, filter="data")
+            archive.extractall(temporary, filter=snapshot_member_filter(skipped))
+        if skipped:
+            log(f"{commit[:12]}: skipped {len(skipped)} unsafe archive entries")
         os.replace(temporary, snapshot_dir)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -484,6 +535,79 @@ def build_examples(
     return examples
 
 
+class Progress:
+    """Thread-safe case counter and failure log."""
+
+    def __init__(self, total: int) -> None:
+        self.total = total
+        self.done = 0
+        self.failures: list[tuple[str, str]] = []
+        self._lock = threading.Lock()
+
+    def record(self, label: str, error: BaseException | None = None) -> None:
+        with self._lock:
+            self.done += 1
+            if error is None:
+                log(f"case {self.done}/{self.total}: {label}")
+            else:
+                self.failures.append((label, str(error)))
+                log(f"case {self.done}/{self.total}: {label} FAILED: {error}")
+
+    def record_repo(self, repo: str, cases: int, error: BaseException) -> None:
+        with self._lock:
+            self.done += cases
+            self.failures.append((repo, str(error)))
+            log(f"{repo}: repository setup FAILED ({cases} cases): {error}")
+
+
+def prepare_repo(
+    client: httpx.Client,
+    data_dir: Path,
+    repo: str,
+    repo_cases: list[dict[str, Any]],
+    examples_by_case: dict[str, list[dict[str, Any]]],
+    progress: Progress,
+) -> None:
+    """Fetch metadata, diffs, and one snapshot per case for a single repo.
+
+    Repos run in parallel; cases within a repo run sequentially because they
+    share one bare Git directory.
+    """
+    repo_root = data_dir / "repos" / repo_slug(repo)
+    git_dir = prepare_bare_repo(repo_root, repo)
+    for case in repo_cases:
+        label = f"{case['id']} ({repo}#{case['pr']})"
+        try:
+            pr = fetch_pr(client, repo, case["pr"])
+            write_json(
+                data_dir / "pr" / f"{case['id']}.json",
+                {
+                    "title": pr["title"],
+                    "body": pr["body"],
+                    "head_sha": pr["head_sha"],
+                    "base_sha": pr["base_sha"],
+                },
+            )
+            diff_path = data_dir / "diffs" / f"{case['id']}.diff"
+            diff_path.parent.mkdir(parents=True, exist_ok=True)
+            diff_path.write_text(pr["diff"], encoding="utf-8")
+
+            fetch_commit(git_dir, pr["head_sha"])
+            materialize_snapshot(repo_root, git_dir, pr["head_sha"])
+
+            for example in examples_by_case[case["id"]]:
+                example["head_sha"] = pr["head_sha"]
+                example["base_sha"] = pr["base_sha"]
+                example["snapshot"] = str(
+                    (repo_root / pr["head_sha"]).relative_to(data_dir)
+                )
+                example["diff"] = str(diff_path.relative_to(data_dir))
+        except Exception as error:  # noqa: BLE001 - reported per case
+            progress.record(label, error)
+        else:
+            progress.record(label)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -508,7 +632,18 @@ def main() -> int:
         default=None,
         help="Prepare only the first N cases (for a smoke run).",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=5,
+        help="Repositories prepared in parallel (default: 5).",
+    )
     args = parser.parse_args()
+
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be at least 1")
+    if args.concurrency < 1:
+        parser.error("--concurrency must be at least 1")
 
     data_dir = args.data_dir.resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -517,8 +652,6 @@ def main() -> int:
         dataset = load_cases(client, data_dir, refresh=args.refresh_cases)
         cases = dataset["cases"]
         if args.limit is not None:
-            if args.limit < 1:
-                parser.error("--limit must be at least 1")
             cases = cases[: args.limit]
         validate_cases(cases)
 
@@ -530,42 +663,45 @@ def main() -> int:
         )
 
         examples = build_examples(cases, splits["assignment"])
-        prepared_repos: set[str] = set()
-        if not args.no_snapshots:
-            for index, case in enumerate(cases, start=1):
-                slug = repo_slug(case["repo"])
-                repo_root = data_dir / "repos" / slug
-                log(
-                    f"case {index}/{len(cases)}: {case['id']} "
-                    f"({case['repo']}#{case['pr']})"
-                )
-                pr = fetch_pr(client, case["repo"], case["pr"])
-                write_json(
-                    data_dir / "pr" / f"{case['id']}.json",
-                    {
-                        "title": pr["title"],
-                        "body": pr["body"],
-                        "head_sha": pr["head_sha"],
-                        "base_sha": pr["base_sha"],
-                    },
-                )
-                diff_path = data_dir / "diffs" / f"{case['id']}.diff"
-                diff_path.parent.mkdir(parents=True, exist_ok=True)
-                diff_path.write_text(pr["diff"], encoding="utf-8")
+        examples_by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for example in examples:
+            examples_by_case[example["case_id"]].append(example)
 
-                git_dir = prepare_bare_repo(repo_root, case["repo"])
-                fetch_commit(git_dir, pr["head_sha"])
-                materialize_snapshot(repo_root, git_dir, pr["head_sha"])
-                prepared_repos.add(case["repo"])
-                for example in examples:
-                    if example["case_id"] != case["id"]:
-                        continue
-                    example["head_sha"] = pr["head_sha"]
-                    example["base_sha"] = pr["base_sha"]
-                    example["snapshot"] = str(
-                        (repo_root / pr["head_sha"]).relative_to(data_dir)
-                    )
-                    example["diff"] = str(diff_path.relative_to(data_dir))
+        prepared_repos: set[str] = set()
+        failures: list[tuple[str, str]] = []
+        if not args.no_snapshots:
+            cases_by_repo: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for case in cases:
+                cases_by_repo[case["repo"]].append(case)
+
+            progress = Progress(len(cases))
+            with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+                futures = {
+                    pool.submit(
+                        prepare_repo,
+                        client,
+                        data_dir,
+                        repo,
+                        repo_cases,
+                        examples_by_case,
+                        progress,
+                    ): (repo, repo_cases)
+                    for repo, repo_cases in sorted(cases_by_repo.items())
+                }
+                for future in as_completed(futures):
+                    repo, repo_cases = futures[future]
+                    try:
+                        future.result()
+                    except Exception as error:  # noqa: BLE001 - reported per repo
+                        progress.record_repo(repo, len(repo_cases), error)
+
+            failures = progress.failures
+            failed_repos = {label for label, _ in failures}
+            prepared_repos = {
+                case["repo"]
+                for case in cases
+                if case["repo"] not in failed_repos and case["id"] not in failed_repos
+            }
 
         instances_dir = data_dir / "instances"
         for example in examples:
@@ -586,6 +722,9 @@ def main() -> int:
                 },
                 "snapshots": not args.no_snapshots,
                 "prepared_repos": len(prepared_repos),
+                "failures": [
+                    {"case": label, "error": error} for label, error in failures
+                ],
             },
         )
 
@@ -593,6 +732,9 @@ def main() -> int:
         f"done: {len(examples)} examples across "
         f"{len({case['repo'] for case in cases})} repos under {data_dir}"
     )
+    if failures:
+        log(f"{len(failures)} case(s) failed; see manifest.json")
+        return 1
     return 0
 
 

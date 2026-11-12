@@ -72,6 +72,12 @@ uv run python examples/bug-unleashed/prepare_data.py --no-snapshots
 uv run python examples/bug-unleashed/prepare_data.py --limit 4
 ```
 
+Repositories are prepared in parallel (`--concurrency`, default 5). Cases
+inside one repository run sequentially because they share a bare Git
+directory, so the effective parallelism is the number of repositories in
+flight. Failures are recorded per case in `manifest.json` and the script exits
+non-zero, so a partial run can be re-run to fill in the gaps.
+
 Everything lands under `examples/bug-unleashed/data/` (gitignored):
 `cases.json`, `splits.json`, `pr/<case_id>.json`, `diffs/<case_id>.diff`,
 `repos/<org>__<repo>/git` (bare) and `repos/<org>__<repo>/<head_sha>/`
