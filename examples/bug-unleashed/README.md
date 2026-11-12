@@ -92,14 +92,15 @@ and re-strips the dataset snapshot.
 starts it in NDJSON mode and points `OPENAI_BASE_URL` at the run's endpoint:
 
 ```text
-npx --yes @getollie/cli@<pinned> agent \
+npx --yes @getollie/cli@0.7.2 agent \
   --workspace-path /workspace -v <snapshot>:/workspace:ro \
-  --ndjson --no-color --model ollie --executor local --max-steps <N> <prompt>
+  --mode sandbox --executor none --ndjson --no-color --model ollie \
+  --max-steps 80 <prompt>
 ```
 
-- `--executor local` (not `none`): the agent needs shell/file tools to read
-  the checkout, grep for call sites and follow the diff. That is the whole
-  task, unlike word-puzzle.
+- `--mode sandbox --executor none` runs the sandbox locally, which is what the
+  agent needs to read the checkout, grep for call sites and follow the diff.
+  (`--executor` only accepts `none`, `daytona`, `vercel`; there is no `local`.)
 - The snapshot is mounted **`:ro`** (as in code-search), so concurrent agents
   cannot alter prepared data and nothing the agent writes is scored.
 - `OPENAI_BASE_URL=http://<host>/tuners/<tuner-id>/runs/<run-id>/openai/v1`
@@ -493,6 +494,37 @@ pair (3× cost, only for gated candidates) for eval runs. Generator and judge
 are the same model here, which can only make these pairs easier than real
 rollout findings; re-run this once rollouts exist.
 
+### Training driver (`run_training.py`)
+
+`run_training.py` is the loop: dispense a run, launch the Ollie CLI on that
+example's snapshot, parse `<review_findings>`, score it with `reward.py`, and
+PUT the reward.
+
+```bash
+uv run uvicorn ollie_rl.server.app:app --host 127.0.0.1 --port 8000
+uv run python examples/bug-unleashed/run_training.py --runs 2000 \
+  --judge-base-url https://kumo.up.railway.app/v1 \
+  --judge-api-key "$KEY" --judge-model deepseek-4.1-flash
+```
+
+- Datums are the prepared example ids (`<case_id>__gN`): `split: train` in
+  `data/instances/*.json` becomes `train_datum_ids`, `split: val` becomes
+  `eval_datum_ids`, so the tuner's own eval tier scores val per checkpoint.
+- The recipe defaults to the inline override
+  `{"group_size": 4, "num_groups_per_batch": 8, "reward_normalizer": "centering"}`.
+  `RecipeInput` layers over `Recipe` defaults rather than over a named recipe,
+  so the GRPO shape is spelled out; the driver re-reads the tuner's recipe and
+  warns if the normalizer is not `centering`.
+- Prompt: the block above, with the diff truncated at `--max-diff-chars`
+  (default 60 000, ≈p90 of the prepared diffs) plus a note pointing at
+  `/workspace`.
+- Each run logs `split/kind`, reward, match, finding count, judge calls and a
+  running per-split summary: `strict` = `match ∧ major` recall on bug
+  examples, `quiet` = fraction of clean examples with no major.
+- A failed rollout (agent crash, judge error, expired lease) is logged and left
+  unrewarded; the lease expires and the server re-dispenses the datum.
+- `--judge-votes 3` for eval runs (see Matching → Judge).
+
 ## Sampling and splits
 
 **Repo-disjoint train/val split, fixed at data-prep time** and written to
@@ -538,9 +570,9 @@ Caveats, given the size:
 
 ## Decided
 
-- Agent: Ollie CLI per dispensed run, `--executor local`; per-case clean
-  snapshot (bare Git dir + depth-1 fetch + `git archive`, no `.git`) mounted
-  `:ro` at `/workspace`.
+- Agent: Ollie CLI per dispensed run, `--mode sandbox --executor none`; per-case
+  clean snapshot (bare Git dir + depth-1 fetch + `git archive`, no `.git`)
+  mounted `:ro` at `/workspace`.
 - Data source: local `data/cases.json` snapshot (gitignored), stripped of
   upstream model/eval data.
 - Matching: file-level path gate + LLM judge (system prompt frozen above).
@@ -560,9 +592,10 @@ Caveats, given the size:
       with siblings, PR metadata + diff, bare fetch + `git archive` snapshot).
 - [ ] Confirm data-use / canary with dataset owners.
 - [x] Build `reward.py` (path gate + judge prompt above + the reward table).
-- [ ] Build `run_training.py` (create the tuner with recipe override
-      `reward_normalizer: "centering"`).
+- [x] Build `run_training.py` (create the tuner with recipe override
+      `reward_normalizer: "centering"`, one Ollie CLI launch per dispensed run,
+      per-split strict/quiet logging).
 - [x] Calibrate the judge once on ~30–50 hand-labeled pairs (44 adversarial
       pairs, `0.955`, prompt revised — see Matching → Judge).
-- [ ] Pin the Ollie CLI version (needs `:ro` volume support, i.e. ≥0.7.x)
-      and `--max-steps` for review runs.
+- [x] Pin the Ollie CLI version (`0.7.2`) and `--max-steps` (`80`) for review
+      runs.

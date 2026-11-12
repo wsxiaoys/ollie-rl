@@ -1,0 +1,597 @@
+"""Train the Ollie agent to review pull requests on prepared BugUnleashed cases.
+
+Prepare the dataset first, start ollie-rl, then run from the repository root::
+
+    GITHUB_TOKEN=$(gh auth token) uv run python examples/bug-unleashed/prepare_data.py
+    uv run python examples/bug-unleashed/run_training.py --runs 2000
+
+The judge needs an OpenAI-compatible endpoint: pass ``--judge-base-url`` and
+``--judge-api-key`` (or set ``OPENAI_API_KEY``). The reward table and the judge
+prompt live in ``reward.py`` and are described in the README.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import reward
+
+EXAMPLE_DIR = Path(__file__).resolve().parent
+DEFAULT_DATA_DIR = EXAMPLE_DIR / "data"
+DEFAULT_BASE_URL = "http://localhost:8000"
+# `RecipeInput` layers over `Recipe` defaults rather than over a named recipe,
+# so the grpo_4x8 shape is spelled out next to the required override. Without
+# `centering` the normalizer divides by the group std and the -5.0 clean-PR
+# penalty loses its magnitude.
+DEFAULT_RECIPE = (
+    '{"group_size": 4, "num_groups_per_batch": 8, "reward_normalizer": "centering"}'
+)
+DEFAULT_TRAINER = "fake"
+DEFAULT_TUNER_NAME = "tuning-bug-unleashed-ollie"
+DEFAULT_AGENT_MODEL = "ollie"
+OLLIE_CLI_VERSION = "0.7.2"
+OLLIE_MAX_STEPS = 80
+# Prepared diffs: p50 ~10k characters, p90 ~49k. The tail is truncated with a
+# note; the agent can read the rest from the read-only checkout.
+DEFAULT_MAX_DIFF_CHARS = 60_000
+
+PROMPT_TEMPLATE = """You are reviewing a pull request for defects it introduces. The repository is
+mounted read-only at /workspace and is the tree *after* the PR was applied.
+Use it: read the changed files, grep for call sites, and follow the code paths
+the change touches.
+
+Report only defects this PR introduces. Do not report pre-existing bugs,
+style or naming nits, missing tests, or general risks. A finding must name the
+specific mechanism and the condition that triggers it — "may cause a null
+dereference" is not a finding.
+
+At most 3 findings, majors and minors combined. Use severity "major" only when
+you are confident enough to bet that this is a real defect introduced by the
+PR; use "minor" for a plausible but unconfirmed one. Prefer fewer, sharper
+findings over guesses.
+
+Every finding needs `path` (repository-relative, no leading "./"), `line` (in
+the post-PR file), `title` (one line), and `body` (mechanism + condition).
+
+Your final response must contain a `<review_findings>` element whose contents
+are one JSON array of finding objects. Do not include explanation outside that
+element.
+
+<title>
+{pr_title}
+</title>
+
+<description>
+{pr_body}
+</description>
+
+<diff>
+{diff}
+</diff>"""
+
+
+@dataclass(frozen=True)
+class ReviewTask:
+    """One dispensed example: the prompt inputs plus the scoring gold."""
+
+    example_id: str
+    split: str
+    kind: str
+    repo: str
+    pr: int
+    title: str
+    body: str
+    diff: str
+    snapshot: Path
+    example: reward.Example
+
+
+@dataclass
+class SplitStats:
+    """Running eval summary for one split."""
+
+    rewards: list[float] = field(default_factory=list)
+    bug: int = 0
+    bug_strict: int = 0
+    clean: int = 0
+    clean_quiet: int = 0
+
+    def record(self, kind: str, result: reward.RewardResult) -> None:
+        self.rewards.append(result.total)
+        if kind == "bug":
+            self.bug += 1
+            self.bug_strict += int(result.strict_match)
+        else:
+            self.clean += 1
+            self.clean_quiet += int(result.total == reward.CLEAN_REWARD)
+
+    def summary(self) -> str:
+        if not self.rewards:
+            return "n=0"
+        parts = [
+            f"n={len(self.rewards)}",
+            f"avg={sum(self.rewards) / len(self.rewards):.3f}",
+        ]
+        if self.bug:
+            rate = self.bug_strict / self.bug
+            parts.append(f"strict={self.bug_strict}/{self.bug} ({rate:.2f})")
+        if self.clean:
+            rate = self.clean_quiet / self.clean
+            parts.append(f"quiet={self.clean_quiet}/{self.clean} ({rate:.2f})")
+        return " ".join(parts)
+
+
+def truncate_diff(diff: str, limit: int) -> str:
+    """Cut the diff to `limit` characters, telling the agent what is missing."""
+    if len(diff) <= limit:
+        return diff
+    omitted = len(diff) - limit
+    return (
+        f"{diff[:limit]}\n\n[diff truncated: {omitted} more characters. The full "
+        "post-PR tree is in /workspace.]\n"
+    )
+
+
+def build_prompt(task: ReviewTask) -> str:
+    return PROMPT_TEMPLATE.format(
+        pr_title=task.title,
+        pr_body=task.body or "(no description)",
+        diff=task.diff,
+    )
+
+
+def load_tasks(
+    data_dir: Path,
+    examples: dict[str, reward.Example],
+    max_diff_chars: int,
+) -> dict[str, ReviewTask]:
+    """Load one `ReviewTask` per prepared instance, keyed by example id."""
+    instances_dir = data_dir / "instances"
+    if not instances_dir.is_dir():
+        raise ValueError(
+            f"prepared instances not found: {instances_dir}; run prepare_data.py first"
+        )
+
+    tasks: dict[str, ReviewTask] = {}
+    for path in sorted(instances_dir.glob("*.json")):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+            example_id = item["example_id"]
+            case_id = item["case_id"]
+            split = item["split"]
+            kind = item["kind"]
+            title = item["title"]
+            repo = item["repo"]
+            pr = int(item["pr"])
+            snapshot = data_dir / item["snapshot"]
+            diff_path = data_dir / item["diff"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError(f"invalid prepared instance: {path}") from error
+
+        example = examples.get(example_id)
+        if example is None:
+            raise ValueError(f"instance {path} has no matching example")
+        if split not in {"train", "val"}:
+            raise ValueError(f"instance {path} has unexpected split {split!r}")
+        if not snapshot.is_dir():
+            raise ValueError(f"instance {path} snapshot is missing: {snapshot}")
+
+        body = ""
+        pr_path = data_dir / "pr" / f"{case_id}.json"
+        if pr_path.is_file():
+            payload = json.loads(pr_path.read_text(encoding="utf-8"))
+            body = (payload.get("body") or "").strip()
+        diff = truncate_diff(
+            diff_path.read_text(encoding="utf-8", errors="replace"),
+            max_diff_chars,
+        )
+
+        tasks[example_id] = ReviewTask(
+            example_id=example_id,
+            split=split,
+            kind=kind,
+            repo=repo,
+            pr=pr,
+            title=title,
+            body=body,
+            diff=diff,
+            snapshot=snapshot,
+            example=example,
+        )
+
+    if not tasks:
+        raise ValueError(f"no prepared instances found under {instances_dir}")
+    return tasks
+
+
+def parse_recipe(value: str) -> Any:
+    if not value.lstrip().startswith("{"):
+        return value
+    try:
+        recipe = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise argparse.ArgumentTypeError(f"invalid recipe JSON: {error.msg}") from error
+    if not isinstance(recipe, dict):
+        raise argparse.ArgumentTypeError("recipe JSON must be an object")
+    return recipe
+
+
+async def create_tuner(
+    client: httpx.AsyncClient,
+    *,
+    name: str,
+    recipe: Any,
+    trainer: str,
+    train_datum_ids: list[str],
+    eval_datum_ids: list[str],
+) -> str:
+    response = await client.post(
+        "/tuners",
+        json={
+            "name": name,
+            "recipe": recipe,
+            "trainer": trainer,
+            "train_datum_ids": train_datum_ids,
+            "eval_datum_ids": eval_datum_ids,
+        },
+    )
+    response.raise_for_status()
+    tuner_id = response.json()["tuner_id"]
+    print(
+        f"[driver] created tuner {tuner_id} "
+        f"({len(train_datum_ids)} train / {len(eval_datum_ids)} eval examples)"
+    )
+    return tuner_id
+
+
+async def resolve_tuner(
+    client: httpx.AsyncClient,
+    *,
+    tuner_id: str | None,
+    name: str,
+    recipe: Any,
+    trainer: str,
+    train_datum_ids: list[str],
+    eval_datum_ids: list[str],
+) -> str:
+    if tuner_id:
+        response = await client.get(f"/tuners/{tuner_id}")
+        response.raise_for_status()
+        print(f"[driver] resuming tuner {tuner_id}")
+        return tuner_id
+
+    try:
+        response = await client.get("/tuners")
+        response.raise_for_status()
+        existing_id = next(
+            (
+                tuner["tuner_id"]
+                for tuner in response.json().get("tuners", [])
+                if tuner["name"] == name
+            ),
+            None,
+        )
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+        print(f"[driver] could not look up an existing tuner: {error}")
+        existing_id = None
+
+    if existing_id:
+        print(f"[driver] resuming tuner {existing_id} (name={name!r})")
+        return existing_id
+    return await create_tuner(
+        client,
+        name=name,
+        recipe=recipe,
+        trainer=trainer,
+        train_datum_ids=train_datum_ids,
+        eval_datum_ids=eval_datum_ids,
+    )
+
+
+async def warn_unless_centering(client: httpx.AsyncClient, tuner_id: str) -> None:
+    """The reward table only works at absolute scale (see README → Reward)."""
+    response = await client.get(f"/tuners/{tuner_id}")
+    response.raise_for_status()
+    normalizer = (response.json().get("recipe") or {}).get("reward_normalizer")
+    if normalizer != "centering":
+        print(
+            f"[driver] WARNING: reward_normalizer={normalizer!r}; the -5.0 clean-PR "
+            "penalty is divided away unless it is 'centering'"
+        )
+    else:
+        print("[driver] recipe uses reward_normalizer=centering")
+
+
+async def dispense_run(client: httpx.AsyncClient, tuner_id: str) -> tuple[str, str]:
+    waiting = False
+    while True:
+        response = await client.post(f"/tuners/{tuner_id}/runs")
+        if response.status_code == 204:
+            try:
+                delay = max(0.0, float(response.headers.get("Retry-After", "1")))
+            except ValueError:
+                delay = 1.0
+            if not waiting:
+                print(
+                    f"[driver] waiting for a runnable assignment; retrying in {delay:g}s",
+                    flush=True,
+                )
+                waiting = True
+            await asyncio.sleep(delay)
+            continue
+        response.raise_for_status()
+        body = response.json()
+        if waiting:
+            print("[driver] assignment available; resuming runs", flush=True)
+        return body["run_id"], body["datum_id"]
+
+
+async def run_ollie_agent(
+    *,
+    base_url: str,
+    tuner_id: str,
+    run_id: str,
+    task: ReviewTask,
+    model: str,
+    executor: str,
+    max_steps: int,
+) -> tuple[tuple[reward.Finding, ...], tuple[str, ...]]:
+    """Run one Ollie CLI agent and parse its `<review_findings>` payload."""
+    # A trailing slash on --base-url would otherwise produce a `//tuners/...`
+    # path. Railway does not normalize that path and returns 404 before the
+    # request reaches ollie-rl's OpenAI-compatible endpoint.
+    run_base_url = f"{base_url.rstrip('/')}/tuners/{tuner_id}/runs/{run_id}/openai/v1"
+    environment = {
+        **os.environ,
+        "OPENAI_BASE_URL": run_base_url,
+        "OPENAI_API_KEY": "ollie",
+    }
+    command = (
+        "npx",
+        "--yes",
+        f"@getollie/cli@{OLLIE_CLI_VERSION}",
+        "agent",
+        "--workspace-path",
+        "/workspace",
+        "-v",
+        f"{task.snapshot}:/workspace:ro",
+        "--mode",
+        "sandbox",
+        "--executor",
+        executor,
+        "--ndjson",
+        "--no-color",
+        "--model",
+        model,
+        "--max-steps",
+        str(max_steps),
+        build_prompt(task),
+    )
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        env=environment,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+
+    output = stdout.decode(errors="replace")
+    findings, errors = reward.parse_findings(output)
+    if process.returncode != 0:
+        details = list(errors[-1:])
+        if stderr_detail := stderr.decode(errors="replace").strip():
+            details.append(stderr_detail)
+        if not details and output.strip():
+            details.append(output.strip())
+        detail = " | ".join(details) if details else "no error output"
+        raise RuntimeError(
+            f"Ollie agent exited with status {process.returncode}: {detail[-1000:]}"
+        )
+    return findings, errors
+
+
+async def submit_reward(
+    client: httpx.AsyncClient, tuner_id: str, run_id: str, reward_value: float
+) -> None:
+    response = await client.put(
+        f"/tuners/{tuner_id}/runs/{run_id}/reward",
+        json={"reward": reward_value},
+    )
+    if response.is_error:
+        # 403 means the lease expired, the reward was already set, or the run
+        # recorded no completion; the body says which.
+        raise RuntimeError(
+            f"reward rejected ({response.status_code}): {response.text[:300]}"
+        )
+
+
+async def execute_run(
+    number: int,
+    client: httpx.AsyncClient,
+    tuner_id: str,
+    task: ReviewTask,
+    run_id: str,
+    args: argparse.Namespace,
+    judge: reward.Judge,
+    stats: dict[str, SplitStats],
+) -> None:
+    print(
+        f"[driver] run {number:04d} {task.split}/{task.kind} "
+        f"task={task.example_id} started",
+        flush=True,
+    )
+    try:
+        findings, parse_errors = await run_ollie_agent(
+            base_url=args.base_url,
+            tuner_id=tuner_id,
+            run_id=run_id,
+            task=task,
+            model=args.agent_model,
+            executor=args.ollie_executor,
+            max_steps=args.ollie_max_steps,
+        )
+        result = await reward.score_example(task.example, findings, judge)
+        await submit_reward(client, tuner_id, run_id, result.total)
+    except Exception as error:  # noqa: BLE001 - one failed rollout must not stop peers
+        print(f"[driver] run {number:04d} {task.example_id} failed: {error}")
+        return
+
+    split_stats = stats[task.split]
+    split_stats.record(task.kind, result)
+    matched = f"matched={result.matched_severity}" if result.matched else "matched=no"
+    print(
+        f"[driver] run {number:04d} {task.split}/{task.kind} "
+        f"task={task.example_id} reward={result.total:+.2f} {matched} "
+        f"findings={len(findings)} judge_calls={result.judge_calls} "
+        f"| {task.split} {split_stats.summary()}"
+    )
+    for error in (*parse_errors, *result.errors):
+        print(f"[driver] run {number:04d} note: {error[-500:]}")
+
+
+async def async_main(args: argparse.Namespace) -> int:
+    data_dir = args.data_dir.resolve()
+    examples = reward.load_examples(data_dir)
+    tasks = load_tasks(data_dir, examples, args.max_diff_chars)
+    train_datum_ids = sorted(
+        example_id for example_id, task in tasks.items() if task.split == "train"
+    )
+    eval_datum_ids = sorted(
+        example_id for example_id, task in tasks.items() if task.split == "val"
+    )
+    if not train_datum_ids:
+        raise SystemExit("no train examples; re-run prepare_data.py")
+
+    def count(ids: list[str], kind: str) -> int:
+        return sum(1 for datum_id in ids if tasks[datum_id].kind == kind)
+
+    print(
+        f"[driver] examples: train {len(train_datum_ids)} "
+        f"({count(train_datum_ids, 'bug')} bug / {count(train_datum_ids, 'clean')} clean), "
+        f"val {len(eval_datum_ids)} "
+        f"({count(eval_datum_ids, 'bug')} bug / {count(eval_datum_ids, 'clean')} clean)"
+    )
+
+    timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=30.0)
+    stats = {"train": SplitStats(), "val": SplitStats()}
+    async with (
+        reward.Judge(
+            model=args.judge_model,
+            base_url=args.judge_base_url,
+            api_key=args.judge_api_key,
+            seed=args.judge_seed if args.judge_seed >= 0 else None,
+            votes=args.judge_votes,
+        ) as judge,
+        httpx.AsyncClient(base_url=args.base_url, timeout=timeout) as client,
+    ):
+        tuner_id = await resolve_tuner(
+            client,
+            tuner_id=args.tuner_id,
+            name=args.name,
+            recipe=args.recipe,
+            trainer=args.trainer,
+            train_datum_ids=train_datum_ids,
+            eval_datum_ids=eval_datum_ids,
+        )
+        await warn_unless_centering(client, tuner_id)
+
+        slots = asyncio.Semaphore(args.concurrency)
+
+        async def execute_and_release(
+            number: int, task: ReviewTask, run_id: str
+        ) -> None:
+            try:
+                await execute_run(
+                    number, client, tuner_id, task, run_id, args, judge, stats
+                )
+            finally:
+                slots.release()
+
+        async with asyncio.TaskGroup() as group:
+            for number in range(args.runs):
+                await slots.acquire()
+                try:
+                    run_id, datum_id = await dispense_run(client, tuner_id)
+                    task = tasks[datum_id]
+                except BaseException:
+                    slots.release()
+                    raise
+                group.create_task(execute_and_release(number, task, run_id))
+
+    for split in ("train", "val"):
+        print(f"[driver] {split}: {stats[split].summary()}")
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument(
+        "--recipe",
+        type=parse_recipe,
+        default=DEFAULT_RECIPE,
+        help="Named recipe or an inline JSON object of recipe overrides.",
+    )
+    parser.add_argument("--trainer", default=DEFAULT_TRAINER)
+    parser.add_argument("--name", default=DEFAULT_TUNER_NAME)
+    parser.add_argument("--agent-model", default=DEFAULT_AGENT_MODEL)
+    parser.add_argument(
+        "--ollie-executor",
+        choices=("none", "daytona", "vercel"),
+        default="none",
+        help="Sandbox executor; 'none' runs the sandbox locally.",
+    )
+    parser.add_argument("--ollie-max-steps", type=int, default=OLLIE_MAX_STEPS)
+    parser.add_argument("--max-diff-chars", type=int, default=DEFAULT_MAX_DIFF_CHARS)
+    parser.add_argument("--runs", type=int, default=2000)
+    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--tuner-id", default=None)
+    parser.add_argument("--judge-model", default=reward.DEFAULT_JUDGE_MODEL)
+    parser.add_argument("--judge-base-url", default=reward.DEFAULT_JUDGE_BASE_URL)
+    parser.add_argument("--judge-api-key", default=None)
+    parser.add_argument(
+        "--judge-seed",
+        type=int,
+        default=reward.DEFAULT_JUDGE_SEED,
+        help="Request seed for reproducible verdicts; negative disables it.",
+    )
+    parser.add_argument(
+        "--judge-votes",
+        type=int,
+        default=1,
+        help="Majority vote over N judge calls per pair (odd N is best).",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.runs < 1:
+        raise SystemExit("--runs must be at least 1")
+    if args.concurrency < 1:
+        raise SystemExit("--concurrency must be at least 1")
+    if args.ollie_max_steps < 1:
+        raise SystemExit("--ollie-max-steps must be at least 1")
+    if args.max_diff_chars < 1:
+        raise SystemExit("--max-diff-chars must be at least 1")
+    if args.judge_votes < 1:
+        raise SystemExit("--judge-votes must be at least 1")
+    try:
+        return asyncio.run(async_main(args))
+    except ValueError as error:
+        raise SystemExit(f"[driver] {error}") from error
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
