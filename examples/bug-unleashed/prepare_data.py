@@ -483,6 +483,18 @@ def gold_paths(gold: dict[str, Any]) -> list[str]:
     return sorted({location["path"] for location in gold["locations"]})
 
 
+def gold_notes(gold: dict[str, Any]) -> list[str]:
+    """The per-location `why` notes, kept in order and deduplicated.
+
+    The judge prompt shows these next to the gold summary.
+    """
+    return list(
+        dict.fromkeys(
+            location["why"] for location in gold["locations"] if location.get("why")
+        )
+    )
+
+
 def build_examples(
     cases: list[dict[str, Any]], assignment: dict[str, str]
 ) -> list[dict[str, Any]]:
@@ -516,6 +528,7 @@ def build_examples(
                     "gid": other["gid"],
                     "summary": other["summary"],
                     "paths": gold_paths(other),
+                    "notes": gold_notes(other),
                 }
                 for other in golds
                 if other is not gold
@@ -528,6 +541,7 @@ def build_examples(
                         "gid": gold["gid"],
                         "summary": gold["summary"],
                         "paths": gold_paths(gold),
+                        "notes": gold_notes(gold),
                     },
                     "siblings": siblings,
                 }
