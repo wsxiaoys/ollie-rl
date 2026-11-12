@@ -524,6 +524,47 @@ uv run python examples/bug-unleashed/run_training.py --runs 2000 \
 - A failed rollout (agent crash, judge error, expired lease) is logged and left
   unrewarded; the lease expires and the server re-dispenses the datum.
 - `--judge-votes 3` for eval runs (see Matching → Judge).
+- `--base-model` sets `trainer_params.base_model` (MSRL only; the other
+  trainers ignore it).
+
+#### Smoke test against MSRL
+
+The smallest end-to-end run: `gemini-3.5-flash-lite` as the tuning base model
+and the smallest batch MSRL can train on — 2 datums × 2 rollouts.
+
+```bash
+uv run python examples/bug-unleashed/run_training.py \
+  --base-url https://ollie-rl-production.up.railway.app \
+  --trainer gemini_msrl --base-model gemini-3.5-flash-lite \
+  --recipe '{"group_size": 2, "num_groups_per_batch": 2,
+             "max_off_policy_generation": 0, "sampler_promotion_every": 1,
+             "eval_group_size": 1, "eval_every_n_checkpoints": 1,
+             "reward_normalizer": "centering"}' \
+  --runs 6 --concurrency 2 --ollie-max-steps 12 \
+  --judge-base-url https://kumo.up.railway.app/v1 --judge-api-key "$KEY" \
+  --judge-model deepseek-4.1-flash
+```
+
+What it proves, in order:
+
+1. `POST /tuners` creates the Vertex MSRL job (`--base-model` is the only
+   trainer-specific knob the driver sends). A wrong model id fails here with
+   Vertex's list of accepted base models.
+2. Dispensing returns 204 while the job warms up, then hands out 2 datums ×
+   2 runs — the minimum that completes one group per datum.
+3. Each rollout is a real agent run whose model turns are recorded as tuning
+   candidates, so the reward's `candidate_id`s are the ones MSRL trains on.
+4. Rewards are judged and PUT; the train loop forms the two groups and submits
+   one train step.
+5. `sampler_promotion_every: 1` makes that step produce a checkpoint, so the
+   eval tier dispenses the held-out val datum next and the driver prints a
+   `val` line.
+
+`max_off_policy_generation: 0` caps outstanding runs at
+`group_size × num_groups_per_batch = 4`, so the driver paces itself against
+training instead of racing ahead. The cost of that: a failed rollout leaves its
+group incomplete until the 15-minute run lease expires, so watch the
+`failed:` lines and re-run if a group stalls.
 
 ## Sampling and splits
 

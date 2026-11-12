@@ -1,13 +1,10 @@
 """Train the Ollie agent to review pull requests on prepared BugUnleashed cases.
 
-Prepare the dataset first, start ollie-rl, then run from the repository root::
-
-    GITHUB_TOKEN=$(gh auth token) uv run python examples/bug-unleashed/prepare_data.py
-    uv run python examples/bug-unleashed/run_training.py --runs 2000
-
-The judge needs an OpenAI-compatible endpoint: pass ``--judge-base-url`` and
-``--judge-api-key`` (or set ``OPENAI_API_KEY``). The reward table and the judge
-prompt live in ``reward.py`` and are described in the README.
+Run ``prepare_data.py`` first, start ollie-rl, then point this driver at it
+(the README shows the full command). The judge needs an OpenAI-compatible
+endpoint: pass ``--judge-base-url`` and ``--judge-api-key`` (or set
+``OPENAI_API_KEY``). The reward table and the judge prompt live in
+``reward.py`` and are described in the README.
 """
 
 from __future__ import annotations
@@ -234,22 +231,29 @@ async def create_tuner(
     trainer: str,
     train_datum_ids: list[str],
     eval_datum_ids: list[str],
+    trainer_params: dict[str, Any] | None = None,
 ) -> str:
-    response = await client.post(
-        "/tuners",
-        json={
-            "name": name,
-            "recipe": recipe,
-            "trainer": trainer,
-            "train_datum_ids": train_datum_ids,
-            "eval_datum_ids": eval_datum_ids,
-        },
-    )
-    response.raise_for_status()
+    payload: dict[str, Any] = {
+        "name": name,
+        "recipe": recipe,
+        "trainer": trainer,
+        "train_datum_ids": train_datum_ids,
+        "eval_datum_ids": eval_datum_ids,
+    }
+    if trainer_params:
+        payload["trainer_params"] = trainer_params
+    response = await client.post("/tuners", json=payload)
+    if response.is_error:
+        # Vertex rejects an unknown base model here; the body carries its list
+        # of accepted models, which is the only place to learn it.
+        raise RuntimeError(
+            f"create tuner rejected ({response.status_code}): {response.text[:1000]}"
+        )
     tuner_id = response.json()["tuner_id"]
+    params = f" params={trainer_params}" if trainer_params else ""
     print(
         f"[driver] created tuner {tuner_id} "
-        f"({len(train_datum_ids)} train / {len(eval_datum_ids)} eval examples)"
+        f"({len(train_datum_ids)} train / {len(eval_datum_ids)} eval examples){params}"
     )
     return tuner_id
 
@@ -263,6 +267,7 @@ async def resolve_tuner(
     trainer: str,
     train_datum_ids: list[str],
     eval_datum_ids: list[str],
+    trainer_params: dict[str, Any] | None = None,
 ) -> str:
     if tuner_id:
         response = await client.get(f"/tuners/{tuner_id}")
@@ -295,6 +300,7 @@ async def resolve_tuner(
         trainer=trainer,
         train_datum_ids=train_datum_ids,
         eval_datum_ids=eval_datum_ids,
+        trainer_params=trainer_params,
     )
 
 
@@ -482,6 +488,9 @@ async def async_main(args: argparse.Namespace) -> int:
         f"({count(eval_datum_ids, 'bug')} bug / {count(eval_datum_ids, 'clean')} clean)"
     )
 
+    # MSRL takes its base model from `trainer_params`; other trainers ignore it.
+    trainer_params = {"base_model": args.base_model} if args.base_model else None
+
     timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=30.0)
     stats = {"train": SplitStats(), "val": SplitStats()}
     async with (
@@ -502,6 +511,7 @@ async def async_main(args: argparse.Namespace) -> int:
             trainer=args.trainer,
             train_datum_ids=train_datum_ids,
             eval_datum_ids=eval_datum_ids,
+            trainer_params=trainer_params,
         )
         await warn_unless_centering(client, tuner_id)
 
@@ -544,6 +554,14 @@ def parse_args() -> argparse.Namespace:
         help="Named recipe or an inline JSON object of recipe overrides.",
     )
     parser.add_argument("--trainer", default=DEFAULT_TRAINER)
+    parser.add_argument(
+        "--base-model",
+        default=None,
+        help=(
+            "MSRL only: tuning base model (e.g. gemini-3.5-flash-lite), sent as "
+            "trainer_params.base_model."
+        ),
+    )
     parser.add_argument("--name", default=DEFAULT_TUNER_NAME)
     parser.add_argument("--agent-model", default=DEFAULT_AGENT_MODEL)
     parser.add_argument(
