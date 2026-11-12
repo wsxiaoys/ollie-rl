@@ -530,6 +530,10 @@ uv run python examples/bug-unleashed/run_training.py --runs 2000 \
 - `--judge-votes 3` for eval runs (see Matching → Judge).
 - `--base-model` sets `trainer_params.base_model` (MSRL only; the other
   trainers ignore it).
+- `--adapter-size` sets `trainer_params.adapter_size` (MSRL only). One of
+  `ADAPTER_SIZE_ONE/TWO/FOUR/EIGHT/SIXTEEN/THIRTY_TWO`; the server default is
+  `ADAPTER_SIZE_SIXTEEN` and `ADAPTER_SIZE_THIRTY_TWO` is the largest the API
+  accepts.
 
 #### Smoke test against MSRL
 
@@ -552,8 +556,8 @@ uv run python examples/bug-unleashed/run_training.py \
 
 What it proves, in order:
 
-1. `POST /tuners` creates the Vertex MSRL job (`--base-model` is the only
-   trainer-specific knob the driver sends).
+1. `POST /tuners` creates the Vertex MSRL job (`--base-model` / `--adapter-size`
+   are the trainer-specific knobs the driver sends).
 2. Dispensing returns 204 while the job warms up, then hands out 2 datums ×
    2 runs — the minimum that completes one group per datum.
 3. Each rollout is a real agent run whose model turns are recorded as tuning

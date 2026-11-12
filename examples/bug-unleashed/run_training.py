@@ -46,6 +46,15 @@ DEFAULT_RUN_TIMEOUT = 60 * 60
 # Prepared diffs: p50 ~10k characters, p90 ~49k. The tail is truncated with a
 # note; the agent can read the rest from the read-only checkout.
 DEFAULT_MAX_DIFF_CHARS = 60_000
+# `AdapterSize` enum accepted by the MSRL tuning API, smallest to largest.
+ADAPTER_SIZES = (
+    "ADAPTER_SIZE_ONE",
+    "ADAPTER_SIZE_TWO",
+    "ADAPTER_SIZE_FOUR",
+    "ADAPTER_SIZE_EIGHT",
+    "ADAPTER_SIZE_SIXTEEN",
+    "ADAPTER_SIZE_THIRTY_TWO",
+)
 
 PROMPT_TEMPLATE = """You are reviewing a pull request for defects it introduces. The repository is
 mounted read-only at /workspace and is the tree *after* the PR was applied.
@@ -504,8 +513,15 @@ async def async_main(args: argparse.Namespace) -> int:
         f"({count(eval_datum_ids, 'bug')} bug / {count(eval_datum_ids, 'clean')} clean)"
     )
 
-    # MSRL takes its base model from `trainer_params`; other trainers ignore it.
-    trainer_params = {"base_model": args.base_model} if args.base_model else None
+    # MSRL config fields are passed through `trainer_params`; other trainers
+    # ignore them. Only include values the caller set explicitly so the server
+    # defaults apply otherwise.
+    params: dict[str, Any] = {}
+    if args.base_model:
+        params["base_model"] = args.base_model
+    if args.adapter_size:
+        params["adapter_size"] = args.adapter_size
+    trainer_params: dict[str, Any] | None = params or None
 
     timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=30.0)
     stats = {"train": SplitStats(), "val": SplitStats()}
@@ -576,6 +592,16 @@ def parse_args() -> argparse.Namespace:
         help=(
             "MSRL only: tuning base model (e.g. gemini-3.5-flash-lite), sent as "
             "trainer_params.base_model."
+        ),
+    )
+    parser.add_argument(
+        "--adapter-size",
+        default=None,
+        choices=ADAPTER_SIZES,
+        help=(
+            "MSRL only: LoRA adapter size, sent as trainer_params.adapter_size. "
+            "Server default is ADAPTER_SIZE_SIXTEEN; ADAPTER_SIZE_THIRTY_TWO is "
+            "the largest the API accepts."
         ),
     )
     parser.add_argument("--name", default=DEFAULT_TUNER_NAME)
