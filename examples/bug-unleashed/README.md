@@ -561,8 +561,15 @@ What it proves, in order:
 4. Rewards are judged and PUT; the train loop forms the two groups and submits
    one train step.
 5. `sampler_promotion_every: 1` makes that step produce a checkpoint, so the
-   eval tier dispenses the held-out val datum next and the driver prints a
-   `val` line.
+   eval tier then outranks training and the driver's next runs are held-out val
+   datums, one attempt each at `eval_group_size: 1`, printed as `val` lines.
+
+On the deployed server the first step costs about 5 minutes of TPU warm-up
+(`POST /tuners/{id}/runs` answers 204 until the job is `RUNNING`) plus about
+7.5 minutes for the `trainStep` call, after which `policy_generation` is 1.
+Resuming with `--tuner-id` skips the warm-up; because eval outranks training,
+a resumed run spends its `--runs` on val datums, which is the cheapest way to
+exercise the eval tier.
 
 `max_off_policy_generation: 0` caps outstanding runs at
 `group_size × num_groups_per_batch = 4`, so the driver paces itself against
