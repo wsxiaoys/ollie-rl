@@ -61,11 +61,106 @@ Two things to keep straight:
 
 ## Agent contract
 
-Input (read-only checkout, no shell):
+**Agent: the Ollie CLI** (`@getollie/cli`, same harness as
+`examples/code-search`), launched once per dispensed run. `run_training.py`
+starts it in NDJSON mode and points `OPENAI_BASE_URL` at the run's endpoint:
 
-- PR title, description, commits, diff.
+```text
+npx --yes @getollie/cli@<pinned> agent \
+  --workspace-path /workspace -v <snapshot>:/workspace:ro \
+  --ndjson --no-color --model ollie --executor local --max-steps <N> <prompt>
+```
 
-Output — a list of **at most 3 findings** (majors and minors combined):
+- `--executor local` (not `none`): the agent needs shell/file tools to read
+  the checkout, grep for call sites and follow the diff. That is the whole
+  task, unlike word-puzzle.
+- The snapshot is mounted **`:ro`** (as in code-search), so concurrent agents
+  cannot alter prepared data and nothing the agent writes is scored.
+- `OPENAI_BASE_URL=http://<host>/tuners/<tuner-id>/runs/<run-id>/openai/v1`
+  attributes every model turn to the dispensed run.
+- One agent run per rollout; the scored answer is the `<review_findings>`
+  element of its final message (see Prompt).
+
+### Checkout materialization
+
+Same mechanism as `examples/code-search/prepare_data.py`, done once per
+`(repo, pr)` in `prepare_data.py` and reused by every rollout:
+
+1. One **bare** Git dir per repo (`data/repos/<org>__<repo>/git`), created
+   once, shared by all of that repo's cases.
+2. Resolve the PR's commits with the GitHub API — `cases.json` carries only
+   `repo` + `pr`, no SHAs. `GET /repos/{repo}/pulls/{pr}` gives `head.sha`
+   and `base.sha`.
+3. `git fetch --depth=1 --no-tags origin +<head.sha>:refs/ollie/commits/<sha>`
+   into the bare dir (same as code-search's `fetch_commit`).
+4. Materialize a **clean snapshot with no Git history**:
+   `git archive --format=tar <head.sha> | tar -x` into
+   `data/repos/<org>__<repo>/<head.sha>/`. The agent sees the post-PR tree
+   and nothing else — no `.git`, no pre-PR history, no other branches.
+5. Cache the snapshot on disk; it is content-addressed by the head SHA and
+   mounted `:ro` into every rollout for that case.
+
+The prompt gets the PR title/description and the diff
+(`git diff <base.sha>...<head.sha>`, or the API's `pulls/{pr}` diff media
+type), so the agent can see both the change and the resulting code.
+
+### Prompt
+
+One user message per rollout, built by `run_training.py` from the case. The
+agent's system prompt is the CLI's own; everything task-specific is here.
+
+```text
+You are reviewing a pull request for defects it introduces. The repository is
+mounted read-only at /workspace and is the tree *after* the PR was applied.
+Use it: read the changed files, grep for call sites, and follow the code paths
+the change touches.
+
+Report only defects this PR introduces. Do not report pre-existing bugs,
+style or naming nits, missing tests, or general risks. A finding must name the
+specific mechanism and the condition that triggers it — "may cause a null
+dereference" is not a finding.
+
+At most 3 findings, majors and minors combined. Use severity "major" only when
+you are confident enough to bet that this is a real defect introduced by the
+PR; use "minor" for a plausible but unconfirmed one. Prefer fewer, sharper
+findings over guesses.
+
+Every finding needs `path` (repository-relative, no leading "./"), `line` (in
+the post-PR file), `title` (one line), and `body` (mechanism + condition).
+
+Your final response must contain a `<review_findings>` element whose contents
+are one JSON array of finding objects. Do not include explanation outside that
+element.
+
+<title>
+{pr_title}
+</title>
+
+<description>
+{pr_body}
+</description>
+
+<diff>
+{diff}
+</diff>
+```
+
+- No repo name, PR number, or commit list: the workspace *is* the repo, so
+  those add nothing the agent cannot get from `/workspace`.
+- `{pr_title}` / `{pr_body}` are the PR title and description; `{diff}` is
+  `git diff <base.sha>...<head.sha>`, truncated to a token budget with a note
+  when it is cut (the agent can read the rest from `/workspace`).
+- **Parsing**: scan the NDJSON event text for the last `<review_findings>`
+  element, `json.loads` its contents, keep the first 3 valid findings. Missing
+  element or invalid JSON scores as no findings (a miss on bug cases, `0` on
+  clean ones) and is logged.
+- Nothing about the gold bug, the dataset, or the reward appears in the
+  prompt.
+
+### Output
+
+The `<review_findings>` payload is a list of **at most 3 findings** (majors
+and minors combined):
 
 ```json
 [
@@ -95,8 +190,8 @@ first 3 are truncated in output order.
 
 Example-level (one scalar per run), computed by our own judge. `major` is a
 **commitment channel**: the policy assigns it, so a major claim is a bet;
-the clean-PR penalty sets the odds. This is not real-world severity (the dataset dropped
-severity labels).
+the clean-PR penalty sets the odds. This is not real-world severity (the
+dataset dropped severity labels).
 
 ### One training example per gold bug
 
@@ -336,6 +431,9 @@ Caveats, given the size:
 
 ## Decided
 
+- Agent: Ollie CLI per dispensed run, `--executor local`; per-case clean
+  snapshot (bare Git dir + depth-1 fetch + `git archive`, no `.git`) mounted
+  `:ro` at `/workspace`.
 - Data source: local `data/cases.json` snapshot (gitignored), stripped of
   upstream model/eval data.
 - Matching: file-level path gate + LLM judge (system prompt frozen above).
@@ -353,9 +451,11 @@ Caveats, given the size:
 - [ ] Confirm data-use / canary with dataset owners.
 - [ ] Build `prepare_data.py` (download + strip `data/cases.json`, flatten to one
       example per gold with sibling golds attached, emit `data/splits.json`,
-      materialize PR context from `repo` + `pr`).
+      resolve `head.sha`/`base.sha` via the GitHub API, fetch into bare Git
+      dirs, `git archive` clean snapshots, store the PR diff).
 - [ ] Build `reward.py` (path gate + judge prompt above + the reward table).
 - [ ] Build `run_training.py` (create the tuner with recipe override
       `reward_normalizer: "centering"`).
 - [ ] Calibrate the judge once on ~30–50 hand-labeled pairs.
-- [ ] Decide how the PR checkout is provided to the agent.
+- [ ] Pin the Ollie CLI version (needs `:ro` volume support, i.e. ≥0.7.x)
+      and `--max-steps` for review runs.
