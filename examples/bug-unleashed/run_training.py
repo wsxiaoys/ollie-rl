@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,6 +24,16 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import reward
+
+
+def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    if hasattr(os, "killpg"):
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.kill()  # best-effort fallback where killpg is unavailable
+
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = EXAMPLE_DIR / "data"
@@ -405,14 +416,18 @@ async def run_ollie_agent(
         env=environment,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
     except TimeoutError:
-        # A hung CLI (no more model calls, process still alive) keeps this
-        # worker slot forever and its group can never complete, so the tuner
-        # stops dispensing. Kill it and let the run lease expire server-side.
-        process.kill()
+        # npx spawns the real CLI as a grandchild; killing only the wrapper
+        # leaves that process calling the run's endpoint forever. The child is a
+        # group leader (start_new_session=True), so kill the whole group. A hung
+        # CLI otherwise keeps this worker slot forever and its group can never
+        # complete, so the tuner stops dispensing; the server's run lease then
+        # expires on its own.
+        _kill_process_group(process)
         await process.wait()
         raise RuntimeError(f"Ollie agent timed out after {timeout:.0f}s") from None
 
