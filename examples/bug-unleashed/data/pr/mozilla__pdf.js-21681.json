@@ -1,0 +1,6 @@
+{
+  "title": "Add helper methods for populating `dateActionsCache`/`scandCache` in the `src/scripting_api/util.js` file",
+  "body": "Rather than inlining all of that code, by moving it into separate helper methods we can utilize `Map.prototype.getOrInsertComputed()` instead.\r\n\r\nAlso, make a couple of the existing class fields actually private.\r\n\r\n---\r\n\r\n*Much smaller diff with https://github.com/mozilla/pdf.js/pull/21681/changes?w=1*",
+  "head_sha": "59cd4568b29aba53a11f2240518d356db3042361",
+  "base_sha": "5f181fd8b0db777e18566bf1972848d700f0b44d"
+}

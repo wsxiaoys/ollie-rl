@@ -1,0 +1,25 @@
+{
+  "case_id": "supabase__supabase-js-2378",
+  "repo": "supabase/supabase-js",
+  "pr": 2378,
+  "title": "fix(auth): return null user and session for email_change single-confirmation verifyOtp",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "supabase__supabase-js-2378__g1",
+  "target": {
+    "gid": "supabase__supabase-js-2378#g1",
+    "summary": "Setting user to data.user ?? null removes the fallback for responses containing a bare top-level user object. As a result, endpoints like signUp() that return a user object directly without a nested user property will incorrectly resolve data.user as null.",
+    "paths": [
+      "packages/core/auth-js/src/lib/fetch.ts"
+    ],
+    "notes": [
+      "faulty statement removing fallback for top-level user object"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5b604057aa03a5d93446e46c156f0beea21ea590",
+  "base_sha": "ef339737ed68777c59f79f0cca3051637104a2d1",
+  "snapshot": "repos/supabase__supabase-js/5b604057aa03a5d93446e46c156f0beea21ea590",
+  "diff": "diffs/supabase__supabase-js-2378.diff"
+}

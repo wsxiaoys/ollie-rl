@@ -1,0 +1,6 @@
+{
+  "title": "fix(repo): hide repositories of hidden owners",
+  "body": "Exclude public repositories owned by hidden individual accounts from broad repository listings, while preserving visibility through explicit access and ownership.\r\n\r\n_Assisted-by: Codex:GPT-5_\r\n",
+  "head_sha": "a2f524e7c163eedaf8567b882263edaefd5214e5",
+  "base_sha": "fcc23af280e75543c2d91cd9b665fceabc096cb6"
+}

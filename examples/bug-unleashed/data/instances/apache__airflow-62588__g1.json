@@ -1,0 +1,27 @@
+{
+  "case_id": "apache__airflow-62588",
+  "repo": "apache/airflow",
+  "pr": 62588,
+  "title": "Forbid accessing team secrets with environment variable as global secret",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apache__airflow-62588__g1",
+  "target": {
+    "gid": "apache__airflow-62588#g1",
+    "summary": "`_is_team_specific_accessed_as_global` only guards against team-specific secret IDs when `team_name` is None and fails to match team names containing underscores. Consequently, a team-scoped lookup for another team's namespaced secret falls through to the global environment lookup, exposing other teams' connections and variables.",
+    "paths": [
+      "airflow-core/src/airflow/secrets/environment_variables.py"
+    ],
+    "notes": [
+      "faulty helper method that only checks when team_name is None and fails to match team names containing underscores",
+      "call site in get_conn_value relying on the faulty helper",
+      "call site in get_variable relying on the faulty helper"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "69d3d90da5430823a7e04f667f65f19616e6570d",
+  "base_sha": "e034749cdb3d27f5be02c6448eab928a3a9ea123",
+  "snapshot": "repos/apache__airflow/69d3d90da5430823a7e04f667f65f19616e6570d",
+  "diff": "diffs/apache__airflow-62588.diff"
+}

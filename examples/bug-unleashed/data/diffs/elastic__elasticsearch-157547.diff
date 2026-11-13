@@ -1,0 +1,355 @@
+diff --git a/server/src/main/java/org/elasticsearch/index/codec/bloomfilter/ES87BloomFilterPostingsFormat.java b/server/src/main/java/org/elasticsearch/index/codec/bloomfilter/ES87BloomFilterPostingsFormat.java
+index 440187fa39fb9..a9c4e0961b120 100644
+--- a/server/src/main/java/org/elasticsearch/index/codec/bloomfilter/ES87BloomFilterPostingsFormat.java
++++ b/server/src/main/java/org/elasticsearch/index/codec/bloomfilter/ES87BloomFilterPostingsFormat.java
+@@ -39,6 +39,7 @@
+ import org.apache.lucene.store.IndexOutput;
+ import org.apache.lucene.store.RandomAccessInput;
+ import org.apache.lucene.util.BytesRef;
++import org.apache.lucene.util.IOBooleanSupplier;
+ import org.elasticsearch.common.bytes.BytesReference;
+ import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
+ import org.elasticsearch.common.util.BigArrays;
+@@ -462,6 +463,11 @@ public TermState termState() throws IOException {
+                     // TODO: return TermState that includes BloomFilter and fix _disk_usage API
+                     return getDelegate().termState();
+                 }
++
++                @Override
++                public IOBooleanSupplier prepareSeekExact(BytesRef text) throws IOException {
++                    return getDelegate().prepareSeekExact(text);
++                }
+             };
+         }
+     }
+diff --git a/server/src/main/java/org/elasticsearch/index/engine/InternalEngine.java b/server/src/main/java/org/elasticsearch/index/engine/InternalEngine.java
+index cf464ff50878a..66ffd149807bd 100644
+--- a/server/src/main/java/org/elasticsearch/index/engine/InternalEngine.java
++++ b/server/src/main/java/org/elasticsearch/index/engine/InternalEngine.java
+@@ -4322,7 +4322,7 @@ protected long getPreCommitSegmentGeneration() {
+         return preCommitSegmentGeneration.get();
+     }
+ 
+-    <T> T performActionWithDirectoryReader(SearcherScope scope, CheckedFunction<DirectoryReader, T, IOException> action)
++    protected <T> T performActionWithDirectoryReader(SearcherScope scope, CheckedFunction<DirectoryReader, T, IOException> action)
+         throws EngineException {
+         assert scope == SearcherScope.INTERNAL : "performActionWithDirectoryReader(...) isn't prepared for external usage";
+         if (store.tryIncRef() == false) {
+diff --git a/x-pack/plugin/stateless/src/internalClusterTest/java/org/elasticsearch/xpack/stateless/recovery/IndexingShardRelocationIT.java b/x-pack/plugin/stateless/src/internalClusterTest/java/org/elasticsearch/xpack/stateless/recovery/IndexingShardRelocationIT.java
+index 9be9ecf56f370..d70bc8b690afe 100644
+--- a/x-pack/plugin/stateless/src/internalClusterTest/java/org/elasticsearch/xpack/stateless/recovery/IndexingShardRelocationIT.java
++++ b/x-pack/plugin/stateless/src/internalClusterTest/java/org/elasticsearch/xpack/stateless/recovery/IndexingShardRelocationIT.java
+@@ -8,6 +8,9 @@
+ package org.elasticsearch.xpack.stateless.recovery;
+ 
+ import org.apache.logging.log4j.Level;
++import org.apache.lucene.store.FilterIndexInput;
++import org.apache.lucene.store.IOContext;
++import org.apache.lucene.store.IndexInput;
+ import org.elasticsearch.ElasticsearchException;
+ import org.elasticsearch.action.ActionListener;
+ import org.elasticsearch.action.ActionRunnable;
+@@ -51,6 +54,7 @@
+ import org.elasticsearch.index.engine.EngineConfig;
+ import org.elasticsearch.index.shard.IllegalIndexShardStateException;
+ import org.elasticsearch.index.shard.IndexShard;
++import org.elasticsearch.index.shard.ShardId;
+ import org.elasticsearch.indices.IndicesService;
+ import org.elasticsearch.indices.cluster.IndicesClusterStateService;
+ import org.elasticsearch.indices.recovery.RecoveryClusterStateDelayListeners;
+@@ -59,6 +63,7 @@
+ import org.elasticsearch.rest.RestStatus;
+ import org.elasticsearch.snapshots.mockstore.MockRepository;
+ import org.elasticsearch.telemetry.TelemetryProvider;
++import org.elasticsearch.test.ESTestCase;
+ import org.elasticsearch.test.InternalSettingsPlugin;
+ import org.elasticsearch.test.MockLog;
+ import org.elasticsearch.test.junit.annotations.TestLogging;
+@@ -81,9 +86,11 @@
+ import org.elasticsearch.xpack.stateless.cache.StatelessSharedBlobCacheService;
+ import org.elasticsearch.xpack.stateless.cache.WarmingRatioProvider;
+ import org.elasticsearch.xpack.stateless.commits.BlobFile;
++import org.elasticsearch.xpack.stateless.commits.BlobFileRanges;
+ import org.elasticsearch.xpack.stateless.commits.StatelessCommitService;
+ import org.elasticsearch.xpack.stateless.commits.StatelessCompoundCommit;
+ import org.elasticsearch.xpack.stateless.commits.VirtualBatchedCompoundCommit;
++import org.elasticsearch.xpack.stateless.engine.IndexEngine;
+ import org.elasticsearch.xpack.stateless.engine.PrimaryTermAndGeneration;
+ import org.elasticsearch.xpack.stateless.lucene.BlobStoreCacheDirectory;
+ import org.elasticsearch.xpack.stateless.lucene.IndexBlobStoreCacheDirectory;
+@@ -102,11 +109,13 @@
+ import java.util.Map;
+ import java.util.Queue;
+ import java.util.Set;
++import java.util.TreeSet;
+ import java.util.concurrent.CountDownLatch;
+ import java.util.concurrent.CyclicBarrier;
+ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicInteger;
++import java.util.concurrent.atomic.LongAdder;
+ import java.util.function.IntConsumer;
+ import java.util.function.LongSupplier;
+ import java.util.stream.IntStream;
+@@ -120,6 +129,7 @@
+ import static org.elasticsearch.xpack.stateless.commits.HollowShardsService.STATELESS_HOLLOW_INDEX_SHARDS_ENABLED;
+ import static org.elasticsearch.xpack.stateless.objectstore.ObjectStoreTestUtils.getObjectStoreMockRepository;
+ import static org.elasticsearch.xpack.stateless.recovery.SlowRelocationLogger.MAX_SLOW_OPERATION_THREAD_DUMPS;
++import static org.elasticsearch.xpack.stateless.recovery.TransportStatelessPrimaryRelocationAction.ID_LOOKUP_RECENCY_THRESHOLD_SETTING;
+ import static org.elasticsearch.xpack.stateless.recovery.TransportStatelessPrimaryRelocationAction.PRIMARY_CONTEXT_HANDOFF_ACTION_NAME;
+ import static org.elasticsearch.xpack.stateless.recovery.TransportStatelessPrimaryRelocationAction.SLOW_RELOCATION_THRESHOLD_SETTING;
+ import static org.elasticsearch.xpack.stateless.recovery.TransportStatelessPrimaryRelocationAction.START_RELOCATION_ACTION_NAME;
+@@ -144,7 +154,7 @@ protected boolean addMockFsRepository() {
+     protected Collection<Class<? extends Plugin>> nodePlugins() {
+         final var plugins = new ArrayList<>(super.nodePlugins());
+         plugins.remove(TestUtils.StatelessPluginWithTrialLicense.class);
+-        plugins.add(DisableWarmOnUploadPlugin.class);
++        plugins.add(StatelessTestPlugin.class);
+         plugins.add(MockRepository.Plugin.class);
+         plugins.add(InternalSettingsPlugin.class);
+         return List.copyOf(plugins);
+@@ -1088,7 +1098,67 @@ public void testPreferredNodeIdsAreUsedDuringRelocation() throws Exception {
+         ensureGreen(indexName);
+     }
+ 
+-    public static class DisableWarmOnUploadPlugin extends TestUtils.StatelessPluginWithTrialLicense {
++    public void testPrewarmIdLookupsOnRelocation() {
++        TimeValue recentIdLookupThreshold = TimeValue.timeValueMinutes(5);
++        final var nodeSettings = Settings.builder()
++            .put(STATELESS_HOLLOW_INDEX_SHARDS_ENABLED.getKey(), false)
++            .put(ID_LOOKUP_RECENCY_THRESHOLD_SETTING.getKey(), recentIdLookupThreshold)
++            .put(disableIndexingDiskAndMemoryControllersNodeSettings())
++            .build();
++        final var sourceNode = startMasterAndIndexNode(nodeSettings);
++        final var targetNode = startMasterAndIndexNode(nodeSettings);
++
++        // With recent ID lookups: prewarmIdLookups should be true on the target engine after relocation.
++        final var indexWithLookups = "index-with-lookups";
++        createIndex(indexWithLookups, indexSettings(1, 0).put("index.routing.allocation.require._name", sourceNode).build());
++        ensureGreen(indexWithLookups);
++        // Index a single document sometimes so min==max
++        var bulkResponse = indexDocs(indexWithLookups, randomIntBetween(1, 25), ESTestCase::randomUUID);
++        var indexedIds = new TreeSet<String>();
++        for (BulkItemResponse bulkItemResponse : bulkResponse) {
++            indexedIds.add(bulkItemResponse.getId());
++        }
++        flush(indexWithLookups);
++        assertTrue(getShardEngine(findIndexShard(indexWithLookups), IndexEngine.class).hasRecentIdLookup(recentIdLookupThreshold));
++        long prefetchCountBeforeRelocation = StatelessTestPlugin.timFilePrefetchCount.longValue();
++        updateIndexSettings(Settings.builder().put("index.routing.allocation.require._name", targetNode), indexWithLookups);
++        ensureGreen(indexWithLookups);
++        assertThat(StatelessTestPlugin.timFilePrefetchCount.longValue(), greaterThan(prefetchCountBeforeRelocation));
++        var cacheService = internalCluster().getInstance(StatelessPlugin.SharedBlobCacheServiceSupplier.class, targetNode).get();
++        long missCountBeforeIdLookups = cacheService.getStats().missCount();
++        // Ensure that the min and max _id's do not hit cache misses
++        try {
++            client().prepareIndex(indexWithLookups).setId(indexedIds.first()).setCreate(true).setSource(Map.of("key", "value")).get();
++        } catch (Exception e) {
++            // expected: document already exists
++        }
++        try {
++            client().prepareIndex(indexWithLookups).setId(indexedIds.last()).setCreate(true).setSource(Map.of("key", "value")).get();
++        } catch (Exception e) {
++            // expected: document already exists
++        }
++        assertThat(cacheService.getStats().missCount(), equalTo(missCountBeforeIdLookups));
++
++        // Without recent ID lookups: prewarmIdLookups should be false on the target engine after relocation.
++        final var indexWithoutLookups = "index-without-lookups";
++        createIndex(indexWithoutLookups, indexSettings(1, 0).put("index.routing.allocation.require._name", sourceNode).build());
++        ensureGreen(indexWithoutLookups);
++        flush(indexWithoutLookups);
++        assertFalse(
++            getShardEngine(findIndexShard(resolveIndex(indexWithoutLookups), 0, sourceNode), IndexEngine.class).hasRecentIdLookup(
++                recentIdLookupThreshold
++            )
++        );
++
++        long prefetchCountBeforeSecondRelocation = StatelessTestPlugin.timFilePrefetchCount.longValue();
++        updateIndexSettings(Settings.builder().put("index.routing.allocation.require._name", targetNode), indexWithoutLookups);
++        ensureGreen(indexWithoutLookups);
++        assertThat(StatelessTestPlugin.timFilePrefetchCount.longValue(), equalTo(prefetchCountBeforeSecondRelocation));
++    }
++
++    public static class StatelessTestPlugin extends TestUtils.StatelessPluginWithTrialLicense {
++
++        static final LongAdder timFilePrefetchCount = new LongAdder();
+ 
+         static final Setting<Boolean> ENABLED_WARMING = Setting.boolSetting(
+             "test.stateless.warm_on_upload_enabled",
+@@ -1102,7 +1172,7 @@ public static class DisableWarmOnUploadPlugin extends TestUtils.StatelessPluginW
+             Setting.Property.NodeScope
+         );
+ 
+-        public DisableWarmOnUploadPlugin(Settings settings) {
++        public StatelessTestPlugin(Settings settings) {
+             super(settings);
+         }
+ 
+@@ -1171,6 +1241,46 @@ public void warmCacheBeforeUpload(VirtualBatchedCompoundCommit vbcc, ActionListe
+                 }
+             };
+         }
++
++        @Override
++        protected IndexBlobStoreCacheDirectory createIndexBlobStoreCacheDirectory(
++            StatelessSharedBlobCacheService cacheService,
++            ShardId shardId
++        ) {
++            return new IndexBlobStoreCacheDirectory(cacheService, shardId) {
++                @Override
++                protected IndexInput doOpenInput(String name, IOContext context, BlobFileRanges blobFileRanges) {
++                    return new PrefetchCountingIndexInput(super.doOpenInput(name, context, blobFileRanges), name.contains(".tim"));
++                }
++            };
++        }
++
++        private static final class PrefetchCountingIndexInput extends FilterIndexInput {
++            private final boolean countPrefetch;
++
++            PrefetchCountingIndexInput(IndexInput delegate, boolean countPrefetch) {
++                super(delegate.toString(), delegate);
++                this.countPrefetch = countPrefetch;
++            }
++
++            @Override
++            public void prefetch(long offset, long length) throws IOException {
++                if (countPrefetch) {
++                    timFilePrefetchCount.increment();
++                }
++                in.prefetch(offset, length);
++            }
++
++            @Override
++            public IndexInput clone() {
++                return new PrefetchCountingIndexInput(in.clone(), countPrefetch);
++            }
++
++            @Override
++            public IndexInput slice(String description, long offset, long length) throws IOException {
++                return new PrefetchCountingIndexInput(in.slice(description, offset, length), countPrefetch || description.contains(".tim"));
++            }
++        }
+     }
+ 
+     public void testRelocatingIndexShardFetchesFirstRegionOnly() throws Exception {
+@@ -1259,10 +1369,10 @@ public void testRelocatingIndexShardFetchesFirstRegionOnly() throws Exception {
+             Settings.builder()
+                 .put(indexNodesSettings)
+                 // Disable warm-on-upload since otherwise it populates the cache when uploading the flush after relocation handoff.
+-                .put(DisableWarmOnUploadPlugin.ENABLED_WARMING.getKey(), false)
++                .put(StatelessTestPlugin.ENABLED_WARMING.getKey(), false)
+                 // Ensure BCC header pre-warming completes before readIndexingShardState reads region 0, so the test
+                 // observes exactly one cache write instead of two when they race to fill different sub-ranges.
+-                .put(DisableWarmOnUploadPlugin.SYNC_BCC_HEADER_PREWARM.getKey(), true)
++                .put(StatelessTestPlugin.SYNC_BCC_HEADER_PREWARM.getKey(), true)
+                 .build()
+         );
+         ensureStableCluster(3);
+diff --git a/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/engine/IndexEngine.java b/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/engine/IndexEngine.java
+index 482a1fc77094c..28351815a57fe 100644
+--- a/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/engine/IndexEngine.java
++++ b/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/engine/IndexEngine.java
+@@ -15,6 +15,7 @@
+ import org.apache.lucene.index.IndexCommit;
+ import org.apache.lucene.index.IndexFileNames;
+ import org.apache.lucene.index.IndexWriter;
++import org.apache.lucene.index.LeafReaderContext;
+ import org.apache.lucene.index.MergePolicy;
+ import org.apache.lucene.index.OneMergeWrappingMergePolicy;
+ import org.apache.lucene.index.SegmentInfos;
+@@ -23,6 +24,7 @@
+ import org.apache.lucene.store.AlreadyClosedException;
+ import org.apache.lucene.store.Directory;
+ import org.apache.lucene.store.IOContext;
++import org.apache.lucene.util.BytesRef;
+ import org.apache.lucene.util.LongsRef;
+ import org.elasticsearch.action.ActionListener;
+ import org.elasticsearch.action.ActionRunnable;
+@@ -53,6 +55,7 @@
+ import org.elasticsearch.index.engine.MergeMetrics;
+ import org.elasticsearch.index.engine.ThreadPoolMergeExecutorService;
+ import org.elasticsearch.index.mapper.DateFieldMapper;
++import org.elasticsearch.index.mapper.IdFieldMapper;
+ import org.elasticsearch.index.mapper.ParsedDocument;
+ import org.elasticsearch.index.merge.OnGoingMerge;
+ import org.elasticsearch.index.seqno.LocalCheckpointTracker;
+@@ -239,6 +242,31 @@ public IndexEngine(
+         this.translogRecoveryMetrics = metrics.translogRecoveryMetrics();
+     }
+ 
++    /**
++     * Prefetches the min/max {@code _id} .tim blocks in each segment so the first id lookups after a primary relocation do not
++     * block on a cold read from the object store. Best-effort: only boundary blocks are prefetched; interior lookups will still
++     * cold-read on first access.
++     */
++    public void prewarmIdLookups() {
++        performActionWithDirectoryReader(SearcherScope.INTERNAL, reader -> {
++            for (LeafReaderContext leaf : reader.leaves()) {
++                var terms = leaf.reader().terms(IdFieldMapper.NAME);
++                if (terms == null) {
++                    continue; // no-op segment
++                }
++                BytesRef min = terms.getMin();
++                if (min != null) {
++                    terms.iterator().prepareSeekExact(min);
++                }
++                BytesRef max = terms.getMax();
++                if (max != null) {
++                    terms.iterator().prepareSeekExact(max);
++                }
++            }
++            return null;
++        });
++    }
++
+     /**
+      * Reads the value range for the field with the date mapping type {@param timestampFieldMappedType} from the underlying
+      * lucene directory {@code indexCommit#getDirectory}.
+diff --git a/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/StatelessPrimaryRelocationTargetService.java b/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/StatelessPrimaryRelocationTargetService.java
+index e0f0382335521..22335f2011780 100644
+--- a/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/StatelessPrimaryRelocationTargetService.java
++++ b/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/StatelessPrimaryRelocationTargetService.java
+@@ -22,6 +22,7 @@
+ import org.elasticsearch.threadpool.ThreadPool;
+ import org.elasticsearch.xpack.stateless.IndexShardCacheWarmer;
+ import org.elasticsearch.xpack.stateless.commits.StatelessCommitService;
++import org.elasticsearch.xpack.stateless.engine.IndexEngine;
+ import org.elasticsearch.xpack.stateless.lucene.BlobStoreCacheDirectory;
+ import org.elasticsearch.xpack.stateless.utils.StatelessCommitServiceProvider;
+ import org.elasticsearch.xpack.stateless.utils.StatelessPrimaryRelocationMetricsCollectorProvider;
+@@ -138,6 +139,19 @@ void handlePrimaryContextHandoff(PrimaryContextHandoffRequest request, ActionLis
+                 recoveryState.setStage(RecoveryState.Stage.TRANSLOG);
+                 indexShard.openEngineAndSkipTranslogRecovery();
+ 
++                if (request.hasRecentIdLookup()) {
++                    try {
++                        indexShard.withEngine(engine -> {
++                            if (engine instanceof IndexEngine indexEngine) {
++                                indexEngine.prewarmIdLookups();
++                            }
++                            return null;
++                        });
++                    } catch (Exception e) {
++                        logger.debug("id lookup prewarm for shard " + indexShard.shardId() + " failed", e);
++                    }
++                }
++
+                 // Should not actually have recovered anything from the translog, so the MSN and LCP should remain equal and unchanged
+                 // from the ones we received in the primary context handoff.
+                 assert StatelessPrimaryRelocationSourceService.assertLastCommitSequenceNumberConsistency(
+diff --git a/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/TransportStatelessPrimaryRelocationAction.java b/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/TransportStatelessPrimaryRelocationAction.java
+index 577bf84ce92d6..9a77d7b00a9dc 100644
+--- a/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/TransportStatelessPrimaryRelocationAction.java
++++ b/x-pack/plugin/stateless/src/main/java/org/elasticsearch/xpack/stateless/recovery/TransportStatelessPrimaryRelocationAction.java
+@@ -335,6 +335,10 @@ public BlobFileWithLength latestBccBlob() {
+             return latestBccBlob;
+         }
+ 
++        public boolean hasRecentIdLookup() {
++            return hasRecentIdLookup;
++        }
++
+         public RecoveryInfoFromSource recoveryInfoFromSource() {
+             if (latestBccBlob == null && hasRecentIdLookup == false) {
+                 return null;

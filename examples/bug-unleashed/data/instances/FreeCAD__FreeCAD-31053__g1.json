@@ -1,0 +1,26 @@
+{
+  "case_id": "FreeCAD__FreeCAD-31053",
+  "repo": "FreeCAD/FreeCAD",
+  "pr": 31053,
+  "title": "CAM: Make adaptive operation skip finishing passes in pre-cleared regions",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "FreeCAD__FreeCAD-31053__g1",
+  "target": {
+    "gid": "FreeCAD__FreeCAD-31053#g1",
+    "summary": "Duplicate point filtering only handles vertices where pt.z == 1, failing to deduplicate other shared vertices when open-path intersection produces multiple segments. When a path crosses in and out of the stock boundary, these duplicate points cause path reassembly to look up non-generated vertex IDs in newZNeedsFinishing, throwing a std::out_of_range exception.",
+    "paths": [
+      "src/Mod/CAM/libarea/Adaptive.cpp"
+    ],
+    "notes": [
+      "faulty deduplication logic that only filters vertices with z == 1",
+      "relies on nonclearedPoints being deduplicated; throws std::out_of_range in map::at on duplicate vertices"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "1ff686ef81cc9cd8c718fa2bfec474d23560a95c",
+  "base_sha": "ba406c730396ec276004d5ef6c70d96a5a97488b",
+  "snapshot": "repos/FreeCAD__FreeCAD/1ff686ef81cc9cd8c718fa2bfec474d23560a95c",
+  "diff": "diffs/FreeCAD__FreeCAD-31053.diff"
+}

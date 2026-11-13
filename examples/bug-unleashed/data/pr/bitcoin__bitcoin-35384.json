@@ -1,0 +1,6 @@
+{
+  "title": "util: Check write failures before renaming settings.json",
+  "body": "This PR Fixes #35373.\r\nThe error message was updated from: \"This is probably caused by disk corruption or a crash\" to: \"This is probably caused by a full disk, disk corruption or a crash\"\r\n\r\nThe following files were updated:\r\n1. src/common/settings.cpp -- Updated the main string formatting for the parse failure.\r\n2. src/test/settings_tests.cpp -- Updated the exact string expectation in the C++ unit test.\r\n3. test/functional/feature_settings.py -- Updated the expected error message in the Python test suite.\r\n\r\nConfigured the Bitcoin Core project natively on Windows using Visual Studio (cmake --preset vs2026-static -DBUILD_GUI=OFF) and it compiled with 100% of the C++ tests passed successfully (347 out of 347).",
+  "head_sha": "0654511e1b935d22fe6c88e3f5d5c7b336516222",
+  "base_sha": "1e169a8a6cb8ed0221042a9abbd121167ee02b29"
+}

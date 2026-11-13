@@ -1,0 +1,230 @@
+diff --git a/models/issues/pull.go b/models/issues/pull.go
+index 6121b39b89c8c..84a9611df6eb3 100644
+--- a/models/issues/pull.go
++++ b/models/issues/pull.go
+@@ -202,15 +202,10 @@ func (pr *PullRequest) String() string {
+ 	return s.String()
+ }
+ 
+-// MustHeadUserName returns the HeadRepo's username if failed return blank
+-func (pr *PullRequest) MustHeadUserName(ctx context.Context) string {
+-	if err := pr.LoadHeadRepo(ctx); err != nil {
+-		if !repo_model.IsErrRepoNotExist(err) {
+-			log.Error("LoadHeadRepo: %v", err)
+-		} else {
+-			log.Warn("LoadHeadRepo %d but repository does not exist: %v", pr.HeadRepoID, err)
+-		}
+-		return ""
++// OptionalHeadUserName returns the HeadRepo's username if failed return blank
++func (pr *PullRequest) OptionalHeadUserName(ctx context.Context) string {
++	if err := pr.LoadHeadRepo(ctx); err != nil && !errors.Is(err, util.ErrNotExist) {
++		log.Error("LoadHeadRepo: %v", err)
+ 	}
+ 	if pr.HeadRepo == nil {
+ 		return ""
+diff --git a/routers/web/repo/compare.go b/routers/web/repo/compare.go
+index 4781c5a68b574..49027ea2e2510 100644
+--- a/routers/web/repo/compare.go
++++ b/routers/web/repo/compare.go
+@@ -207,10 +207,12 @@ func (cpi *comparePageInfoType) parseCompareInfo(ctx *context.Context, comparePa
+ 		return err
+ 	}
+ 
++	// for the dropdown links ("{base} ... {head}") in the compare page "compare.tmpl"
+ 	ctx.Data["BaseName"] = baseRepo.OwnerName
+-	ctx.Data["BaseBranch"] = baseRef.ShortName() // for legacy templates
+ 	ctx.Data["HeadUser"] = headOwner
+-	ctx.Data["HeadBranch"] = headRef.ShortName() // for legacy templates
++	ctx.Data["BaseBranch"] = baseRef.ShortName() // also for "commits_table.tmpl"'s "no_commits" message
++	ctx.Data["HeadBranch"] = headRef.ShortName()
++
+ 	ctx.Data["IsPull"] = true
+ 
+ 	context.InitRepoPullRequestCtx(ctx, baseRepo, headRepo)
+diff --git a/routers/web/repo/pull.go b/routers/web/repo/pull.go
+index a0cf614033284..fff8d107032df 100644
+--- a/routers/web/repo/pull.go
++++ b/routers/web/repo/pull.go
+@@ -161,12 +161,12 @@ func getPullInfo(ctx *context.Context) (issue *issues_model.Issue, ok bool) {
+ 
+ func (prInfo *pullRequestViewInfo) setTemplateDataMergeTarget(ctx *context.Context) {
+ 	pull := prInfo.issue.PullRequest
+-	if ctx.Repo.Owner.Name == pull.MustHeadUserName(ctx) {
++	if ctx.Repo.Owner.Name == pull.OptionalHeadUserName(ctx) {
+ 		prInfo.headTarget = pull.HeadBranch
+ 	} else if pull.HeadRepo == nil {
+ 		prInfo.headTarget = ctx.Locale.TrString("repo.pull.deleted_branch", pull.HeadBranch)
+ 	} else {
+-		prInfo.headTarget = pull.MustHeadUserName(ctx) + "/" + pull.HeadRepo.Name + ":" + pull.HeadBranch
++		prInfo.headTarget = pull.OptionalHeadUserName(ctx) + "/" + pull.HeadRepo.Name + ":" + pull.HeadBranch
+ 	}
+ 	ctx.Data["HeadTarget"] = prInfo.headTarget
+ 	ctx.Data["BaseTarget"] = pull.BaseBranch
+@@ -351,11 +351,6 @@ func (prInfo *pullRequestViewInfo) prepareViewInfo(ctx *context.Context, issue *
+ 		return
+ 	}
+ 
+-	// for the PR target branch selector
+-	ctx.Data["BaseBranch"] = issue.PullRequest.BaseBranch
+-	ctx.Data["HeadBranch"] = issue.PullRequest.HeadBranch
+-	ctx.Data["HeadUserName"] = issue.PullRequest.MustHeadUserName(ctx)
+-
+ 	if issue.PullRequest.HasMerged {
+ 		prInfo.prepareViewMergedPullInfo(ctx)
+ 	} else {
+diff --git a/templates/repo/issue/view_title.tmpl b/templates/repo/issue/view_title.tmpl
+index 103fa5de530a9..f1ccbe68c1368 100644
+--- a/templates/repo/issue/view_title.tmpl
++++ b/templates/repo/issue/view_title.tmpl
+@@ -38,7 +38,7 @@
+ 		</div>
+ 	</form>
+ 	{{end}}
+-	<div class="issue-title-meta">
++	<div class="issue-title-meta flex-text-block">
+ 		{{if .HasMerged}}
+ 			<div class="ui purple label issue-state-label">{{svg "octicon-git-merge" 16 "tw-mr-1"}} {{if eq .Issue.PullRequest.Status 3}}{{ctx.Locale.Tr "repo.pulls.manually_merged"}}{{else}}{{ctx.Locale.Tr "repo.pulls.merged"}}{{end}}</div>
+ 		{{else if .Issue.IsClosed}}
+@@ -52,7 +52,7 @@
+ 		{{else}}
+ 			<div class="ui green label issue-state-label">{{svg "octicon-issue-opened"}} {{ctx.Locale.Tr "repo.issues.open_title"}}</div>
+ 		{{end}}
+-		<div class="tw-ml-2 tw-flex-1 tw-break-anywhere">
++		<div class="flex-text-block">
+ 			{{if .Issue.IsPull}}
+ 				{{$headHref := .HeadTarget}}
+ 				{{if .HeadBranchLink}}
+@@ -90,16 +90,22 @@
+ 							{{ctx.Locale.Tr "repo.pulls.title_desc" .NumCommits $headHref $baseHref}}
+ 						</span>
+ 					{{end}}
+-					<span id="pull-desc-editor" class="tw-hidden flex-text-block" data-target-update-url="{{$.RepoLink}}/pull/{{.Issue.Index}}/target_branch">
+-						<div class="ui floating filter dropdown">
+-							<div class="ui basic small button tw-mr-0">
+-								<span class="text">{{ctx.Locale.Tr "repo.pulls.compare_compare"}}: {{$.HeadTarget}}</span>
+-							</div>
++					{{if .Issue.PullRequest}}
++					<div id="pull-desc-editor" class="tw-hidden flex-text-block tw-flex-wrap" data-target-update-url="{{$.RepoLink}}/pull/{{.Issue.Index}}/target_branch">
++						{{$pr := .Issue.PullRequest}}
++						{{$baseBranch := $pr.BaseBranch}}
++						{{$headBranch := $pr.HeadBranch}}
++						{{$baseUserName := $pr.BaseRepo.OwnerName}}
++						{{$headUserName := $pr.OptionalHeadUserName ctx}}
++						<div class="ui basic small button tw-pointer-events-none">
++							<span class="gt-ellipsis">{{ctx.Locale.Tr "repo.pulls.compare_compare"}}: {{$.HeadTarget}}</span>
+ 						</div>
+ 						{{svg "octicon-arrow-right"}}
+-						<div class="ui floating filter dropdown" data-no-results="{{ctx.Locale.Tr "no_results_found"}}">
++						<div class="ui floating dropdown" data-no-results="{{ctx.Locale.Tr "no_results_found"}}">
+ 							<div class="ui basic small button">
+-								<span class="text" id="pull-target-branch" data-basename="{{$.BaseName}}" data-branch="{{$.BaseBranch}}">{{ctx.Locale.Tr "repo.pulls.compare_base"}}: {{$.BaseName}}:{{$.BaseBranch}}</span>
++								<span id="pull-target-branch" class="gt-ellipsis" data-base-user-name="{{$baseUserName}}" data-text-compare-base="{{ctx.Locale.Tr "repo.pulls.compare_base"}}">
++									{{ctx.Locale.Tr "repo.pulls.compare_base"}}: {{$baseUserName}}:{{$baseBranch}}
++								</span>
+ 								{{svg "octicon-triangle-down" 14 "dropdown icon"}}
+ 							</div>
+ 							<div class="menu">
+@@ -108,17 +114,18 @@
+ 									<input name="search" placeholder="{{ctx.Locale.Tr "repo.pulls.filter_branch"}}...">
+ 								</div>
+ 								<div class="scrolling menu" id="branch-select">
+-									{{range .Branches}}
+-										{{$sameBase := ne $.BaseName $.HeadUserName}}
+-										{{$differentBranch := ne . $.HeadBranch}}
+-										{{if or $sameBase $differentBranch}}
+-											<div class="item {{if eq $.BaseBranch .}}selected{{end}}" data-branch="{{.}}">{{$.BaseName}}:{{.}}</div>
++									{{$differentOwner := ne $baseUserName $headUserName}}
++									{{range $branch := $.Branches}}
++										{{$differentBranch := ne $branch $headBranch}}
++										{{if or $differentOwner $differentBranch}}
++											<div class="item {{if eq $baseBranch $branch}}selected{{end}}" data-branch="{{$branch}}">{{$baseUserName}}:{{$branch}}</div>
+ 										{{end}}
+ 									{{end}}
+ 								</div>
+ 							</div>
+ 						</div>
+-					</span>
++					</div>
++					{{end}}
+ 				{{end}}
+ 			{{else}}
+ 				{{$createdStr:= DateUtils.TimeSince .Issue.CreatedUnix}}
+diff --git a/web_src/css/repo.css b/web_src/css/repo.css
+index c75501d864339..c1023d55a8cfd 100644
+--- a/web_src/css/repo.css
++++ b/web_src/css/repo.css
+@@ -302,11 +302,6 @@
+   margin-bottom: 1rem;
+ }
+ 
+-.issue-title-meta {
+-  display: flex;
+-  align-items: center;
+-}
+-
+ .repository.view.issue .issue-title-buttons {
+   display: flex;
+   gap: 0.5em;
+diff --git a/web_src/js/features/repo-issue.ts b/web_src/js/features/repo-issue.ts
+index 93d3e99efcd34..f7c445a1118cc 100644
+--- a/web_src/js/features/repo-issue.ts
++++ b/web_src/js/features/repo-issue.ts
+@@ -399,6 +399,17 @@ export function initRepoIssueTitleEdit() {
+   const pullDescEditor = document.querySelector('#pull-desc-editor'); // it may not exist for a merged PR
+   const prTargetUpdateUrl = pullDescEditor?.getAttribute('data-target-update-url');
+ 
++  pullDescEditor?.querySelector('#branch-select')?.addEventListener('click', (e: Event) => {
++    const el = (e.target as HTMLElement).closest('.item[data-branch]');
++    if (!el) return;
++    const pullTargetBranch = pullDescEditor.querySelector('#pull-target-branch')!;
++    const textCompareBase = pullTargetBranch.getAttribute('data-text-compare-base')!;
++    const baseUserName = pullTargetBranch.getAttribute('data-base-user-name')!;
++    const branchNameNew = el.getAttribute('data-branch')!;
++    pullTargetBranch.textContent = `${textCompareBase}: ${baseUserName}:${branchNameNew}`;
++    pullTargetBranch.setAttribute('data-branch', branchNameNew);
++  });
++
+   const editSaveButton = issueTitleEditor.querySelector('.ui.primary.button')!;
+   issueTitleEditor.addEventListener('submit', async (e) => {
+     e.preventDefault();
+@@ -429,19 +440,6 @@ export function initRepoIssueTitleEdit() {
+   });
+ }
+ 
+-export function initRepoIssueBranchSelect() {
+-  document.querySelector<HTMLElement>('#branch-select')?.addEventListener('click', (e: Event) => {
+-    const el = (e.target as HTMLElement).closest('.item[data-branch]');
+-    if (!el) return;
+-    const pullTargetBranch = document.querySelector('#pull-target-branch')!;
+-    const baseName = pullTargetBranch.getAttribute('data-basename');
+-    const branchNameNew = el.getAttribute('data-branch')!;
+-    const branchNameOld = pullTargetBranch.getAttribute('data-branch');
+-    pullTargetBranch.textContent = pullTargetBranch.textContent.replace(`${baseName}:${branchNameOld}`, `${baseName}:${branchNameNew}`);
+-    pullTargetBranch.setAttribute('data-branch', branchNameNew);
+-  });
+-}
+-
+ async function initSingleCommentEditor(commentForm: HTMLFormElement) {
+   // pages:
+   // * normal new issue/pr page: no status-button, no comment-button (there is only a normal submit button which can submit empty content)
+diff --git a/web_src/js/features/repo-legacy.ts b/web_src/js/features/repo-legacy.ts
+index db91529535c5f..73f94ef3f8117 100644
+--- a/web_src/js/features/repo-legacy.ts
++++ b/web_src/js/features/repo-legacy.ts
+@@ -1,7 +1,7 @@
+ import {registerGlobalInitFunc} from '../modules/observer.ts';
+ import {
+   initRepoCommentFormAndSidebar,
+-  initRepoIssueBranchSelect, initRepoIssueCodeCommentCancel, initRepoIssueCommentDelete,
++  initRepoIssueCodeCommentCancel, initRepoIssueCommentDelete,
+   initRepoIssueComments, initRepoIssueReferenceIssue,
+   initRepoIssueTitleEdit, initRepoIssueWipNewTitle, initRepoIssueWipToggle,
+ } from './repo-issue.ts';
+@@ -61,7 +61,6 @@ export function initRepository() {
+   if (pageContent.matches('.page-content.repository.view.issue')) {
+     initRepoIssueCommentEdit();
+ 
+-    initRepoIssueBranchSelect();
+     initRepoIssueTitleEdit();
+     initRepoIssueWipToggle();
+     initRepoIssueComments();

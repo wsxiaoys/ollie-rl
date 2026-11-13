@@ -1,0 +1,6 @@
+{
+  "title": "fix(tsconfig): fail loudly when extends/references can't be resolved",
+  "body": "Today a typo'd `extends` or `references` path in a tsconfig gets silently swallowed - `innerLoadTsConfig` sees the file doesn't exist and just returns an empty config. So the paths/baseUrl you meant to inherit never get applied, and the failure surfaces somewhere else entirely (broken path mappings, a missing baseUrl). Painful to trace, especially in CI.\n\nThis makes it loud: if an `extends`/`references` path can't be resolved, we throw and name it, e.g. `Failed to resolve \"extends\" path \"./tsconfig.bas.json\" referenced from <config>`. The top-level tsconfig can still be legitimately absent, so that path stays tolerant.\n\nI left the `node_modules` fallback (and its \"delete in the next minor\" TODO) alone - it's orthogonal and can go in a separate PR.\n\nAlso documented `extends`, since it works and has tests but wasn't in the supported-options list.\n\nFixes #41543\n",
+  "head_sha": "f6c8b66e5224b72b9fedf89fb9512efe029c1775",
+  "base_sha": "72fc4f78cca7f421f28a55d7d213d18a47f4cf8f"
+}

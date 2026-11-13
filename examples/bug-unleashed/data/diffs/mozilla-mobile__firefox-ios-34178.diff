@@ -1,0 +1,971 @@
+diff --git a/firefox-ios/Client.xcodeproj/project.pbxproj b/firefox-ios/Client.xcodeproj/project.pbxproj
+index 0d8606d409892..6ac1e0cef8887 100644
+--- a/firefox-ios/Client.xcodeproj/project.pbxproj
++++ b/firefox-ios/Client.xcodeproj/project.pbxproj
+@@ -508,7 +508,6 @@
+ 		3B546EC01D95ECAE00BDBE36 /* ActivityStreamTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B546EBF1D95ECAE00BDBE36 /* ActivityStreamTest.swift */; };
+ 		3BCE6D3C1CEB9E4D0080928C /* ThirdPartySearchAlerts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BCE6D3B1CEB9E4D0080928C /* ThirdPartySearchAlerts.swift */; };
+ 		3BF4B8E91D38497A00493393 /* BaseTestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BF4B8E81D38497A00493393 /* BaseTestCase.swift */; };
+-		8238DAEED1514CBFBB6A51F3 /* TestConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BA0ED001432406BA5B07E0B /* TestConstants.swift */; };
+ 		3BFE4B501D34673D00DDF53F /* ThirdPartySearchTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BFE4B4F1D34673D00DDF53F /* ThirdPartySearchTest.swift */; };
+ 		3D9CA9841EF456A8002434DD /* NightModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9CA9831EF456A8002434DD /* NightModeTests.swift */; };
+ 		3D9CAA1C1EFCD655002434DD /* ClipBoardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9CAA1B1EFCD655002434DD /* ClipBoardTests.swift */; };
+@@ -865,6 +864,7 @@
+ 		81F1010D2E2EB64A008F6FDC /* MerinoTestData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F1010C2E2EB642008F6FDC /* MerinoTestData.swift */; };
+ 		81F617C92C8755AB003799BF /* MainMenuAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F617C82C8755AB003799BF /* MainMenuAction.swift */; };
+ 		81F617CB2C877EC7003799BF /* MainMenuTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F617CA2C877EC7003799BF /* MainMenuTelemetry.swift */; };
++		8238DAEED1514CBFBB6A51F3 /* TestConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BA0ED001432406BA5B07E0B /* TestConstants.swift */; };
+ 		884CA7492344A301002E4711 /* TextContentDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 884CA7482344A301002E4711 /* TextContentDetector.swift */; };
+ 		8A008F6D2D70C51B005F4A6C /* HomepageMiddleware.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A008F6C2D70C51B005F4A6C /* HomepageMiddleware.swift */; };
+ 		8A00BD882CAB401700680AF9 /* HomepageViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A00BD862CAB3FE500680AF9 /* HomepageViewControllerTests.swift */; };
+@@ -1680,6 +1680,9 @@
+ 		C2F335372ECE339F0071588A /* TranslationsEngine.html in Resources */ = {isa = PBXBuildFile; fileRef = C2F335362ECE339F0071588A /* TranslationsEngine.html */; };
+ 		C2F336EB2ECE44840071588A /* TranslationsServiceProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F336EA2ECE447A0071588A /* TranslationsServiceProtocol.swift */; };
+ 		C2F336ED2ECE45E20071588A /* TranslationsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F336EC2ECE45DB0071588A /* TranslationsService.swift */; };
++		C2F700A12FBC000100112233 /* TrackerBlockerModuleAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F700B12FBC000100112233 /* TrackerBlockerModuleAction.swift */; };
++		C2F700A22FBC000100112233 /* TrackerBlockerModuleCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F700B22FBC000100112233 /* TrackerBlockerModuleCell.swift */; };
++		C2F700A32FBC000100112233 /* TrackerBlockerModuleState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2F700B32FBC000100112233 /* TrackerBlockerModuleState.swift */; };
+ 		C400467C1CF4E43E00B08303 /* BackForwardListViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C400467B1CF4E43E00B08303 /* BackForwardListViewController.swift */; };
+ 		C40046FA1CF8E0B200B08303 /* BackForwardListAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C40046F91CF8E0B200B08303 /* BackForwardListAnimator.swift */; };
+ 		C45F44691D087DB600CB7EF0 /* TopTabsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45F44681D087DB600CB7EF0 /* TopTabsViewController.swift */; };
+@@ -2362,10 +2365,10 @@
+ 		FF0001AB2F000007000AAAAA /* WorldCupMiddleware.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0001AB2F000004000AAAAA /* WorldCupMiddleware.swift */; };
+ 		FF0002AA2F000002000BBBBB /* ClearablesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0002AA2F000001000BBBBB /* ClearablesTests.swift */; };
+ 		FF0003AB2F000002000BBBBB /* WorldCupMiddlewareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0003AA2F000001000BBBBB /* WorldCupMiddlewareTests.swift */; };
+-		FFCAFE022F0000AB000BBBBB /* WorldCupMatchCardViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCAFE012F0000AA000BBBBB /* WorldCupMatchCardViewTests.swift */; };
+ 		FF0003AD2F000004000BBBBB /* WorldCupCellFactoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0003AC2F000003000BBBBB /* WorldCupCellFactoryTests.swift */; };
+ 		FF0004AB2F000002000BBBBB /* WorldCupSectionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0004AA2F000001000BBBBB /* WorldCupSectionStateTests.swift */; };
+ 		FF0005AB2F000002000BBBBB /* MockWorldCupStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0005AA2F000001000BBBBB /* MockWorldCupStore.swift */; };
++		FFCAFE022F0000AB000BBBBB /* WorldCupMatchCardViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCAFE012F0000AA000BBBBB /* WorldCupMatchCardViewTests.swift */; };
+ /* End PBXBuildFile section */
+ 
+ /* Begin PBXContainerItemProxy section */
+@@ -3543,7 +3546,6 @@
+ 		3BCC4716A1AC7645F49D316A /* uz */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = uz; path = uz.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+ 		3BCE6D3B1CEB9E4D0080928C /* ThirdPartySearchAlerts.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ThirdPartySearchAlerts.swift; sourceTree = "<group>"; };
+ 		3BF4B8E81D38497A00493393 /* BaseTestCase.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = BaseTestCase.swift; sourceTree = "<group>"; };
+-		5BA0ED001432406BA5B07E0B /* TestConstants.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TestConstants.swift; sourceTree = "<group>"; };
+ 		3BF646DF88995BFE702F9A54 /* cs */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = cs; path = cs.lproj/Today.strings; sourceTree = "<group>"; };
+ 		3BF9438BA7306EFAF4752A76 /* id */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = id; path = id.lproj/ErrorPages.strings; sourceTree = "<group>"; };
+ 		3BFE4B071D342FB800DDF53F /* XCUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = XCUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+@@ -8899,6 +8901,7 @@
+ 		5B3F4893A27CA0F3A655E93C /* zh-TW */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-TW"; path = "zh-TW.lproj/Intro.strings"; sourceTree = "<group>"; };
+ 		5B7A4C3C85CE0BB43E25B018 /* ca */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ca; path = ca.lproj/PrivateBrowsing.strings; sourceTree = "<group>"; };
+ 		5B9B4B3B9FE43A8766265D11 /* vi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = vi; path = vi.lproj/Search.strings; sourceTree = "<group>"; };
++		5BA0ED001432406BA5B07E0B /* TestConstants.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TestConstants.swift; sourceTree = "<group>"; };
+ 		5BA14991AD322490C3F65DFF /* pt-PT */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "pt-PT"; path = "pt-PT.lproj/ClearPrivateDataConfirm.strings"; sourceTree = "<group>"; };
+ 		5BA247AD89EA6DC430F40E90 /* ka */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ka; path = ka.lproj/3DTouchActions.strings; sourceTree = "<group>"; };
+ 		5BB94E87ACEE70CBB1E9D588 /* ru */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ru; path = ru.lproj/Today.strings; sourceTree = "<group>"; };
+@@ -10550,6 +10553,9 @@
+ 		C2F336EC2ECE45DB0071588A /* TranslationsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationsService.swift; sourceTree = "<group>"; };
+ 		C2F55C612F9A441B00BE73E7 /* WorldCupCountry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupCountry.swift; sourceTree = "<group>"; };
+ 		C2F55C622F9A441B00BE73E7 /* WorldCupCountryPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupCountryPickerView.swift; sourceTree = "<group>"; };
++		C2F700B12FBC000100112233 /* TrackerBlockerModuleAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackerBlockerModuleAction.swift; sourceTree = "<group>"; };
++		C2F700B22FBC000100112233 /* TrackerBlockerModuleCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackerBlockerModuleCell.swift; sourceTree = "<group>"; };
++		C2F700B32FBC000100112233 /* TrackerBlockerModuleState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackerBlockerModuleState.swift; sourceTree = "<group>"; };
+ 		C326435B8F6E47257506096B /* ar */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ar; path = ar.lproj/Search.strings; sourceTree = "<group>"; };
+ 		C3334FC58A76876D8E9F00F3 /* az */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = az; path = az.lproj/ClearPrivateData.strings; sourceTree = "<group>"; };
+ 		C34D464780B65FD5A9F3118B /* ga */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ga; path = ga.lproj/Search.strings; sourceTree = "<group>"; };
+@@ -11866,7 +11872,6 @@
+ 		FF0001AB2F000004000AAAAA /* WorldCupMiddleware.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupMiddleware.swift; sourceTree = "<group>"; };
+ 		FF0002AA2F000001000BBBBB /* ClearablesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClearablesTests.swift; sourceTree = "<group>"; };
+ 		FF0003AA2F000001000BBBBB /* WorldCupMiddlewareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupMiddlewareTests.swift; sourceTree = "<group>"; };
+-		FFCAFE012F0000AA000BBBBB /* WorldCupMatchCardViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupMatchCardViewTests.swift; sourceTree = "<group>"; };
+ 		FF0003AC2F000003000BBBBB /* WorldCupCellFactoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupCellFactoryTests.swift; sourceTree = "<group>"; };
+ 		FF0004AA2F000001000BBBBB /* WorldCupSectionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupSectionStateTests.swift; sourceTree = "<group>"; };
+ 		FF0005AA2F000001000BBBBB /* MockWorldCupStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockWorldCupStore.swift; sourceTree = "<group>"; };
+@@ -11878,6 +11883,7 @@
+ 		FF8D4A9183688EA96AFBB608 /* ro */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ro; path = ro.lproj/ClearHistoryConfirm.strings; sourceTree = "<group>"; };
+ 		FFA94EF3A2E3DC24A014D4B2 /* ga */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ga; path = ga.lproj/ErrorPages.strings; sourceTree = "<group>"; };
+ 		FFC049AA898EF4096E22F595 /* es-CL */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "es-CL"; path = "es-CL.lproj/ClearHistoryConfirm.strings"; sourceTree = "<group>"; };
++		FFCAFE012F0000AA000BBBBB /* WorldCupMatchCardViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldCupMatchCardViewTests.swift; sourceTree = "<group>"; };
+ 		FFEB4308B5A82E56F1EEEC56 /* oc */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = oc; path = oc.lproj/AuthenticationManager.strings; sourceTree = "<group>"; };
+ /* End PBXFileReference section */
+ 
+@@ -12987,6 +12993,16 @@
+ 			path = ThirdParty;
+ 			sourceTree = "<group>";
+ 		};
++		390786DC2FD722FA001CE0C2 /* TrackerBlockerModule */ = {
++			isa = PBXGroup;
++			children = (
++				C2F700B12FBC000100112233 /* TrackerBlockerModuleAction.swift */,
++				C2F700B22FBC000100112233 /* TrackerBlockerModuleCell.swift */,
++				C2F700B32FBC000100112233 /* TrackerBlockerModuleState.swift */,
++			);
++			path = TrackerBlockerModule;
++			sourceTree = "<group>";
++		};
+ 		392ED7D51D0AEEEE009D9B62 /* Accessors */ = {
+ 			isa = PBXGroup;
+ 			children = (
+@@ -14247,25 +14263,26 @@
+ 		8A7D08E12CAAF79F0035999C /* Homepage */ = {
+ 			isa = PBXGroup;
+ 			children = (
+-				C2D7AC3B2F9B5D750090EC28 /* WorldCup */,
+-				8AD8FAF52EBAFA2400FDFD78 /* HomepageUX.swift */,
+-				C7FA9B672E4B9A13004F2CA1 /* Layout */,
+-				8A7C125F2E01DB0600F2D7FA /* SearchBar */,
+ 				8A9E04172D4D07E30022ED90 /* Bookmark */,
+-				8A6E63CD2D4A7FA60040D355 /* SectionHeader */,
+-				8A6E63C32D4946600040D355 /* JumpBackIn */,
+-				8AED23022D400020000FF624 /* MessageCard */,
+ 				8A62B15B2CED40800045F46E /* ContextMenu */,
+-				8A454D3D2CB9B896009436D9 /* TopSites */,
+ 				8A454D2A2CB7079A009436D9 /* Header */,
+-				8ABDBAA42CB6BF3A00B51F63 /* Merino */,
+-				8A7D08E22CAAF7C30035999C /* HomepageViewController.swift */,
+-				8A7D08E42FBE2EBC0035999C /* HomepageTabStateStore.swift */,
+ 				8AA0A6622CAC40AA00AC7EB3 /* HomepageDiffableDataSource.swift */,
+ 				8AD3AFC22D143EF000CFC887 /* HomepageDimensionImplementation.swift */,
++				8A7D08E42FBE2EBC0035999C /* HomepageTabStateStore.swift */,
++				8AD8FAF52EBAFA2400FDFD78 /* HomepageUX.swift */,
++				8A7D08E22CAAF7C30035999C /* HomepageViewController.swift */,
++				8A6E63C32D4946600040D355 /* JumpBackIn */,
++				C7FA9B672E4B9A13004F2CA1 /* Layout */,
++				8ABDBAA42CB6BF3A00B51F63 /* Merino */,
++				8AED23022D400020000FF624 /* MessageCard */,
++				C71158CB2EEA0ADF009766B8 /* PrivacyNotice */,
+ 				8AF347DC2CADD0E100624036 /* Redux */,
++				8A7C125F2E01DB0600F2D7FA /* SearchBar */,
++				8A6E63CD2D4A7FA60040D355 /* SectionHeader */,
++				8A454D3D2CB9B896009436D9 /* TopSites */,
++				390786DC2FD722FA001CE0C2 /* TrackerBlockerModule */,
+ 				DFACBF82277B9278003D5F41 /* Wallpapers */,
+-				C71158CB2EEA0ADF009766B8 /* PrivacyNotice */,
++				C2D7AC3B2F9B5D750090EC28 /* WorldCup */,
+ 			);
+ 			path = Homepage;
+ 			sourceTree = "<group>";
+@@ -19924,6 +19941,7 @@
+ 				8A83B7462A264FA0002FF9AC /* SettingsCoordinator.swift in Sources */,
+ 				619FE8932CE6595B004F83E2 /* WallpaperMiddleware.swift in Sources */,
+ 				8A5435562D53CB6800501214 /* JumpBackInAction.swift in Sources */,
++				C2F700A12FBC000100112233 /* TrackerBlockerModuleAction.swift in Sources */,
+ 				A9072B801D07B34100459960 /* NoImageModeHelper.swift in Sources */,
+ 				8A97E6EA2C58487900F94793 /* AddressLocaleFeatureValidator.swift in Sources */,
+ 				AB3DB0C92B596739001D32CB /* AppStartupTelemetry.swift in Sources */,
+@@ -19934,6 +19952,7 @@
+ 				31286F788EBE4BDE9BB9FF21 /* AutoTranslatePromptState.swift in Sources */,
+ 				AA02D5EB2EB3D83200814F4C /* TranslationsAction.swift in Sources */,
+ 				C79CEE5E2EDF3C4B004C4EB8 /* JumpBackInCell.swift in Sources */,
++				C2F700A22FBC000100112233 /* TrackerBlockerModuleCell.swift in Sources */,
+ 				0EBD66922DBFE41000A78532 /* ConcurrencyThrottler.swift in Sources */,
+ 				EBC4869D2195F58300CDA48D /* ErrorPageHelper.swift in Sources */,
+ 				C84655E8288739CB00861B4A /* WallpaperCollectionAvailability.swift in Sources */,
+@@ -20146,6 +20165,7 @@
+ 				8AE0BF4F2819B10E00F33EC4 /* TopSitesSettingsViewController.swift in Sources */,
+ 				ED7A08DD2CF6749B0035EC8F /* ShareType.swift in Sources */,
+ 				8A6E63C72D4946B90040D355 /* JumpBackInSectionState.swift in Sources */,
++				C2F700A32FBC000100112233 /* TrackerBlockerModuleState.swift in Sources */,
+ 				BDE2DB332DB1024E002FAE26 /* TabWebViewPreviewAppearanceConfiguration.swift in Sources */,
+ 				8A8DDEBF276259A900E7B97A /* RatingPromptManager.swift in Sources */,
+ 				8A9F4F0B2DC8F5D1004644B9 /* MockPlaces.swift in Sources */,
+@@ -33239,7 +33259,6 @@
+ 		};
+ 		EDD09DC02FCF6AB20038C8FA /* ModifiedCopy */ = {
+ 			isa = XCSwiftPackageProductDependency;
+-			package = EDD09DBF2FCF6AB20038C8FA /* XCRemoteSwiftPackageReference "ModifiedCopyMacro" */;
+ 			productName = ModifiedCopy;
+ 		};
+ 		EDD2A7F72CDACE7C00ED464C /* UnifiedSearchKit */ = {
+diff --git a/firefox-ios/Client/Frontend/Home/Homepage/HomepageDiffableDataSource.swift b/firefox-ios/Client/Frontend/Home/Homepage/HomepageDiffableDataSource.swift
+index 4d68d5758e649..eb318f70c0463 100644
+--- a/firefox-ios/Client/Frontend/Home/Homepage/HomepageDiffableDataSource.swift
++++ b/firefox-ios/Client/Frontend/Home/Homepage/HomepageDiffableDataSource.swift
+@@ -27,6 +27,7 @@ final class HomepageDiffableDataSource: UICollectionViewDiffableDataSource<Homep
+         case topSites(TextColor?, NumberOfTilesPerRow, ShouldShowSectionHeader)
+         case searchBar
+         case jumpBackIn(TextColor?, JumpBackInSectionLayoutConfiguration)
++        case trackerBlockerModule
+         case bookmarks(TextColor?)
+         case pocket(TextColor?)
+         case worldcup
+@@ -52,6 +53,7 @@ final class HomepageDiffableDataSource: UICollectionViewDiffableDataSource<Homep
+         case searchBar
+         case jumpBackIn(JumpBackInTabConfiguration)
+         case jumpBackInSyncedTab(JumpBackInSyncedTabConfiguration)
++        case trackerBlockerModule
+         case bookmark(BookmarkConfiguration)
+         /// FXIOS-15423: Include the selected category in the item's identity so category transitions are treated as
+         /// a presentation-context change. Without the category context, diffable treats the same story in
+@@ -71,6 +73,7 @@ final class HomepageDiffableDataSource: UICollectionViewDiffableDataSource<Homep
+                 SearchBarCell.self,
+                 JumpBackInCell.self,
+                 SyncedTabCell.self,
++                TrackerBlockerModuleCell.self,
+                 BookmarksCell.self,
+                 StoryCell.self,
+                 WorldCupCell.self,
+@@ -152,6 +155,11 @@ final class HomepageDiffableDataSource: UICollectionViewDiffableDataSource<Homep
+             snapshot.reconfigureItems([.worldcupCard])
+         }
+ 
++        if state.trackerBlockerModuleState.shouldShowSection {
++            snapshot.appendSections([.trackerBlockerModule])
++            snapshot.appendItems([.trackerBlockerModule], toSection: .trackerBlockerModule)
++        }
++
+         if let (tabs, configuration) = getJumpBackInTabs(with: state.jumpBackInState, and: jumpBackInDisplayConfig) {
+             snapshot.appendSections([.jumpBackIn(textColor, configuration)])
+             snapshot.appendItems(tabs, toSection: .jumpBackIn(textColor, configuration))
+diff --git a/firefox-ios/Client/Frontend/Home/Homepage/HomepageViewController.swift b/firefox-ios/Client/Frontend/Home/Homepage/HomepageViewController.swift
+index d56f98427f4a4..576c76bbca7d3 100644
+--- a/firefox-ios/Client/Frontend/Home/Homepage/HomepageViewController.swift
++++ b/firefox-ios/Client/Frontend/Home/Homepage/HomepageViewController.swift
+@@ -658,6 +658,8 @@ final class HomepageViewController: UIViewController,
+             }
+         case .jumpBackInSyncedTab(let config):
+             return configureSyncedTabCell(config, item: item, at: indexPath)
++        case .trackerBlockerModule:
++            return configuredCell(cellType: TrackerBlockerModuleCell.self, at: indexPath) { _ in }
+         case .bookmark(let item):
+             return configuredCell(cellType: BookmarksCell.self, at: indexPath) { cell in
+                 cell.configure(config: item, theme: currentTheme)
+diff --git a/firefox-ios/Client/Frontend/Home/Homepage/Layout/HomepageSectionLayoutProvider.swift b/firefox-ios/Client/Frontend/Home/Homepage/Layout/HomepageSectionLayoutProvider.swift
+index de29e7cacdc4c..0de2381661a59 100644
+--- a/firefox-ios/Client/Frontend/Home/Homepage/Layout/HomepageSectionLayoutProvider.swift
++++ b/firefox-ios/Client/Frontend/Home/Homepage/Layout/HomepageSectionLayoutProvider.swift
+@@ -102,6 +102,10 @@ final class HomepageSectionLayoutProvider: FeatureFlaggable {
+             }
+         }
+ 
++        struct TrackerBlockerModuleConstants {
++            static let height: CGFloat = 50
++        }
++
+         struct BookmarksConstants {
+             static let cellWidth: CGFloat = 134
+         }
+@@ -166,6 +170,8 @@ final class HomepageSectionLayoutProvider: FeatureFlaggable {
+                 for: traitCollection,
+                 config: configuration
+             )
++        case .trackerBlockerModule:
++            return createTrackerBlockerModuleSectionLayout(for: traitCollection)
+         case .pocket:
+             return createStoriesSectionLayout(for: environment)
+         case .bookmarks:
+@@ -486,6 +492,28 @@ final class HomepageSectionLayoutProvider: FeatureFlaggable {
+         return section
+     }
+ 
++    private func createTrackerBlockerModuleSectionLayout(
++        for traitCollection: UITraitCollection
++    ) -> NSCollectionLayoutSection {
++        let itemSize = NSCollectionLayoutSize(
++            widthDimension: .fractionalWidth(1),
++            heightDimension: .absolute(UX.TrackerBlockerModuleConstants.height)
++        )
++        let item = NSCollectionLayoutItem(layoutSize: itemSize)
++        let group = NSCollectionLayoutGroup.horizontal(layoutSize: itemSize, subitem: item, count: 1)
++        let section = NSCollectionLayoutSection(group: group)
++
++        let leadingInset = UX.leadingInset(traitCollection: traitCollection)
++        section.contentInsets = NSDirectionalEdgeInsets(
++            top: 0,
++            leading: leadingInset,
++            bottom: UX.spacingBetweenSections,
++            trailing: leadingInset
++        )
++
++        return section
++    }
++
+     private func createBookmarksSectionLayout(for environment: NSCollectionLayoutEnvironment) -> NSCollectionLayoutSection {
+         let cellWidth = UX.BookmarksConstants.cellWidth
+ 
+@@ -795,6 +823,13 @@ final class HomepageSectionLayoutProvider: FeatureFlaggable {
+         return bookmarksMeasurement.totalHeight
+     }
+ 
++    private func getTrackerBlockerModuleSectionHeight() -> CGFloat {
++        guard let state = store.state.componentState(HomepageState.self, for: .homepage, window: windowUUID),
++              state.trackerBlockerModuleState.shouldShowSection else { return 0 }
++
++        return UX.TrackerBlockerModuleConstants.height + UX.spacingBetweenSections
++    }
++
+     /// Creates a "dummy" search bar section and returns its height
+     private func getSearchBarSectionHeight(environment: NSCollectionLayoutEnvironment) -> CGFloat {
+         guard let state = store.state.componentState(HomepageState.self, for: .homepage, window: windowUUID) else {
+@@ -904,6 +939,7 @@ final class HomepageSectionLayoutProvider: FeatureFlaggable {
+         let topSitesHeight = getShortcutsSectionHeight(environment: environment)
+         let worldcupHeight = getWorldcupSectionHeight(environment: environment)
+         let jumpBackInHeight = getJumpBackInSectionHeight(environment: environment)
++        let trackerBlockerModuleHeight = getTrackerBlockerModuleSectionHeight()
+         let bookmarksHeight = getBookmarksSectionHeight(environment: environment)
+         let searchBarHeight = getSearchBarSectionHeight(environment: environment)
+ 
+@@ -913,6 +949,7 @@ final class HomepageSectionLayoutProvider: FeatureFlaggable {
+             - topSitesHeight
+             - worldcupHeight
+             - jumpBackInHeight
++            - trackerBlockerModuleHeight
+             - bookmarksHeight
+             - searchBarHeight
+     }
+diff --git a/firefox-ios/Client/Frontend/Home/Homepage/Redux/HomepageState.swift b/firefox-ios/Client/Frontend/Home/Homepage/Redux/HomepageState.swift
+index b19b37ed404f2..20bad24d85ed8 100644
+--- a/firefox-ios/Client/Frontend/Home/Homepage/Redux/HomepageState.swift
++++ b/firefox-ios/Client/Frontend/Home/Homepage/Redux/HomepageState.swift
+@@ -16,6 +16,7 @@ struct HomepageState: ScreenState, Equatable {
+     let topSitesState: TopSitesSectionState
+     let searchState: SearchBarState
+     let jumpBackInState: JumpBackInSectionState
++    let trackerBlockerModuleState: TrackerBlockerModuleState
+     let bookmarkState: BookmarksSectionState
+     let worldcupState: WorldCupSectionState
+     let merinoState: MerinoState
+@@ -64,6 +65,7 @@ struct HomepageState: ScreenState, Equatable {
+             topSitesState: homepageState.topSitesState,
+             searchState: homepageState.searchState,
+             jumpBackInState: homepageState.jumpBackInState,
++            trackerBlockerModuleState: homepageState.trackerBlockerModuleState,
+             bookmarkState: homepageState.bookmarkState,
+             worldcupState: homepageState.worldcupState,
+             merinoState: homepageState.merinoState,
+@@ -84,6 +86,7 @@ struct HomepageState: ScreenState, Equatable {
+             topSitesState: TopSitesSectionState(windowUUID: windowUUID),
+             searchState: SearchBarState(windowUUID: windowUUID),
+             jumpBackInState: JumpBackInSectionState(windowUUID: windowUUID),
++            trackerBlockerModuleState: TrackerBlockerModuleState(windowUUID: windowUUID),
+             bookmarkState: BookmarksSectionState(windowUUID: windowUUID),
+             worldcupState: WorldCupSectionState(windowUUID: windowUUID),
+             merinoState: MerinoState(windowUUID: windowUUID),
+@@ -103,6 +106,7 @@ struct HomepageState: ScreenState, Equatable {
+         topSitesState: TopSitesSectionState,
+         searchState: SearchBarState,
+         jumpBackInState: JumpBackInSectionState,
++        trackerBlockerModuleState: TrackerBlockerModuleState,
+         bookmarkState: BookmarksSectionState,
+         worldcupState: WorldCupSectionState,
+         merinoState: MerinoState,
+@@ -119,6 +123,7 @@ struct HomepageState: ScreenState, Equatable {
+         self.topSitesState = topSitesState
+         self.searchState = searchState
+         self.jumpBackInState = jumpBackInState
++        self.trackerBlockerModuleState = trackerBlockerModuleState
+         self.bookmarkState = bookmarkState
+         self.worldcupState = worldcupState
+         self.merinoState = merinoState
+@@ -166,6 +171,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.reducer(state.topSitesState, action))
+             .copy(searchState: SearchBarState.reducer(state.searchState, action))
+             .copy(jumpBackInState: JumpBackInSectionState.reducer(state.jumpBackInState, action))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.reducer(state.trackerBlockerModuleState, action))
+             .copy(bookmarkState: BookmarksSectionState.reducer(state.bookmarkState, action))
+             .copy(worldcupState: WorldCupSectionState.reducer(state.worldcupState, action))
+             .copy(merinoState: MerinoState.reducer(state.merinoState, action))
+@@ -183,6 +189,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.reducer(state.topSitesState, action))
+             .copy(searchState: SearchBarState.reducer(state.searchState, action))
+             .copy(jumpBackInState: JumpBackInSectionState.reducer(state.jumpBackInState, action))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.reducer(state.trackerBlockerModuleState, action))
+             .copy(bookmarkState: BookmarksSectionState.reducer(state.bookmarkState, action))
+             .copy(worldcupState: WorldCupSectionState.reducer(state.worldcupState, action))
+             .copy(merinoState: MerinoState.reducer(state.merinoState, action))
+@@ -207,6 +214,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.reducer(state.topSitesState, action))
+             .copy(searchState: SearchBarState.reducer(state.searchState, action))
+             .copy(jumpBackInState: JumpBackInSectionState.reducer(state.jumpBackInState, action))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.reducer(state.trackerBlockerModuleState, action))
+             .copy(bookmarkState: BookmarksSectionState.reducer(state.bookmarkState, action))
+             .copy(worldcupState: WorldCupSectionState.reducer(state.worldcupState, action))
+             .copy(merinoState: MerinoState.reducer(state.merinoState, action))
+@@ -224,6 +232,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.reducer(state.topSitesState, action))
+             .copy(searchState: SearchBarState.reducer(state.searchState, action))
+             .copy(jumpBackInState: JumpBackInSectionState.reducer(state.jumpBackInState, action))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.reducer(state.trackerBlockerModuleState, action))
+             .copy(bookmarkState: BookmarksSectionState.reducer(state.bookmarkState, action))
+             .copy(worldcupState: WorldCupSectionState.reducer(state.worldcupState, action))
+             .copy(merinoState: MerinoState.reducer(state.merinoState, action))
+@@ -240,6 +249,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.reducer(state.topSitesState, action))
+             .copy(searchState: SearchBarState.reducer(state.searchState, action))
+             .copy(jumpBackInState: JumpBackInSectionState.reducer(state.jumpBackInState, action))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.reducer(state.trackerBlockerModuleState, action))
+             .copy(bookmarkState: BookmarksSectionState.reducer(state.bookmarkState, action))
+             .copy(worldcupState: WorldCupSectionState.reducer(state.worldcupState, action))
+             .copy(merinoState: MerinoState.reducer(state.merinoState, action))
+@@ -255,6 +265,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.reducer(state.topSitesState, action))
+             .copy(searchState: SearchBarState.reducer(state.searchState, action))
+             .copy(jumpBackInState: JumpBackInSectionState.reducer(state.jumpBackInState, action))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.reducer(state.trackerBlockerModuleState, action))
+             .copy(bookmarkState: BookmarksSectionState.reducer(state.bookmarkState, action))
+             .copy(worldcupState: WorldCupSectionState.reducer(state.worldcupState, action))
+             .copy(merinoState: MerinoState.reducer(state.merinoState, action))
+@@ -271,6 +282,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.reducer(state.topSitesState, action))
+             .copy(searchState: SearchBarState.reducer(state.searchState, action))
+             .copy(jumpBackInState: JumpBackInSectionState.reducer(state.jumpBackInState, action))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.reducer(state.trackerBlockerModuleState, action))
+             .copy(bookmarkState: BookmarksSectionState.reducer(state.bookmarkState, action))
+             .copy(worldcupState: WorldCupSectionState.reducer(state.worldcupState, action))
+             .copy(merinoState: MerinoState.reducer(state.merinoState, action))
+@@ -284,6 +296,7 @@ struct HomepageState: ScreenState, Equatable {
+             .copy(topSitesState: TopSitesSectionState.defaultState(from: state.topSitesState))
+             .copy(searchState: SearchBarState.defaultState(from: state.searchState))
+             .copy(jumpBackInState: JumpBackInSectionState.defaultState(from: state.jumpBackInState))
++            .copy(trackerBlockerModuleState: TrackerBlockerModuleState.defaultState(from: state.trackerBlockerModuleState))
+             .copy(bookmarkState: BookmarksSectionState.defaultState(from: state.bookmarkState))
+             .copy(worldcupState: WorldCupSectionState.defaultState(from: state.worldcupState))
+             .copy(merinoState: MerinoState.defaultState(from: state.merinoState))
+diff --git a/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleAction.swift b/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleAction.swift
+new file mode 100644
+index 0000000000000..de400f21dc90b
+--- /dev/null
++++ b/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleAction.swift
+@@ -0,0 +1,26 @@
++// This Source Code Form is subject to the terms of the Mozilla Public
++// License, v. 2.0. If a copy of the MPL was not distributed with this
++// file, You can obtain one at http://mozilla.org/MPL/2.0/
++
++import Common
++import Redux
++
++struct TrackerBlockerModuleAction: Action {
++    let windowUUID: WindowUUID
++    let actionType: ActionType
++    let isEnabled: Bool?
++
++    init(
++        isEnabled: Bool? = nil,
++        windowUUID: WindowUUID,
++        actionType: any ActionType
++    ) {
++        self.windowUUID = windowUUID
++        self.actionType = actionType
++        self.isEnabled = isEnabled
++    }
++}
++
++enum TrackerBlockerModuleActionType: ActionType {
++    case toggleShowSectionSetting
++}
+diff --git a/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleCell.swift b/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleCell.swift
+new file mode 100644
+index 0000000000000..019da09b92d04
+--- /dev/null
++++ b/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleCell.swift
+@@ -0,0 +1,17 @@
++// This Source Code Form is subject to the terms of the Mozilla Public
++// License, v. 2.0. If a copy of the MPL was not distributed with this
++// file, You can obtain one at http://mozilla.org/MPL/2.0/
++
++import Common
++import UIKit
++
++final class TrackerBlockerModuleCell: UICollectionViewCell, ReusableCell {
++    override init(frame: CGRect) {
++        super.init(frame: frame)
++        contentView.backgroundColor = .purple
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++}
+diff --git a/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleState.swift b/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleState.swift
+new file mode 100644
+index 0000000000000..d4681424e6c02
+--- /dev/null
++++ b/firefox-ios/Client/Frontend/Home/Homepage/TrackerBlockerModule/TrackerBlockerModuleState.swift
+@@ -0,0 +1,70 @@
++// This Source Code Form is subject to the terms of the Mozilla Public
++// License, v. 2.0. If a copy of the MPL was not distributed with this
++// file, You can obtain one at http://mozilla.org/MPL/2.0/
++
++import Common
++import ModifiedCopy
++import Redux
++import Shared
++
++@Copyable
++struct TrackerBlockerModuleState: StateType, Equatable, Hashable {
++    var windowUUID: WindowUUID
++    let shouldShowSection: Bool
++
++    init(
++        userPreferences: UserFeaturePreferring = AppContainer.shared.resolve(),
++        featureFlagsProvider: FeatureFlagProviding = AppContainer.shared.resolve(),
++        windowUUID: WindowUUID
++    ) {
++        self.init(
++            windowUUID: windowUUID,
++            shouldShowSection: featureFlagsProvider.isEnabled(.homepageTrackerBlockerModule)
++                && userPreferences.getPreferenceFor(.homepageTrackerBlockerModule)
++        )
++    }
++
++    private init(
++        windowUUID: WindowUUID,
++        shouldShowSection: Bool
++    ) {
++        self.windowUUID = windowUUID
++        self.shouldShowSection = shouldShowSection
++    }
++
++    static let reducer: Reducer<Self> = { state, action in
++        guard action.windowUUID == .unavailable || action.windowUUID == state.windowUUID
++        else {
++            return defaultState(from: state)
++        }
++
++        switch action.actionType {
++        case TrackerBlockerModuleActionType.toggleShowSectionSetting:
++            return handleSettingsToggleAction(action, state: state)
++        default:
++            return defaultState(from: state)
++        }
++    }
++
++    private static func handleSettingsToggleAction(
++        _ action: Action,
++        state: TrackerBlockerModuleState,
++        featureFlagsProvider: FeatureFlagProviding = AppContainer.shared.resolve()
++    ) -> TrackerBlockerModuleState {
++        guard featureFlagsProvider.isEnabled(.homepageTrackerBlockerModule) else {
++            return state.copy(shouldShowSection: false)
++        }
++
++        guard let trackerBlockerModuleAction = action as? TrackerBlockerModuleAction,
++              let isEnabled = trackerBlockerModuleAction.isEnabled
++        else {
++            return defaultState(from: state)
++        }
++
++        return state.copy(shouldShowSection: isEnabled)
++    }
++
++    static func defaultState(from state: TrackerBlockerModuleState) -> TrackerBlockerModuleState {
++        return state
++    }
++}
+diff --git a/firefox-ios/Client/Frontend/Settings/HomepageSettings/HomePageSettingViewController.swift b/firefox-ios/Client/Frontend/Settings/HomepageSettings/HomePageSettingViewController.swift
+index c2105a9b6262d..b18569eb40565 100644
+--- a/firefox-ios/Client/Frontend/Settings/HomepageSettings/HomePageSettingViewController.swift
++++ b/firefox-ios/Client/Frontend/Settings/HomepageSettings/HomePageSettingViewController.swift
+@@ -150,6 +150,25 @@ class HomePageSettingViewController: SettingsTableViewController,
+             }
+             sectionItems.append(jumpBackInSetting)
+ 
++            if featureFlagsProvider.isEnabled(.homepageTrackerBlockerModule) {
++                let trackerBlockerModuleSetting = BoolSetting(
++                    prefs: profile.prefs,
++                    theme: themeManager.getCurrentTheme(for: windowUUID),
++                    prefKey: PrefsKeys.HomepageSettings.TrackerBlockerSection,
++                    defaultValue: userPreferences.getPreferenceFor(.homepageTrackerBlockerModule),
++                    titleText: .Settings.Homepage.CustomizeFirefoxHome.PrivacyReport
++                ) { value in
++                    store.dispatch(
++                        TrackerBlockerModuleAction(
++                            isEnabled: value,
++                            windowUUID: self.windowUUID,
++                            actionType: TrackerBlockerModuleActionType.toggleShowSectionSetting
++                        )
++                    )
++                }
++                sectionItems.append(trackerBlockerModuleSetting)
++            }
++
+             if worldCupStore.isFeatureEnabled {
+                 let windowUUID = self.windowUUID
+                 let worldCupSetting = BoolSetting(
+diff --git a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/HomepageDiffableDataSourceTests.swift b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/HomepageDiffableDataSourceTests.swift
+index 598bafd11b228..92186d7f333ea 100644
+--- a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/HomepageDiffableDataSourceTests.swift
++++ b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/HomepageDiffableDataSourceTests.swift
+@@ -12,9 +12,22 @@ import MozillaAppServices
+ final class HomepageDiffableDataSourceTests: XCTestCase {
+     var collectionView: UICollectionView?
+     var diffableDataSource: HomepageDiffableDataSource?
++    private var profile: MockProfile!
++    private var mockNimbusLayer: MockNimbusFeatureFlagLayer!
+ 
+     override func setUp() async throws {
+         try await super.setUp()
++        profile = MockProfile()
++        mockNimbusLayer = MockNimbusFeatureFlagLayer()
++        let featureFlagProvider = FeatureFlagsProvider(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++        let userFeaturePreferences = UserFeaturePreferenceManager(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++
++        DependencyHelperMock().bootstrapDependencies(
++            injectedProfile: profile,
++            injectedFeatureFlagProvider: featureFlagProvider,
++            injectedUserFeaturePreferences: userFeaturePreferences
++        )
++
+         collectionView = UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewFlowLayout())
+         let collectionView = try XCTUnwrap(collectionView)
+         diffableDataSource = HomepageDiffableDataSource(
+@@ -22,12 +35,13 @@ final class HomepageDiffableDataSourceTests: XCTestCase {
+         ) { (collectionView, indexPath, item) -> UICollectionViewCell? in
+             return UICollectionViewCell()
+         }
+-        DependencyHelperMock().bootstrapDependencies()
+     }
+ 
+     override func tearDown() async throws {
+         diffableDataSource = nil
+         collectionView = nil
++        profile = nil
++        mockNimbusLayer = nil
+         DependencyHelperMock().reset()
+         try await super.tearDown()
+     }
+@@ -496,6 +510,92 @@ final class HomepageDiffableDataSourceTests: XCTestCase {
+         XCTAssertEqual(snapshot.sectionIdentifiers, expectedSections)
+     }
+ 
++    @MainActor
++    func test_updateSnapshot_withTrackerBlockerModuleEnabled_returnTrackerBlockerModuleSection() throws {
++        setFeatureFlag(.homepageTrackerBlockerModule, isEnabled: true)
++        let dataSource = try XCTUnwrap(diffableDataSource)
++
++        let state = HomepageState.reducer(
++            HomepageState(windowUUID: .XCTestDefaultUUID),
++            TrackerBlockerModuleAction(
++                isEnabled: true,
++                windowUUID: .XCTestDefaultUUID,
++                actionType: TrackerBlockerModuleActionType.toggleShowSectionSetting
++            )
++        )
++
++        dataSource.updateSnapshot(state: state, jumpBackInDisplayConfig: mockSectionConfig)
++
++        let snapshot = dataSource.snapshot()
++        XCTAssertEqual(snapshot.numberOfItems(inSection: .trackerBlockerModule), 1)
++        XCTAssertEqual(snapshot.itemIdentifiers(inSection: .trackerBlockerModule).first, .trackerBlockerModule)
++        let expectedSections: [HomepageSection] = [
++            .header,
++            .trackerBlockerModule,
++            .spacer
++        ]
++        XCTAssertEqual(snapshot.sectionIdentifiers, expectedSections)
++    }
++
++    @MainActor
++    func test_updateSnapshot_withShortcutsWorldCupTrackerBlockerAndJumpBackIn_ordersTrackerBlockerAfterWorldCup() throws {
++        setFeatureFlag(.homepageTrackerBlockerModule, isEnabled: true)
++        let dataSource = try XCTUnwrap(diffableDataSource)
++
++        var state = HomepageState.reducer(
++            HomepageState(windowUUID: .XCTestDefaultUUID),
++            TopSitesAction(
++                topSites: createSites(),
++                windowUUID: .XCTestDefaultUUID,
++                actionType: TopSitesMiddlewareActionType.retrievedUpdatedSites
++            )
++        )
++        state = HomepageState.reducer(
++            state,
++            TrackerBlockerModuleAction(
++                isEnabled: true,
++                windowUUID: .XCTestDefaultUUID,
++                actionType: TrackerBlockerModuleActionType.toggleShowSectionSetting
++            )
++        )
++        state = HomepageState.reducer(
++            state,
++            TabManagerAction(
++                recentTabs: [createTab(urlString: "www.mozilla.org")],
++                windowUUID: .XCTestDefaultUUID,
++                actionType: TabManagerMiddlewareActionType.fetchedRecentTabs
++            )
++        )
++        state = HomepageState.reducer(
++            state,
++            JumpBackInAction(
++                isEnabled: true,
++                windowUUID: .XCTestDefaultUUID,
++                actionType: JumpBackInActionType.toggleShowSectionSetting
++            )
++        )
++        state = HomepageState.reducer(
++            state,
++            WorldCupAction(
++                windowUUID: .XCTestDefaultUUID,
++                actionType: WorldCupMiddlewareActionType.didUpdate,
++                shouldShowHomepageWorldCupSection: true
++            )
++        )
++
++        dataSource.updateSnapshot(state: state, jumpBackInDisplayConfig: mockSectionConfig)
++
++        let expectedSections: [HomepageSection] = [
++            .header,
++            .topSites(nil, state.topSitesState.numberOfTilesPerRow, true),
++            .worldcup,
++            .trackerBlockerModule,
++            .jumpBackIn(nil, mockSectionConfig),
++            .spacer
++        ]
++        XCTAssertEqual(dataSource.snapshot().sectionIdentifiers, expectedSections)
++    }
++
+     @MainActor
+     func test_updateSnapshot_withValidState_returnsPrivacyNoticeSection() throws {
+         let dataSource = try XCTUnwrap(diffableDataSource)
+@@ -597,6 +697,14 @@ final class HomepageDiffableDataSourceTests: XCTestCase {
+         )
+     }
+ 
++    private func setFeatureFlag(_ flag: FeatureFlagID, isEnabled: Bool) {
++        if isEnabled {
++            mockNimbusLayer.enabledFlags.insert(flag)
++        } else {
++            mockNimbusLayer.enabledFlags.remove(flag)
++        }
++    }
++
+     @MainActor
+     private func createTab(urlString: String) -> Tab {
+         let tab = Tab(profile: MockProfile(), windowUUID: .XCTestDefaultUUID)
+diff --git a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/Redux/HomepageStateTests.swift b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/Redux/HomepageStateTests.swift
+index 8f444066198d6..f2628668a6c96 100644
+--- a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/Redux/HomepageStateTests.swift
++++ b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Frontend/Homepage/Redux/HomepageStateTests.swift
+@@ -8,13 +8,27 @@ import XCTest
+ @testable import Client
+ 
+ final class HomepageStateTests: XCTestCase {
++    private var profile: MockProfile!
++    private var mockNimbusLayer: MockNimbusFeatureFlagLayer!
++
+     override func setUp() async throws {
+         try await super.setUp()
+-        await DependencyHelperMock().bootstrapDependencies()
++        profile = MockProfile()
++        mockNimbusLayer = MockNimbusFeatureFlagLayer()
++        let featureFlagProvider = FeatureFlagsProvider(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++        let userFeaturePreferences = UserFeaturePreferenceManager(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++
++        await DependencyHelperMock().bootstrapDependencies(
++            injectedProfile: profile,
++            injectedFeatureFlagProvider: featureFlagProvider,
++            injectedUserFeaturePreferences: userFeaturePreferences
++        )
+     }
+ 
+     override func tearDown() async throws {
+         DependencyHelperMock().reset()
++        profile = nil
++        mockNimbusLayer = nil
+         try await super.tearDown()
+     }
+ 
+@@ -25,6 +39,7 @@ final class HomepageStateTests: XCTestCase {
+ 
+         XCTAssertFalse(initialState.headerState.isPrivate)
+         XCTAssertFalse(initialState.headerState.showiPadSetup)
++        XCTAssertFalse(initialState.trackerBlockerModuleState.shouldShowSection)
+         XCTAssertFalse(initialState.isZeroSearch)
+         XCTAssertFalse(initialState.shouldTriggerImpression)
+         XCTAssertEqual(initialState.availableContentHeight, 0)
+@@ -172,6 +187,58 @@ final class HomepageStateTests: XCTestCase {
+         XCTAssertEqual(newState.windowUUID, .XCTestDefaultUUID)
+     }
+ 
++    @MainActor
++    func test_trackerBlockerModuleToggleAction_withToggleOn_returnsExpectedState() {
++        setFeatureFlag(.homepageTrackerBlockerModule, isEnabled: true)
++        let initialState = createSubject()
++        let reducer = homepageReducer()
++
++        let newState = reducer(
++            initialState,
++            TrackerBlockerModuleAction(
++                isEnabled: true,
++                windowUUID: .XCTestDefaultUUID,
++                actionType: TrackerBlockerModuleActionType.toggleShowSectionSetting
++            )
++        )
++
++        XCTAssertTrue(newState.trackerBlockerModuleState.shouldShowSection)
++    }
++
++    func test_trackerBlockerModuleState_withFeatureDisabledAndPreferenceEnabled_returnsExpectedState() {
++        let profile = MockProfile()
++        let mockNimbusLayer = MockNimbusFeatureFlagLayer()
++        let userPreferences = UserFeaturePreferenceManager(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++        userPreferences.setPreferenceFor(.homepageTrackerBlockerModule, to: true)
++        let featureFlagsProvider = FeatureFlagsProvider(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++
++        let state = TrackerBlockerModuleState(
++            userPreferences: userPreferences,
++            featureFlagsProvider: featureFlagsProvider,
++            windowUUID: .XCTestDefaultUUID
++        )
++
++        XCTAssertFalse(state.shouldShowSection)
++    }
++
++    @MainActor
++    func test_trackerBlockerModuleToggleAction_withToggleOff_returnsExpectedState() {
++        setFeatureFlag(.homepageTrackerBlockerModule, isEnabled: true)
++        let initialState = createSubject()
++        let reducer = homepageReducer()
++
++        let newState = reducer(
++            initialState,
++            TrackerBlockerModuleAction(
++                isEnabled: false,
++                windowUUID: .XCTestDefaultUUID,
++                actionType: TrackerBlockerModuleActionType.toggleShowSectionSetting
++            )
++        )
++
++        XCTAssertFalse(newState.trackerBlockerModuleState.shouldShowSection)
++    }
++
+     // MARK: - Private
+     private func createSubject() -> HomepageState {
+         return HomepageState(windowUUID: .XCTestDefaultUUID)
+@@ -180,4 +247,12 @@ final class HomepageStateTests: XCTestCase {
+     private func homepageReducer() -> Reducer<HomepageState> {
+         return HomepageState.reducer
+     }
++
++    private func setFeatureFlag(_ flag: FeatureFlagID, isEnabled: Bool) {
++        if isEnabled {
++            mockNimbusLayer.enabledFlags.insert(flag)
++        } else {
++            mockNimbusLayer.enabledFlags.remove(flag)
++        }
++    }
+ }
+diff --git a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Settings/HomePageSettingViewControllerTests.swift b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Settings/HomePageSettingViewControllerTests.swift
+index 82af849c01803..d12ea0933871c 100644
+--- a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Settings/HomePageSettingViewControllerTests.swift
++++ b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Settings/HomePageSettingViewControllerTests.swift
+@@ -12,21 +12,31 @@ final class HomePageSettingViewControllerTests: XCTestCase {
+     private var profile: MockProfile!
+     private var wallpaperManager: WallpaperManagerMock!
+     private var delegate: MockSettingsDelegate!
++    private var mockNimbusLayer: MockNimbusFeatureFlagLayer!
+ 
+     override func setUp() async throws {
+         try await super.setUp()
+         profile = MockProfile()
+-        setIsWorldCupFeatureFlagEnabled(false)
+-        DependencyHelperMock().bootstrapDependencies()
+-        self.profile = MockProfile()
+-        self.delegate = MockSettingsDelegate()
+-        self.wallpaperManager = WallpaperManagerMock()
++        mockNimbusLayer = MockNimbusFeatureFlagLayer()
++        let featureFlagProvider = FeatureFlagsProvider(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++        let userFeaturePreferences = UserFeaturePreferenceManager(prefs: profile.prefs, backendLayer: mockNimbusLayer)
++
++        DependencyHelperMock().bootstrapDependencies(
++            injectedProfile: profile,
++            injectedFeatureFlagProvider: featureFlagProvider,
++            injectedUserFeaturePreferences: userFeaturePreferences
++        )
++
++        delegate = MockSettingsDelegate()
++        wallpaperManager = WallpaperManagerMock()
+     }
+ 
+     override func tearDown() async throws {
+         DependencyHelperMock().reset()
+-        self.profile = nil
+-        self.delegate = nil
++        profile = nil
++        delegate = nil
++        wallpaperManager = nil
++        mockNimbusLayer = nil
+ 
+         try await super.tearDown()
+     }
+@@ -70,7 +80,7 @@ final class HomePageSettingViewControllerTests: XCTestCase {
+ 
+         let bookmarksSectionSetting = customizeFirefoxHomeSettingsList?.children.first(
+             where: {
+-                ($0 as? BoolSetting)?.prefKey == PrefsKeys.HomepageSettings.JumpBackInSection
++                ($0 as? BoolSetting)?.prefKey == PrefsKeys.HomepageSettings.BookmarksSection
+             }) as? BoolSetting
+ 
+         let bookmarksSectionSettingValue = try XCTUnwrap(bookmarksSectionSetting?.getDefaultValue())
+@@ -78,10 +88,51 @@ final class HomePageSettingViewControllerTests: XCTestCase {
+         XCTAssertFalse(bookmarksSectionSettingValue)
+     }
+ 
++    func testHomepageSettings_generateSettings_trackerBlockerModule_whenFeatureDisabled_isHidden() throws {
++        let subject = createSubject()
++        subject.profile = profile
++
++        let settingsList = subject.generateSettings()
++
++        let customizeFirefoxHomeSettingsList = settingsList.first(
++            where: {
++                $0.title?.string == .Settings.Homepage.CustomizeFirefoxHome.Title
++            })
++
++        let trackerBlockerModuleSetting = customizeFirefoxHomeSettingsList?.children.first(
++            where: {
++                ($0 as? BoolSetting)?.prefKey == PrefsKeys.HomepageSettings.TrackerBlockerSection
++            }) as? BoolSetting
++
++        XCTAssertNil(trackerBlockerModuleSetting)
++    }
++
++    func testHomepageSettings_generateSettings_trackerBlockerModule_whenFeatureEnabledDefaultValue_isTrue() throws {
++        setFeatureFlag(.homepageTrackerBlockerModule, isEnabled: true)
++        let subject = createSubject()
++        subject.profile = profile
++
++        let settingsList = subject.generateSettings()
++
++        let customizeFirefoxHomeSettingsList = settingsList.first(
++            where: {
++                $0.title?.string == .Settings.Homepage.CustomizeFirefoxHome.Title
++            })
++
++        let trackerBlockerModuleSetting = customizeFirefoxHomeSettingsList?.children.first(
++            where: {
++                ($0 as? BoolSetting)?.prefKey == PrefsKeys.HomepageSettings.TrackerBlockerSection
++            }) as? BoolSetting
++
++        let trackerBlockerModuleSettingValue = try XCTUnwrap(trackerBlockerModuleSetting?.getDefaultValue())
++
++        XCTAssertTrue(trackerBlockerModuleSettingValue)
++    }
++
+     func testHomepageSettings_generateSettings_worldCupSectionDefaultValue_whenFFEnabled_isTrue() throws {
++        setFeatureFlag(.worldCupWidget, isEnabled: true)
+         let subject = createSubject()
+         subject.profile = profile
+-        setIsWorldCupFeatureFlagEnabled(true)
+ 
+         let settingsList = subject.generateSettings()
+ 
+@@ -101,9 +152,11 @@ final class HomePageSettingViewControllerTests: XCTestCase {
+     }
+ 
+     // MARK: - Helper
+-    private func setIsWorldCupFeatureFlagEnabled(_ isEnabled: Bool) {
+-        FxNimbus.shared.features.worldCupWidgetFeature.with { _, _ in
+-            return WorldCupWidgetFeature(enabled: isEnabled)
++    private func setFeatureFlag(_ flag: FeatureFlagID, isEnabled: Bool) {
++        if isEnabled {
++            mockNimbusLayer.enabledFlags.insert(flag)
++        } else {
++            mockNimbusLayer.enabledFlags.remove(flag)
+         }
+     }
+ 
+diff --git a/firefox-ios/nimbus-features/homepageTrackerBlockerModuleFeature.yaml b/firefox-ios/nimbus-features/homepageTrackerBlockerModuleFeature.yaml
+index ffe7272090889..9e84a5aa7cd82 100644
+--- a/firefox-ios/nimbus-features/homepageTrackerBlockerModuleFeature.yaml
++++ b/firefox-ios/nimbus-features/homepageTrackerBlockerModuleFeature.yaml
+@@ -15,4 +15,4 @@ features:
+           enabled: false
+       - channel: developer
+         value:
+-          enabled: true
+\ No newline at end of file
++          enabled: false

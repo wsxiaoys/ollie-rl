@@ -1,0 +1,6 @@
+{
+  "title": "Lib.VideoOut: Properly remove events on close",
+  "body": "This PR fixes Mass Effect™ Legendary Edition crashing when you try to load one of the games it contains.\r\n<img width=\"1282\" height=\"752\" alt=\"image\" src=\"https://github.com/user-attachments/assets/760bfd3a-6590-4c2f-8c37-ec7772001016\" />\r\n",
+  "head_sha": "c3abbf63f2ca234b1cda9e7d4b9d8cab81353ec2",
+  "base_sha": "f95edd27e0dde1ea26e94152ac3c6c12ed42ffaf"
+}

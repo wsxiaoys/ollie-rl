@@ -1,0 +1,6 @@
+{
+  "title": "Narrow types based on collection containment",
+  "body": "~Test cases come from https://github.com/python/mypy/pull/17344 authored by Jordandev678~\r\n\r\nWe've wanted to do this for a long time, but previous attempt was reverted due to issues like  https://github.com/python/mypy/issues/17841 , https://github.com/python/mypy/issues/17864 , https://github.com/python/mypy/pull/17869\r\n\r\nFollowing https://github.com/python/mypy/pull/20492 we should now be in a position to do this narrowing\r\n\r\nFixes https://github.com/python/mypy/issues/3229\r\nFixes #20234\r\nFixes #18208\r\nFixes #16774",
+  "head_sha": "3e8ded4d961581f34336a68d98c608848c09a02f",
+  "base_sha": "66f83ea328e40058d6f4e7e707672c2aa51fff31"
+}

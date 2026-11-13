@@ -1,0 +1,6 @@
+{
+  "title": "Fix false negatives in walrus vs inference fallback logic",
+  "body": "Fixes https://github.com/python/mypy/issues/20606\r\n\r\nThis fixes couple edge cases where walrus interferes with type inference fallback logic. This is not a complete fix, but I think it is OK for now as these are probably rare situations. Most changes in `binder.py` are a pure performance optimization to compensate the fact that `frame_context()` will be more hot now. I also leave a TODO explaining a more proper fix for the assignment case (and other possible cases), return case should be already good (it is simpler since we don't need to apply any of the narrowing).\r\n\r\n",
+  "head_sha": "5ea65ab28044260e26f97430e0e68936527a94fa",
+  "base_sha": "b5587a383fab59231b571751f4955434b43ba381"
+}

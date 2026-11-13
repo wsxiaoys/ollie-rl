@@ -1,0 +1,1776 @@
+diff --git a/packages/desktop-client/src/accounts/mutations.ts b/packages/desktop-client/src/accounts/mutations.ts
+index 86f4a5ed3f9..ce453563388 100644
+--- a/packages/desktop-client/src/accounts/mutations.ts
++++ b/packages/desktop-client/src/accounts/mutations.ts
+@@ -4,6 +4,7 @@ import { send } from '@actual-app/core/platform/client/connection';
+ import type { SyncResponseWithErrors } from '@actual-app/core/server/accounts/app';
+ import type {
+   AccountEntity,
++  AccountGroupEntity,
+   CategoryEntity,
+   SyncServerAkahuAccount,
+   SyncServerEnableBankingAccount,
+@@ -179,6 +180,7 @@ export function useUpdateAccountMutation() {
+ type MoveAccountPayload = {
+   id: AccountEntity['id'];
+   targetId: AccountEntity['id'] | null;
++  accountGroupId?: AccountGroupEntity['id'] | null;
+ };
+ 
+ export function useMoveAccountMutation() {
+@@ -187,8 +189,12 @@ export function useMoveAccountMutation() {
+   const { t } = useTranslation();
+ 
+   return useMutation({
+-    mutationFn: async ({ id, targetId }: MoveAccountPayload) => {
+-      await send('account-move', { id, targetId });
++    mutationFn: async ({
++      id,
++      targetId,
++      accountGroupId,
++    }: MoveAccountPayload) => {
++      await send('account-move', { id, targetId, accountGroupId });
+     },
+     onSuccess: () => {
+       invalidateQueries(queryClient);
+diff --git a/packages/desktop-client/src/components/App.tsx b/packages/desktop-client/src/components/App.tsx
+index f1d361b0101..2e8984c2a66 100644
+--- a/packages/desktop-client/src/components/App.tsx
++++ b/packages/desktop-client/src/components/App.tsx
+@@ -37,6 +37,7 @@ import { ExposeNavigate } from '#util/router-tools';
+ 
+ import { AppBackground } from './AppBackground';
+ import { BudgetMonthCountProvider } from './budget/BudgetMonthCountContext';
++import { AriaRouterProvider } from './common/AriaRouterProvider';
+ import { DevelopmentTopBar } from './DevelopmentTopBar';
+ import { FatalError } from './FatalError';
+ import { FinancesApp } from './FinancesApp';
+@@ -204,46 +205,50 @@ export function App() {
+   return (
+     <BrowserRouter>
+       <ExposeNavigate />
+-      <HotkeysProvider initiallyActiveScopes={['app']}>
+-        <SpreadsheetProvider>
+-          <SidebarProvider>
+-            <BudgetMonthCountProvider>
+-              <DndProvider backend={HTML5Backend}>
+-                <View
+-                  data-theme={theme}
+-                  style={{
+-                    height: '100%',
+-                    display: 'flex',
+-                    flexDirection: 'column',
+-                  }}
+-                >
++      <AriaRouterProvider>
++        <HotkeysProvider initiallyActiveScopes={['app']}>
++          <SpreadsheetProvider>
++            <SidebarProvider>
++              <BudgetMonthCountProvider>
++                <DndProvider backend={HTML5Backend}>
+                   <View
+-                    key={hiddenScrollbars ? 'hidden-scrollbars' : 'scrollbars'}
++                    data-theme={theme}
+                     style={{
+-                      flexGrow: 1,
+-                      overflow: 'hidden',
+-                      ...styles.lightScrollbar,
++                      height: '100%',
++                      display: 'flex',
++                      flexDirection: 'column',
+                     }}
+                   >
+-                    <ErrorBoundary FallbackComponent={ErrorFallback}>
+-                      {import.meta.env.REACT_APP_REVIEW_ID && !isTestEnv && (
+-                        <DevelopmentTopBar />
+-                      )}
+-                      <AppInner />
+-                    </ErrorBoundary>
+-                    <ThemeStyle />
+-                    <CustomThemeStyle />
+-                    <ErrorBoundary FallbackComponent={FatalError}>
+-                      <Modals />
+-                    </ErrorBoundary>
+-                    <UpdateNotification />
++                    <View
++                      key={
++                        hiddenScrollbars ? 'hidden-scrollbars' : 'scrollbars'
++                      }
++                      style={{
++                        flexGrow: 1,
++                        overflow: 'hidden',
++                        ...styles.lightScrollbar,
++                      }}
++                    >
++                      <ErrorBoundary FallbackComponent={ErrorFallback}>
++                        {import.meta.env.REACT_APP_REVIEW_ID && !isTestEnv && (
++                          <DevelopmentTopBar />
++                        )}
++                        <AppInner />
++                      </ErrorBoundary>
++                      <ThemeStyle />
++                      <CustomThemeStyle />
++                      <ErrorBoundary FallbackComponent={FatalError}>
++                        <Modals />
++                      </ErrorBoundary>
++                      <UpdateNotification />
++                    </View>
+                   </View>
+-                </View>
+-              </DndProvider>
+-            </BudgetMonthCountProvider>
+-          </SidebarProvider>
+-        </SpreadsheetProvider>
+-      </HotkeysProvider>
++                </DndProvider>
++              </BudgetMonthCountProvider>
++            </SidebarProvider>
++          </SpreadsheetProvider>
++        </HotkeysProvider>
++      </AriaRouterProvider>
+     </BrowserRouter>
+   );
+ }
+diff --git a/packages/desktop-client/src/components/common/AriaRouterProvider.tsx b/packages/desktop-client/src/components/common/AriaRouterProvider.tsx
+new file mode 100644
+index 00000000000..58f3ae44450
+--- /dev/null
++++ b/packages/desktop-client/src/components/common/AriaRouterProvider.tsx
+@@ -0,0 +1,19 @@
++import type { ReactNode } from 'react';
++import { RouterProvider } from 'react-aria-components';
++import { useHref } from 'react-router';
++
++import { useNavigate } from '#hooks/useNavigate';
++
++type AriaRouterProviderProps = {
++  children: ReactNode;
++};
++
++export function AriaRouterProvider({ children }: AriaRouterProviderProps) {
++  const navigate = useNavigate();
++
++  return (
++    <RouterProvider navigate={path => navigate(path)} useHref={useHref}>
++      {children}
++    </RouterProvider>
++  );
++}
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/AccountGroupHeader.tsx b/packages/desktop-client/src/components/sidebar/redesign/AccountGroupHeader.tsx
+index d99153f366d..6787717d42f 100644
+--- a/packages/desktop-client/src/components/sidebar/redesign/AccountGroupHeader.tsx
++++ b/packages/desktop-client/src/components/sidebar/redesign/AccountGroupHeader.tsx
+@@ -1,7 +1,12 @@
+-import { useRef, useState } from 'react';
++import { useContext, useState } from 'react';
++import {
++  Button,
++  TreeItem,
++  TreeItemContent,
++  TreeStateContext,
++} from 'react-aria-components';
+ import { useTranslation } from 'react-i18next';
+ 
+-import { Button } from '@actual-app/components/button';
+ import { InitialFocus } from '@actual-app/components/initial-focus';
+ import { Input } from '@actual-app/components/input';
+ import { styles } from '@actual-app/components/styles';
+@@ -9,7 +14,10 @@ import { Text } from '@actual-app/components/text';
+ import { theme } from '@actual-app/components/theme';
+ import { radius, spacing } from '@actual-app/components/tokens';
+ import { View } from '@actual-app/components/view';
+-import type { AccountGroupEntity } from '@actual-app/core/types/models';
++import type {
++  AccountEntity,
++  AccountGroupEntity,
++} from '@actual-app/core/types/models';
+ import { css } from '@emotion/css';
+ 
+ import {
+@@ -21,28 +29,31 @@ import { pushModal } from '#modals/modalsSlice';
+ import { useDispatch } from '#redux';
+ import * as bindings from '#spreadsheet/bindings';
+ 
++import { AccountRow } from './AccountRow';
+ import { CollapseChevron } from './CollapseChevron';
+ import { CountPill } from './CountPill';
++import { DragHandle } from './DragHandle';
+ import { SidebarBalance } from './SidebarBalance';
+-import { groupLabelStyle } from './styles';
++import { dropZoneStyle, groupLabelStyle } from './styles';
+ import { SyncErrorRollup } from './SyncErrorRollup';
++import { treeKeys } from './treeKeys';
+ 
+ type AccountGroupHeaderProps = {
+   group: AccountGroupEntity;
+   side: 'on' | 'off';
+-  accountCount: number;
++  accounts: AccountEntity[];
+   failedCount: number;
+-  isOpen: boolean;
+-  onToggle: () => void;
++  showSyncDot: boolean;
++  isDropZoneActive: boolean;
+ };
+ 
+ export function AccountGroupHeader({
+   group,
+   side,
+-  accountCount,
++  accounts,
+   failedCount,
+-  isOpen,
+-  onToggle,
++  showSyncDot,
++  isDropZoneActive,
+ }: AccountGroupHeaderProps) {
+   const { t } = useTranslation();
+   const dispatch = useDispatch();
+@@ -50,9 +61,9 @@ export function AccountGroupHeader({
+   const updateGroup = useUpdateAccountGroupMutation();
+   const deleteGroup = useDeleteAccountGroupMutation();
+ 
+-  const triggerRef = useRef<HTMLButtonElement>(null);
++  const [rowElement, setRowElement] = useState<HTMLDivElement | null>(null);
+   useContextMenu({
+-    triggerRef,
++    triggerRef: { current: rowElement },
+     items: [
+       {
+         name: 'account-group-rename',
+@@ -81,72 +92,105 @@ export function AccountGroupHeader({
+     ],
+   });
+ 
+-  if (isEditing) {
+-    return (
+-      <View
+-        style={{
+-          flexDirection: 'row',
+-          alignItems: 'center',
+-          gap: spacing.xs,
+-          paddingBlock: spacing.xs,
+-          paddingLeft: spacing.xs,
+-          paddingRight: spacing.sm,
+-        }}
+-      >
+-        <CollapseChevron isOpen={isOpen} size={11} />
+-        <InitialFocus>
+-          <Input
+-            aria-label={t('Group name')}
+-            style={{ flex: 1, padding: 0, fontSize: 12 }}
+-            defaultValue={group.name}
+-            onEnter={newGroupName => {
+-              if (newGroupName.trim() !== '') {
+-                updateGroup.mutate({ id: group.id, name: newGroupName });
+-              }
+-              setIsEditing(false);
+-            }}
+-            onEscape={() => setIsEditing(false)}
+-            onBlur={() => setIsEditing(false)}
+-          />
+-        </InitialFocus>
+-      </View>
+-    );
+-  }
++  const treeState = useContext(TreeStateContext);
++  const key = treeKeys.group(group.id);
+ 
+   return (
+-    <Button
+-      ref={triggerRef}
+-      variant="bare"
+-      aria-expanded={isOpen}
+-      onPress={onToggle}
++    <TreeItem
++      ref={setRowElement}
++      id={key}
++      textValue={group.name}
++      onAction={() => treeState?.toggleKey(key)}
+       className={css({
+-        '&[data-hovered], &[data-focus-visible]': {
+-          backgroundColor: theme.sidebarItemBackgroundHover,
+-        },
+-      })}
+-      style={{
+-        flexDirection: 'row',
+-        alignItems: 'center',
+-        justifyContent: 'flex-start',
+-        gap: spacing.xs,
+-        paddingBlock: spacing.xs,
+-        paddingLeft: spacing.xs,
+-        paddingRight: spacing.sm,
++        outline: 'none',
+         borderRadius: radius.sm,
+-        width: '100%',
+-      }}
++        marginBottom: spacing.xxs,
++        ...(isDropZoneActive && dropZoneStyle),
++        '&[data-dragging]': { opacity: 0.5 },
++      })}
+     >
+-      <CollapseChevron isOpen={isOpen} size={11} />
+-      <Text style={{ ...groupLabelStyle, ...styles.ellipsisText }}>
+-        {group.name}
+-      </Text>
+-      {!isOpen && <CountPill count={accountCount} />}
+-      <SyncErrorRollup count={failedCount} />
+-      <View style={{ flex: 1 }} />
+-      <SidebarBalance
+-        binding={bindings.accountGroupBalance(group.id, side === 'off')}
+-        style={{ fontSize: 11, color: groupLabelStyle.color }}
+-      />
+-    </Button>
++      <TreeItemContent>
++        {({ isExpanded }) => (
++          <View
++            className={css({
++              flexDirection: 'row',
++              alignItems: 'center',
++              gap: spacing.xs,
++              paddingBlock: spacing.xs,
++              paddingLeft: spacing.xs,
++              paddingRight: spacing.sm,
++              borderRadius: radius.sm,
++              cursor: 'pointer',
++              '[data-hovered] > &, [data-focus-visible] > &': {
++                backgroundColor: theme.sidebarItemBackgroundHover,
++              },
++            })}
++          >
++            <Button
++              slot="chevron"
++              aria-label={
++                isExpanded
++                  ? t('Collapse {{group}}', { group: group.name })
++                  : t('Expand {{group}}', { group: group.name })
++              }
++              className={css({
++                display: 'flex',
++                alignItems: 'center',
++                padding: spacing.xxs,
++                border: 'none',
++                background: 'none',
++                color: 'inherit',
++                cursor: 'pointer',
++                outline: 'none',
++              })}
++            >
++              <CollapseChevron isOpen={isExpanded} />
++            </Button>
++            {isEditing ? (
++              <InitialFocus>
++                <Input
++                  aria-label={t('Group name')}
++                  style={{ flex: 1, padding: 0, fontSize: 12 }}
++                  defaultValue={group.name}
++                  onKeyDown={e => e.stopPropagation()}
++                  onEnter={newGroupName => {
++                    if (newGroupName.trim() !== '') {
++                      updateGroup.mutate({ id: group.id, name: newGroupName });
++                    }
++                    setIsEditing(false);
++                  }}
++                  onEscape={() => setIsEditing(false)}
++                  onBlur={() => setIsEditing(false)}
++                />
++              </InitialFocus>
++            ) : (
++              <>
++                <Text style={{ ...groupLabelStyle, ...styles.ellipsisText }}>
++                  {group.name}
++                </Text>
++                {!isExpanded && <CountPill count={accounts.length} />}
++                <SyncErrorRollup count={failedCount} />
++                <View style={{ flex: 1 }} />
++                <SidebarBalance
++                  binding={bindings.accountGroupBalance(
++                    group.id,
++                    side === 'off',
++                  )}
++                  style={{ fontSize: 11, color: groupLabelStyle.color }}
++                />
++              </>
++            )}
++            <DragHandle />
++          </View>
++        )}
++      </TreeItemContent>
++      {accounts.map(account => (
++        <AccountRow
++          key={treeKeys.account(account.id)}
++          account={account}
++          showSyncDot={showSyncDot}
++        />
++      ))}
++    </TreeItem>
+   );
+ }
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/AccountRow.tsx b/packages/desktop-client/src/components/sidebar/redesign/AccountRow.tsx
+index 7ec72996b1a..6c4b5353cd3 100644
+--- a/packages/desktop-client/src/components/sidebar/redesign/AccountRow.tsx
++++ b/packages/desktop-client/src/components/sidebar/redesign/AccountRow.tsx
+@@ -1,5 +1,7 @@
+-import { useRef, useState } from 'react';
++import { useState } from 'react';
++import { TreeItem, TreeItemContent } from 'react-aria-components';
+ import { useTranslation } from 'react-i18next';
++import { useLocation } from 'react-router';
+ 
+ import { InitialFocus } from '@actual-app/components/initial-focus';
+ import { Input } from '@actual-app/components/input';
+@@ -9,10 +11,10 @@ import { theme } from '@actual-app/components/theme';
+ import { radius, spacing } from '@actual-app/components/tokens';
+ import { View } from '@actual-app/components/view';
+ import type { AccountEntity } from '@actual-app/core/types/models';
++import { css } from '@emotion/css';
+ 
+ import { useReopenAccountMutation, useUpdateAccountMutation } from '#accounts';
+ import { isAccountFailedSync } from '#accounts/syncStatus';
+-import { Link } from '#components/common/Link';
+ import { useContextMenu } from '#hooks/useContextMenu';
+ import { useUpdatedAccounts } from '#hooks/useUpdatedAccounts';
+ import { openAccountCloseModal, pushModal } from '#modals/modalsSlice';
+@@ -21,9 +23,11 @@ import * as bindings from '#spreadsheet/bindings';
+ import { isTouchDevice } from '#util/isTouchDevice';
+ 
+ import { AccountHoverCard } from './AccountHoverCard';
++import { DragHandle } from './DragHandle';
+ import { SidebarBalance } from './SidebarBalance';
+ import { SyncDot, useSyncDotLabel } from './SyncDot';
+ import type { SyncDotStatus } from './SyncDot';
++import { treeKeys } from './treeKeys';
+ 
+ type AccountRowProps = {
+   account: AccountEntity;
+@@ -38,10 +42,13 @@ export function AccountRow({
+ }: AccountRowProps) {
+   const { t } = useTranslation();
+   const dispatch = useDispatch();
++  const location = useLocation();
+   const syncingAccountIds = useSelector(state => state.account.accountsSyncing);
+   const updatedAccounts = useUpdatedAccounts();
+   const isUpdated = !isClosed && updatedAccounts.includes(account.id);
+   const [isEditing, setIsEditing] = useState(false);
++  const href = `/accounts/${account.id}`;
++  const isActive = location.pathname === href;
+ 
+   const reopenAccount = useReopenAccountMutation();
+   const updateAccount = useUpdateAccountMutation();
+@@ -52,9 +59,9 @@ export function AccountRow({
+         typeof i === 'object' && 'name' in i && i.name.startsWith('account-'),
+     ),
+   );
+-  const triggerRef = useRef<HTMLDivElement>(null);
++  const [rowElement, setRowElement] = useState<HTMLDivElement | null>(null);
+   useContextMenu({
+-    triggerRef,
++    triggerRef: { current: rowElement },
+     enabled: !isTouchDevice(),
+     items: [
+       {
+@@ -103,69 +110,103 @@ export function AccountRow({
+   const statusLabel = useSyncDotLabel(status);
+ 
+   return (
+-    <AccountHoverCard
+-      account={account}
+-      isDisabled={isContextMenuOpen || isEditing}
++    <TreeItem
++      ref={setRowElement}
++      id={treeKeys.account(account.id)}
++      textValue={account.name}
++      href={isEditing ? undefined : href}
++      onAuxClick={e => {
++        if (e.button === 1 && !isEditing) {
++          window.open(href, '_blank');
++        }
++      }}
++      className={css({
++        outline: 'none',
++        borderRadius: radius.sm,
++        cursor: 'pointer',
++        color: isClosed ? theme.sidebarTextMuted : theme.sidebarItemText,
++        ...(isUpdated && {
++          fontWeight: 700,
++          color: theme.sidebarItemTextUpdated,
++        }),
++        ...(isActive && {
++          backgroundColor: theme.sidebarItemBackgroundSelected,
++          color: theme.sidebarItemTextSelected,
++          fontWeight: 'normal',
++        }),
++        '&[data-hovered], &[data-focus-visible]': {
++          backgroundColor: isActive
++            ? theme.sidebarItemBackgroundSelected
++            : theme.sidebarItemBackgroundHover,
++        },
++        '&[data-dragging]': { opacity: 0.5 },
++      })}
+     >
+-      <View innerRef={triggerRef} style={{ flexShrink: 0 }}>
+-        <Link
+-          variant="internal"
+-          to={`/accounts/${account.id}`}
+-          isDisabled={isEditing}
+-          style={{
+-            display: 'flex',
+-            flexDirection: 'row',
+-            alignItems: 'center',
+-            gap: spacing.sm,
+-            paddingBlock: spacing.xs,
+-            paddingInline: spacing.sm,
+-            borderRadius: radius.sm,
+-            fontSize: 13,
+-            textDecoration: isClosed ? 'line-through' : 'none',
+-            color: isClosed ? theme.sidebarTextMuted : theme.sidebarItemText,
+-            ':hover': { backgroundColor: theme.sidebarItemBackgroundHover },
+-            ...(isUpdated && {
+-              fontWeight: 700,
+-              color: theme.sidebarItemTextUpdated,
+-            }),
+-          }}
+-          activeStyle={{
+-            backgroundColor: theme.sidebarItemBackgroundSelected,
+-            color: theme.sidebarItemTextSelected,
+-            fontWeight: 'normal',
+-          }}
+-        >
+-          {showSyncDot ? <SyncDot status={status} /> : null}
+-          {isEditing ? (
+-            <InitialFocus>
+-              <Input
+-                aria-label={t('Account name')}
+-                style={{ flex: 1, padding: 0, fontSize: 13 }}
+-                defaultValue={account.name}
+-                onEnter={newAccountName => {
+-                  if (newAccountName.trim() !== '') {
+-                    updateAccount.mutate({
+-                      account: { id: account.id, name: newAccountName },
+-                    });
+-                  }
+-                  setIsEditing(false);
++      <TreeItemContent>
++        {({ level }) => (
++          <AccountHoverCard
++            account={account}
++            isDisabled={isContextMenuOpen || isEditing}
++          >
++            <View
++              style={{
++                flexDirection: 'row',
++                alignItems: 'center',
++                gap: spacing.xs,
++                paddingBlock: spacing.xs,
++                paddingRight: spacing.sm,
++                paddingLeft: level > 1 ? spacing.xs + spacing.sm : spacing.xs,
++                fontSize: 13,
++                textDecoration: isClosed ? 'line-through' : 'none',
++              }}
++            >
++              <View
++                style={{
++                  width: spacing.lg,
++                  flexShrink: 0,
++                  alignItems: 'center',
++                }}
++              >
++                {showSyncDot && <SyncDot status={status} />}
++              </View>
++              {isEditing ? (
++                <InitialFocus>
++                  <Input
++                    aria-label={t('Account name')}
++                    style={{ flex: 1, padding: 0, fontSize: 13 }}
++                    defaultValue={account.name}
++                    onKeyDown={e => e.stopPropagation()}
++                    onEnter={newAccountName => {
++                      if (newAccountName.trim() !== '') {
++                        updateAccount.mutate({
++                          account: { id: account.id, name: newAccountName },
++                        });
++                      }
++                      setIsEditing(false);
++                    }}
++                    onEscape={() => setIsEditing(false)}
++                    onBlur={() => setIsEditing(false)}
++                  />
++                </InitialFocus>
++              ) : (
++                <Text style={{ flex: 1, ...styles.ellipsisText }}>
++                  {account.name}
++                </Text>
++              )}
++              <Text style={styles.visuallyHidden}>{statusLabel}</Text>
++              <SidebarBalance
++                binding={bindings.accountBalance(account.id)}
++                style={{
++                  fontSize: 12,
++                  color: 'inherit',
++                  marginLeft: spacing.xs,
+                 }}
+-                onEscape={() => setIsEditing(false)}
+-                onBlur={() => setIsEditing(false)}
+               />
+-            </InitialFocus>
+-          ) : (
+-            <Text style={{ flex: 1, ...styles.ellipsisText }}>
+-              {account.name}
+-            </Text>
+-          )}
+-          <Text style={styles.visuallyHidden}>{statusLabel}</Text>
+-          <SidebarBalance
+-            binding={bindings.accountBalance(account.id)}
+-            style={{ fontSize: 12, color: 'inherit' }}
+-          />
+-        </Link>
+-      </View>
+-    </AccountHoverCard>
++              <DragHandle />
++            </View>
++          </AccountHoverCard>
++        )}
++      </TreeItemContent>
++    </TreeItem>
+   );
+ }
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/AccountTree.tsx b/packages/desktop-client/src/components/sidebar/redesign/AccountTree.tsx
+new file mode 100644
+index 00000000000..634c67820ae
+--- /dev/null
++++ b/packages/desktop-client/src/components/sidebar/redesign/AccountTree.tsx
+@@ -0,0 +1,84 @@
++import { Tree } from 'react-aria-components';
++import type { Key } from 'react-aria-components';
++
++import { css } from '@emotion/css';
++
++import { AccountGroupHeader } from './AccountGroupHeader';
++import { AccountRow } from './AccountRow';
++import { treeKeys } from './treeKeys';
++import { useAccountTreeDragAndDrop } from './useAccountTreeDragAndDrop';
++import type { AccountTreeSide } from './useAccountTreeDragAndDrop';
++import type { GroupBucket } from './useSidebarAccountTree';
++
++type AccountTreeProps = {
++  label: string;
++  side: AccountTreeSide;
++  buckets: GroupBucket[];
++  showSyncDot: boolean;
++  isDragDisabled: boolean;
++  isBucketOpen?: (bucket: GroupBucket) => boolean;
++  onToggleBucket?: (bucket: GroupBucket) => void;
++};
++
++export function AccountTree({
++  label,
++  side,
++  buckets,
++  showSyncDot,
++  isDragDisabled,
++  isBucketOpen,
++  onToggleBucket,
++}: AccountTreeProps) {
++  const { dragAndDropHooks, isGroupDropZoneActive, isDraggingGroup } =
++    useAccountTreeDragAndDrop({ side, buckets, isDisabled: isDragDisabled });
++
++  const groupBuckets = buckets.filter(bucket => bucket.group != null);
++  const expandedKeys = new Set<Key>(
++    groupBuckets
++      .filter(bucket => !isDraggingGroup && (isBucketOpen?.(bucket) ?? true))
++      .map(bucket => treeKeys.group(bucket.group?.id ?? '')),
++  );
++
++  const onExpandedChange = (keys: Set<Key>) => {
++    for (const bucket of groupBuckets) {
++      const key = treeKeys.group(bucket.group?.id ?? '');
++      if (keys.has(key) !== expandedKeys.has(key)) {
++        onToggleBucket?.(bucket);
++      }
++    }
++  };
++
++  return (
++    <Tree
++      aria-label={label}
++      selectionMode="none"
++      expandedKeys={expandedKeys}
++      onExpandedChange={onExpandedChange}
++      dragAndDropHooks={dragAndDropHooks}
++      className={css({ outline: 'none' })}
++    >
++      {buckets.map(bucket =>
++        bucket.group == null ? (
++          bucket.accounts.map(account => (
++            <AccountRow
++              key={treeKeys.account(account.id)}
++              account={account}
++              isClosed={side === 'closed'}
++              showSyncDot={showSyncDot}
++            />
++          ))
++        ) : (
++          <AccountGroupHeader
++            key={treeKeys.group(bucket.group.id)}
++            group={bucket.group}
++            side={side === 'off' ? 'off' : 'on'}
++            accounts={bucket.accounts}
++            failedCount={bucket.failedCount}
++            showSyncDot={showSyncDot}
++            isDropZoneActive={isGroupDropZoneActive(bucket.group.id)}
++          />
++        ),
++      )}
++    </Tree>
++  );
++}
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/AccountsSection.tsx b/packages/desktop-client/src/components/sidebar/redesign/AccountsSection.tsx
+index a9603820e62..2d5b515fd7f 100644
+--- a/packages/desktop-client/src/components/sidebar/redesign/AccountsSection.tsx
++++ b/packages/desktop-client/src/components/sidebar/redesign/AccountsSection.tsx
+@@ -66,6 +66,7 @@ export function AccountsSection() {
+           <SideGroup
+             label={t('On budget')}
+             side="on"
++            isDragDisabled={isSearching}
+             showSyncDot={showSyncDot}
+             sideData={visibleTree.onBudget}
+             totalBinding={bindings.onBudgetAccountBalance()}
+@@ -80,6 +81,7 @@ export function AccountsSection() {
+           <SideGroup
+             label={t('Off budget')}
+             side="off"
++            isDragDisabled={isSearching}
+             showSyncDot={showSyncDot}
+             sideData={visibleTree.offBudget}
+             totalBinding={bindings.offBudgetAccountBalance()}
+@@ -94,6 +96,7 @@ export function AccountsSection() {
+           accounts={visibleTree.closed}
+           isOpen={collapse.isOpen('closed')}
+           onToggle={() => collapse.toggle('closed')}
++          isDragDisabled={isSearching}
+         />
+         <View style={{ height: spacing.md }} />
+       </View>
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/ClosedSection.tsx b/packages/desktop-client/src/components/sidebar/redesign/ClosedSection.tsx
+index f3d880a9e67..ba0e7a8154d 100644
+--- a/packages/desktop-client/src/components/sidebar/redesign/ClosedSection.tsx
++++ b/packages/desktop-client/src/components/sidebar/redesign/ClosedSection.tsx
+@@ -1,4 +1,4 @@
+-import { Trans } from 'react-i18next';
++import { Trans, useTranslation } from 'react-i18next';
+ 
+ import { Button } from '@actual-app/components/button';
+ import { Text } from '@actual-app/components/text';
+@@ -8,7 +8,7 @@ import { View } from '@actual-app/components/view';
+ import type { AccountEntity } from '@actual-app/core/types/models';
+ import { css } from '@emotion/css';
+ 
+-import { AccountRow } from './AccountRow';
++import { AccountTree } from './AccountTree';
+ import { CollapseChevron } from './CollapseChevron';
+ import { CountPill } from './CountPill';
+ import { sectionLabelStyle } from './styles';
+@@ -17,13 +17,17 @@ type ClosedSectionProps = {
+   accounts: AccountEntity[];
+   isOpen: boolean;
+   onToggle: () => void;
++  isDragDisabled: boolean;
+ };
+ 
+ export function ClosedSection({
+   accounts,
+   isOpen,
+   onToggle,
++  isDragDisabled,
+ }: ClosedSectionProps) {
++  const { t } = useTranslation();
++
+   if (accounts.length === 0) {
+     return null;
+   }
+@@ -43,9 +47,9 @@ export function ClosedSection({
+           flexDirection: 'row',
+           alignItems: 'center',
+           justifyContent: 'flex-start',
+-          gap: spacing.xs,
++          gap: spacing.xs + spacing.xxs,
+           paddingBlock: spacing.xs,
+-          paddingLeft: spacing.xs,
++          paddingLeft: spacing.xs + spacing.xxs,
+           paddingRight: spacing.sm,
+           borderRadius: radius.sm,
+           width: '100%',
+@@ -58,11 +62,13 @@ export function ClosedSection({
+         {!isOpen && <CountPill count={accounts.length} />}
+       </Button>
+       {isOpen && (
+-        <View style={{ paddingLeft: spacing.xs }}>
+-          {accounts.map(account => (
+-            <AccountRow key={account.id} account={account} isClosed />
+-          ))}
+-        </View>
++        <AccountTree
++          label={t('Closed accounts')}
++          side="closed"
++          buckets={[{ group: null, accounts, failedCount: 0 }]}
++          showSyncDot={false}
++          isDragDisabled={isDragDisabled}
++        />
+       )}
+     </View>
+   );
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/DragHandle.tsx b/packages/desktop-client/src/components/sidebar/redesign/DragHandle.tsx
+new file mode 100644
+index 00000000000..b6e2e99b97e
+--- /dev/null
++++ b/packages/desktop-client/src/components/sidebar/redesign/DragHandle.tsx
+@@ -0,0 +1,36 @@
++import { Button } from 'react-aria-components';
++
++import { SvgMenu } from '@actual-app/components/icons/v1';
++import { styles } from '@actual-app/components/styles';
++import { theme } from '@actual-app/components/theme';
++import { radius } from '@actual-app/components/tokens';
++import { css } from '@emotion/css';
++
++export function DragHandle() {
++  return (
++    <Button
++      slot="drag"
++      className={css({
++        ...styles.visuallyHidden,
++        '&[data-focus-visible]': {
++          position: 'static',
++          width: 'auto',
++          height: 'auto',
++          margin: 0,
++          overflow: 'visible',
++          clip: 'auto',
++          display: 'flex',
++          alignItems: 'center',
++          border: 'none',
++          background: 'none',
++          color: 'inherit',
++          borderRadius: radius.sm,
++          outline: `2px solid ${theme.formInputBorderSelected}`,
++          outlineOffset: 1,
++        },
++      })}
++    >
++      <SvgMenu style={{ width: 10, height: 10 }} />
++    </Button>
++  );
++}
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/SideGroup.tsx b/packages/desktop-client/src/components/sidebar/redesign/SideGroup.tsx
+index f5326351ad8..6537b88fe04 100644
+--- a/packages/desktop-client/src/components/sidebar/redesign/SideGroup.tsx
++++ b/packages/desktop-client/src/components/sidebar/redesign/SideGroup.tsx
+@@ -10,9 +10,9 @@ import { css } from '@emotion/css';
+ import { Link } from '#components/common/Link';
+ import type { Binding } from '#spreadsheet';
+ 
++import { AccountTree } from './AccountTree';
+ import { CollapseChevron } from './CollapseChevron';
+ import { CountPill } from './CountPill';
+-import { SidebarAccountGroup } from './SidebarAccountGroup';
+ import { SidebarBalance } from './SidebarBalance';
+ import { sectionLabelStyle } from './styles';
+ import { SyncErrorRollup } from './SyncErrorRollup';
+@@ -30,6 +30,7 @@ type SideGroupProps = {
+   balanceTestId: string;
+   isOpen: boolean;
+   onToggle: () => void;
++  isDragDisabled: boolean;
+   isBucketOpen: (bucket: GroupBucket) => boolean;
+   onToggleBucket: (bucket: GroupBucket) => void;
+ };
+@@ -43,6 +44,7 @@ export function SideGroup({
+   balanceTestId,
+   isOpen,
+   onToggle,
++  isDragDisabled,
+   isBucketOpen,
+   onToggleBucket,
+ }: SideGroupProps) {
+@@ -109,17 +111,17 @@ export function SideGroup({
+           />
+         </Link>
+       </View>
+-      {isOpen &&
+-        sideData.buckets.map(bucket => (
+-          <SidebarAccountGroup
+-            key={bucket.group?.id ?? 'ungrouped'}
+-            bucket={bucket}
+-            side={side}
+-            showSyncDot={showSyncDot}
+-            isOpen={isBucketOpen(bucket)}
+-            onToggle={() => onToggleBucket(bucket)}
+-          />
+-        ))}
++      {isOpen && (
++        <AccountTree
++          label={label}
++          side={side}
++          buckets={sideData.buckets}
++          showSyncDot={showSyncDot}
++          isDragDisabled={isDragDisabled}
++          isBucketOpen={isBucketOpen}
++          onToggleBucket={onToggleBucket}
++        />
++      )}
+     </View>
+   );
+ }
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/SidebarAccountGroup.tsx b/packages/desktop-client/src/components/sidebar/redesign/SidebarAccountGroup.tsx
+deleted file mode 100644
+index 05853b4a604..00000000000
+--- a/packages/desktop-client/src/components/sidebar/redesign/SidebarAccountGroup.tsx
++++ /dev/null
+@@ -1,62 +0,0 @@
+-import { spacing } from '@actual-app/components/tokens';
+-import { View } from '@actual-app/components/view';
+-
+-import { AccountGroupHeader } from './AccountGroupHeader';
+-import { AccountRow } from './AccountRow';
+-import type { GroupBucket } from './useSidebarAccountTree';
+-
+-type SidebarAccountGroupProps = {
+-  bucket: GroupBucket;
+-  side: 'on' | 'off';
+-  showSyncDot: boolean;
+-  isOpen: boolean;
+-  onToggle: () => void;
+-};
+-
+-export function SidebarAccountGroup({
+-  bucket,
+-  side,
+-  showSyncDot,
+-  isOpen,
+-  onToggle,
+-}: SidebarAccountGroupProps) {
+-  const { group, accounts, failedCount } = bucket;
+-
+-  if (group == null) {
+-    return (
+-      <View style={{ paddingLeft: spacing.xs }}>
+-        {accounts.map(account => (
+-          <AccountRow
+-            key={account.id}
+-            account={account}
+-            showSyncDot={showSyncDot}
+-          />
+-        ))}
+-      </View>
+-    );
+-  }
+-
+-  return (
+-    <View style={{ paddingLeft: spacing.xs, marginBottom: spacing.xxs }}>
+-      <AccountGroupHeader
+-        group={group}
+-        side={side}
+-        accountCount={accounts.length}
+-        failedCount={failedCount}
+-        isOpen={isOpen}
+-        onToggle={onToggle}
+-      />
+-      {isOpen && (
+-        <View style={{ paddingLeft: spacing.sm }}>
+-          {accounts.map(account => (
+-            <AccountRow
+-              key={account.id}
+-              account={account}
+-              showSyncDot={showSyncDot}
+-            />
+-          ))}
+-        </View>
+-      )}
+-    </View>
+-  );
+-}
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/accountTreeMoves.test.ts b/packages/desktop-client/src/components/sidebar/redesign/accountTreeMoves.test.ts
+new file mode 100644
+index 00000000000..e7dcfdc1975
+--- /dev/null
++++ b/packages/desktop-client/src/components/sidebar/redesign/accountTreeMoves.test.ts
+@@ -0,0 +1,224 @@
++import { generateAccount } from '@actual-app/core/mocks';
++import type {
++  AccountEntity,
++  AccountGroupEntity,
++} from '@actual-app/core/types/models';
++import { describe, expect, it } from 'vitest';
++
++import { computeAccountMove, computeGroupMove } from './accountTreeMoves';
++import type { AccountDropTarget } from './accountTreeMoves';
++import { parseTreeKey, treeKeys } from './treeKeys';
++
++function makeAccount(
++  id: string,
++  overrides: Partial<AccountEntity> = {},
++): AccountEntity {
++  return { ...generateAccount(id), id, name: id, ...overrides };
++}
++
++function makeGroup(id: string): AccountGroupEntity {
++  return { id, name: id, sort_order: 0 };
++}
++
++const liveGroupIds = new Set(['g1', 'g2']);
++const groups = [makeGroup('g1'), makeGroup('g2'), makeGroup('g3')];
++
++// Raw sort order: a (g1), b (g1), c (ungrouped), d (g2), off1, closed1
++const accounts = [
++  makeAccount('a', { account_group_id: 'g1' }),
++  makeAccount('b', { account_group_id: 'g1' }),
++  makeAccount('c'),
++  makeAccount('d', { account_group_id: 'g2' }),
++  makeAccount('off1', { offbudget: 1 }),
++  makeAccount('closed1', { closed: 1 }),
++];
++
++function move(draggedId: string, target: AccountDropTarget) {
++  return computeAccountMove({ accounts, liveGroupIds, draggedId, target });
++}
++
++const before = (accountId: string): AccountDropTarget => ({
++  kind: 'account',
++  accountId,
++  position: 'before',
++});
++const after = (accountId: string): AccountDropTarget => ({
++  kind: 'account',
++  accountId,
++  position: 'after',
++});
++const into = (groupId: string): AccountDropTarget => ({
++  kind: 'group',
++  groupId,
++  position: 'on',
++});
++
++describe('treeKeys', () => {
++  it('round-trips account and group keys and rejects other keys', () => {
++    expect(parseTreeKey(treeKeys.account('abc'))).toEqual({
++      kind: 'account',
++      accountId: 'abc',
++    });
++    expect(parseTreeKey(treeKeys.group('g1'))).toEqual({
++      kind: 'group',
++      groupId: 'g1',
++    });
++    expect(parseTreeKey('abc')).toBeNull();
++    expect(parseTreeKey(12)).toBeNull();
++  });
++});
++
++describe('computeAccountMove', () => {
++  it('reorders within a group without touching the group', () => {
++    expect(move('b', before('a'))).toEqual({
++      id: 'b',
++      targetId: 'a',
++      accountGroupId: undefined,
++    });
++  });
++
++  it('inserts before the next account on the same side when dropping after a row', () => {
++    expect(move('a', after('b'))).toEqual({
++      id: 'a',
++      targetId: 'c',
++      accountGroupId: undefined,
++    });
++  });
++
++  it('skips accounts outside the sort partition when finding the successor', () => {
++    const mixed = [
++      makeAccount('on1'),
++      makeAccount('off1', { offbudget: 1 }),
++      makeAccount('on2'),
++      makeAccount('on3'),
++      makeAccount('closedA', { closed: 1 }),
++      makeAccount('off2', { offbudget: 1 }),
++      makeAccount('closedB', { closed: 1 }),
++      makeAccount('closedC', { closed: 1 }),
++    ];
++    const moveMixed = (draggedId: string, target: AccountDropTarget) =>
++      computeAccountMove({ accounts: mixed, liveGroupIds, draggedId, target });
++
++    expect(moveMixed('on3', after('on1'))?.targetId).toBe('on2');
++    expect(moveMixed('on1', after('on3'))?.targetId).toBe('closedA');
++    expect(moveMixed('closedC', after('closedA'))?.targetId).toBe('closedB');
++    expect(moveMixed('closedB', after('on3'))?.targetId).toBe(null);
++  });
++
++  it('appends at the end when dropping after the last account', () => {
++    expect(move('a', after('closed1'))?.targetId).toBe(null);
++  });
++
++  it('adopts the drop target row group, including ungrouped', () => {
++    expect(move('a', before('d'))).toEqual({
++      id: 'a',
++      targetId: 'd',
++      accountGroupId: 'g2',
++    });
++    expect(move('a', before('c'))).toEqual({
++      id: 'a',
++      targetId: 'c',
++      accountGroupId: null,
++    });
++  });
++
++  it('never reassigns groups for closed account drags', () => {
++    expect(move('closed1', before('a'))).toEqual({
++      id: 'closed1',
++      targetId: 'a',
++      accountGroupId: undefined,
++    });
++  });
++
++  it('drops onto a group before its first member on the same side', () => {
++    expect(move('c', into('g1'))).toEqual({
++      id: 'c',
++      targetId: 'a',
++      accountGroupId: 'g1',
++    });
++  });
++
++  it('keeps the group untouched when dropping onto its own group', () => {
++    expect(move('b', into('g1'))).toEqual({
++      id: 'b',
++      targetId: 'a',
++      accountGroupId: undefined,
++    });
++    expect(move('a', into('g1'))).toBeNull();
++  });
++
++  it('ignores drops onto groups with no members on the side', () => {
++    expect(
++      computeAccountMove({
++        accounts,
++        liveGroupIds: new Set(['g9']),
++        draggedId: 'a',
++        target: into('g9'),
++      }),
++    ).toBeNull();
++  });
++
++  it('ungroups to the end of the loose list when dropped beside a group', () => {
++    expect(
++      move('b', { kind: 'group', groupId: 'g2', position: 'before' }),
++    ).toEqual({ id: 'b', targetId: null, accountGroupId: null });
++    expect(
++      move('c', { kind: 'group', groupId: 'g2', position: 'before' }),
++    ).toBeNull();
++    expect(
++      move('closed1', { kind: 'group', groupId: 'g2', position: 'before' }),
++    ).toBeNull();
++  });
++
++  it('returns null for unknown dragged accounts', () => {
++    expect(move('nope', before('a'))).toBeNull();
++  });
++});
++
++describe('computeGroupMove', () => {
++  it('moves a group before or after another group', () => {
++    expect(
++      computeGroupMove({
++        groups,
++        draggedId: 'g3',
++        targetId: 'g1',
++        position: 'before',
++      }),
++    ).toEqual({ id: 'g3', targetId: 'g1' });
++    expect(
++      computeGroupMove({
++        groups,
++        draggedId: 'g1',
++        targetId: 'g2',
++        position: 'after',
++      }),
++    ).toEqual({ id: 'g1', targetId: 'g3' });
++    expect(
++      computeGroupMove({
++        groups,
++        draggedId: 'g1',
++        targetId: 'g3',
++        position: 'after',
++      }),
++    ).toEqual({ id: 'g1', targetId: null });
++  });
++
++  it('ignores moves that change nothing', () => {
++    expect(
++      computeGroupMove({
++        groups,
++        draggedId: 'g1',
++        targetId: 'g1',
++        position: 'before',
++      }),
++    ).toBeNull();
++    expect(
++      computeGroupMove({
++        groups,
++        draggedId: 'g2',
++        targetId: 'g1',
++        position: 'after',
++      }),
++    ).toBeNull();
++  });
++});
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/accountTreeMoves.ts b/packages/desktop-client/src/components/sidebar/redesign/accountTreeMoves.ts
+new file mode 100644
+index 00000000000..a7ece5472f7
+--- /dev/null
++++ b/packages/desktop-client/src/components/sidebar/redesign/accountTreeMoves.ts
+@@ -0,0 +1,114 @@
++import type {
++  AccountEntity,
++  AccountGroupEntity,
++} from '@actual-app/core/types/models';
++
++import { getEffectiveGroupId } from './useSidebarAccountTree';
++
++export type AccountMove = {
++  id: AccountEntity['id'];
++  targetId: AccountEntity['id'] | null;
++  accountGroupId?: AccountGroupEntity['id'] | null;
++};
++
++export type GroupMove = {
++  id: AccountGroupEntity['id'];
++  targetId: AccountGroupEntity['id'] | null;
++};
++
++export type AccountDropTarget =
++  | { kind: 'account'; accountId: string; position: 'before' | 'after' }
++  | { kind: 'group'; groupId: string; position: 'on' | 'before' | 'after' };
++
++export function computeAccountMove({
++  accounts,
++  liveGroupIds,
++  draggedId,
++  target,
++}: {
++  accounts: AccountEntity[];
++  liveGroupIds: ReadonlySet<AccountGroupEntity['id']>;
++  draggedId: AccountEntity['id'];
++  target: AccountDropTarget;
++}): AccountMove | null {
++  const draggedAccount = accounts.find(account => account.id === draggedId);
++  if (draggedAccount == null) {
++    return null;
++  }
++  const draggedGroupId = getEffectiveGroupId(draggedAccount, liveGroupIds);
++
++  if (target.kind === 'group' && target.position === 'on') {
++    const firstMember = accounts.find(
++      account =>
++        !account.closed &&
++        account.offbudget === draggedAccount.offbudget &&
++        getEffectiveGroupId(account, liveGroupIds) === target.groupId,
++    );
++    if (firstMember == null || firstMember.id === draggedId) {
++      return null;
++    }
++    return {
++      id: draggedId,
++      targetId: firstMember.id,
++      accountGroupId:
++        draggedGroupId === target.groupId ? undefined : target.groupId,
++    };
++  }
++
++  if (target.kind === 'group') {
++    if (draggedAccount.closed || draggedGroupId == null) {
++      return null;
++    }
++    return { id: draggedId, targetId: null, accountGroupId: null };
++  }
++
++  let targetId: AccountEntity['id'] | null = target.accountId;
++  if (target.position === 'after') {
++    const siblings = accounts.filter(account =>
++      draggedAccount.closed
++        ? account.closed
++        : account.offbudget === draggedAccount.offbudget,
++    );
++    const idx = siblings.findIndex(account => account.id === target.accountId);
++    targetId =
++      idx >= 0 && idx + 1 < siblings.length ? siblings[idx + 1].id : null;
++  }
++
++  let accountGroupId: AccountGroupEntity['id'] | null | undefined;
++  const targetAccount = accounts.find(
++    account => account.id === target.accountId,
++  );
++  if (!draggedAccount.closed && targetAccount != null) {
++    const targetGroupId = getEffectiveGroupId(targetAccount, liveGroupIds);
++    if (targetGroupId !== draggedGroupId) {
++      accountGroupId = targetGroupId;
++    }
++  }
++
++  return { id: draggedId, targetId, accountGroupId };
++}
++
++export function computeGroupMove({
++  groups,
++  draggedId,
++  targetId,
++  position,
++}: {
++  groups: AccountGroupEntity[];
++  draggedId: AccountGroupEntity['id'];
++  targetId: AccountGroupEntity['id'];
++  position: 'before' | 'after';
++}): GroupMove | null {
++  if (draggedId === targetId) {
++    return null;
++  }
++  if (position === 'before') {
++    return { id: draggedId, targetId };
++  }
++  const idx = groups.findIndex(group => group.id === targetId);
++  const next = idx >= 0 ? groups[idx + 1] : undefined;
++  if (next?.id === draggedId) {
++    return null;
++  }
++  return { id: draggedId, targetId: next?.id ?? null };
++}
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/styles.ts b/packages/desktop-client/src/components/sidebar/redesign/styles.ts
+index b9d6520064d..f5c4399b45e 100644
+--- a/packages/desktop-client/src/components/sidebar/redesign/styles.ts
++++ b/packages/desktop-client/src/components/sidebar/redesign/styles.ts
+@@ -1,5 +1,6 @@
+ import type { CSSProperties } from '@actual-app/components/styles';
+ import { theme } from '@actual-app/components/theme';
++import { radius } from '@actual-app/components/tokens';
+ 
+ export const sectionLabelStyle = {
+   fontSize: 13,
+@@ -11,3 +12,9 @@ export const groupLabelStyle = {
+   fontWeight: 600,
+   color: theme.sidebarTextSubdued,
+ } satisfies CSSProperties;
++
++export const dropZoneStyle = {
++  backgroundColor: theme.sidebarItemBackgroundHover,
++  boxShadow: `inset 0 0 0 1px ${theme.sidebarItemAccentSelected}`,
++  borderRadius: radius.sm,
++} satisfies CSSProperties;
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/treeKeys.ts b/packages/desktop-client/src/components/sidebar/redesign/treeKeys.ts
+new file mode 100644
+index 00000000000..7ed9d6aa2ad
+--- /dev/null
++++ b/packages/desktop-client/src/components/sidebar/redesign/treeKeys.ts
+@@ -0,0 +1,29 @@
++import type { Key } from 'react-aria-components';
++
++export type SidebarTreeKey = `account:${string}` | `group:${string}`;
++
++export type SidebarTreeNode =
++  | { kind: 'account'; accountId: string }
++  | { kind: 'group'; groupId: string };
++
++export const treeKeys = {
++  account(accountId: string): SidebarTreeKey {
++    return `account:${accountId}`;
++  },
++  group(groupId: string): SidebarTreeKey {
++    return `group:${groupId}`;
++  },
++};
++
++export function parseTreeKey(key: Key): SidebarTreeNode | null {
++  if (typeof key !== 'string') {
++    return null;
++  }
++  if (key.startsWith('account:')) {
++    return { kind: 'account', accountId: key.slice('account:'.length) };
++  }
++  if (key.startsWith('group:')) {
++    return { kind: 'group', groupId: key.slice('group:'.length) };
++  }
++  return null;
++}
+diff --git a/packages/desktop-client/src/components/sidebar/redesign/useAccountTreeDragAndDrop.tsx b/packages/desktop-client/src/components/sidebar/redesign/useAccountTreeDragAndDrop.tsx
+new file mode 100644
+index 00000000000..6e8667d1619
+--- /dev/null
++++ b/packages/desktop-client/src/components/sidebar/redesign/useAccountTreeDragAndDrop.tsx
+@@ -0,0 +1,223 @@
++import { useRef, useState } from 'react';
++import type { DragItem } from 'react-aria';
++import { DropIndicator, useDragAndDrop } from 'react-aria-components';
++import type {
++  DragTypes,
++  DropTarget,
++  ItemDropTarget,
++} from 'react-aria-components';
++
++import { theme } from '@actual-app/components/theme';
++import { spacing } from '@actual-app/components/tokens';
++import type {
++  AccountEntity,
++  AccountGroupEntity,
++} from '@actual-app/core/types/models';
++import { css } from '@emotion/css';
++
++import { useMoveAccountGroupMutation } from '#account-groups';
++import { useMoveAccountMutation } from '#accounts';
++import { useAccountGroups } from '#hooks/useAccountGroups';
++import { useAccounts } from '#hooks/useAccounts';
++
++import { computeAccountMove, computeGroupMove } from './accountTreeMoves';
++import { parseTreeKey } from './treeKeys';
++import type { SidebarTreeNode } from './treeKeys';
++import { getEffectiveGroupId } from './useSidebarAccountTree';
++import type { GroupBucket } from './useSidebarAccountTree';
++
++export type AccountTreeSide = 'on' | 'off' | 'closed';
++
++type DraggedNode =
++  | {
++      kind: 'account';
++      accountId: AccountEntity['id'];
++      groupId: AccountGroupEntity['id'] | null;
++    }
++  | { kind: 'group'; groupId: AccountGroupEntity['id'] };
++
++type UseAccountTreeDragAndDropArgs = {
++  side: AccountTreeSide;
++  buckets: GroupBucket[];
++  isDisabled: boolean;
++};
++
++export function useAccountTreeDragAndDrop({
++  side,
++  buckets,
++  isDisabled,
++}: UseAccountTreeDragAndDropArgs) {
++  const { data: accounts = [] } = useAccounts();
++  const { data: accountGroups = [] } = useAccountGroups();
++  const moveAccount = useMoveAccountMutation();
++  const moveGroup = useMoveAccountGroupMutation();
++  const [dragged, setDragged] = useState<DraggedNode | null>(null);
++  const [hoveredGroupId, setHoveredGroupId] = useState<
++    AccountGroupEntity['id'] | null
++  >(null);
++  const [isDraggingGroup, setIsDraggingGroup] = useState(false);
++  const collapseTimer = useRef<number | undefined>(undefined);
++
++  const accountType = `sidebar-account-${side}`;
++  const groupType = `sidebar-group-${side}`;
++  const liveGroupIds = new Set(accountGroups.map(group => group.id));
++  const firstRootGroupId = buckets.find(bucket => bucket.group != null)?.group
++    ?.id;
++
++  const groupOfNode = (node: SidebarTreeNode | null) => {
++    if (node?.kind === 'group') {
++      return node.groupId;
++    }
++    if (node?.kind === 'account') {
++      const account = accounts.find(item => item.id === node.accountId);
++      return account == null
++        ? null
++        : getEffectiveGroupId(account, liveGroupIds);
++    }
++    return null;
++  };
++
++  const isValidTarget = (target: DropTarget, types: DragTypes) => {
++    if (target.type === 'root') {
++      return false;
++    }
++    const node = parseTreeKey(target.key);
++    if (node == null) {
++      return false;
++    }
++    if (types.has(groupType)) {
++      return node.kind === 'group' && target.dropPosition !== 'on';
++    }
++    if (!types.has(accountType)) {
++      return false;
++    }
++    if (node.kind === 'account') {
++      return target.dropPosition !== 'on';
++    }
++    if (target.dropPosition === 'on') {
++      return true;
++    }
++    return (
++      target.dropPosition === 'before' && node.groupId === firstRootGroupId
++    );
++  };
++
++  const applyDrop = (target: ItemDropTarget) => {
++    const targetNode = parseTreeKey(target.key);
++    if (dragged == null || targetNode == null) {
++      return;
++    }
++
++    if (dragged.kind === 'group') {
++      if (targetNode.kind !== 'group' || target.dropPosition === 'on') {
++        return;
++      }
++      const move = computeGroupMove({
++        groups: accountGroups,
++        draggedId: dragged.groupId,
++        targetId: targetNode.groupId,
++        position: target.dropPosition,
++      });
++      if (move != null) {
++        moveGroup.mutate(move);
++      }
++      return;
++    }
++
++    const move = computeAccountMove({
++      accounts,
++      liveGroupIds,
++      draggedId: dragged.accountId,
++      target:
++        targetNode.kind === 'account'
++          ? {
++              kind: 'account',
++              accountId: targetNode.accountId,
++              position: target.dropPosition === 'after' ? 'after' : 'before',
++            }
++          : {
++              kind: 'group',
++              groupId: targetNode.groupId,
++              position: target.dropPosition,
++            },
++    });
++    if (move != null) {
++      moveAccount.mutate(move);
++    }
++  };
++
++  const { dragAndDropHooks } = useDragAndDrop({
++    isDisabled,
++    getItems: keys =>
++      [...keys].flatMap((key): DragItem[] => {
++        const node = parseTreeKey(key);
++        if (node?.kind === 'account') {
++          return [{ [accountType]: node.accountId, 'text/plain': String(key) }];
++        }
++        if (node?.kind === 'group') {
++          return [{ [groupType]: node.groupId, 'text/plain': String(key) }];
++        }
++        return [];
++      }),
++    acceptedDragTypes: [accountType, groupType],
++    shouldAcceptItemDrop: (target, types) =>
++      types.has(accountType) && parseTreeKey(target.key)?.kind === 'group',
++    getDropOperation: (target, types) =>
++      isValidTarget(target, types) ? 'move' : 'cancel',
++    renderDropIndicator: target => (
++      <DropIndicator
++        target={target}
++        className={css({
++          '&[data-drop-target]': {
++            height: 3,
++            marginBlock: -1.5,
++            marginInline: spacing.xxs,
++            borderRadius: 3,
++            backgroundColor: theme.pageTextLink,
++          },
++        })}
++      />
++    ),
++    onDragStart: e => {
++      const [key] = e.keys;
++      const node = key == null ? null : parseTreeKey(key);
++      setDragged(
++        node?.kind === 'account'
++          ? { ...node, groupId: groupOfNode(node) }
++          : node,
++      );
++      if (node?.kind === 'group') {
++        collapseTimer.current = window.setTimeout(
++          () => setIsDraggingGroup(true),
++          0,
++        );
++      }
++    },
++    onDragEnd: () => {
++      window.clearTimeout(collapseTimer.current);
++      setIsDraggingGroup(false);
++      setDragged(null);
++      setHoveredGroupId(null);
++    },
++    onDropEnter: e => {
++      setHoveredGroupId(
++        e.target.type === 'item'
++          ? groupOfNode(parseTreeKey(e.target.key))
++          : null,
++      );
++    },
++    onDropExit: () => setHoveredGroupId(null),
++    onMove: e => applyDrop(e.target),
++  });
++
++  const isGroupDropZoneActive = (groupId: AccountGroupEntity['id']) =>
++    dragged?.kind === 'account' &&
++    hoveredGroupId === groupId &&
++    dragged.groupId !== groupId;
++
++  return {
++    dragAndDropHooks,
++    isGroupDropZoneActive,
++    isDraggingGroup,
++  };
++}
+diff --git a/packages/loot-core/src/server/account-groups/app.test.ts b/packages/loot-core/src/server/account-groups/app.test.ts
+index 3216f450e6c..293c86c7b6b 100644
+--- a/packages/loot-core/src/server/account-groups/app.test.ts
++++ b/packages/loot-core/src/server/account-groups/app.test.ts
+@@ -163,4 +163,78 @@ describe('account groups app', () => {
+       expect(accounts[0].account_group_id).toBeNull();
+     });
+   });
++
++  describe('account-move', () => {
++    it('reorders and reassigns the group in one undoable move', async () => {
++      const groupId = await app.handlers['account-group-create']({
++        name: 'Savings',
++      });
++      await db.insertAccount({ id: 'acct1', name: 'Checking' });
++      await db.insertAccount({ id: 'acct2', name: 'Marcus' });
++      await db.insertAccount({ id: 'acct3', name: 'Premium Saver' });
++      await accountsApp.handlers['account-update']({
++        id: 'acct3',
++        account_group_id: groupId,
++      });
++
++      await accountsApp.handlers['account-move']({
++        id: 'acct1',
++        targetId: 'acct3',
++        accountGroupId: groupId,
++      });
++
++      let accounts = await accountsApp.handlers['accounts-get']();
++      expect(accounts.map(account => account.id)).toEqual([
++        'acct2',
++        'acct1',
++        'acct3',
++      ]);
++      expect(
++        accounts.find(account => account.id === 'acct1')?.account_group_id,
++      ).toBe(groupId);
++
++      await accountsApp.handlers['account-move']({
++        id: 'acct1',
++        targetId: 'acct2',
++        accountGroupId: null,
++      });
++      accounts = await accountsApp.handlers['accounts-get']();
++      expect(accounts.map(account => account.id)).toEqual([
++        'acct1',
++        'acct2',
++        'acct3',
++      ]);
++      expect(
++        accounts.find(account => account.id === 'acct1')?.account_group_id,
++      ).toBeNull();
++
++      await accountsApp.handlers['account-move']({
++        id: 'acct2',
++        targetId: null,
++      });
++      accounts = await accountsApp.handlers['accounts-get']();
++      expect(accounts.map(account => account.id)).toEqual([
++        'acct1',
++        'acct3',
++        'acct2',
++      ]);
++      expect(
++        accounts.find(account => account.id === 'acct2')?.account_group_id,
++      ).toBeNull();
++
++      await accountsApp.handlers['account-move']({
++        id: 'acct3',
++        targetId: 'acct1',
++      });
++      accounts = await accountsApp.handlers['accounts-get']();
++      expect(accounts.map(account => account.id)).toEqual([
++        'acct3',
++        'acct1',
++        'acct2',
++      ]);
++      expect(
++        accounts.find(account => account.id === 'acct3')?.account_group_id,
++      ).toBe(groupId);
++    });
++  });
+ });
+diff --git a/packages/loot-core/src/server/accounts/app.ts b/packages/loot-core/src/server/accounts/app.ts
+index 3bb87cc4519..1613b90a8ae 100644
+--- a/packages/loot-core/src/server/accounts/app.ts
++++ b/packages/loot-core/src/server/accounts/app.ts
+@@ -26,6 +26,7 @@ import { amountToInteger } from '#shared/util';
+ import type { ImportTransactionsOpts } from '#types/api-handlers';
+ import type {
+   AccountEntity,
++  AccountGroupEntity,
+   BankSyncProviderStatus,
+   BankSyncStatus,
+   CategoryEntity,
+@@ -710,11 +711,13 @@ async function reopenAccount({ id }: { id: AccountEntity['id'] }) {
+ async function moveAccount({
+   id,
+   targetId,
++  accountGroupId,
+ }: {
+   id: AccountEntity['id'];
+   targetId: AccountEntity['id'] | null;
++  accountGroupId?: AccountGroupEntity['id'] | null;
+ }) {
+-  await db.moveAccount(id, targetId);
++  await db.moveAccount(id, targetId, accountGroupId);
+ }
+ 
+ async function setSecret({
+diff --git a/packages/loot-core/src/server/db/index.ts b/packages/loot-core/src/server/db/index.ts
+index 866a5ca90eb..8f982b98657 100644
+--- a/packages/loot-core/src/server/db/index.ts
++++ b/packages/loot-core/src/server/db/index.ts
+@@ -758,6 +758,7 @@ export function deleteAccount(account) {
+ export async function moveAccount(
+   id: DbAccount['id'],
+   targetId: DbAccount['id'] | null,
++  accountGroupId?: DbAccountGroup['id'] | null,
+ ) {
+   const account = await first<DbAccount>(
+     'SELECT * FROM accounts WHERE id = ?',
+@@ -780,7 +781,13 @@ export async function moveAccount(
+     for (const info of updates) {
+       void update('accounts', info);
+     }
+-    void update('accounts', { id, sort_order });
++    void update('accounts', {
++      id,
++      sort_order,
++      ...(accountGroupId !== undefined && {
++        account_group_id: accountGroupId,
++      }),
++    });
+   });
+ }
+ 
+diff --git a/upcoming-release-notes/add-new-sidebar-reorder.md b/upcoming-release-notes/add-new-sidebar-reorder.md
+new file mode 100644
+index 00000000000..398fbc3f481
+--- /dev/null
++++ b/upcoming-release-notes/add-new-sidebar-reorder.md
+@@ -0,0 +1,6 @@
++---
++category: Features
++authors: [matt-fidd]
++---
++
++Support reordering accounts and groups and moving accounts between groups by drag and drop in the experimental new sidebar

@@ -1,0 +1,66 @@
+diff --git a/lib/internal/streams/readable.js b/lib/internal/streams/readable.js
+index 57aa71817e4f..296818e31eac 100644
+--- a/lib/internal/streams/readable.js
++++ b/lib/internal/streams/readable.js
+@@ -604,6 +604,8 @@ Readable.prototype.setEncoding = function(enc) {
+   for (const data of state.buffer.slice(state.bufferIndex)) {
+     content += decoder.write(data);
+   }
++  if ((state[kState] & kEnded) !== 0)
++    content += decoder.end();
+   state.buffer.length = 0;
+   state.bufferIndex = 0;
+ 
+diff --git a/test/parallel/test-stream-readable-setEncoding-existing-buffers.js b/test/parallel/test-stream-readable-setEncoding-existing-buffers.js
+index eb75260bacfc..38d50b567757 100644
+--- a/test/parallel/test-stream-readable-setEncoding-existing-buffers.js
++++ b/test/parallel/test-stream-readable-setEncoding-existing-buffers.js
+@@ -58,3 +58,48 @@ const assert = require('assert');
+     assert.deepStrictEqual(chunks, ['🎉']);
+   });
+ }
++
++{
++  // Call .setEncoding() before the stream starts flowing, after _read()
++  // has buffered the first chunk of a split character.
++  const chunks = [
++    Buffer.from([0xf0, 0x9f]),
++    Buffer.from([0x8e, 0x89]),
++    null,
++  ];
++  const r = new Readable({
++    read() {
++      this.push(chunks.shift());
++    },
++  });
++
++  r.read(0);
++  assert.strictEqual(r.readableFlowing, null);
++  assert.strictEqual(r.readableLength, 2);
++
++  r.setEncoding('utf8');
++  const received = [];
++  r.on('data', (chunk) => received.push(chunk));
++
++  process.nextTick(() => {
++    assert.deepStrictEqual(received, ['🎉']);
++  });
++}
++
++{
++  // Call .setEncoding() after EOF while the buffer contains an
++  // incomplete character.
++  const r = new Readable({ read() {} });
++
++  r.push(Buffer.from([0xf0]));
++  r.push(Buffer.from([0x9f]));
++  r.push(null);
++
++  r.setEncoding('utf8');
++  const chunks = [];
++  r.on('data', (chunk) => chunks.push(chunk));
++
++  process.nextTick(() => {
++    assert.deepStrictEqual(chunks, ['�']);
++  });
++}

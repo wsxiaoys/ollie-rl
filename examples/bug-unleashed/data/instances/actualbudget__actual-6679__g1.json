@@ -1,0 +1,25 @@
+{
+  "case_id": "actualbudget__actual-6679",
+  "repo": "actualbudget/actual",
+  "pr": 6679,
+  "title": "lint: a11y issue fixes",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "actualbudget__actual-6679__g1",
+  "target": {
+    "gid": "actualbudget__actual-6679#g1",
+    "summary": "Wrapping the report card in a `Button` even when `isEditing` is true intercepts mouse events, breaking drag-and-drop reordering of widgets in edit mode.",
+    "paths": [
+      "packages/desktop-client/src/components/reports/ReportCard.tsx"
+    ],
+    "notes": [
+      "wrapping the report card in Button intercepts mouse events even when disabled, breaking drag-and-drop reordering in edit mode"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "30c4ead36a572d2a5f1ac54685c8593cdf0818f0",
+  "base_sha": "517b1b4a81838cab765e21aa595d4101c87b2c1f",
+  "snapshot": "repos/actualbudget__actual/30c4ead36a572d2a5f1ac54685c8593cdf0818f0",
+  "diff": "diffs/actualbudget__actual-6679.diff"
+}

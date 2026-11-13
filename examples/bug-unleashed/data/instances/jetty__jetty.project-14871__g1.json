@@ -1,0 +1,25 @@
+{
+  "case_id": "jetty__jetty.project-14871",
+  "repo": "jetty/jetty.project",
+  "pr": 14871,
+  "title": "[12.1.x] Fixes #14870 - Refactor compliance checks.",
+  "language": "Java",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "jetty__jetty.project-14871__g1",
+  "target": {
+    "gid": "jetty__jetty.project-14871#g1",
+    "summary": "The authority-vs-Host compliance check is executed in onRequest() before request customizers run. Requests whose authority or Host header would be reconciled or modified by customizers are prematurely rejected with a 400 Bad Request error.",
+    "paths": [
+      "jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpChannelState.java"
+    ],
+    "notes": [
+      "authority-vs-Host compliance check executed prematurely in onRequest() before request customizers run"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a2f0d5a9f0ac82bf6442768dbc1364af88f0aa4e",
+  "base_sha": "7173f073d7f915e29d55c596a589558b23fdd937",
+  "snapshot": "repos/jetty__jetty.project/a2f0d5a9f0ac82bf6442768dbc1364af88f0aa4e",
+  "diff": "diffs/jetty__jetty.project-14871.diff"
+}

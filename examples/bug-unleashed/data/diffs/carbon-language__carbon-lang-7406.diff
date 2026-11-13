@@ -1,0 +1,271 @@
+diff --git a/toolchain/check/handle_operator.cpp b/toolchain/check/handle_operator.cpp
+index 98711d2e7c0ae..0f1eb5756abc0 100644
+--- a/toolchain/check/handle_operator.cpp
++++ b/toolchain/check/handle_operator.cpp
+@@ -104,9 +104,13 @@ auto HandleParseNode(Context& context, Parse::InfixOperatorEqualId node_id)
+ 
+   auto [rhs_node, rhs_id] = context.node_stack().PopExprWithNodeId();
+   auto [lhs_node, lhs_id] = context.node_stack().PopExprWithNodeId();
++  auto lhs_type_id = context.insts().Get(lhs_id).type_id();
++  auto lhs_quals =
++      context.types().GetUnqualifiedTypeAndQualifiers(lhs_type_id).second;
+   if (auto lhs_cat = SemIR::GetExprCategory(context.sem_ir(), lhs_id);
+-      lhs_cat != SemIR::ExprCategory::DurableRef &&
+-      lhs_cat != SemIR::ExprCategory::Error) {
++      (lhs_cat != SemIR::ExprCategory::DurableRef &&
++       lhs_cat != SemIR::ExprCategory::Error) ||
++      lhs_quals.HasAnyOf(SemIR::TypeQualifiers::Const)) {
+     CARBON_DIAGNOSTIC(AssignmentToNonAssignable, Error,
+                       "expression is not assignable");
+     context.emitter().Emit(lhs_node, AssignmentToNonAssignable);
+diff --git a/toolchain/check/member_access.cpp b/toolchain/check/member_access.cpp
+index 4b900c4183328..5680b81648272 100644
+--- a/toolchain/check/member_access.cpp
++++ b/toolchain/check/member_access.cpp
+@@ -406,11 +406,18 @@ static auto PerformInstanceBinding(Context& context, SemIR::LocId loc_id,
+   if (auto unbound_element_type =
+           context.types().TryGetAs<SemIR::UnboundElementType>(
+               context.insts().Get(member_id).type_id())) {
++    auto base_type_id = context.insts().Get(base_id).type_id();
++    auto [unqualified_base_type_id, qualifiers] =
++        context.types().GetUnqualifiedTypeAndQualifiers(base_type_id);
++
+     // Convert the base to the type of the element if necessary.
+-    base_id = ConvertToValueOrRefOfType(
+-        context, loc_id, base_id,
+-        context.types().GetTypeIdForTypeInstId(
+-            unbound_element_type->class_type_inst_id));
++    auto element_class_type_id =
++        GetQualifiedType(context,
++                         context.types().GetTypeIdForTypeInstId(
++                             unbound_element_type->class_type_inst_id),
++                         qualifiers);
++    base_id = ConvertToValueOrRefOfType(context, loc_id, base_id,
++                                        element_class_type_id);
+ 
+     // Find the specified element, which could be either a field or a base
+     // class, and build an element access expression.
+@@ -419,12 +426,18 @@ static auto PerformInstanceBinding(Context& context, SemIR::LocId loc_id,
+                  "Non-constant value {0} of unbound element type",
+                  context.insts().Get(member_id));
+     auto index = GetClassElementIndex(context, element_id);
++    // Only propagate the `partial` qualifier to the `base` field.
++    if (!context.insts().Is<SemIR::BaseDecl>(element_id)) {
++      qualifiers.Remove(SemIR::TypeQualifiers::Partial);
++    }
++    auto access_type_id =
++        GetQualifiedType(context,
++                         context.types().GetTypeIdForTypeInstId(
++                             unbound_element_type->element_type_inst_id),
++                         qualifiers);
+     auto access_id = GetOrAddInst<SemIR::ClassElementAccess>(
+         context, loc_id,
+-        {.type_id = context.types().GetTypeIdForTypeInstId(
+-             unbound_element_type->element_type_inst_id),
+-         .base_id = base_id,
+-         .index = index});
++        {.type_id = access_type_id, .base_id = base_id, .index = index});
+     if (SemIR::GetExprCategory(context.sem_ir(), base_id) ==
+             SemIR::ExprCategory::Value &&
+         SemIR::GetExprCategory(context.sem_ir(), access_id) !=
+@@ -582,7 +595,11 @@ static auto PerformActionHelper(Context& context, SemIR::LocId loc_id,
+   base_id = ConvertToValueOrRefExpr(context, base_id);
+   base_type_id = context.insts().Get(base_id).type_id();
+ 
+-  auto lookup_const_id = context.types().GetConstantId(base_type_id);
++  // If the type has qualifiers, use the unqualified type for lookup.
++  auto unqualified_base_type_id =
++      context.types().GetUnqualifiedTypeAndQualifiers(base_type_id).first;
++  auto lookup_const_id =
++      context.types().GetConstantId(unqualified_base_type_id);
+ 
+   // TODO: If the type is a facet, we look through it into the facet's type (a
+   // FacetType) for names. According to the design, we shouldn't need to do
+diff --git a/toolchain/check/testdata/class/partial/access.carbon b/toolchain/check/testdata/class/partial/access.carbon
+new file mode 100644
+index 0000000000000..7373c272eedd4
+--- /dev/null
++++ b/toolchain/check/testdata/class/partial/access.carbon
+@@ -0,0 +1,47 @@
++// Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++// Exceptions. See /LICENSE for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++// INCLUDE-FILE: toolchain/testing/testdata/min_prelude/int.carbon
++//
++// AUTOUPDATE
++// TIP: To test this file alone, run:
++// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/class/partial/access.carbon
++// TIP: To dump output, run:
++// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/class/partial/access.carbon
++
++// --- common.carbon
++package Common;
++
++base class A {
++    var n: i32;
++    virtual fn F(self);
++}
++
++base class B {
++    extend base: A;
++}
++
++// --- partial_member_access.carbon
++library "[[@TEST_NAME]]";
++import Common;
++
++fn F(ref pb: partial Common.B) {
++    let ref _: i32 = pb.n;
++    let ref _: partial Common.A = pb.base;
++}
++
++// --- fail_invalid_partial_member_access.carbon
++library "[[@TEST_NAME]]";
++import Common;
++
++fn F(ref pb: partial Common.B) {
++    // CHECK:STDERR: fail_invalid_partial_member_access.carbon:[[@LINE+7]]:27: error: cannot implicitly convert expression of type `partial Common.A` to `Common.A` [ConversionFailure]
++    // CHECK:STDERR:     let ref _: Common.A = pb.base;
++    // CHECK:STDERR:                           ^~~~~~~
++    // CHECK:STDERR: fail_invalid_partial_member_access.carbon:[[@LINE+4]]:27: note: type `partial Common.A` does not implement interface `Core.ImplicitAs(Common.A)` [MissingImplInMemberAccessInContext]
++    // CHECK:STDERR:     let ref _: Common.A = pb.base;
++    // CHECK:STDERR:                           ^~~~~~~
++    // CHECK:STDERR:
++    let ref _: Common.A = pb.base;
++}
+diff --git a/toolchain/check/testdata/const/access.carbon b/toolchain/check/testdata/const/access.carbon
+new file mode 100644
+index 0000000000000..88479fd34b901
+--- /dev/null
++++ b/toolchain/check/testdata/const/access.carbon
+@@ -0,0 +1,52 @@
++// Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++// Exceptions. See /LICENSE for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++// INCLUDE-FILE: toolchain/testing/testdata/min_prelude/int.carbon
++//
++// AUTOUPDATE
++// TIP: To test this file alone, run:
++// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/const/access.carbon
++// TIP: To dump output, run:
++// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/const/access.carbon
++
++// --- const_member_access.carbon
++library "[[@TEST_NAME]]";
++
++class C {
++  var x: ();
++}
++
++fn F(c: const C) {
++  c.x;
++}
++
++// --- fail_const_member_assign.carbon
++library "[[@TEST_NAME]]";
++
++class C {
++  var x: ();
++}
++
++fn F(c: const C) {
++  // CHECK:STDERR: fail_const_member_assign.carbon:[[@LINE+4]]:3: error: expression is not assignable [AssignmentToNonAssignable]
++  // CHECK:STDERR:   c.x = ();
++  // CHECK:STDERR:   ^~~
++  // CHECK:STDERR:
++  c.x = ();
++}
++
++// --- fail_const_ref_member_assign.carbon
++library "[[@TEST_NAME]]";
++
++class C {
++  var x: ();
++}
++
++fn F(ref c: const C) {
++  // CHECK:STDERR: fail_const_ref_member_assign.carbon:[[@LINE+4]]:3: error: expression is not assignable [AssignmentToNonAssignable]
++  // CHECK:STDERR:   c.x = ();
++  // CHECK:STDERR:   ^~~
++  // CHECK:STDERR:
++  c.x = ();
++}
+diff --git a/toolchain/check/testdata/interop/cpp/const/access.carbon b/toolchain/check/testdata/interop/cpp/const/access.carbon
+new file mode 100644
+index 0000000000000..ef1c90a690aa1
+--- /dev/null
++++ b/toolchain/check/testdata/interop/cpp/const/access.carbon
+@@ -0,0 +1,71 @@
++// Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++// Exceptions. See /LICENSE for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++// INCLUDE-FILE: toolchain/testing/testdata/min_prelude/int.carbon
++//
++// AUTOUPDATE
++// TIP: To test this file alone, run:
++// TIP:   bazel test //toolchain/testing:file_test --test_arg=--file_tests=toolchain/check/testdata/interop/cpp/const/access.carbon
++// TIP: To dump output, run:
++// TIP:   bazel run //toolchain/testing:file_test -- --dump_output --file_tests=toolchain/check/testdata/interop/cpp/const/access.carbon
++
++// --- const_member_access.carbon
++library "[[@TEST_NAME]]";
++
++import Cpp inline '''
++struct S {
++  int x;
++};
++
++const S& Get();
++''';
++
++fn F() {
++  Cpp.Get().x;
++}
++
++// --- fail_const_member_assign.carbon
++library "[[@TEST_NAME]]";
++
++import Cpp inline '''
++struct S {
++  int x;
++};
++
++const S& Get();
++''';
++
++fn F() {
++  // CHECK:STDERR: fail_const_member_assign.carbon:[[@LINE+11]]:3: error: expression is not assignable [AssignmentToNonAssignable]
++  // CHECK:STDERR:   Cpp.Get().x = 123;
++  // CHECK:STDERR:   ^~~~~~~~~~~
++  // CHECK:STDERR:
++  // CHECK:STDERR: fail_const_member_assign.carbon:[[@LINE+7]]:3: error: cannot implicitly convert expression of type `Core.IntLiteral` to `const i32` [ConversionFailure]
++  // CHECK:STDERR:   Cpp.Get().x = 123;
++  // CHECK:STDERR:   ^~~~~~~~~~~~~~~~~
++  // CHECK:STDERR: fail_const_member_assign.carbon:[[@LINE+4]]:3: note: type `Core.IntLiteral` does not implement interface `Core.ImplicitAs(const i32)` [MissingImplInMemberAccessInContext]
++  // CHECK:STDERR:   Cpp.Get().x = 123;
++  // CHECK:STDERR:   ^~~~~~~~~~~~~~~~~
++  // CHECK:STDERR:
++  Cpp.Get().x = 123;
++}
++
++// --- fail_const_member_assign_cast.carbon
++library "[[@TEST_NAME]]";
++
++import Cpp inline '''
++struct S {
++  int x;
++};
++
++const S& Get();
++''';
++
++fn F() {
++  // CHECK:STDERR: fail_const_member_assign_cast.carbon:[[@LINE+4]]:3: error: expression is not assignable [AssignmentToNonAssignable]
++  // CHECK:STDERR:   Cpp.Get().x = 123 as i32;
++  // CHECK:STDERR:   ^~~~~~~~~~~
++  // CHECK:STDERR:
++  Cpp.Get().x = 123 as i32;
++}

@@ -1,0 +1,1357 @@
+diff --git a/.changeset/twenty-toes-design.md b/.changeset/twenty-toes-design.md
+new file mode 100644
+index 0000000000..a8a96edb18
+--- /dev/null
++++ b/.changeset/twenty-toes-design.md
+@@ -0,0 +1,9 @@
++---
++"@tinacms/app": patch
++"@tinacms/mdx": patch
++"tinacms": patch
++---
++
++Harden cross-window message handling and rich-text URL sanitization.
++
++Adds stricter origin/source checks for trusted message flows, use explicit target origins for preview iframe message, and applies URL sanitization to slatejson rich-text parsing and default rich-text link/image rendering.
+diff --git a/packages/@tinacms/app/package.json b/packages/@tinacms/app/package.json
+index f214c9f9af..a1dbc227f5 100644
+--- a/packages/@tinacms/app/package.json
++++ b/packages/@tinacms/app/package.json
+@@ -3,10 +3,17 @@
+ 	"version": "2.5.5",
+ 	"main": "src/main.tsx",
+ 	"license": "Apache-2.0",
++	"scripts": {
++		"test": "vitest run",
++		"test-watch": "vitest"
++	},
+ 	"devDependencies": {
+ 		"@types/react": "^18.3.18",
+ 		"@types/react-dom": "catalog:",
+-		"typescript": "^5.7.3"
++		"happy-dom": "catalog:",
++		"typescript": "^5.7.3",
++		"vite": "^5.4.14",
++		"vitest": "^2.1.9"
+ 	},
+ 	"peerDependencies": {
+ 		"react": ">=18.3.1 <20.0.0",
+diff --git a/packages/@tinacms/app/src/lib/graphql-reducer.ts b/packages/@tinacms/app/src/lib/graphql-reducer.ts
+index b17a307601..571fcd0e4f 100644
+--- a/packages/@tinacms/app/src/lib/graphql-reducer.ts
++++ b/packages/@tinacms/app/src/lib/graphql-reducer.ts
+@@ -24,6 +24,11 @@ import { z } from 'zod';
+ import { FormifyCallback, createForm, createGlobalForm } from './build-form';
+ import { showErrorModal } from './errors';
+ import { expandQuery, isConnectionType, isNodeType } from './expand-query';
++import {
++  getExpectedPreviewOrigin,
++  isFromTrustedPreviewOrigin,
++  postMessageToPreview,
++} from './preview-origin';
+ import type {
+   Payload,
+   PostMessage,
+@@ -200,6 +205,13 @@ export const useGraphQLReducer = (
+ 
+   const activeField = searchParams.get('active-field');
+ 
++  // Origin of the preview document we load in the iframe. Used to validate
++  // inbound messages and as the explicit `targetOrigin` for outbound ones.
++  const expectedOrigin = React.useMemo(
++    () => getExpectedPreviewOrigin(url),
++    [url]
++  );
++
+   React.useEffect(() => {
+     const run = async () => {
+       return Promise.all(
+@@ -483,11 +495,15 @@ export const useGraphQLReducer = (
+             });
+           }
+         }
+-        iframe.current?.contentWindow?.postMessage({
+-          type: 'updateData',
+-          id: payload.id,
+-          data: result.data,
+-        });
++        postMessageToPreview(
++          iframe.current?.contentWindow,
++          {
++            type: 'updateData',
++            id: payload.id,
++            data: result.data,
++          },
++          expectedOrigin
++        );
+       }
+       cms.dispatch({
+         type: 'form-lists:add',
+@@ -502,6 +518,7 @@ export const useGraphQLReducer = (
+     [
+       resolvedDocuments.map((doc) => doc._internalSys.path).join('.'),
+       activeField,
++      expectedOrigin,
+     ]
+   );
+ 
+@@ -527,6 +544,17 @@ export const useGraphQLReducer = (
+ 
+   const handleMessage = React.useCallback(
+     (event: MessageEvent<PostMessage>) => {
++      // Validate the sender before reading `event.data`: only the preview
++      // iframe we loaded is trusted to drive the reducer.
++      if (
++        !isFromTrustedPreviewOrigin({
++          event,
++          expectedOrigin,
++          peerWindow: iframe.current?.contentWindow,
++        })
++      ) {
++        return;
++      }
+       if (event.data.type === 'user-select-form') {
+         const incoming = event.data.formId;
+         // Buffer until `forms:add` resolves it if the form isn't built yet.
+@@ -538,15 +566,23 @@ export const useGraphQLReducer = (
+           type: 'set-quick-editing-supported',
+           value: event.data.value,
+         });
+-        iframe.current?.contentWindow?.postMessage({
+-          type: 'quickEditEnabled',
+-          value: cms.state.sidebarDisplayState === 'open',
+-        });
++        postMessageToPreview(
++          iframe.current?.contentWindow,
++          {
++            type: 'quickEditEnabled',
++            value: cms.state.sidebarDisplayState === 'open',
++          },
++          expectedOrigin
++        );
+       }
+       if (event?.data?.type === 'isEditMode') {
+-        iframe?.current?.contentWindow?.postMessage({
+-          type: 'tina:editMode',
+-        });
++        postMessageToPreview(
++          iframe.current?.contentWindow,
++          {
++            type: 'tina:editMode',
++          },
++          expectedOrigin
++        );
+       }
+       if (event.data.type === 'field:selected') {
+         const [queryId, eventFieldName] = event.data.fieldName.split('---');
+@@ -597,7 +633,7 @@ export const useGraphQLReducer = (
+       //   });
+       // }
+     },
+-    [cms, JSON.stringify(results)]
++    [cms, JSON.stringify(results), expectedOrigin]
+   );
+ 
+   React.useEffect(() => {
+@@ -627,11 +663,15 @@ export const useGraphQLReducer = (
+   }, [cms.state.forms.length, pendingPrimaryId, activateFormByWireId]);
+ 
+   React.useEffect(() => {
+-    iframe.current?.contentWindow?.postMessage({
+-      type: 'quickEditEnabled',
+-      value: cms.state.sidebarDisplayState === 'open',
+-    });
+-  }, [cms.state.sidebarDisplayState]);
++    postMessageToPreview(
++      iframe.current?.contentWindow,
++      {
++        type: 'quickEditEnabled',
++        value: cms.state.sidebarDisplayState === 'open',
++      },
++      expectedOrigin
++    );
++  }, [cms.state.sidebarDisplayState, expectedOrigin]);
+ 
+   React.useEffect(() => {
+     cms.dispatch({ type: 'set-edit-mode', value: 'visual' });
+diff --git a/packages/@tinacms/app/src/lib/preview-origin.test.ts b/packages/@tinacms/app/src/lib/preview-origin.test.ts
+new file mode 100644
+index 0000000000..50b3aa7514
+--- /dev/null
++++ b/packages/@tinacms/app/src/lib/preview-origin.test.ts
+@@ -0,0 +1,147 @@
++import { describe, expect, it, vi } from 'vitest';
++import {
++  getExpectedPreviewOrigin,
++  isFromTrustedPreviewOrigin,
++  postMessageToPreview,
++} from './preview-origin';
++
++const ADMIN = 'https://admin.example';
++const PREVIEW = 'https://preview.example';
++
++// A stand-in for the iframe's content window; we only need an identity to
++// compare `event.source` against.
++const makePeerWindow = () =>
++  ({ postMessage: vi.fn() }) as unknown as Window & {
++    postMessage: ReturnType<typeof vi.fn>;
++  };
++
++describe('getExpectedPreviewOrigin', () => {
++  it('resolves a relative admin URL to the admin origin', () => {
++    expect(getExpectedPreviewOrigin('/posts/hello', ADMIN)).toBe(ADMIN);
++  });
++
++  it('keeps the origin of an absolute preview URL', () => {
++    expect(getExpectedPreviewOrigin(`${PREVIEW}/posts/hello`, ADMIN)).toBe(
++      PREVIEW
++    );
++  });
++});
++
++describe('isFromTrustedPreviewOrigin', () => {
++  it('ignores messages from an untrusted origin', () => {
++    const peerWindow = makePeerWindow();
++    const event = {
++      origin: 'https://evil.example',
++      source: peerWindow,
++      data: { type: 'open' },
++    } as unknown as MessageEvent;
++
++    expect(
++      isFromTrustedPreviewOrigin({
++        event,
++        expectedOrigin: PREVIEW,
++        peerWindow,
++      })
++    ).toBe(false);
++  });
++
++  it('accepts messages from the trusted origin and peer window', () => {
++    const peerWindow = makePeerWindow();
++    const event = {
++      origin: PREVIEW,
++      source: peerWindow,
++      data: { type: 'open' },
++    } as unknown as MessageEvent;
++
++    expect(
++      isFromTrustedPreviewOrigin({
++        event,
++        expectedOrigin: PREVIEW,
++        peerWindow,
++      })
++    ).toBe(true);
++  });
++
++  it('ignores the trusted origin from the wrong source window', () => {
++    const peerWindow = makePeerWindow();
++    const otherFrame = makePeerWindow();
++    const event = {
++      origin: PREVIEW,
++      source: otherFrame,
++      data: { type: 'open' },
++    } as unknown as MessageEvent;
++
++    expect(
++      isFromTrustedPreviewOrigin({
++        event,
++        expectedOrigin: PREVIEW,
++        peerWindow,
++      })
++    ).toBe(false);
++  });
++
++  it('does not read event.data before validating the origin', () => {
++    const peerWindow = makePeerWindow();
++    const event = {
++      origin: 'https://evil.example',
++      source: peerWindow,
++      // Reading `data` would throw — proves the guard never touches the
++      // payload when the origin is untrusted.
++      get data(): unknown {
++        throw new Error('event.data must not be read before origin validation');
++      },
++    } as unknown as MessageEvent;
++
++    expect(() =>
++      isFromTrustedPreviewOrigin({
++        event,
++        expectedOrigin: PREVIEW,
++        peerWindow,
++      })
++    ).not.toThrow();
++    expect(
++      isFromTrustedPreviewOrigin({
++        event,
++        expectedOrigin: PREVIEW,
++        peerWindow,
++      })
++    ).toBe(false);
++  });
++
++  it('falls back to origin-only when no peer window handle is available', () => {
++    const event = {
++      origin: PREVIEW,
++      source: makePeerWindow(),
++      data: { type: 'open' },
++    } as unknown as MessageEvent;
++
++    expect(
++      isFromTrustedPreviewOrigin({
++        event,
++        expectedOrigin: PREVIEW,
++        peerWindow: null,
++      })
++    ).toBe(true);
++  });
++});
++
++describe('postMessageToPreview', () => {
++  it('posts with the exact expected targetOrigin, not a wildcard', () => {
++    const peerWindow = makePeerWindow();
++    const message = { type: 'updateData', id: 'q1', data: {} };
++
++    postMessageToPreview(peerWindow, message, PREVIEW);
++
++    expect(peerWindow.postMessage).toHaveBeenCalledWith(message, PREVIEW);
++    expect(peerWindow.postMessage).not.toHaveBeenCalledWith(
++      expect.anything(),
++      '*'
++    );
++  });
++
++  it('no-ops when there is no peer window', () => {
++    expect(() =>
++      postMessageToPreview(null, { type: 'updateData' }, PREVIEW)
++    ).not.toThrow();
++  });
++});
+diff --git a/packages/@tinacms/app/src/lib/preview-origin.ts b/packages/@tinacms/app/src/lib/preview-origin.ts
+new file mode 100644
+index 0000000000..ebdaff12f5
+--- /dev/null
++++ b/packages/@tinacms/app/src/lib/preview-origin.ts
+@@ -0,0 +1,61 @@
++/**
++ * Utilities for securing the admin <-> preview iframe postMessage channel.
++ *
++ * The trusted peer is the preview iframe loaded by the admin. Messages are only
++ * trusted when they match the expected preview origin and, when available, the
++ * iframe's exact `contentWindow`.
++ */
++
++/**
++ * Returns the origin expected for the preview iframe.
++ *
++ * Relative URLs resolve against `baseOrigin`; absolute URLs keep their own
++ * origin.
++ */
++export const getExpectedPreviewOrigin = (
++  url: string,
++  baseOrigin: string = typeof window !== 'undefined'
++    ? window.location.origin
++    : ''
++): string => {
++  try {
++    return new URL(url, baseOrigin || undefined).origin;
++  } catch {
++    return baseOrigin;
++  }
++};
++
++/**
++ * Checks whether a MessageEvent came from the trusted preview iframe.
++ *
++ * `event.data` is intentionally not read here, so callers can run this check
++ * before trusting the payload.
++ */
++export const isFromTrustedPreviewOrigin = ({
++  event,
++  expectedOrigin,
++  peerWindow,
++}: {
++  event: MessageEvent;
++  expectedOrigin: string;
++  peerWindow: Window | null | undefined;
++}): boolean => {
++  if (!expectedOrigin) return false;
++  if (event.origin !== expectedOrigin) return false;
++  if (peerWindow && event.source !== peerWindow) return false;
++  return true;
++};
++
++/**
++ * Sends a message to the preview iframe with a strict target origin.
++ *
++ * No-ops when the iframe window or origin is missing, and never uses `"*"`.
++ */
++export const postMessageToPreview = (
++  peerWindow: Window | null | undefined,
++  message: unknown,
++  expectedOrigin: string
++): void => {
++  if (!peerWindow || !expectedOrigin) return;
++  peerWindow.postMessage(message, expectedOrigin);
++};
+diff --git a/packages/@tinacms/app/vitest.config.ts b/packages/@tinacms/app/vitest.config.ts
+new file mode 100644
+index 0000000000..c86cb255ac
+--- /dev/null
++++ b/packages/@tinacms/app/vitest.config.ts
+@@ -0,0 +1,10 @@
++/// <reference types="vitest" />
++import { defineConfig } from 'vite';
++
++export default defineConfig({
++  test: {
++    globals: true,
++    environment: 'happy-dom',
++    include: ['src/**/*.test.ts'],
++  },
++});
+diff --git a/packages/@tinacms/mdx/src/index.ts b/packages/@tinacms/mdx/src/index.ts
+index f9009ca863..3758a7fdf2 100644
+--- a/packages/@tinacms/mdx/src/index.ts
++++ b/packages/@tinacms/mdx/src/index.ts
+@@ -6,3 +6,4 @@ export * from './parse/plate';
+ 
+ export { parseMDX };
+ export { serializeMDX };
++export { sanitizeUrl } from './parse/remarkToPlate';
+diff --git a/packages/@tinacms/mdx/src/parse/index.test.ts b/packages/@tinacms/mdx/src/parse/index.test.ts
+index 26ca60428d..965ca446d8 100644
+--- a/packages/@tinacms/mdx/src/parse/index.test.ts
++++ b/packages/@tinacms/mdx/src/parse/index.test.ts
+@@ -22,7 +22,127 @@ const field: RichTextField = {
+   ],
+ };
+ 
++const slateField: RichTextField = {
++  name: 'body',
++  type: 'rich-text',
++  parser: { type: 'slatejson' },
++};
++
+ describe('parseMDX', () => {
++  describe('slatejson URL sanitization', () => {
++    it('clears an unsafe URL stored on a link node', () => {
++      const input = {
++        type: 'root',
++        children: [
++          {
++            type: 'a',
++            url: 'javascript:alert(1)',
++            children: [{ type: 'text', text: 'link' }],
++          },
++        ],
++      };
++      const tree = parseMDX(input as any, slateField, passthrough);
++      expect((tree.children[0] as any).url).toBe('');
++    });
++
++    it('clears an unsafe URL stored on an image node', () => {
++      const input = {
++        type: 'root',
++        children: [{ type: 'img', url: 'javascript:alert(1)', children: [] }],
++      };
++      const tree = parseMDX(input as any, slateField, passthrough);
++      expect((tree.children[0] as any).url).toBe('');
++    });
++
++    it('clears an unsafe URL on a link nested inside other nodes', () => {
++      const input = {
++        type: 'root',
++        children: [
++          {
++            type: 'p',
++            children: [
++              {
++                type: 'a',
++                url: 'data:text/html,<p>hi</p>',
++                children: [{ type: 'text', text: 'link' }],
++              },
++            ],
++          },
++        ],
++      };
++      const tree = parseMDX(input as any, slateField, passthrough);
++      expect((tree.children[0] as any).children[0].url).toBe('');
++    });
++
++    it('clears an unsafe URL nested under props.children', () => {
++      const input = {
++        type: 'root',
++        children: [
++          {
++            type: 'mdxJsxFlowElement',
++            name: 'Cta',
++            props: {
++              children: {
++                type: 'root',
++                children: [
++                  {
++                    type: 'a',
++                    url: 'javascript:alert(1)',
++                    children: [{ type: 'text', text: 'link' }],
++                  },
++                  { type: 'img', url: 'javascript:alert(1)', children: [] },
++                ],
++              },
++            },
++            children: [{ type: 'text', text: '' }],
++          },
++        ],
++      };
++      const tree = parseMDX(input as any, slateField, passthrough);
++      const nested = (tree.children[0] as any).props.children.children;
++      expect(nested[0].url).toBe('');
++      expect(nested[1].url).toBe('');
++    });
++
++    it('leaves arbitrary props untouched', () => {
++      const input = {
++        type: 'root',
++        children: [
++          {
++            type: 'mdxJsxFlowElement',
++            name: 'Embed',
++            props: {
++              // A prop literally named `url` is not a slate node and must be left as-is
++              url: 'javascript:alert(1)',
++              // A `children` prop that is not slate content must be left as-is
++              children: 'javascript:alert(1)',
++            },
++            children: [{ type: 'text', text: '' }],
++          },
++        ],
++      };
++      const tree = parseMDX(input as any, slateField, passthrough);
++      const props = (tree.children[0] as any).props;
++      expect(props.url).toBe('javascript:alert(1)');
++      expect(props.children).toBe('javascript:alert(1)');
++    });
++
++    it('preserves a safe link URL', () => {
++      const input = {
++        type: 'root',
++        children: [
++          {
++            type: 'a',
++            url: 'https://example.com/path',
++            children: [{ type: 'text', text: 'link' }],
++          },
++        ],
++      };
++      const tree = parseMDX(input as any, slateField, passthrough);
++      expect((tree.children[0] as any).url).toBe('https://example.com/path');
++    });
++  });
++
+   describe('parser type routing — markdown vs mdx', () => {
+     it('parser.type markdown treats JS expressions as plain text; parser.type mdx fails on the same input', () => {
+       // This input is valid markdown but invalid MDX (JS expression inside {…} is not valid JS)
+diff --git a/packages/@tinacms/mdx/src/parse/index.ts b/packages/@tinacms/mdx/src/parse/index.ts
+index c226b47157..76c57b166b 100644
+--- a/packages/@tinacms/mdx/src/parse/index.ts
++++ b/packages/@tinacms/mdx/src/parse/index.ts
+@@ -17,7 +17,11 @@ import { parseMDX as parseMDXNext } from '../next';
+ import type { Pattern } from '../stringify';
+ import { parseShortcode } from './parseShortcode';
+ import type * as Plate from './plate';
+-import { RichTextParseError, remarkToSlate } from './remarkToPlate';
++import {
++  RichTextParseError,
++  remarkToSlate,
++  sanitizeUrl,
++} from './remarkToPlate';
+ /**
+  * ### Convert the MDXAST into an API-friendly format
+  *
+@@ -98,6 +102,56 @@ export const MDX_PARSE_ERROR_MSG =
+ export const MDX_PARSE_ERROR_MSG_HTML =
+   'TinaCMS supports a stricter version of markdown and a subset of MDX. <a href="https://tina.io/docs/r/what-is-markdown" target="_blank" rel="noopener noreferrer">Learn More</a>';
+ 
++/** Returns true for Slate-like element nodes. */
++const isSlateNode = (value: unknown): value is Record<string, unknown> =>
++  !!value &&
++  typeof value === 'object' &&
++  !Array.isArray(value) &&
++  typeof (value as Record<string, unknown>).type === 'string';
++
++/** Returns true for traversable Slate-like content. */
++const isSlateContent = (value: unknown): boolean =>
++  isSlateNode(value) ||
++  (Array.isArray(value) && value.length > 0 && value.every(isSlateNode));
++
++/**
++ * Recursively sanitizes URLs on Slate link and image nodes.
++ *
++ * Also traverses Slate-shaped `props.children`; arbitrary props are left
++ * untouched.
++ */
++const sanitizeSlateTree = <T>(node: T): T => {
++  if (Array.isArray(node)) {
++    return node.map((child) => sanitizeSlateTree(child)) as unknown as T;
++  }
++  if (!node || typeof node !== 'object') {
++    return node;
++  }
++  const next: Record<string, unknown> = {
++    ...(node as Record<string, unknown>),
++  };
++  if (
++    (next.type === 'a' || next.type === 'img') &&
++    typeof next.url === 'string'
++  ) {
++    next.url = sanitizeUrl(next.url);
++  }
++  if (Array.isArray(next.children)) {
++    next.children = next.children.map((child) => sanitizeSlateTree(child));
++  }
++  if (
++    next.props &&
++    typeof next.props === 'object' &&
++    !Array.isArray(next.props)
++  ) {
++    const props = next.props as Record<string, unknown>;
++    if (isSlateContent(props.children)) {
++      next.props = { ...props, children: sanitizeSlateTree(props.children) };
++    }
++  }
++  return next as unknown as T;
++};
++
+ export const parseMDX = (
+   value: string,
+   field: RichTextType,
+@@ -113,7 +167,9 @@ export const parseMDX = (
+         return parseMDXNext(value, field, imageCallback);
+       case 'slatejson':
+         // Assuming `value` is a JSON object
+-        return value as unknown as Plate.RootElement;
++        return sanitizeSlateTree(
++          value as unknown as Plate.RootElement
++        ) as Plate.RootElement;
+     }
+     let preprocessedString = value;
+     const templatesWithMatchers = field.templates?.filter(
+diff --git a/packages/@tinacms/mdx/src/parse/remarkToPlate.test.ts b/packages/@tinacms/mdx/src/parse/remarkToPlate.test.ts
+index b7770ddbb4..92244eddb9 100644
+--- a/packages/@tinacms/mdx/src/parse/remarkToPlate.test.ts
++++ b/packages/@tinacms/mdx/src/parse/remarkToPlate.test.ts
+@@ -40,6 +40,23 @@ describe('sanitizeUrl', () => {
+     expect(sanitizeUrl('ftp://example.com')).toBe('');
+   });
+ 
++  it('should block an unsafe scheme regardless of letter casing', () => {
++    expect(sanitizeUrl('JaVaScRiPt:alert(1)')).toBe('');
++  });
++
++  it('should block an unsafe scheme with surrounding whitespace', () => {
++    expect(sanitizeUrl('  javascript:alert(1)')).toBe('');
++  });
++
++  it('should block an unsafe scheme containing embedded control characters', () => {
++    expect(sanitizeUrl('java\tscript:alert(1)')).toBe('');
++    expect(sanitizeUrl('java\nscript:alert(1)')).toBe('');
++  });
++
++  it('should block the data scheme', () => {
++    expect(sanitizeUrl('data:text/html,<p>hi</p>')).toBe('');
++  });
++
+   it('should preserve query parameters', () => {
+     expect(sanitizeUrl('https://example.com/?utm_source=blog')).toBe(
+       'https://example.com?utm_source=blog'
+diff --git a/packages/@tinacms/mdx/src/parse/remarkToPlate.ts b/packages/@tinacms/mdx/src/parse/remarkToPlate.ts
+index 892eb77e62..4cb4a959e7 100644
+--- a/packages/@tinacms/mdx/src/parse/remarkToPlate.ts
++++ b/packages/@tinacms/mdx/src/parse/remarkToPlate.ts
+@@ -525,7 +525,7 @@ export const remarkToSlate = (
+   const image = (content: Md.Image): Plate.ImageElement => {
+     return {
+       type: 'img',
+-      url: imageCallback(content.url),
++      url: imageCallback(sanitizeUrl(content.url)),
+       alt: content.alt || undefined, // alt cannot be `null`
+       caption: content.title,
+       children: [{ type: 'text', text: '' }],
+diff --git a/packages/tinacms/src/auth/authenticate.test.ts b/packages/tinacms/src/auth/authenticate.test.ts
+new file mode 100644
+index 0000000000..bbda9d0c61
+--- /dev/null
++++ b/packages/tinacms/src/auth/authenticate.test.ts
+@@ -0,0 +1,187 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import {
++  authenticate,
++  AUTH_TOKEN_KEY,
++  AuthenticationCancelledError,
++} from './authenticate';
++
++vi.mock('./popupWindow', () => ({
++  default: vi.fn(),
++}));
++
++import popupWindow from './popupWindow';
++
++const FRONTEND_URL = 'https://frontend.example';
++const EXPECTED_ORIGIN = 'https://frontend.example';
++const UNTRUSTED_ORIGIN = 'https://untrusted.example';
++
++const TINA_LOGIN_EVENT = 'tinaCloudLogin';
++
++const validData = {
++  source: TINA_LOGIN_EVENT,
++  id_token: 'id-token',
++  access_token: 'access-token',
++  refresh_token: 'refresh-token',
++};
++
++// A stand-in for the Window object returned by window.open.
++const makeAuthTab = () => ({
++  close: vi.fn(),
++  closed: false,
++});
++
++// Captured `message` listeners registered against the real window. We spy on
++// addEventListener/removeEventListener so the real window object is preserved.
++let messageListeners: Array<(e: MessageEvent) => void>;
++let authTab: ReturnType<typeof makeAuthTab>;
++
++const dispatch = (e: Partial<MessageEvent>) => {
++  for (const listener of [...messageListeners]) {
++    listener(e as MessageEvent);
++  }
++};
++
++beforeEach(() => {
++  vi.useFakeTimers();
++  messageListeners = [];
++  authTab = makeAuthTab();
++
++  vi.mocked(popupWindow).mockReturnValue(authTab as unknown as Window);
++
++  vi.spyOn(window, 'addEventListener').mockImplementation(
++    (type: string, cb: EventListenerOrEventListenerObject) => {
++      if (type === 'message') {
++        messageListeners.push(cb as (e: MessageEvent) => void);
++      }
++    }
++  );
++  vi.spyOn(window, 'removeEventListener').mockImplementation(
++    (type: string, cb: EventListenerOrEventListenerObject) => {
++      if (type === 'message') {
++        messageListeners = messageListeners.filter((l) => l !== cb);
++      }
++    }
++  );
++});
++
++afterEach(() => {
++  vi.useRealTimers();
++  vi.restoreAllMocks();
++});
++
++// Drive the popup-closed poll so a pending authenticate() promise settles
++// deterministically, and assert it rejects with the cancellation error.
++const settleViaPopupClose = async (result: Promise<unknown>) => {
++  const expectation = expect(result).rejects.toThrowError(
++    new AuthenticationCancelledError('Popup was closed')
++  );
++  authTab.closed = true;
++  await vi.advanceTimersByTimeAsync(600);
++  await expectation;
++};
++
++describe('authenticate origin/source validation', () => {
++  it('ignores a message from an untrusted origin', async () => {
++    const result = authenticate('client-id', FRONTEND_URL);
++
++    dispatch({
++      origin: UNTRUSTED_ORIGIN,
++      source: authTab as unknown as Window,
++      data: validData,
++    });
++
++    // The handler should not have resolved; the listener stays registered.
++    expect(messageListeners.length).toBe(1);
++    expect(authTab.close).not.toHaveBeenCalled();
++
++    await settleViaPopupClose(result);
++  });
++
++  it('ignores a message from the expected origin but a different source', async () => {
++    const result = authenticate('client-id', FRONTEND_URL);
++
++    const otherWindow = makeAuthTab();
++    dispatch({
++      origin: EXPECTED_ORIGIN,
++      source: otherWindow as unknown as Window,
++      data: validData,
++    });
++
++    expect(messageListeners.length).toBe(1);
++    expect(authTab.close).not.toHaveBeenCalled();
++
++    await settleViaPopupClose(result);
++  });
++
++  it('accepts a message from the expected origin and the exact opened popup source', async () => {
++    const result = authenticate('client-id', FRONTEND_URL);
++
++    dispatch({
++      origin: EXPECTED_ORIGIN,
++      source: authTab as unknown as Window,
++      data: validData,
++    });
++
++    await expect(result).resolves.toEqual({
++      id_token: 'id-token',
++      access_token: 'access-token',
++      refresh_token: 'refresh-token',
++    });
++    expect(authTab.close).toHaveBeenCalled();
++    // Listener cleaned up after a successful login.
++    expect(messageListeners.length).toBe(0);
++  });
++
++  it('derives expectedOrigin from new URL(frontendUrl).origin, including the port', async () => {
++    const result = authenticate('client-id', 'https://frontend.example:8443');
++
++    // Same host but the default port (no :8443) is a different origin.
++    dispatch({
++      origin: 'https://frontend.example',
++      source: authTab as unknown as Window,
++      data: validData,
++    });
++    expect(authTab.close).not.toHaveBeenCalled();
++
++    // Exact origin including the port is accepted.
++    dispatch({
++      origin: 'https://frontend.example:8443',
++      source: authTab as unknown as Window,
++      data: validData,
++    });
++
++    await expect(result).resolves.toEqual({
++      id_token: 'id-token',
++      access_token: 'access-token',
++      refresh_token: 'refresh-token',
++    });
++    expect(authTab.close).toHaveBeenCalled();
++  });
++
++  it('does not read event.data before origin/source validation', async () => {
++    const result = authenticate('client-id', FRONTEND_URL);
++
++    let dataAccessed = false;
++    const trap = {
++      get source() {
++        dataAccessed = true;
++        return TINA_LOGIN_EVENT;
++      },
++    };
++
++    // Untrusted origin: the handler must bail out before touching e.data.
++    dispatch({
++      origin: UNTRUSTED_ORIGIN,
++      source: authTab as unknown as Window,
++      data: trap,
++    });
++
++    expect(dataAccessed).toBe(false);
++
++    await settleViaPopupClose(result);
++  });
++});
++
++it('exports the auth token key', () => {
++  expect(AUTH_TOKEN_KEY).toBe('tinacms-auth');
++});
+diff --git a/packages/tinacms/src/auth/authenticate.ts b/packages/tinacms/src/auth/authenticate.ts
+index 735ba39805..b803639458 100644
+--- a/packages/tinacms/src/auth/authenticate.ts
++++ b/packages/tinacms/src/auth/authenticate.ts
+@@ -28,6 +28,12 @@ export const authenticate = (
+   return new Promise((resolve, reject) => {
+     const origin = `${window.location.protocol}//${window.location.host}`;
+ 
++    // The origin we expect login results to be posted from. Only messages
++    // sent from this origin are trusted.
++    const expectedOrigin = new URL(frontendUrl).origin;
++
++    // The exact Window we opened. Only messages whose source is this Window
++    // are trusted.
+     const authTab = popupWindow(
+       `${frontendUrl}/signin?clientId=${clientId}&origin=${origin}`,
+       '_blank',
+@@ -46,11 +52,21 @@ export const authenticate = (
+       return;
+     }
+ 
++    const cleanup = () => {
++      clearInterval(pollInterval);
++      window.removeEventListener('message', messageHandler);
++    };
++
+     // Message handler for auth completion
+     const messageHandler = (e: MessageEvent) => {
++      // Validate the message origin and source before reading or trusting
++      // anything in e.data.
++      if (e.origin !== expectedOrigin || e.source !== authTab) {
++        return;
++      }
++
+       if (e.data.source === TINA_LOGIN_EVENT) {
+-        clearInterval(pollInterval);
+-        window.removeEventListener('message', messageHandler);
++        cleanup();
+ 
+         if (authTab) {
+           authTab.close();
+@@ -66,8 +82,7 @@ export const authenticate = (
+     // Poll to detect if popup was closed without completing auth
+     const pollInterval = setInterval(() => {
+       if (authTab.closed) {
+-        clearInterval(pollInterval);
+-        window.removeEventListener('message', messageHandler);
++        cleanup();
+         reject(new AuthenticationCancelledError('Popup was closed'));
+       }
+     }, 500);
+diff --git a/packages/tinacms/src/internal-admin-origin.tsx b/packages/tinacms/src/internal-admin-origin.tsx
+new file mode 100644
+index 0000000000..fed4f219f6
+--- /dev/null
++++ b/packages/tinacms/src/internal-admin-origin.tsx
+@@ -0,0 +1,42 @@
++import React from 'react';
++
++/**
++ * Trusted admin parent origins for overlay messages.
++ * Defaults to the page origin because legacy admin embeds the site same-origin,
++ * and useTina posts back to `window.location.origin`.
++ *
++ * Internal only: consumed by useTina; tests may import the provider directly.
++ */
++const TinaAdminOriginContext = React.createContext<string | string[] | null>(
++  null
++);
++
++export function TinaAdminOriginProvider(props: {
++  origin: string | string[];
++  children: React.ReactNode;
++}): React.ReactElement {
++  return (
++    <TinaAdminOriginContext.Provider value={props.origin}>
++      {props.children}
++    </TinaAdminOriginContext.Provider>
++  );
++}
++
++export function useTrustedAdminOrigins(): string[] {
++  const configured = React.useContext(TinaAdminOriginContext);
++  return React.useMemo(() => {
++    if (configured == null) {
++      return typeof window !== 'undefined' ? [window.location.origin] : [];
++    }
++    return Array.isArray(configured) ? [...configured] : [configured];
++  }, [configured]);
++}
++
++export function isFromAdmin(
++  event: MessageEvent,
++  trustedOrigins: string[]
++): boolean {
++  if (typeof window === 'undefined') return false;
++  if (!trustedOrigins.includes(event.origin)) return false;
++  return event.source === window.parent;
++}
+diff --git a/packages/tinacms/src/react.test.tsx b/packages/tinacms/src/react.test.tsx
+new file mode 100644
+index 0000000000..18e29383dc
+--- /dev/null
++++ b/packages/tinacms/src/react.test.tsx
+@@ -0,0 +1,88 @@
++import { act, render } from '@testing-library/react';
++import React from 'react';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { TinaAdminOriginProvider } from './internal-admin-origin';
++import { hashFromQuery, useTina } from './react';
++
++const query = 'query Post { post(relativePath: "hello.md") { title } }';
++const variables = { relativePath: 'hello.md' };
++
++// Both ends of the overlay wire derive the same id from query + variables.
++const id = hashFromQuery(JSON.stringify({ query, variables }));
++
++// Stable reference: useTina re-derives its processed data whenever `data`
++// changes identity, so an inline literal here would re-fire its effect on
++// every render.
++const initialData = { title: 'initial' };
++
++function Probe() {
++  const { data } = useTina<{ title: string }>({
++    query,
++    variables,
++    data: initialData,
++  });
++  return <span data-testid='title'>{data?.title}</span>;
++}
++
++function dispatchUpdate(origin: string, title: string, source?: Window) {
++  act(() => {
++    window.dispatchEvent(
++      new MessageEvent('message', {
++        origin,
++        source: source ?? null,
++        data: { type: 'updateData', id, data: { title } },
++      })
++    );
++  });
++}
++
++describe('useTina overlay message handling', () => {
++  beforeEach(() => {
++    // The hook posts to the parent on mount; in the test runner the parent
++    // is the same window, so stub postMessage to a no-op.
++    vi.spyOn(window, 'postMessage').mockImplementation(() => {});
++  });
++
++  afterEach(() => {
++    vi.restoreAllMocks();
++  });
++
++  it('ignores message events from untrusted origins', () => {
++    const { getByTestId } = render(<Probe />);
++    expect(getByTestId('title').textContent).toBe('initial');
++
++    dispatchUpdate(
++      'https://untrusted.example',
++      'untrusted-update',
++      window.parent
++    );
++
++    expect(getByTestId('title').textContent).toBe('initial');
++  });
++
++  it('updates rendered data from a trusted same-origin admin message', () => {
++    const { getByTestId } = render(<Probe />);
++    expect(getByTestId('title').textContent).toBe('initial');
++
++    dispatchUpdate(window.location.origin, 'updated', window.parent);
++
++    expect(getByTestId('title').textContent).toBe('updated');
++  });
++
++  it('honours an admin origin supplied through TinaAdminOriginProvider', () => {
++    const adminOrigin = 'https://admin.example';
++    const { getByTestId } = render(
++      <TinaAdminOriginProvider origin={adminOrigin}>
++        <Probe />
++      </TinaAdminOriginProvider>
++    );
++    expect(getByTestId('title').textContent).toBe('initial');
++
++    // Same-origin no longer counts as admin once an explicit origin is set.
++    dispatchUpdate(window.location.origin, 'same-origin', window.parent);
++    expect(getByTestId('title').textContent).toBe('initial');
++
++    dispatchUpdate(adminOrigin, 'from-admin', window.parent);
++    expect(getByTestId('title').textContent).toBe('from-admin');
++  });
++});
+diff --git a/packages/tinacms/src/react.tsx b/packages/tinacms/src/react.tsx
+index a29ad02922..8a42344e5c 100644
+--- a/packages/tinacms/src/react.tsx
++++ b/packages/tinacms/src/react.tsx
+@@ -1,6 +1,7 @@
+ import { addMetadata, hashFromQuery } from '@tinacms/bridge/metadata';
+ import { QUICK_EDIT_CSS } from '@tinacms/bridge/quick-edit-css';
+ import React from 'react';
++import { isFromAdmin, useTrustedAdminOrigins } from './internal-admin-origin';
+ 
+ export { addMetadata, hashFromQuery };
+ 
+@@ -27,6 +28,8 @@ export function useTina<T extends object>(props: {
+     }
+   }, [props.data, id]);
+ 
++  const trustedAdminOrigins = useTrustedAdminOrigins();
++
+   const [data, setData] = React.useState(processedData);
+   const [isClient, setIsClient] = React.useState(false);
+   const [quickEditEnabled, setQuickEditEnabled] = React.useState(false);
+@@ -106,6 +109,7 @@ export function useTina<T extends object>(props: {
+     const { experimental___selectFormByFormId, ...rest } = props;
+     parent.postMessage({ type: 'open', ...rest, id }, window.location.origin);
+     const handleMessage = (event) => {
++      if (!isFromAdmin(event, trustedAdminOrigins)) return;
+       if (event.data.type === 'quickEditEnabled') {
+         setQuickEditEnabled(event.data.value);
+       }
+@@ -138,7 +142,7 @@ export function useTina<T extends object>(props: {
+       window.removeEventListener('message', handleMessage);
+       parent.postMessage({ type: 'close', id }, window.location.origin);
+     };
+-  }, [id, setQuickEditEnabled]);
++  }, [id, setQuickEditEnabled, trustedAdminOrigins]);
+ 
+   return { data, isClient };
+ }
+diff --git a/packages/tinacms/src/rich-text/index.test.tsx b/packages/tinacms/src/rich-text/index.test.tsx
+new file mode 100644
+index 0000000000..50c7d76b53
+--- /dev/null
++++ b/packages/tinacms/src/rich-text/index.test.tsx
+@@ -0,0 +1,65 @@
++import { render } from '@testing-library/react';
++import * as React from 'react';
++import { describe, expect, it } from 'vitest';
++import { TinaMarkdown } from './index';
++
++describe('TinaMarkdown URL sanitization', () => {
++  it('drops an unsafe link URL', () => {
++    const { container } = render(
++      <TinaMarkdown
++        content={
++          {
++            type: 'root',
++            children: [
++              {
++                type: 'a',
++                url: 'javascript:alert(1)',
++                children: [{ type: 'text', text: 'link' }],
++              },
++            ],
++          } as any
++        }
++      />
++    );
++    const anchor = container.querySelector('a');
++    expect(anchor?.getAttribute('href')).toBe('');
++  });
++
++  it('preserves a safe link URL', () => {
++    const { container } = render(
++      <TinaMarkdown
++        content={
++          {
++            type: 'root',
++            children: [
++              {
++                type: 'a',
++                url: 'https://example.com/path',
++                children: [{ type: 'text', text: 'link' }],
++              },
++            ],
++          } as any
++        }
++      />
++    );
++    const anchor = container.querySelector('a');
++    expect(anchor?.getAttribute('href')).toBe('https://example.com/path');
++  });
++
++  it('drops an unsafe image URL', () => {
++    const { container } = render(
++      <TinaMarkdown
++        content={
++          {
++            type: 'root',
++            children: [
++              { type: 'img', url: 'javascript:alert(1)', children: [] },
++            ],
++          } as any
++        }
++      />
++    );
++    const img = container.querySelector('img');
++    expect(img?.getAttribute('src')).toBe('');
++  });
++});
+diff --git a/packages/tinacms/src/rich-text/index.tsx b/packages/tinacms/src/rich-text/index.tsx
+index 0c987c0a81..72329adb7e 100644
+--- a/packages/tinacms/src/rich-text/index.tsx
++++ b/packages/tinacms/src/rich-text/index.tsx
+@@ -2,6 +2,7 @@
+ 
+ */
+ 
++import { sanitizeUrl } from '@tinacms/mdx';
+ import React from 'react';
+ 
+ type BaseComponents = {
+@@ -318,7 +319,7 @@ const Node = ({ components, child }) => {
+         return <Component {...props} />;
+       }
+       // @ts-ignore FIXME: TinaMarkdownContent needs to be a union of all possible node types
+-      return <img src={child.url} alt={child.alt} />;
++      return <img src={sanitizeUrl(child.url)} alt={child.alt} />;
+     case 'a':
+       if (components[child.type]) {
+         const Component = components[child.type];
+@@ -331,7 +332,7 @@ const Node = ({ components, child }) => {
+       }
+       return (
+         // @ts-ignore FIXME: TinaMarkdownContent needs to be a union of all possible node types
+-        <a href={child.url}>
++        <a href={sanitizeUrl(child.url)}>
+           <TinaMarkdown components={components} content={children} />
+         </a>
+       );
+diff --git a/packages/tinacms/src/rich-text/static.tsx b/packages/tinacms/src/rich-text/static.tsx
+index 48cac7877c..5adace6317 100644
+--- a/packages/tinacms/src/rich-text/static.tsx
++++ b/packages/tinacms/src/rich-text/static.tsx
+@@ -7,6 +7,7 @@
+  * fully static and can be rendered on the server.
+  */
+ 
++import { sanitizeUrl } from '@tinacms/mdx';
+ import React from 'react';
+ 
+ type BaseComponents = {
+@@ -238,7 +239,7 @@ const Node = ({
+         //@ts-ignore Same issue with TinaMarkdown
+         return <Component {...props} />;
+       }
+-      return <img src={child.url} alt={child.alt} />;
++      return <img src={sanitizeUrl(child.url)} alt={child.alt} />;
+     case 'a':
+       if (components[child.type]) {
+         const Component = components[child.type];
+@@ -250,7 +251,7 @@ const Node = ({
+         );
+       }
+       return (
+-        <a href={child.url}>
++        <a href={sanitizeUrl(child.url)}>
+           <StaticTinaMarkdown components={components} content={children} />
+         </a>
+       );
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 2bb6a01231..0c0731064a 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -1239,6 +1239,15 @@ importers:
+       '@types/react-dom':
+         specifier: 'catalog:'
+         version: 18.3.7(@types/react@18.3.27)
++      happy-dom:
++        specifier: 'catalog:'
++        version: 15.10.2
++      vite:
++        specifier: ^5.4.14
++        version: 5.4.21(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)
++      vitest:
++        specifier: ^2.1.9
++        version: 2.1.9(@types/node@25.1.0)(happy-dom@15.10.2)(jsdom@15.2.1(bufferutil@4.1.0))(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)
+ 
+   packages/@tinacms/astro:
+     dependencies:
+@@ -22689,6 +22698,14 @@ snapshots:
+     optionalDependencies:
+       vite: 5.4.21(@types/node@22.19.3)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)
+ 
++  '@vitest/mocker@2.1.9(vite@5.4.21(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0))':
++    dependencies:
++      '@vitest/spy': 2.1.9
++      estree-walker: 3.0.3
++      magic-string: 0.30.21
++    optionalDependencies:
++      vite: 5.4.21(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)
++
+   '@vitest/mocker@3.2.4(vite@6.4.1(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)(yaml@2.8.2))':
+     dependencies:
+       '@vitest/spy': 3.2.4
+@@ -32427,6 +32444,24 @@ snapshots:
+       - supports-color
+       - terser
+ 
++  vite-node@2.1.9(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0):
++    dependencies:
++      cac: 6.7.14
++      debug: 4.4.3
++      es-module-lexer: 1.7.0
++      pathe: 1.1.2
++      vite: 5.4.21(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)
++    transitivePeerDependencies:
++      - '@types/node'
++      - less
++      - lightningcss
++      - sass
++      - sass-embedded
++      - stylus
++      - sugarss
++      - supports-color
++      - terser
++
+   vite-node@3.2.4(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)(yaml@2.8.2):
+     dependencies:
+       cac: 6.7.14
+@@ -32496,6 +32531,18 @@ snapshots:
+       sass: 1.97.3
+       terser: 5.46.0
+ 
++  vite@5.4.21(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0):
++    dependencies:
++      esbuild: 0.21.5
++      postcss: 8.5.6
++      rollup: 4.53.4
++    optionalDependencies:
++      '@types/node': 25.1.0
++      fsevents: 2.3.3
++      lightningcss: 1.32.0
++      sass: 1.97.3
++      terser: 5.46.0
++
+   vite@6.4.1(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)(yaml@2.8.2):
+     dependencies:
+       esbuild: 0.25.12
+@@ -32685,6 +32732,43 @@ snapshots:
+       - supports-color
+       - terser
+ 
++  vitest@2.1.9(@types/node@25.1.0)(happy-dom@15.10.2)(jsdom@15.2.1(bufferutil@4.1.0))(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0):
++    dependencies:
++      '@vitest/expect': 2.1.9
++      '@vitest/mocker': 2.1.9(vite@5.4.21(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0))
++      '@vitest/pretty-format': 2.1.9
++      '@vitest/runner': 2.1.9
++      '@vitest/snapshot': 2.1.9
++      '@vitest/spy': 2.1.9
++      '@vitest/utils': 2.1.9
++      chai: 5.3.3
++      debug: 4.4.3
++      expect-type: 1.3.0
++      magic-string: 0.30.21
++      pathe: 1.1.2
++      std-env: 3.10.0
++      tinybench: 2.9.0
++      tinyexec: 0.3.2
++      tinypool: 1.1.1
++      tinyrainbow: 1.2.0
++      vite: 5.4.21(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)
++      vite-node: 2.1.9(@types/node@25.1.0)(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)
++      why-is-node-running: 2.3.0
++    optionalDependencies:
++      '@types/node': 25.1.0
++      happy-dom: 15.10.2
++      jsdom: 15.2.1(bufferutil@4.1.0)
++    transitivePeerDependencies:
++      - less
++      - lightningcss
++      - msw
++      - sass
++      - sass-embedded
++      - stylus
++      - sugarss
++      - supports-color
++      - terser
++
+   vitest@3.2.4(@types/debug@4.1.12)(@types/node@22.19.17)(happy-dom@15.10.2)(jiti@2.6.1)(jsdom@15.2.1(bufferutil@4.1.0))(lightningcss@1.32.0)(sass@1.97.3)(terser@5.46.0)(yaml@2.8.2):
+     dependencies:
+       '@types/chai': 5.2.3

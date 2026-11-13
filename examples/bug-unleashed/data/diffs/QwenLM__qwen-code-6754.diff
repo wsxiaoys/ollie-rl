@@ -1,0 +1,643 @@
+diff --git a/packages/core/src/core/geminiChat.test.ts b/packages/core/src/core/geminiChat.test.ts
+index cb0df1f80bf..c3060e85770 100644
+--- a/packages/core/src/core/geminiChat.test.ts
++++ b/packages/core/src/core/geminiChat.test.ts
+@@ -4729,7 +4729,7 @@ describe('GeminiChat', async () => {
+       }
+     });
+ 
+-    it('should keep protocol tag leak retries at the existing budget', async () => {
++    it('should retry protocol tag leaks four times', async () => {
+       vi.useFakeTimers();
+       try {
+         vi.mocked(
+@@ -4762,12 +4762,12 @@ describe('GeminiChat', async () => {
+ 
+         expect(
+           mockContentGenerator.generateContentStream,
+-        ).toHaveBeenCalledTimes(3);
+-        expect(mockLogContentRetry).toHaveBeenCalledTimes(2);
++        ).toHaveBeenCalledTimes(5);
++        expect(mockLogContentRetry).toHaveBeenCalledTimes(4);
+         expect(mockLogContentRetryFailure).toHaveBeenCalledWith(
+           mockConfig,
+           expect.objectContaining({
+-            total_attempts: 3,
++            total_attempts: 5,
+             final_error_type: 'PROTOCOL_TAG_LEAK',
+             model: 'test-model',
+           }),
+@@ -9925,12 +9925,12 @@ describe('GeminiChat', async () => {
+ 
+         expect(
+           mockContentGenerator.generateContentStream,
+-        ).toHaveBeenCalledTimes(5);
+-        expect(mockLogContentRetry).toHaveBeenCalledTimes(2);
++        ).toHaveBeenCalledTimes(7);
++        expect(mockLogContentRetry).toHaveBeenCalledTimes(4);
+         expect(mockLogContentRetry).toHaveBeenLastCalledWith(
+           mockConfig,
+           expect.objectContaining({
+-            attempt_number: 1,
++            attempt_number: 3,
+             error_type: 'PROTOCOL_TAG_LEAK',
+           }),
+         );
+diff --git a/packages/core/src/core/geminiChat.ts b/packages/core/src/core/geminiChat.ts
+index 880c6fe4c14..f78e8bd9452 100644
+--- a/packages/core/src/core/geminiChat.ts
++++ b/packages/core/src/core/geminiChat.ts
+@@ -102,6 +102,9 @@ import {
+   collectToolCallIdsFromHistory,
+   normalizeModelToolCallIds,
+ } from './toolCallIdUtils.js';
++import { InvalidStreamError } from './invalid-stream-error.js';
++
++export { InvalidStreamError };
+ 
+ const debugLogger = createDebugLogger('QWEN_CODE_CHAT');
+ 
+@@ -343,10 +346,7 @@ const INVALID_CONTENT_RETRY_OPTIONS: ContentRetryOptions = {
+ // reason. All are retried with an independent budget (similar to rate-limit
+ // retries) so they do not consume each other's retry budgets.
+ const INVALID_STREAM_RETRY_CONFIG = {
+-  transientMaxRetries: 4,
+-  // Protocol-tag leaks are model-output validation failures, not the
+-  // provider-side empty/truncated streams covered by issue #6670.
+-  protocolTagLeakMaxRetries: 2,
++  maxRetries: 4,
+   initialDelayMs: 2000,
+ };
+ 
+@@ -1041,23 +1041,6 @@ function stripThoughtPartsFromContent(content: Content): Content | null {
+   };
+ }
+ 
+-/**
+- * Custom error to signal that a stream completed with invalid content,
+- * which should trigger a retry.
+- */
+-export class InvalidStreamError extends Error {
+-  readonly type: 'NO_FINISH_REASON' | 'NO_RESPONSE_TEXT' | 'PROTOCOL_TAG_LEAK';
+-
+-  constructor(
+-    message: string,
+-    type: 'NO_FINISH_REASON' | 'NO_RESPONSE_TEXT' | 'PROTOCOL_TAG_LEAK',
+-  ) {
+-    super(message);
+-    this.name = 'InvalidStreamError';
+-    this.type = type;
+-  }
+-}
+-
+ const PROTOCOL_TAG_PREFIXES = [
+   '<analysis',
+   '</analysis',
+@@ -2522,9 +2505,7 @@ export class GeminiChat {
+             // not consume the content retry budget.
+             const isInvalidStreamError = error instanceof InvalidStreamError;
+             const maxInvalidStreamRetries =
+-              isInvalidStreamError && error.type === 'PROTOCOL_TAG_LEAK'
+-                ? INVALID_STREAM_RETRY_CONFIG.protocolTagLeakMaxRetries
+-                : INVALID_STREAM_RETRY_CONFIG.transientMaxRetries;
++              INVALID_STREAM_RETRY_CONFIG.maxRetries;
+             const invalidStreamRetryCount =
+               isInvalidStreamError && error.type === 'PROTOCOL_TAG_LEAK'
+                 ? protocolTagLeakRetryCount
+@@ -2681,9 +2662,7 @@ export class GeminiChat {
+ 
+               attemptState.rollback();
+               const maxContinuationRetries =
+-                error.type === 'PROTOCOL_TAG_LEAK'
+-                  ? INVALID_STREAM_RETRY_CONFIG.protocolTagLeakMaxRetries
+-                  : INVALID_STREAM_RETRY_CONFIG.transientMaxRetries;
++                INVALID_STREAM_RETRY_CONFIG.maxRetries;
+               const continuationRetryCount =
+                 error.type === 'PROTOCOL_TAG_LEAK'
+                   ? protocolTagLeakRetryCount
+diff --git a/packages/core/src/core/invalid-stream-error.ts b/packages/core/src/core/invalid-stream-error.ts
+new file mode 100644
+index 00000000000..dadfcaf866d
+--- /dev/null
++++ b/packages/core/src/core/invalid-stream-error.ts
+@@ -0,0 +1,16 @@
++/**
++ * Custom error to signal that a stream completed with invalid content,
++ * which should trigger a retry.
++ */
++export class InvalidStreamError extends Error {
++  readonly type: 'NO_FINISH_REASON' | 'NO_RESPONSE_TEXT' | 'PROTOCOL_TAG_LEAK';
++
++  constructor(
++    message: string,
++    type: 'NO_FINISH_REASON' | 'NO_RESPONSE_TEXT' | 'PROTOCOL_TAG_LEAK',
++  ) {
++    super(message);
++    this.name = 'InvalidStreamError';
++    this.type = type;
++  }
++}
+diff --git a/packages/core/src/core/openaiContentGenerator/converter.test.ts b/packages/core/src/core/openaiContentGenerator/converter.test.ts
+index 560158e35c3..af57707bd60 100644
+--- a/packages/core/src/core/openaiContentGenerator/converter.test.ts
++++ b/packages/core/src/core/openaiContentGenerator/converter.test.ts
+@@ -96,6 +96,18 @@ describe('OpenAIContentConverter', () => {
+   }
+ 
+   describe('stream-local parser state', () => {
++    const streamChunk = (
++      id: string,
++      delta: Record<string, unknown>,
++      finishReason: string | null = null,
++    ) =>
++      ({
++        id,
++        created: 1,
++        model: 'test',
++        choices: [{ index: 0, delta, finish_reason: finishReason }],
++      }) as unknown as OpenAI.Chat.ChatCompletionChunk;
++
+     it('creates fresh parser instances', () => {
+       const ctx1 = new StreamingToolCallParser();
+       const ctx2 = new StreamingToolCallParser();
+@@ -351,6 +363,283 @@ describe('OpenAIContentConverter', () => {
+       expect(fn?.args).toEqual({});
+       expect(fn?.id).toBe('call_noargs');
+     });
++
++    it('discards a response whose tool call never provides a function name', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++
++      expect(
++        converter.convertOpenAIChunkToGemini(
++          streamChunk('malformed-tool-call', {
++            reasoning_content: 'failed reasoning',
++            content: 'failed visible content',
++            tool_calls: [
++              {
++                index: 0,
++                id: 'call_without_name',
++                type: 'function',
++                function: { arguments: '' },
++              },
++            ],
++          }),
++          stream,
++        ).candidates?.[0]?.content?.parts,
++      ).toEqual([]);
++      const result = converter.convertOpenAIChunkToGemini(
++        streamChunk('malformed-tool-call-finish', {}, 'stop'),
++        stream,
++      );
++      expect(result.candidates?.[0]?.content?.parts).toEqual([]);
++      expect(result.candidates?.[0]?.finishReason).toBeUndefined();
++    });
++
++    it('preserves literal thinking tags when no nameless tool call appears', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++
++      expect(
++        converter.convertOpenAIChunkToGemini(
++          streamChunk('literal-think', {
++            content: 'Use <think>literal</think> text.',
++          }),
++          stream,
++        ).candidates?.[0]?.content?.parts,
++      ).toEqual([{ text: 'Use <think>literal</think> text.' }]);
++
++      const result = converter.convertOpenAIChunkToGemini(
++        streamChunk('literal-think-finish', {}, 'stop'),
++        stream,
++      );
++
++      expect(result.candidates?.[0]?.content?.parts).toEqual([]);
++      expect(result.candidates?.[0]?.finishReason).toBe(FinishReason.STOP);
++    });
++
++    it('preserves inline thinking-tag references after structured reasoning', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++
++      const reasoning = converter.convertOpenAIChunkToGemini(
++        streamChunk('literal-think-reasoning', {
++          reasoning_content: 'The user is asking about response formats.',
++        }),
++        stream,
++      );
++      const content = converter.convertOpenAIChunkToGemini(
++        streamChunk('literal-think-content', {
++          content:
++            'In Qwen output, the `<think>` tag wraps hidden reasoning text.',
++        }),
++        stream,
++      );
++      const finish = converter.convertOpenAIChunkToGemini(
++        streamChunk('literal-think-finish', {}, 'stop'),
++        stream,
++      );
++
++      expect(reasoning.candidates?.[0]?.content?.parts).toEqual([
++        {
++          thought: true,
++          text: 'The user is asking about response formats.',
++        },
++      ]);
++      expect(content.candidates?.[0]?.content?.parts).toEqual([
++        {
++          text: 'In Qwen output, the `<think>` tag wraps hidden reasoning text.',
++        },
++      ]);
++      expect(finish.candidates?.[0]?.finishReason).toBe(FinishReason.STOP);
++    });
++
++    it('drops buffered thinking tags when a later tool call has no name', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++
++      converter.convertOpenAIChunkToGemini(
++        streamChunk('late-think', {
++          content: 'late <think>payload</think>',
++        }),
++        stream,
++      );
++      const malformed = converter.convertOpenAIChunkToGemini(
++        streamChunk('late-tool-call', {
++          tool_calls: [
++            {
++              index: 0,
++              id: 'call_without_name',
++              type: 'function',
++              function: { arguments: '' },
++            },
++          ],
++        }),
++        stream,
++      );
++      const result = converter.convertOpenAIChunkToGemini(
++        streamChunk('late-finish', {}, 'stop'),
++        stream,
++      );
++
++      expect(malformed.candidates?.[0]?.content?.parts).toEqual([]);
++      expect(result.candidates?.[0]?.content?.parts).toEqual([]);
++      expect(result.candidates?.[0]?.finishReason).toBeUndefined();
++    });
++
++    it('rejects raw thinking tags that leak after structured reasoning output', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++      const reasoning = converter.convertOpenAIChunkToGemini(
++        streamChunk('structured-reasoning', {
++          reasoning_content: 'Let me check<think>',
++        }),
++        stream,
++      );
++      const leaked = converter.convertOpenAIChunkToGemini(
++        streamChunk('leaked-visible-thinking', {
++          content:
++            ' file read the presubmit report.\n</think>\n<think>\n\n</think>\n\n',
++        }),
++        stream,
++      );
++      expect(reasoning.candidates?.[0]?.content?.parts).toEqual([]);
++      expect(leaked.candidates?.[0]?.content?.parts).toEqual([]);
++      expect(() =>
++        converter.convertOpenAIChunkToGemini(
++          streamChunk('leaked-visible-thinking-finish', {}, 'stop'),
++          stream,
++        ),
++      ).toThrowError(expect.objectContaining({ type: 'PROTOCOL_TAG_LEAK' }));
++    });
++
++    it.each([
++      ['closing tag', '</thi', 'nk> leaked visible reasoning'],
++      [
++        'mixed-case tag with whitespace',
++        '<Thinking ',
++        '>leaked visible reasoning</Thinking >',
++      ],
++    ])(
++      'rejects a split %s across streamed deltas',
++      (_name, firstDelta, secondDelta) => {
++        const stream = withStreamParser(new StreamingToolCallParser());
++        converter.convertOpenAIChunkToGemini(
++          streamChunk('structured-reasoning-before-split-leak', {
++            reasoning_content: 'hidden reasoning',
++          }),
++          stream,
++        );
++
++        const firstLeak = converter.convertOpenAIChunkToGemini(
++          streamChunk('split-leak-start', { content: firstDelta }),
++          stream,
++        );
++        const secondLeak = converter.convertOpenAIChunkToGemini(
++          streamChunk('split-leak-end', { content: secondDelta }),
++          stream,
++        );
++
++        expect(firstLeak.candidates?.[0]?.content?.parts).toEqual([]);
++        expect(secondLeak.candidates?.[0]?.content?.parts).toEqual([]);
++        expect(() =>
++          converter.convertOpenAIChunkToGemini(
++            streamChunk('split-leak-finish', {}, 'stop'),
++            stream,
++          ),
++        ).toThrowError(expect.objectContaining({ type: 'PROTOCOL_TAG_LEAK' }));
++      },
++    );
++
++    it('rejects an incomplete thinking tag prefix when the stream finishes', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++      converter.convertOpenAIChunkToGemini(
++        streamChunk('structured-reasoning-before-incomplete-leak', {
++          reasoning_content: 'hidden reasoning',
++        }),
++        stream,
++      );
++      converter.convertOpenAIChunkToGemini(
++        streamChunk('incomplete-leak', {
++          content: 'leaked visible reasoning </thi',
++        }),
++        stream,
++      );
++
++      expect(() =>
++        converter.convertOpenAIChunkToGemini(
++          streamChunk('incomplete-leak-finish', {}, 'stop'),
++          stream,
++        ),
++      ).toThrowError(expect.objectContaining({ type: 'PROTOCOL_TAG_LEAK' }));
++    });
++
++    it('marks a completed structured reasoning tag leak explicitly', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++
++      expect(() =>
++        converter.convertOpenAIChunkToGemini(
++          streamChunk(
++            'explicit-protocol-tag-leak',
++            {
++              reasoning_content: 'hidden reasoning',
++              content: '</think> leaked visible reasoning',
++            },
++            'stop',
++          ),
++          stream,
++        ),
++      ).toThrowError(
++        expect.objectContaining({
++          name: 'InvalidStreamError',
++          type: 'PROTOCOL_TAG_LEAK',
++        }),
++      );
++    });
++
++    it('rejects raw thinking tags when they share a chunk with structured reasoning', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++
++      expect(() =>
++        converter.convertOpenAIChunkToGemini(
++          streamChunk(
++            'same-chunk-structured-reasoning-leak',
++            {
++              reasoning_content: 'hidden reasoning',
++              content: '<think>leaked reasoning</think>visible',
++            },
++            'stop',
++          ),
++          stream,
++        ),
++      ).toThrowError(expect.objectContaining({ type: 'PROTOCOL_TAG_LEAK' }));
++    });
++
++    it('rejects tag leaks before emitting their tool calls', () => {
++      const stream = withStreamParser(new StreamingToolCallParser());
++      const reasoning = converter.convertOpenAIChunkToGemini(
++        streamChunk('structured-reasoning-before-tool-leak', {
++          reasoning_content: 'hidden reasoning',
++        }),
++        stream,
++      );
++
++      expect(reasoning.candidates?.[0]?.content?.parts).toEqual([
++        { thought: true, text: 'hidden reasoning' },
++      ]);
++      expect(() =>
++        converter.convertOpenAIChunkToGemini(
++          streamChunk(
++            'structured-reasoning-leak-with-tool-call',
++            {
++              content: '</think> leaked visible reasoning',
++              tool_calls: [
++                {
++                  index: 0,
++                  id: 'call_named',
++                  type: 'function',
++                  function: { name: 'run_shell_command', arguments: '{}' },
++                },
++              ],
++            },
++            'tool_calls',
++          ),
++          stream,
++        ),
++      ).toThrowError(expect.objectContaining({ type: 'PROTOCOL_TAG_LEAK' }));
++    });
+   });
+ 
+   describe('convertGeminiRequestToOpenAI', () => {
+diff --git a/packages/core/src/core/openaiContentGenerator/converter.ts b/packages/core/src/core/openaiContentGenerator/converter.ts
+index 5bfcdb4cac5..8655644ca3f 100644
+--- a/packages/core/src/core/openaiContentGenerator/converter.ts
++++ b/packages/core/src/core/openaiContentGenerator/converter.ts
+@@ -28,6 +28,7 @@ import {
+   convertSchema,
+   type SchemaComplianceMode,
+ } from '../../utils/schemaConverter.js';
++import { InvalidStreamError } from '../invalid-stream-error.js';
+ 
+ const debugLogger = createDebugLogger('CONVERTER');
+ const SPLIT_TOOL_MEDIA_TEXT = '(attached media from previous tool call)';
+@@ -1086,6 +1087,64 @@ function hasThoughtPart(parts: Part[]): boolean {
+   return parts.some((part) => part.thought === true);
+ }
+ 
++const THINKING_TAG_PATTERN = /<\/?think(?:ing)?\b/i;
++const COMPLETE_THINKING_TAG_PATTERN = /<\/?think(?:ing)?\s*>/gi;
++const LEADING_THINKING_TAG_PATTERN = /^\s*<think(?:ing)?\s*>/i;
++const PARTIAL_SPACED_THINKING_TAG_PATTERN = /^<\/?think(?:ing)?\s+$/;
++const OPENING_THINKING_TAGS = ['<think>', '<thinking>'] as const;
++const CLOSING_THINKING_TAGS = ['</think>', '</thinking>'] as const;
++
++function getPartText(parts: Part[], visibleOnly = false): string {
++  return parts
++    .map((part) =>
++      (!visibleOnly || part.thought !== true) && typeof part.text === 'string'
++        ? part.text
++        : '',
++    )
++    .join('');
++}
++
++function hasVisibleThinkingTagLeakSignature(parts: Part[]): boolean {
++  const text = getPartText(parts, true);
++  const lowerText = text.toLowerCase();
++  const leadingText = lowerText.trimStart();
++  if (
++    LEADING_THINKING_TAG_PATTERN.test(text) ||
++    OPENING_THINKING_TAGS.some(
++      (tag) =>
++        leadingText.startsWith(tag) ||
++        (leadingText.length >= 2 && tag.startsWith(leadingText)),
++    ) ||
++    PARTIAL_SPACED_THINKING_TAG_PATTERN.test(leadingText)
++  ) {
++    return true;
++  }
++
++  let openTags = 0;
++  for (const match of text.matchAll(COMPLETE_THINKING_TAG_PATTERN)) {
++    if (match[0].startsWith('</')) {
++      if (openTags === 0) {
++        return true;
++      }
++      openTags--;
++    } else {
++      openTags++;
++    }
++  }
++
++  const tagStart = lowerText.lastIndexOf('<');
++  if (tagStart < 0) {
++    return false;
++  }
++  const suffix = lowerText.slice(tagStart);
++  return (
++    suffix.length >= 3 &&
++    (CLOSING_THINKING_TAGS.some((tag) => tag.startsWith(suffix)) ||
++      (suffix.startsWith('</') &&
++        PARTIAL_SPACED_THINKING_TAG_PATTERN.test(suffix)))
++  );
++}
++
+ /**
+  * Convert OpenAI response to Gemini format.
+  */
+@@ -1289,11 +1348,13 @@ export function convertOpenAIChunkToGemini(
+         normalizedReasoningText &&
+         !requestContext.responseParsingOptions?.taggedThinkingTags
+       ) {
++        requestContext.hasStructuredReasoningContent = true;
+         parts.push(createOpenAIReasoningThoughtPart(normalizedReasoningText));
+       } else if (
+         normalizedReasoningText &&
+         !requestContext.hasTaggedThinkingThought
+       ) {
++        requestContext.hasStructuredReasoningContent = true;
+         requestContext.pendingReasoningText =
+           (requestContext.pendingReasoningText ?? '') + normalizedReasoningText;
+         debugLogger.debug(
+@@ -1366,9 +1427,57 @@ export function convertOpenAIChunkToGemini(
+       }
+     }
+ 
++    // The recorded leak starts with a tag in the thought part, so all parts
++    // participate in holding while only visible parts decide rejection.
++    const pendingAndCurrentParts = [
++      ...(requestContext.pendingUntrustedResponseParts ?? []),
++      ...parts,
++    ];
++    const hasVisibleThinkingTagLeak =
++      requestContext.hasStructuredReasoningContent &&
++      hasVisibleThinkingTagLeakSignature(pendingAndCurrentParts);
++    const hasUntrustedProtocolText =
++      requestContext.hasStructuredReasoningContent &&
++      (parts.some(
++        (part) =>
++          part.thought === true &&
++          typeof part.text === 'string' &&
++          THINKING_TAG_PATTERN.test(part.text),
++      ) ||
++        hasVisibleThinkingTagLeak);
++    const toolCallWithoutName = toolCallParser.hasNamelessToolCall();
++    const malformedNamelessToolCall =
++      Boolean(choice.finish_reason) && toolCallWithoutName;
++    const malformedThinkingTagLeak =
++      Boolean(choice.finish_reason) && hasVisibleThinkingTagLeak;
++    if (malformedThinkingTagLeak) {
++      requestContext.pendingUntrustedResponseParts = undefined;
++      throw new InvalidStreamError(
++        'Model response leaked thinking tags into visible content.',
++        'PROTOCOL_TAG_LEAK',
++      );
++    }
++    const shouldDropMalformedAttempt = malformedNamelessToolCall;
++    const shouldHoldUntrustedParts =
++      toolCallWithoutName ||
++      (!choice.finish_reason &&
++        (hasUntrustedProtocolText ||
++          Boolean(requestContext.pendingUntrustedResponseParts?.length)));
++
++    if (shouldDropMalformedAttempt) {
++      parts.length = 0;
++      requestContext.pendingUntrustedResponseParts = undefined;
++    } else if (shouldHoldUntrustedParts) {
++      (requestContext.pendingUntrustedResponseParts ??= []).push(...parts);
++      parts.length = 0;
++    } else if (requestContext.pendingUntrustedResponseParts) {
++      parts.unshift(...requestContext.pendingUntrustedResponseParts);
++      requestContext.pendingUntrustedResponseParts = undefined;
++    }
++
+     // Only emit function calls when streaming is complete (finish_reason is present)
+     let toolCallsTruncated = false;
+-    if (choice.finish_reason) {
++    if (choice.finish_reason && !shouldDropMalformedAttempt) {
+       // Detect truncation the provider may not report correctly.
+       // Some providers (e.g. DashScope/Qwen) send "stop" or "tool_calls"
+       // even when output was cut off mid-JSON due to max_tokens.
+@@ -1393,8 +1502,11 @@ export function convertOpenAIChunkToGemini(
+ 
+     // If tool call JSON was truncated, override to "length" so downstream
+     // (turn.ts) correctly sets wasOutputTruncated=true.
+-    const effectiveFinishReason =
+-      toolCallsTruncated && choice.finish_reason !== 'length'
++    // Withhold the finish signal so the existing invalid-stream retry drops
++    // the buffered attempt instead of accepting a silently lost tool call.
++    const effectiveFinishReason = shouldDropMalformedAttempt
++      ? undefined
++      : toolCallsTruncated && choice.finish_reason !== 'length'
+         ? 'length'
+         : choice.finish_reason;
+ 
+diff --git a/packages/core/src/core/openaiContentGenerator/streamingToolCallParser.ts b/packages/core/src/core/openaiContentGenerator/streamingToolCallParser.ts
+index 3379e5f5a97..37e536d045f 100644
+--- a/packages/core/src/core/openaiContentGenerator/streamingToolCallParser.ts
++++ b/packages/core/src/core/openaiContentGenerator/streamingToolCallParser.ts
+@@ -260,6 +260,15 @@ export class StreamingToolCallParser {
+     return this.toolCallMeta.get(index) || {};
+   }
+ 
++  hasNamelessToolCall(): boolean {
++    for (const index of this.buffers.keys()) {
++      if (!this.toolCallMeta.get(index)?.name) {
++        return true;
++      }
++    }
++    return false;
++  }
++
+   /**
+    * Gets all completed tool calls that are ready to be emitted
+    *
+diff --git a/packages/core/src/core/openaiContentGenerator/types.ts b/packages/core/src/core/openaiContentGenerator/types.ts
+index 4e363f3df7e..d884aa05dcd 100644
+--- a/packages/core/src/core/openaiContentGenerator/types.ts
++++ b/packages/core/src/core/openaiContentGenerator/types.ts
+@@ -79,6 +79,8 @@ export interface RequestContext {
+    * emitted after the reasoning thought if no tagged thought appears.
+    */
+   pendingContentParts?: Part[];
++  pendingUntrustedResponseParts?: Part[];
++  hasStructuredReasoningContent?: boolean;
+ }
+ 
+ export interface ErrorHandler {

@@ -1,0 +1,260 @@
+diff --git a/lib/browser/api/web-contents.ts b/lib/browser/api/web-contents.ts
+index 339fc92466241..e1c416bf9765f 100644
+--- a/lib/browser/api/web-contents.ts
++++ b/lib/browser/api/web-contents.ts
+@@ -694,7 +694,7 @@ WebContents.prototype._init = function () {
+ 
+   if (this.getType() !== 'remote') {
+     // Make new windows requested by links behave like "window.open".
+-    this.on('-new-window', (event, url, frameName, disposition, rawFeatures, referrer, postData) => {
++    this.on('-new-window', (event, url, frameName, disposition, rawFeatures, referrer, postData, sandboxFlags) => {
+       const postBody = postData
+         ? {
+             data: postData,
+@@ -728,7 +728,8 @@ WebContents.prototype._init = function () {
+           overrideBrowserWindowOptions: options || {},
+           windowOpenArgs: details,
+           outlivesOpener: result.outlivesOpener,
+-          createWindow: result.createWindow
++          createWindow: result.createWindow,
++          inheritedSandboxFlags: sandboxFlags
+         });
+       }
+     });
+diff --git a/lib/browser/guest-window-manager.ts b/lib/browser/guest-window-manager.ts
+index 2abdeca399041..6103d0f0b35f2 100644
+--- a/lib/browser/guest-window-manager.ts
++++ b/lib/browser/guest-window-manager.ts
+@@ -30,7 +30,8 @@ export function openGuestWindow({
+   overrideBrowserWindowOptions,
+   windowOpenArgs,
+   outlivesOpener,
+-  createWindow
++  createWindow,
++  inheritedSandboxFlags
+ }: {
+   embedder: WebContents;
+   guest?: WebContents;
+@@ -41,6 +42,7 @@ export function openGuestWindow({
+   windowOpenArgs: WindowOpenArgs;
+   outlivesOpener: boolean;
+   createWindow?: Electron.CreateWindowFunction;
++  inheritedSandboxFlags?: number;
+ }): void {
+   const { url, frameName, features } = windowOpenArgs;
+   const { options: parsedOptions } = parseFeatures(features);
+@@ -52,6 +54,18 @@ export function openGuestWindow({
+     ...overrideBrowserWindowOptions
+   };
+ 
++  // When the opening frame is sandboxed without
++  // 'allow-popups-to-escape-sandbox', the new window must inherit the
++  // opener's sandbox restrictions. They are applied when the window's
++  // WebContents is created; sandbox flags can only be added this way, never
++  // cleared.
++  if (inheritedSandboxFlags) {
++    browserWindowOptions.webPreferences = {
++      ...browserWindowOptions.webPreferences,
++      openerSandboxFlags: inheritedSandboxFlags
++    };
++  }
++
+   if (createWindow) {
+     const webContents = createWindow({
+       webContents: guest,
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+index 76e1da0508152..8392c2fc02258 100644
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -44,6 +44,7 @@
+ #include "components/security_state/core/security_state.h"
+ #include "content/browser/renderer_host/frame_tree_node.h"  // nogncheck
+ #include "content/browser/renderer_host/navigation_controller_impl.h"  // nogncheck
++#include "content/browser/renderer_host/render_frame_host_impl.h"  // nogncheck
+ #include "content/browser/renderer_host/render_frame_host_manager.h"  // nogncheck
+ #include "content/browser/renderer_host/render_widget_host_impl.h"  // nogncheck
+ #include "content/browser/renderer_host/render_widget_host_view_base.h"  // nogncheck
+@@ -912,6 +913,14 @@ WebContents::WebContents(v8::Isolate* isolate,
+   // Whether to enable DevTools.
+   options.Get("devTools", &enable_devtools_);
+ 
++  // Sandbox flags this WebContents must start with, e.g. inherited from a
++  // sandboxed frame that requested the window. Sandbox flags can only be
++  // added this way, never cleared.
++  uint32_t opener_sandbox_flags = 0;
++  options.Get("openerSandboxFlags", &opener_sandbox_flags);
++  const auto starting_sandbox_flags =
++      static_cast<network::mojom::WebSandboxFlags>(opener_sandbox_flags);
++
+   const bool initially_shown = options.ValueOrDefault(options::kShow, true);
+ 
+   // Obtain the session.
+@@ -962,6 +971,7 @@ WebContents::WebContents(v8::Isolate* isolate,
+     bool transparent = bc == SK_ColorTRANSPARENT;
+ 
+     content::WebContents::CreateParams params{browser_context};
++    params.starting_sandbox_flags = starting_sandbox_flags;
+     auto* view = new OffScreenWebContentsView(
+         transparent, offscreen_use_shared_texture_,
+         offscreen_shared_texture_pixel_format_, offscreen_device_scale_factor_,
+@@ -973,6 +983,7 @@ WebContents::WebContents(v8::Isolate* isolate,
+     view->SetWebContents(web_contents.get());
+   } else {
+     content::WebContents::CreateParams params{browser_context};
++    params.starting_sandbox_flags = starting_sandbox_flags;
+     params.initially_hidden = !initially_shown;
+     web_contents = content::WebContents::Create(params);
+   }
+@@ -1446,28 +1457,40 @@ content::WebContents* WebContents::OpenURLFromTab(
+         navigation_handle_callback) {
+   auto weak_this = GetWeakPtr();
+   if (params.disposition != WindowOpenDisposition::CURRENT_TAB) {
+-    content::FrameTreeNode* initiator =
+-        params.frame_tree_node_id ? content::FrameTreeNode::GloballyFindByID(
+-                                        params.frame_tree_node_id)
+-                                  : nullptr;
+-    if (initiator && !initiator->IsMainFrame()) {
+-      using SandboxFlags = network::mojom::WebSandboxFlags;
++    using SandboxFlags = network::mojom::WebSandboxFlags;
++    SandboxFlags inherited_sandbox_flags = SandboxFlags::kNone;
++    // For non-CURRENT_TAB dispositions params.frame_tree_node_id refers to
++    // the frame to navigate (which doesn't exist yet), so resolve the
++    // initiating frame through the source RenderFrameHost instead.
++    auto* initiator = static_cast<content::RenderFrameHostImpl*>(
++        content::RenderFrameHost::FromID(params.source_render_process_id,
++                                         params.source_render_frame_id));
++    if (initiator && initiator->GetParent()) {
++      // Use the initiating document's active sandboxing flag set (its policy
++      // container flags), which is what
++      // content::WebContentsImpl::CreateWithOpener consults when deciding
++      // whether renderer-created popups must stay sandboxed.
+       const SandboxFlags flags = initiator->active_sandbox_flags();
+       auto allow = [flags](SandboxFlags flag) {
+         return (flags & flag) == SandboxFlags::kNone;
+       };
+       if (!allow(SandboxFlags::kPopups)) {
+-        if (auto* rfh = initiator->current_frame_host()) {
+-          rfh->AddMessageToConsole(
+-              blink::mojom::ConsoleMessageLevel::kError,
+-              "Blocked opening a new window because the iframe is sandboxed "
+-              "and the 'allow-popups' keyword is not set.");
+-        }
++        initiator->AddMessageToConsole(
++            blink::mojom::ConsoleMessageLevel::kError,
++            "Blocked opening a new window because the iframe is sandboxed "
++            "and the 'allow-popups' keyword is not set.");
+         return nullptr;
+       }
++      // A sandboxed frame may create popups, but unless the
++      // 'allow-popups-to-escape-sandbox' keyword is set the new top-level
++      // browsing context must inherit the initiator's sandbox flags. See
++      // https://html.spec.whatwg.org/C/#attr-iframe-sandbox.
++      if (!allow(SandboxFlags::kPropagatesToAuxiliaryBrowsingContexts)) {
++        inherited_sandbox_flags = flags;
++      }
+     }
+     Emit("-new-window", params.url, "", params.disposition, "", params.referrer,
+-         params.post_data);
++         params.post_data, static_cast<uint32_t>(inherited_sandbox_flags));
+     return nullptr;
+   }
+ 
+diff --git a/spec/chromium-spec.ts b/spec/chromium-spec.ts
+index 91b1ac1508577..a89fa0e828010 100644
+--- a/spec/chromium-spec.ts
++++ b/spec/chromium-spec.ts
+@@ -5091,11 +5091,11 @@ describe('iframe sandbox popups', () => {
+   let serverUrl: string;
+   let w: BrowserWindow;
+ 
+-  const childHtml = `
++  const makeChildHtml = (href: string) => `
+     <script>
+       addEventListener('DOMContentLoaded', () => {
+         const a = document.createElement('a');
+-        a.href = 'https://example.com/sandbox-bypassed';
++        a.href = ${JSON.stringify(href)};
+         document.body.appendChild(a);
+         a.dispatchEvent(new MouseEvent('click', {
+           ctrlKey: true, metaKey: true, bubbles: true, cancelable: true, view: window
+@@ -5107,10 +5107,16 @@ describe('iframe sandbox popups', () => {
+     server = http.createServer((req, res) => {
+       res.setHeader('Content-Type', 'text/html');
+       if (req.url === '/child') {
+-        res.end(childHtml);
++        res.end(makeChildHtml('https://example.com/sandbox-bypassed'));
++      } else if (req.url === '/child-local-popup') {
++        res.end(makeChildHtml('/popup'));
++      } else if (req.url === '/popup') {
++        res.end('<title>popup</title>');
+       } else {
+-        const sandbox = new URL(req.url!, serverUrl).searchParams.get('sandbox') ?? '';
+-        res.end(`<iframe sandbox="${sandbox}" src="/child"></iframe>`);
++        const params = new URL(req.url!, serverUrl).searchParams;
++        const sandbox = params.get('sandbox') ?? '';
++        const child = params.get('child') ?? '/child';
++        res.end(`<iframe sandbox="${sandbox}" src="${child}"></iframe>`);
+       }
+     });
+     serverUrl = (await listen(server)).url;
+@@ -5157,4 +5163,38 @@ describe('iframe sandbox popups', () => {
+     await setTimeout(200);
+     expect(handlerCalls).to.equal(1);
+   });
++
++  async function openPopupFromSandboxedIframe(sandbox: string) {
++    const didCreateWindow = once(w.webContents, 'did-create-window') as Promise<[BrowserWindow]>;
++    await w.loadURL(
++      `${serverUrl}/?child=${encodeURIComponent('/child-local-popup')}&sandbox=${encodeURIComponent(sandbox)}`
++    );
++    const [popup] = await didCreateWindow;
++    if (popup.webContents.isLoading()) {
++      await once(popup.webContents, 'did-finish-load');
++    }
++    return popup.webContents.executeJavaScript(
++      `(() => {
++      const result = { origin: String(self.origin) };
++      try { localStorage.setItem('k', 'v'); result.localStorage = 'allowed'; } catch (e) { result.localStorage = e.name; }
++      try { document.cookie = 'k=v'; result.cookie = 'allowed'; } catch (e) { result.cookie = e.name; }
++      return result;
++    })()`,
++      true
++    );
++  }
++
++  it('popups from a sandboxed iframe without allow-popups-to-escape-sandbox inherit the sandbox', async () => {
++    const result = await openPopupFromSandboxedIframe('allow-scripts allow-popups');
++    expect(result.origin).to.equal('null');
++    expect(result.localStorage).to.equal('SecurityError');
++    expect(result.cookie).to.equal('SecurityError');
++  });
++
++  it('popups from a sandboxed iframe with allow-popups-to-escape-sandbox escape the sandbox', async () => {
++    const result = await openPopupFromSandboxedIframe('allow-scripts allow-popups allow-popups-to-escape-sandbox');
++    expect(result.origin).to.equal(new URL(serverUrl).origin);
++    expect(result.localStorage).to.equal('allowed');
++    expect(result.cookie).to.equal('allowed');
++  });
+ });
+diff --git a/typings/internal-electron.d.ts b/typings/internal-electron.d.ts
+index 27356e9afa94e..251ced1fcc41b 100644
+--- a/typings/internal-electron.d.ts
++++ b/typings/internal-electron.d.ts
+@@ -158,6 +158,7 @@ declare namespace Electron {
+   interface WebPreferences {
+     disablePopups?: boolean;
+     embedder?: Electron.WebContents;
++    openerSandboxFlags?: number;
+     type?: 'backgroundPage' | 'window' | 'browserView' | 'remote' | 'webview' | 'offscreen';
+   }
+ 
+@@ -271,7 +272,8 @@ declare namespace Electron {
+         disposition: Electron.HandlerDetails['disposition'],
+         rawFeatures: string,
+         referrer: Electron.Referrer,
+-        postData: LoadURLOptions['postData']
++        postData: LoadURLOptions['postData'],
++        inheritedSandboxFlags: number
+       ) => void
+     ): this;
+     on(

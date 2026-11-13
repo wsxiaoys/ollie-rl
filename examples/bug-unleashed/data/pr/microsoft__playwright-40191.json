@@ -1,0 +1,6 @@
+{
+  "title": "feat(mcp): support both v1 and v2 extension protocol in cdpRelay",
+  "body": "## Summary\n- Reapply multi-tab extension protocol (v2) from #40104 while keeping v1 backward compatibility\n- Protocol version is selected via `PLAYWRIGHT_EXTENSION_VERSION` env variable, defaults to v2\n- v1: single-tab, extension manages debugger attachment\n- v2: multi-tab, relay manages debugger via chrome.* APIs",
+  "head_sha": "59b33261f706e5b6465377bcaffcf63ac91df37a",
+  "base_sha": "23817d24721db5189037a61e0b2f3576043dd517"
+}

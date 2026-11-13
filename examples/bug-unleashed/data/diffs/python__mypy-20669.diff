@@ -1,0 +1,185 @@
+diff --git a/mypy/plugins/default.py b/mypy/plugins/default.py
+index a994a3a80066d..57909ce7c7309 100644
+--- a/mypy/plugins/default.py
++++ b/mypy/plugins/default.py
+@@ -105,6 +105,8 @@ def get_function_hook(self, fullname: str) -> Callable[[FunctionContext], Type]
+             return partial_new_callback
+         elif fullname == "enum.member":
+             return enum_member_callback
++        elif fullname == "builtins.len":
++            return len_callback
+         return None
+ 
+     def get_function_signature_hook(
+@@ -213,6 +215,18 @@ def get_class_decorator_hook_2(
+         return None
+ 
+ 
++def len_callback(ctx: FunctionContext) -> Type:
++    """Infer a better return type for 'len'."""
++    if len(ctx.arg_types) == 1:
++        arg_type = ctx.arg_types[0][0]
++        arg_type = get_proper_type(arg_type)
++        if isinstance(arg_type, Instance) and arg_type.type.fullname == "librt.vecs.vec":
++            # The length of vec is a fixed-width integer, for more
++            # low-level optimization potential.
++            return ctx.api.named_generic_type("mypy_extensions.i64", [])
++    return ctx.default_return_type
++
++
+ def typed_dict_get_signature_callback(ctx: MethodSigContext) -> CallableType:
+     """Try to infer a better signature type for TypedDict.get.
+ 
+diff --git a/mypy/semanal.py b/mypy/semanal.py
+index 20bcb2f4ac60a..9acf379b848fd 100644
+--- a/mypy/semanal.py
++++ b/mypy/semanal.py
+@@ -245,6 +245,7 @@
+     TypeVarLikeList,
+     analyze_type_alias,
+     check_for_explicit_any,
++    check_vec_type_args,
+     detect_diverging_alias,
+     find_self_type,
+     fix_instance,
+@@ -6178,6 +6179,10 @@ def analyze_type_application(self, expr: IndexExpr) -> None:
+         expr.analyzed.line = expr.line
+         expr.analyzed.column = expr.column
+ 
++        if isinstance(base, RefExpr) and base.fullname == "librt.vecs.vec":
++            # Apply restrictions specific to vec
++            check_vec_type_args(types, expr, self)
++
+     def analyze_type_application_args(self, expr: IndexExpr) -> list[Type] | None:
+         """Analyze type arguments (index) in a type application.
+ 
+diff --git a/mypy/typeanal.py b/mypy/typeanal.py
+index c09e97f0a231e..5190eeb2df2c5 100644
+--- a/mypy/typeanal.py
++++ b/mypy/typeanal.py
+@@ -65,6 +65,7 @@
+     CONCATENATE_TYPE_NAMES,
+     FINAL_TYPE_NAMES,
+     LITERAL_TYPE_NAMES,
++    MYPYC_NATIVE_INT_NAMES,
+     NEVER_NAMES,
+     TUPLE_NAMES,
+     TYPE_ALIAS_NAMES,
+@@ -877,6 +878,11 @@ def analyze_type_with_type_info(
+         if len(info.type_vars) == 1 and info.has_param_spec_type:
+             instance.args = tuple(self.pack_paramspec_args(instance.args, empty_tuple_index))
+ 
++        if info.fullname == "librt.vecs.vec" and not check_vec_type_args(
++            instance.args, ctx, self.api
++        ):
++            return AnyType(TypeOfAny.from_error)
++
+         # Check type argument count.
+         instance.args = tuple(flatten_nested_tuples(instance.args))
+         if not (self.defining_alias and self.nesting_level == 0) and not validate_instance(
+@@ -2736,3 +2742,54 @@ def visit_unbound_type(self, t: UnboundType) -> Type:
+     def visit_type_alias_type(self, t: TypeAliasType) -> Type:
+         # TypeAliasTypes are analyzed separately already, just return it
+         return t
++
++
++def check_vec_type_args(
++    args: tuple[Type, ...] | list[Type], ctx: Context, api: SemanticAnalyzerCoreInterface
++) -> bool:
++    """Report an error if type args for 'vec' are invalid.
++
++    Return False on error.
++    """
++    ok = True
++    if len(args) != 1:
++        ok = False
++    else:
++        arg = get_proper_type(args[0])
++        if isinstance(arg, Instance):
++            if arg.type.fullname == "builtins.int":
++                # A fixed-width integer such as 'i64' must be used instead of plain 'int'
++                ok = False
++        elif isinstance(arg, UnionType):
++            non_optional = None
++            items = [get_proper_type(item) for item in arg.items]
++            if len(items) != 2:
++                ok = False
++            elif isinstance(items[0], NoneType):
++                if not check_vec_type_args([items[1]], ctx, api):
++                    # Error has already been reported so it's fine to return
++                    return False
++                non_optional = items[1]
++            elif isinstance(items[1], NoneType):
++                if not check_vec_type_args([items[0]], ctx, api):
++                    # Error has already been reported so it's fine to return
++                    return False
++                non_optional = items[0]
++            else:
++                ok = False
++            if isinstance(non_optional, Instance) and (
++                non_optional.type.fullname in MYPYC_NATIVE_INT_NAMES
++                or non_optional.type.fullname
++                in ("builtins.int", "builtins.float", "builtins.bool", "librt.vecs.vec")
++            ):
++                ok = False
++        elif isinstance(arg, TypeVarType):
++            # Generic vec types aren't supported in type checked Python code, but
++            # they can be provided in libraries implemented in C (e.g. append).
++            if not api.is_stub_file:
++                ok = False
++        else:
++            ok = False
++    if not ok:
++        api.fail('Invalid item type for "vec"', ctx)
++    return ok
+diff --git a/test-data/unit/check-vec.test b/test-data/unit/check-vec.test
+new file mode 100644
+index 0000000000000..fc28bb48f6290
+--- /dev/null
++++ b/test-data/unit/check-vec.test
+@@ -0,0 +1,45 @@
++[case testVecBasics]
++# flags: --python-version 3.10
++from typing import Optional, Any, TypeVar
++
++from librt.vecs import vec
++from mypy_extensions import i64, i32, i16, u8
++
++def f(v: vec[i64]) -> None:
++    x: i64 = v[0]
++    x = v[x]
++    v[x] = x
++
++v = vec[i64]()
++reveal_type(v)  # N: Revealed type is "librt.vecs.vec[mypy_extensions.i64]"
++f(v)
++reveal_type(len(v))  # N: Revealed type is "mypy_extensions.i64"
++
++vec_i32: vec[i32]
++vec_i16: vec[i16]
++vec_u8: vec[u8]
++vec_bool: vec[bool]
++vec_float: vec[float]
++vec_str: vec[str]
++vec_str_opt1: vec[str | None]
++vec_str_opt2: vec[Optional[str]]
++vec_nested1: vec[vec[i32]]
++vec_nested2: vec[vec[vec[str | None]]]
++vec_list: vec[list[int]]
++vec_var_tuple: vec[tuple[int, ...]]
++vec_object: vec[object]
++
++vec_bad_int: vec[int]  # E: Invalid item type for "vec"
++vec_bad_tuple: vec[tuple[int, str]]  # E: Invalid item type for "vec"
++vec_bad_union: vec[str | ellipsis]  # E: Invalid item type for "vec"
++vec_bad_any: vec[Any]  # E: Invalid item type for "vec"
++vec_bad_two_args: vec[i32, i32]  # E: Invalid item type for "vec"
++vec_bad_optional1: vec[int | None]  # E: Invalid item type for "vec"
++vec_bad_optional2: vec[i64 | None]  # E: Invalid item type for "vec"
++vec_bad_optional3: vec[bool | None]  # E: Invalid item type for "vec"
++vec_bad_optional4: vec[float | None]  # E: Invalid item type for "vec"
++
++T = TypeVar("T")
++
++def bad_generic_func(v: vec[T]) -> None: ...  # E: Invalid item type for "vec"
++[builtins fixtures/len.pyi]

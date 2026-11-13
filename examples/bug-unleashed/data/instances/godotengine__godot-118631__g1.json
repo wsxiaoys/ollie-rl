@@ -1,0 +1,25 @@
+{
+  "case_id": "godotengine__godot-118631",
+  "repo": "godotengine/godot",
+  "pr": 118631,
+  "title": "Ignore non-Scene resources in the \"Quick Open Scene...\" context",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "godotengine__godot-118631__g1",
+  "target": {
+    "gid": "godotengine__godot-118631#g1",
+    "summary": "Checking only whether base_types[0] is PackedScene assumes that PackedScene is the sole requested type. When quick open is invoked with multiple base types and PackedScene is first, all valid candidates belonging to the other requested types are incorrectly filtered out and ignored.",
+    "paths": [
+      "editor/gui/editor_quick_open_dialog.cpp"
+    ],
+    "notes": [
+      "faulty condition checking base_types[0] without verifying base_types has only one element"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "b8728c2efa59c52284d2b1ab750412ffb3dc0c14",
+  "base_sha": "a6ed51df17a2afce9459cf9f46ded0baac79b9cb",
+  "snapshot": "repos/godotengine__godot/b8728c2efa59c52284d2b1ab750412ffb3dc0c14",
+  "diff": "diffs/godotengine__godot-118631.diff"
+}

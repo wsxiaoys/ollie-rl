@@ -1,0 +1,25 @@
+{
+  "case_id": "electron__electron-51401",
+  "repo": "electron/electron",
+  "pr": 51401,
+  "title": "fix: respect iframe sandbox flags on the OpenURL navigation path",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "electron__electron-51401__g1",
+  "target": {
+    "gid": "electron__electron-51401#g1",
+    "summary": "For non-CURRENT_TAB dispositions, params.frame_tree_node_id identifies the target frame and is unset, causing initiator to always resolve to null. Consequently, the WebSandboxFlags::kPopups check never executes and sandboxed iframes can still open new windows.",
+    "paths": [
+      "shell/browser/api/electron_api_web_contents.cc"
+    ],
+    "notes": [
+      "resolves initiator frame via params.frame_tree_node_id which is unset for non-CURRENT_TAB dispositions"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "8ee4c78d0cd1231378134c28fcf4d7309f1e7315",
+  "base_sha": "4e56da6d30dcda65946ced3d88aefa48ad452fb6",
+  "snapshot": "repos/electron__electron/8ee4c78d0cd1231378134c28fcf4d7309f1e7315",
+  "diff": "diffs/electron__electron-51401.diff"
+}

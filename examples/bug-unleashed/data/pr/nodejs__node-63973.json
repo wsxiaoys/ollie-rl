@@ -1,0 +1,6 @@
+{
+  "title": "stream: handle setEncoding after buffered data",
+  "body": "Fixes `Readable.prototype.setEncoding()` when it is called after byte data has already been buffered but before that data is consumed.\n\nThis addresses the Node.js core stream behavior behind nodejs/undici#5002: if `setEncoding('utf8')` is applied after bytes are buffered, split multibyte UTF-8 sequences must be handed to a single `StringDecoder` so consumers do not see `U+FFFD` corruption at chunk boundaries.\n\nWhen the buffered data ends with an incomplete multibyte sequence and the stream has ended, the new decoder needs to be finalized so it can emit the replacement character instead of dropping the bytes.\n\nTests cover:\n- calling `setEncoding()` after split multibyte data is buffered\n- calling it before the stream starts flowing after `_read()` buffered the first chunk\n- calling it after EOF with an incomplete buffered UTF-8 sequence\n\nRefs: https://github.com/nodejs/node/issues/63570\nRefs: https://github.com/nodejs/undici/issues/5002\n",
+  "head_sha": "bccc5df85064c3bef3c56743da7a7ecb49209963",
+  "base_sha": "d001e26f406441b86c8b243b7b2a4212b850aa31"
+}

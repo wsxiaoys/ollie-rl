@@ -1,0 +1,6 @@
+{
+  "title": "Prewarm id lookup terms blocks on relocation",
+  "body": "When a primary relocation source reports recent id lookups,\r\nthe target IndexEngine now prefetches the min/max terms blocks\r\nin each segment's terms dictionary at lookup-state construction\r\ntime. The prewarm is active for a configurable TTL\r\n(stateless.id_lookup.prewarm_ttl, default disabled).",
+  "head_sha": "a0e377995beb5d8497d5c9492503bc94d040d38d",
+  "base_sha": "a4ed003bb41983f67a7febc01ea2525fab43f71c"
+}

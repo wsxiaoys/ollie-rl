@@ -1,0 +1,52 @@
+diff --git a/src/scripts/itemsByName.js b/src/scripts/itemsByName.js
+index 3762faf7ba46..3c512e0fc8b3 100644
+--- a/src/scripts/itemsByName.js
++++ b/src/scripts/itemsByName.js
+@@ -68,6 +68,11 @@ function renderItems(page, item) {
+         });
+     }
+ 
++    sections.push({
++        name: globalize.translate('HeaderAudioBooks'),
++        type: 'Audiobook'
++    });
++
+     // TODO add a check when the API reports BookCount or PersonRoles
+     sections.push({
+         name: globalize.translate('Books'),
+@@ -217,6 +222,22 @@ function renderSection(item, element, type) {
+             });
+             break;
+ 
++        case 'Audiobook':
++            loadItems(element, item, type, {
++                IncludeItemTypes: 'Audiobook',
++                SortBy: 'ProductionYear,SortName',
++                SortOrder: 'Descending,Ascending',
++                Limit: 10
++            }, {
++                shape: 'overflowPortrait',
++                showTitle: true,
++                centerText: true,
++                overlayMoreButton: true,
++                overlayText: false,
++                showYear: true
++            });
++            break;
++
+         case 'Book':
+             loadItems(element, item, type, {
+                 IncludeItemTypes: 'Book',
+diff --git a/src/strings/en-us.json b/src/strings/en-us.json
+index 8bfbf2f8e7ce..343c9c6a1e87 100644
+--- a/src/strings/en-us.json
++++ b/src/strings/en-us.json
+@@ -402,7 +402,7 @@
+     "HeaderApiKeysHelp": "External applications are required to have an API key in order to communicate with the server. Keys are issued by logging in with a normal user account or manually granting the application a key.",
+     "HeaderApp": "App",
+     "HeaderAppearsOn": "Appears On",
+-    "HeaderAudioBooks": "Audio Books",
++    "HeaderAudioBooks": "Audiobooks",
+     "HeaderAudioAdvanced": "Audio Advanced",
+     "HeaderAudioSettings": "Audio Settings",
+     "HeaderAutoDiscovery": "Network Discovery",

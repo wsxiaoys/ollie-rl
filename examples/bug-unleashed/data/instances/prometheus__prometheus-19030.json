@@ -1,0 +1,16 @@
+{
+  "case_id": "prometheus__prometheus-19030",
+  "repo": "prometheus/prometheus",
+  "pr": 19030,
+  "title": "feat(discovery/oci): expose primary VNIC IPv6 addresses and hostname",
+  "language": "Go",
+  "split": "val",
+  "kind": "clean",
+  "example_id": "prometheus__prometheus-19030",
+  "target": null,
+  "siblings": [],
+  "head_sha": "8268cffedb37927e49ace65bbbaa0c12111585ef",
+  "base_sha": "30355e794753770112c3684dee8b5fe11563467f",
+  "snapshot": "repos/prometheus__prometheus/8268cffedb37927e49ace65bbbaa0c12111585ef",
+  "diff": "diffs/prometheus__prometheus-19030.diff"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "Add initial support for exporting generic classes",
+  "body": "Currently only fields of generic classes are exported; methods of generic classes are not supported yet.\r\n\r\nSimple example:\r\n\r\n```carbon\r\nclass C(T: type) {\r\n  var t: T;\r\n}\r\n\r\ninline Cpp '''\r\nvoid F() {\r\n  Carbon::C<int> c;\r\n  c.t = 123;\r\n\r\n  Carbon::C<float> c2;\r\n  c2.t = 124.5;\r\n}\r\n''';\r\n```",
+  "head_sha": "04de4b79a8d9d24db609509ade0848a6455d0c4a",
+  "base_sha": "700e42a1950aa9b31afa27a90afdea50293d6613"
+}

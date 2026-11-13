@@ -1,0 +1,27 @@
+{
+  "case_id": "jellyfin__jellyfin-web-7777",
+  "repo": "jellyfin/jellyfin-web",
+  "pr": 7777,
+  "title": "Replace libpgs with libbitsub and adds support for vobsub rendering",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "jellyfin__jellyfin-web-7777__g1",
+  "target": {
+    "gid": "jellyfin__jellyfin-web-7777#g1",
+    "summary": "Using track?.DeliveryUrl as a candidate filename hint causes embedded VobSub streams to extract a filename ending in .vobsub, making libbitsub treat them as an .idx/.sub pair instead of falling back to subtitle.mks and failing to render.",
+    "paths": [
+      "src/plugins/htmlVideoPlayer/plugin.js"
+    ],
+    "notes": [
+      "faulty statement including DeliveryUrl as candidate filename hint",
+      "definition of getSubtitleFileNameHint",
+      "call site passing the faulty filename hint to VobSub renderer options"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9c3d2d9d66a32eb2e0766812a81a085655facbb5",
+  "base_sha": "8a176379ec02bcaadf2867fbf78000f4756b29aa",
+  "snapshot": "repos/jellyfin__jellyfin-web/9c3d2d9d66a32eb2e0766812a81a085655facbb5",
+  "diff": "diffs/jellyfin__jellyfin-web-7777.diff"
+}

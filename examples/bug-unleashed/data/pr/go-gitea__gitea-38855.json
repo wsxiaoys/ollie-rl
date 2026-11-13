@@ -1,0 +1,6 @@
+{
+  "title": "feat(actions)!: add RUN_RETENTION_DAYS to delete old action runs",
+  "body": "Gitea keeps completed Actions runs forever. Artifacts and logs expire on their own schedule, but the run rows never go away, so `action_run` and its child tables grow without bound.\r\n\r\nAdds `RUN_RETENTION_DAYS` to delete completed runs along with their jobs, tasks and anything the earlier expiries left behind. It defaults to 400 days, matching how long GitHub keeps run history browsable. A dedicated `cleanup_action_runs` cron task performs the cleanup, so admins can schedule it separately from the nightly artifact and log sweep.\r\n\r\n`0` now means \"keep forever\" for all three retention settings, where `LOG_RETENTION_DAYS` and `ARTIFACT_RETENTION_DAYS` previously took it literally and deleted everything at the next sweep.\r\n\r\nDocs: https://gitea.com/gitea/docs/pulls/502\r\n\r\n----\r\n\r\n## ⚠️ BREAKING ⚠️\r\n\r\n`RUN_RETENTION_DAYS` defaults to 400, so completed runs older than that are deleted when the cron task next runs at midnight. Set `RUN_RETENTION_DAYS = 0` before upgrading to keep all runs.\r\n",
+  "head_sha": "654a3db59001005be8d657cadbb0e59a057e92e6",
+  "base_sha": "e6af4c341ca84242ab11fec0b46ceb3e2c8f5eca"
+}

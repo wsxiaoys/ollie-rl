@@ -1,0 +1,29 @@
+{
+  "case_id": "ChromeDevTools__chrome-devtools-mcp-2699",
+  "repo": "ChromeDevTools/chrome-devtools-mcp",
+  "pr": 2699,
+  "title": "fix: fail fast on tool calls stuck after a dead browser connection",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ChromeDevTools__chrome-devtools-mcp-2699__g1",
+  "target": {
+    "gid": "ChromeDevTools__chrome-devtools-mcp-2699#g1",
+    "summary": "Racing the entire tool execution against a 60-second watchdog timer and calling forgetBrowserOnTimeout aborts legitimate long operations (such as wait_for with a long timeout, slow scripts, or audits) and closes healthy browsers.",
+    "paths": [
+      "src/BrowserManager.ts",
+      "src/ToolHandler.ts",
+      "src/index.ts"
+    ],
+    "notes": [
+      "faulty statement racing tool execution against timeout and calling forgetBrowserOnTimeout",
+      "call site passing the forget browser callback to ToolHandler",
+      "definition of the helper the call relies on to tear down the browser on timeout"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "8af7351b83f4a5a2eae921fd8727e58174bcdc05",
+  "base_sha": "45000d9c169c36cc072ef1f5c9d88cad3e484bfd",
+  "snapshot": "repos/ChromeDevTools__chrome-devtools-mcp/8af7351b83f4a5a2eae921fd8727e58174bcdc05",
+  "diff": "diffs/ChromeDevTools__chrome-devtools-mcp-2699.diff"
+}

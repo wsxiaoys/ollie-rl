@@ -1,0 +1,52 @@
+diff --git a/models/repo/repo_list.go b/models/repo/repo_list.go
+index 479383570af15..9a25b9caf6790 100644
+--- a/models/repo/repo_list.go
++++ b/models/repo/repo_list.go
+@@ -655,11 +655,15 @@ func SearchRepositoryIDsByCondition(ctx context.Context, cond builder.Cond) ([]i
+ func userAllPublicRepoCond(cond builder.Cond, orgVisibilityLimit []structs.VisibleType) builder.Cond {
+ 	return cond.Or(builder.And(
+ 		builder.Eq{"`repository`.is_private": false},
+-		// Aren't in a private organisation or limited organisation if we're not logged in
+ 		builder.NotIn("`repository`.owner_id", builder.Select("id").From("`user`").Where(
+-			builder.And(
+-				builder.Eq{"type": user_model.UserTypeOrganization},
+-				builder.In("visibility", orgVisibilityLimit)),
++			builder.Or(
++				builder.And(
++					builder.Eq{"type": user_model.UserTypeOrganization},
++					builder.In("visibility", orgVisibilityLimit)),
++				builder.And(
++					builder.Neq{"type": user_model.UserTypeOrganization},
++					builder.Neq{"visibility": structs.VisibleTypePublic}),
++			),
+ 		))))
+ }
+ 
+diff --git a/models/repo/repo_list_test.go b/models/repo/repo_list_test.go
+index 742b0d97c7b24..0bea4b23d59b2 100644
+--- a/models/repo/repo_list_test.go
++++ b/models/repo/repo_list_test.go
+@@ -271,6 +271,23 @@ func testSearchRepositoryRestricted(t *testing.T) {
+ 	})
+ }
+ 
++func TestSearchRepositoryExcludesHiddenIndividualOwners(t *testing.T) {
++	require.NoError(t, unittest.PrepareTestDatabase())
++
++	hiddenOwner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
++	require.NoError(t, user_model.UpdateUserCols(t.Context(), &user_model.User{
++		ID:         hiddenOwner.ID,
++		Visibility: structs.VisibleTypePrivate,
++	}, "visibility"))
++
++	repos, _, err := repo_model.SearchRepositoryByName(t.Context(), repo_model.SearchRepoOptions{
++		ListOptions: db.ListOptions{Page: 1, PageSize: 100},
++		Keyword:     "repo1",
++	})
++	require.NoError(t, err)
++	assert.NotContains(t, repoIDs(repos), int64(1))
++}
++
+ func testSearchRepositoryPrivate(t *testing.T) {
+ 	// test search private repository on explore page
+ 	repos, count, err := repo_model.SearchRepositoryByName(t.Context(), repo_model.SearchRepoOptions{

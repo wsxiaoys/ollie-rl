@@ -1,0 +1,28 @@
+{
+  "case_id": "tinacms__tinacms-7056",
+  "repo": "tinacms/tinacms",
+  "pr": 7056,
+  "title": "Harden message origin checks and rich-text URL sanitization",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "tinacms__tinacms-7056__g1",
+  "target": {
+    "gid": "tinacms__tinacms-7056#g1",
+    "summary": "getExpectedPreviewOrigin derives the expected origin from the input preview URL, allowing an off-origin or absolute URL to be treated as trusted. As a result, isFromTrustedPreviewOrigin accepts messages from untrusted external origins and postMessageToPreview leaks preview data to them.",
+    "paths": [
+      "packages/@tinacms/app/src/lib/graphql-reducer.ts",
+      "packages/@tinacms/app/src/lib/preview-origin.ts"
+    ],
+    "notes": [
+      "faulty statement deriving expected preview origin from the input URL",
+      "definition of getExpectedPreviewOrigin",
+      "call site invoking getExpectedPreviewOrigin with the preview url to determine expectedOrigin"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "90e27852ea0d63bc9c914ccb62af33fbf3a8a719",
+  "base_sha": "42760d8f5afd201107e27e274308af37f96ba8d0",
+  "snapshot": "repos/tinacms__tinacms/90e27852ea0d63bc9c914ccb62af33fbf3a8a719",
+  "diff": "diffs/tinacms__tinacms-7056.diff"
+}

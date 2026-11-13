@@ -1,0 +1,6 @@
+{
+  "title": "Do not repor trivial narrowing as a change in binder",
+  "body": "Fixes https://github.com/python/mypy/issues/20816\r\n\r\nThis makes `--allow-redefinition-new` ~10% faster (or maybe more if you have too many loops in your code). The idea is quite simple: there is no difference between no narrowing, and narrowing to type that is a variable declared type. This doesn't really make a difference for regular mode, IIUC because there is a \"fall through\", i.e. zero-iterations case, but this doesn't work with `bind_all = True`. As a result we used to accept _every_ loop with an assignment in it at lest twice with `--allow-redefinition-new` (which includes assignment to iteration variable in for-loop). \r\n\r\nNote that `declaration_type` may be `None` if there is a partial type, but we already track partial types in accept loop separately, so we don't need to report them as changed here as well.",
+  "head_sha": "a065525a974070db34075dd501ae2a147b750eb3",
+  "base_sha": "fae0084aa4533211b8ecacb467e8e5253ac96932"
+}

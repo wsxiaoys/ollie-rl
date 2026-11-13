@@ -1,0 +1,6 @@
+{
+  "title": "Synthetic cast must not break tailrec",
+  "body": "Fixes #21642 \r\n\r\nPattern matcher inserted a cast, which is no longer tail recursive.\r\nThe fix ignores synthetic select of asInstanceOf for tail position.\r\n\r\n## How much have you relied on LLM-based tools in this contribution?\r\n\r\nNot at all\r\n\r\n## How was the solution tested?\r\n\r\nNew automated tests (including the issue's reproducer, if applicable)\r\n\r\n",
+  "head_sha": "5be0d6ea70c43a3afb05d2c25b8d67bf5c89214b",
+  "base_sha": "9521ae1b0bcf757e3bc426d08f5c61792bd187d7"
+}

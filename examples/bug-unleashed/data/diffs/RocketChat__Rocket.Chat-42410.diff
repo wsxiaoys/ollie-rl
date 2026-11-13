@@ -1,0 +1,532 @@
+diff --git a/.changeset/retention-prune-batches.md b/.changeset/retention-prune-batches.md
+new file mode 100644
+index 0000000000000..cba922bea60f6
+--- /dev/null
++++ b/.changeset/retention-prune-batches.md
+@@ -0,0 +1,7 @@
++---
++'@rocket.chat/meteor': patch
++'@rocket.chat/models': patch
++'@rocket.chat/model-typings': patch
++---
++
++Fixes the retention policy failing to prune rooms with a large backlog. Messages are now removed in batches and their trash copies written in bulk, a room that fails to prune no longer stops the rest of the run, the room's message counter is decremented by the right amount, read receipts of pruned messages are removed, and deleting a room with a very large history no longer fails
+diff --git a/apps/meteor/server/lib/rooms/cleanRoomHistory.ts b/apps/meteor/server/lib/rooms/cleanRoomHistory.ts
+index fa8f8705488ed..7a69042ba89f0 100644
+--- a/apps/meteor/server/lib/rooms/cleanRoomHistory.ts
++++ b/apps/meteor/server/lib/rooms/cleanRoomHistory.ts
+@@ -123,63 +123,82 @@ export async function cleanRoomHistory({
+ 	}
+ 
+ 	if (!ignoreThreads) {
+-		const threads = new Set<string>();
++		const threads: string[] = [];
+ 
+ 		await Messages.findThreadsByRoomIdPinnedTimestampAndUsers(
+ 			{ rid, pinned: excludePinned, ignoreDiscussion, ts, users: fromUsers },
+ 			{ projection: { _id: 1 } },
+ 		).forEach(({ _id }) => {
+-			threads.add(_id);
++			threads.push(_id);
+ 		});
+ 
+-		if (threads.size > 0) {
++		for (let i = 0; i < threads.length; i += FILE_CLEANUP_BATCH_SIZE) {
++			const batch = threads.slice(i, i + FILE_CLEANUP_BATCH_SIZE);
+ 			const subscriptionIds: string[] = (
+-				await Subscriptions.findUnreadThreadsByRoomId(rid, [...threads], { projection: { _id: 1 } }).toArray()
++				await Subscriptions.findUnreadThreadsByRoomId(rid, batch, { projection: { _id: 1 } }).toArray()
+ 			).map(({ _id }) => _id);
+ 
+-			const { modifiedCount } = await Subscriptions.removeUnreadThreadsByRoomId(rid, [...threads]);
++			const { modifiedCount } = await Subscriptions.removeUnreadThreadsByRoomId(rid, batch);
+ 			if (modifiedCount) {
+ 				subscriptionIds.forEach((id) => notifyOnSubscriptionChangedById(id));
+ 			}
+ 		}
+ 	}
+ 
+-	const selectedMessageIds = limit
+-		? await Messages.findByIdPinnedTimestampLimitAndUsers(rid, excludePinned, ignoreDiscussion, ts, limit, fromUsers, ignoreThreads)
+-		: undefined;
+-	const count = await Messages.removeByIdPinnedTimestampLimitAndUsers(
+-		rid,
+-		excludePinned,
+-		ignoreDiscussion,
+-		ts,
+-		limit,
+-		fromUsers,
+-		ignoreThreads,
+-		selectedMessageIds,
+-	);
+-
+-	if (limit && selectedMessageIds) {
+-		await ReadReceipts.removeByMessageIds(selectedMessageIds);
+-		await ReadReceiptsArchive.removeByMessageIds(selectedMessageIds);
+-	}
++	let remaining = limit || Infinity;
++	let count = 0;
+ 
+-	if (count) {
+-		const lastMessage = await Messages.getLastVisibleUserMessageSentByRoomId(rid);
++	try {
++		while (remaining > 0) {
++			const batch = await Messages.findByIdPinnedTimestampLimitAndUsers(
++				rid,
++				excludePinned,
++				ignoreDiscussion,
++				ts,
++				Math.min(FILE_CLEANUP_BATCH_SIZE, remaining),
++				fromUsers,
++				ignoreThreads,
++			);
++			if (!batch.length) {
++				break;
++			}
+ 
+-		await Rooms.resetLastMessageById(rid, lastMessage, -count);
++			count += await Messages.removeByIdPinnedTimestampLimitAndUsers(
++				rid,
++				excludePinned,
++				ignoreDiscussion,
++				ts,
++				batch.length,
++				fromUsers,
++				ignoreThreads,
++				batch,
++			);
++			void api.broadcast('notify.deleteMessageBulk', rid, {
++				rid,
++				excludePinned,
++				ignoreDiscussion,
++				ts,
++				users: fromUsers,
++				ids: batch,
++			});
++			await ReadReceipts.removeByMessageIds(batch);
++			await ReadReceiptsArchive.removeByMessageIds(batch);
++
++			remaining -= batch.length;
++			if (batch.length < FILE_CLEANUP_BATCH_SIZE) {
++				break;
++			}
++		}
++	} finally {
++		if (count) {
++			const lastMessage = await Messages.getLastVisibleUserMessageSentByRoomId(rid);
+ 
+-		await refreshDiscussionMetadataOnParentRoom(rid);
++			await Rooms.resetLastMessageById(rid, lastMessage, -count);
+ 
+-		void notifyOnRoomChangedById(rid);
++			await refreshDiscussionMetadataOnParentRoom(rid);
+ 
+-		void api.broadcast('notify.deleteMessageBulk', rid, {
+-			rid,
+-			excludePinned,
+-			ignoreDiscussion,
+-			ts,
+-			users: fromUsers,
+-			ids: selectedMessageIds,
+-		});
++			void notifyOnRoomChangedById(rid);
++		}
+ 	}
+ 
+ 	return count;
+diff --git a/apps/meteor/server/lib/rooms/retention/cronPruneMessages.ts b/apps/meteor/server/lib/rooms/retention/cronPruneMessages.ts
+index dedec14c23512..f271a50f2734b 100644
+--- a/apps/meteor/server/lib/rooms/retention/cronPruneMessages.ts
++++ b/apps/meteor/server/lib/rooms/retention/cronPruneMessages.ts
+@@ -1,11 +1,14 @@
+ import type { IRoomWithRetentionPolicy } from '@rocket.chat/core-typings';
+ import { cronJobs } from '@rocket.chat/cron';
++import { Logger } from '@rocket.chat/logger';
+ import { Rooms } from '@rocket.chat/models';
+ 
+ import { getCronAdvancedTimerFromPrecisionSetting } from '../../../../lib/getCronAdvancedTimerFromPrecisionSetting';
+ import { settings } from '../../../settings';
+ import { cleanRoomHistory } from '../cleanRoomHistory';
+ 
++const logger = new Logger('RetentionPolicy');
++
+ type RetentionRoomTypes = 'c' | 'p' | 'd';
+ 
+ const getMaxAgeSettingIdByRoomType = (type: RetentionRoomTypes) => {
+@@ -58,7 +61,7 @@ async function job(): Promise<void> {
+ 				excludePinned,
+ 				ignoreDiscussion,
+ 				ignoreThreads,
+-			});
++			}).catch((err) => logger.error({ msg: 'Failed to prune room', rid, err }));
+ 		}
+ 	}
+ 
+@@ -83,7 +86,7 @@ async function job(): Promise<void> {
+ 			excludePinned,
+ 			ignoreDiscussion,
+ 			ignoreThreads,
+-		});
++		}).catch((err) => logger.error({ msg: 'Failed to prune room', rid, err }));
+ 	}
+ }
+ 
+diff --git a/apps/meteor/tests/unit/server/lib/rooms/cleanRoomHistory.spec.ts b/apps/meteor/tests/unit/server/lib/rooms/cleanRoomHistory.spec.ts
+new file mode 100644
+index 0000000000000..d9eb177106aa4
+--- /dev/null
++++ b/apps/meteor/tests/unit/server/lib/rooms/cleanRoomHistory.spec.ts
+@@ -0,0 +1,122 @@
++import type { IMessagesModel, IReadReceiptsModel, IRoomsModel, ISubscriptionsModel } from '@rocket.chat/model-typings';
++import { registerModel } from '@rocket.chat/models';
++import { expect } from 'chai';
++import { beforeEach, describe, it } from 'mocha';
++import p from 'proxyquire';
++import sinon from 'sinon';
++
++const modelsMock = {
++	Messages: {
++		findFilesByRoomIdPinnedTimestampAndUsers: sinon.stub(),
++		findByIdPinnedTimestampLimitAndUsers: sinon.stub(),
++		removeByIdPinnedTimestampLimitAndUsers: sinon.stub(),
++		findThreadsByRoomIdPinnedTimestampAndUsers: sinon.stub(),
++		getLastVisibleUserMessageSentByRoomId: sinon.stub(),
++	},
++	Rooms: {
++		resetLastMessageById: sinon.stub(),
++		findOneDiscussionById: sinon.stub(),
++	},
++	Subscriptions: {
++		findUnreadThreadsByRoomId: sinon.stub(),
++		removeUnreadThreadsByRoomId: sinon.stub(),
++	},
++	ReadReceipts: { removeByMessageIds: sinon.stub() },
++	ReadReceiptsArchive: { removeByMessageIds: sinon.stub() },
++};
++
++registerModel('IMessagesModel', modelsMock.Messages as unknown as IMessagesModel);
++registerModel('IRoomsModel', modelsMock.Rooms as unknown as IRoomsModel);
++registerModel('ISubscriptionsModel', modelsMock.Subscriptions as unknown as ISubscriptionsModel);
++registerModel('IReadReceiptsModel', modelsMock.ReadReceipts as unknown as IReadReceiptsModel);
++registerModel('IReadReceiptsArchiveModel', modelsMock.ReadReceiptsArchive as unknown as IReadReceiptsModel);
++
++const broadcastMock = sinon.stub();
++const notifyOnSubscriptionChangedByIdMock = sinon.stub();
++
++const { cleanRoomHistory } = p.noCallThru().load('../../../../../server/lib/rooms/cleanRoomHistory.ts', {
++	'@rocket.chat/core-services': { api: { broadcast: broadcastMock } },
++	'./deleteRoom': { deleteRoom: sinon.stub() },
++	'../media/file-upload': { FileUpload: { getStore: sinon.stub() } },
++	'../notifyListener': {
++		notifyOnRoomChangedById: sinon.stub(),
++		notifyOnSubscriptionChangedById: notifyOnSubscriptionChangedByIdMock,
++	},
++});
++
++const ids = (prefix: string, count: number) => Array.from({ length: count }, (_, i) => `${prefix}${i}`);
++const cursorOf = (docs: unknown[]) => ({
++	toArray: async () => docs,
++	forEach: async (fn: (doc: any) => void) => docs.forEach(fn),
++	async *[Symbol.asyncIterator]() {
++		yield* docs;
++	},
++});
++
++describe('cleanRoomHistory', () => {
++	beforeEach(() => {
++		[
++			...Object.values(modelsMock.Messages),
++			...Object.values(modelsMock.Subscriptions),
++			modelsMock.Rooms.resetLastMessageById,
++			modelsMock.ReadReceipts.removeByMessageIds,
++			modelsMock.ReadReceiptsArchive.removeByMessageIds,
++			broadcastMock,
++			notifyOnSubscriptionChangedByIdMock,
++		].forEach((stub) => stub.reset());
++
++		modelsMock.Messages.findFilesByRoomIdPinnedTimestampAndUsers.returns(cursorOf([]));
++		modelsMock.Messages.findByIdPinnedTimestampLimitAndUsers.resolves([]);
++		modelsMock.Messages.removeByIdPinnedTimestampLimitAndUsers.callsFake(async (...args: unknown[]) => (args[7] as string[]).length);
++	});
++
++	it('deletes the whole backlog in bounded batches, together with their read receipts', async () => {
++		const batches = [ids('a', 1000), ids('b', 1000), ids('c', 5)];
++		batches.forEach((batch, i) => modelsMock.Messages.findByIdPinnedTimestampLimitAndUsers.onCall(i).resolves(batch));
++
++		const count = await cleanRoomHistory({ rid: 'rid' });
++
++		expect(count).to.equal(2005);
++		expect(modelsMock.Messages.findByIdPinnedTimestampLimitAndUsers.getCalls().map((call) => call.args[4])).to.deep.equal([
++			1000, 1000, 1000,
++		]);
++		expect(modelsMock.Messages.removeByIdPinnedTimestampLimitAndUsers.getCalls().map((call) => call.args[7])).to.deep.equal(batches);
++		expect(modelsMock.ReadReceipts.removeByMessageIds.getCalls().map((call) => call.args[0])).to.deep.equal(batches);
++		expect(modelsMock.ReadReceiptsArchive.removeByMessageIds.getCalls().map((call) => call.args[0])).to.deep.equal(batches);
++		expect(broadcastMock.getCalls().map((call) => call.args[2].ids)).to.deep.equal(batches);
++	});
++
++	it('never selects more messages than the requested limit', async () => {
++		modelsMock.Messages.findByIdPinnedTimestampLimitAndUsers.callsFake(async (...args: unknown[]) =>
++			ids(`l${args[4]}-`, args[4] as number),
++		);
++
++		const count = await cleanRoomHistory({ rid: 'rid', limit: 1500 });
++
++		expect(count).to.equal(1500);
++		expect(modelsMock.Messages.findByIdPinnedTimestampLimitAndUsers.getCalls().map((call) => call.args[4])).to.deep.equal([1000, 500]);
++		expect(broadcastMock.getCalls().map((call) => call.args[2].ids.length)).to.deep.equal([1000, 500]);
++	});
++
++	it('still reflects the batches already deleted when a later batch fails', async () => {
++		modelsMock.Messages.findByIdPinnedTimestampLimitAndUsers.onCall(0).resolves(ids('a', 1000));
++		modelsMock.Messages.findByIdPinnedTimestampLimitAndUsers.onCall(1).resolves(ids('b', 1000));
++		modelsMock.ReadReceipts.removeByMessageIds.onCall(1).rejects(new Error('database unavailable'));
++
++		await expect(cleanRoomHistory({ rid: 'rid' })).to.be.rejectedWith('database unavailable');
++
++		expect(modelsMock.Rooms.resetLastMessageById.calledOnceWith('rid', sinon.match.any, -2000)).to.be.true;
++		expect(broadcastMock.getCalls().map((call) => call.args[2].ids)).to.deep.equal([ids('a', 1000), ids('b', 1000)]);
++	});
++
++	it('clears pruned threads from unread lists in bounded batches', async () => {
++		modelsMock.Messages.findThreadsByRoomIdPinnedTimestampAndUsers.returns(cursorOf(ids('t', 1500).map((_id) => ({ _id }))));
++		modelsMock.Subscriptions.findUnreadThreadsByRoomId.returns(cursorOf([{ _id: 'sub1' }]));
++		modelsMock.Subscriptions.removeUnreadThreadsByRoomId.resolves({ modifiedCount: 1 });
++
++		await cleanRoomHistory({ rid: 'rid', ignoreThreads: false });
++
++		expect(modelsMock.Subscriptions.removeUnreadThreadsByRoomId.getCalls().map((call) => call.args[1].length)).to.deep.equal([1000, 500]);
++		expect(notifyOnSubscriptionChangedByIdMock.alwaysCalledWith('sub1')).to.be.true;
++	});
++});
+diff --git a/packages/model-typings/src/models/IBaseModel.ts b/packages/model-typings/src/models/IBaseModel.ts
+index 14d4dcd07c256..6e49ba5bbaba2 100644
+--- a/packages/model-typings/src/models/IBaseModel.ts
++++ b/packages/model-typings/src/models/IBaseModel.ts
+@@ -120,7 +120,10 @@ export interface IBaseModel<
+ 
+ 	deleteOne(filter: Filter<T>, options?: DeleteOptions & { bypassDocumentValidation?: boolean }): Promise<DeleteResult>;
+ 
+-	deleteMany(filter: Filter<T>, options?: DeleteOptions & { onTrash?: (record: ResultFields<T, C>) => void }): Promise<DeleteResult>;
++	deleteMany(
++		filter: Filter<T>,
++		options?: DeleteOptions & { onTrash?: (record: ResultFields<T, C>) => void; bulkTrash?: boolean },
++	): Promise<DeleteResult>;
+ 
+ 	// Trash
+ 	trashFind<P extends TDeleted>(
+diff --git a/packages/models/src/models/BaseRaw.spec.ts b/packages/models/src/models/BaseRaw.spec.ts
+index cbb093a89c4df..349df65c785d5 100644
+--- a/packages/models/src/models/BaseRaw.spec.ts
++++ b/packages/models/src/models/BaseRaw.spec.ts
+@@ -50,3 +50,69 @@ describe('doNotMixInclusionAndExclusionFields', () => {
+ 		expect(options.projection).toEqual({ name: 1, password: false });
+ 	});
+ });
++
++describe('deleteMany with a trash collection', () => {
++	let docs: { _id: string; name: string; password: string }[] = [];
++	const trash = { updateOne: jest.fn(), bulkWrite: jest.fn() };
++	const deleteMany = jest.fn();
++
++	class TrashedModel extends BaseRaw<{ _id: string; name: string; password: string }> {
++		constructor() {
++			super({ collection: () => ({ find: () => docs, deleteMany }) } as unknown as Db, 'test', trash as unknown as Collection<any>);
++		}
++	}
++
++	beforeEach(() => {
++		trash.updateOne.mockReset();
++		trash.bulkWrite.mockReset();
++		deleteMany
++			.mockReset()
++			.mockImplementation(async ({ _id }: { _id: { $in: string[] } }) => ({ acknowledged: true, deletedCount: _id.$in.length }));
++	});
++
++	it('copies each document to the trash with its own upsert by default', async () => {
++		docs = [
++			{ _id: 'a', name: 'A', password: 'x' },
++			{ _id: 'b', name: 'B', password: 'y' },
++		];
++
++		await new TrashedModel().deleteMany({});
++
++		expect(trash.updateOne).toHaveBeenCalledTimes(2);
++		expect(trash.updateOne).toHaveBeenNthCalledWith(
++			1,
++			{ _id: 'a' },
++			{ $set: expect.objectContaining({ name: 'A', __collection__: 'test' }) },
++			{ upsert: true, session: undefined },
++		);
++		expect(trash.bulkWrite).not.toHaveBeenCalled();
++		expect(deleteMany.mock.calls[0][0]).toEqual({ _id: { $in: ['a', 'b'] } });
++	});
++
++	it('copies to the trash and deletes in chunks of 1000 when asked to', async () => {
++		docs = Array.from({ length: 2500 }, (_, i) => ({ _id: `id${i}`, name: `name${i}`, password: 'x' }));
++
++		const { deletedCount } = await new TrashedModel().deleteMany({}, { bulkTrash: true });
++
++		expect(trash.updateOne).not.toHaveBeenCalled();
++		expect(trash.bulkWrite.mock.calls.map(([operations]) => operations.length)).toEqual([1000, 1000, 500]);
++		expect(trash.bulkWrite.mock.calls[0][0][0]).toEqual({
++			updateOne: {
++				filter: { _id: 'id0' },
++				update: { $set: expect.objectContaining({ name: 'name0', __collection__: 'test' }) },
++				upsert: true,
++			},
++		});
++		expect(deleteMany.mock.calls.map(([filter]) => filter._id.$in.length)).toEqual([1000, 1000, 500]);
++		expect(deletedCount).toBe(2500);
++	});
++
++	it('does not issue an empty delete after a full chunk', async () => {
++		docs = Array.from({ length: 1000 }, (_, i) => ({ _id: `id${i}`, name: `name${i}`, password: 'x' }));
++
++		const { deletedCount } = await new TrashedModel().deleteMany({}, { bulkTrash: true });
++
++		expect(deleteMany).toHaveBeenCalledTimes(1);
++		expect(deletedCount).toBe(1000);
++	});
++});
+diff --git a/packages/models/src/models/BaseRaw.ts b/packages/models/src/models/BaseRaw.ts
+index 4c857a2907995..c0ca4a3fac439 100644
+--- a/packages/models/src/models/BaseRaw.ts
++++ b/packages/models/src/models/BaseRaw.ts
+@@ -13,6 +13,7 @@ import type {
+ import { traceInstanceMethods } from '@rocket.chat/tracing';
+ import { ObjectId } from 'mongodb';
+ import type {
++	AnyBulkWriteOperation,
+ 	BulkWriteOptions,
+ 	ChangeStream,
+ 	Collection,
+@@ -397,7 +398,10 @@ export abstract class BaseRaw<
+ 		return this.findOneAndDelete({ _id } as Filter<T>, options);
+ 	}
+ 
+-	async deleteMany(filter: Filter<T>, options?: DeleteOptions & { onTrash?: (record: ResultFields<T, C>) => void }): Promise<DeleteResult> {
++	async deleteMany(
++		filter: Filter<T>,
++		options?: DeleteOptions & { onTrash?: (record: ResultFields<T, C>) => void; bulkTrash?: boolean },
++	): Promise<DeleteResult> {
+ 		if (!this.trash) {
+ 			if (options) {
+ 				return this.col.deleteMany(filter, options);
+@@ -408,6 +412,8 @@ export abstract class BaseRaw<
+ 		const cursor = this.find<ResultFields<T, C>>(filter, { session: options?.session });
+ 
+ 		const ids: T['_id'][] = [];
++		const trashOperations: AnyBulkWriteOperation<TDeleted>[] = [];
++		let deletedCount = 0;
+ 		for await (const doc of cursor) {
+ 			const { _id, ...record } = doc as T;
+ 
+@@ -420,20 +426,37 @@ export abstract class BaseRaw<
+ 			ids.push(_id);
+ 
+ 			// since the operation is not atomic, we need to make sure that the record is not already deleted/inserted
+-			await this.trash?.updateOne(
+-				{ _id } as Filter<TDeleted>,
+-				{ $set: trash },
+-				{
+-					upsert: true,
+-					session: options?.session,
+-				},
+-			);
++			if (options?.bulkTrash) {
++				trashOperations.push({ updateOne: { filter: { _id } as Filter<TDeleted>, update: { $set: trash }, upsert: true } });
++				if (trashOperations.length === 1000) {
++					await this.trash?.bulkWrite(trashOperations.splice(0), { session: options.session });
++					deletedCount += (await this.col.deleteMany({ _id: { $in: ids.splice(0) } } as unknown as Filter<T>, options)).deletedCount;
++				}
++			} else {
++				await this.trash?.updateOne(
++					{ _id } as Filter<TDeleted>,
++					{ $set: trash },
++					{
++						upsert: true,
++						session: options?.session,
++					},
++				);
++			}
+ 
+ 			void options?.onTrash?.(doc);
+ 		}
+ 
++		if (trashOperations.length) {
++			await this.trash?.bulkWrite(trashOperations, { session: options?.session });
++		}
++
++		if (!ids.length) {
++			return { acknowledged: true, deletedCount };
++		}
++
+ 		if (options) {
+-			return this.col.deleteMany({ _id: { $in: ids } } as unknown as Filter<T>, options);
++			const result = await this.col.deleteMany({ _id: { $in: ids } } as unknown as Filter<T>, options);
++			return { ...result, deletedCount: result.deletedCount + deletedCount };
+ 		}
+ 		return this.col.deleteMany({ _id: { $in: ids } } as unknown as Filter<T>);
+ 	}
+diff --git a/packages/models/src/models/Messages.ts b/packages/models/src/models/Messages.ts
+index b7f07972d6466..d21442a0a261a 100644
+--- a/packages/models/src/models/Messages.ts
++++ b/packages/models/src/models/Messages.ts
+@@ -575,7 +575,7 @@ export class MessagesRaw extends BaseRaw<IMessage> implements IMessagesModel {
+ 	}
+ 
+ 	removeByRoomId(roomId: string): Promise<DeleteResult> {
+-		return this.deleteMany({ rid: roomId });
++		return this.deleteMany({ rid: roomId }, { bulkTrash: true });
+ 	}
+ 
+ 	setReactions(messageId: string, reactions: IMessage['reactions']): Promise<UpdateResult> {
+@@ -1402,7 +1402,7 @@ export class MessagesRaw extends BaseRaw<IMessage> implements IMessagesModel {
+ 	// REMOVE
+ 
+ 	removeByRoomIds(rids: string[]): Promise<DeleteResult> {
+-		return this.deleteMany({ rid: { $in: rids } });
++		return this.deleteMany({ rid: { $in: rids } }, { bulkTrash: true });
+ 	}
+ 
+ 	findThreadsByRoomIdPinnedTimestampAndUsers<
+@@ -1504,13 +1504,11 @@ export class MessagesRaw extends BaseRaw<IMessage> implements IMessagesModel {
+ 			query.tcount = { $exists: false };
+ 		}
+ 
+-		const notCountedMessages = await this.countDocuments(
+-			{
+-				...query,
+-				$or: [{ _hidden: true }, { editedAt: { $exists: true }, editedBy: { $exists: true }, t: 'rm' }],
+-			},
+-			{ ...(limit ? { limit } : {}) },
+-		);
++		const notCountedMessages = await this.countDocuments({
++			...query,
++			...(limit && { _id: { $in: selectedMessageIds } }),
++			$or: [{ _hidden: true }, { editedAt: { $exists: true }, editedBy: { $exists: true }, t: 'rm' }],
++		});
+ 
+ 		if (!limit) {
+ 			const count = (await this.deleteMany(query)).deletedCount - notCountedMessages;
+@@ -1520,11 +1518,15 @@ export class MessagesRaw extends BaseRaw<IMessage> implements IMessagesModel {
+ 
+ 		const count =
+ 			(
+-				await this.deleteMany({
+-					_id: {
+-						$in: selectedMessageIds,
++				await this.deleteMany(
++					{
++						...query,
++						_id: {
++							$in: selectedMessageIds,
++						},
+ 					},
+-				})
++					{ bulkTrash: true },
++				)
+ 			).deletedCount - notCountedMessages;
+ 
+ 		return count;

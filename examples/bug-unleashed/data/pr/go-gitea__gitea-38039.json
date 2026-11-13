@@ -1,0 +1,6 @@
+{
+  "title": "fix(hostmatcher): block reserved IP ranges from external/private filters",
+  "body": "Go's net.IP.IsPrivate only recognises RFC 1918 and RFC 4193, so the \"external\" builtin used by the default webhook and migration allow-lists treated several special-purpose ranges as public destinations. This let authenticated users reach cloud metadata, internal, and IPv6 transition endpoints (CGNAT, Azure WireServer, NAT64, Teredo, 6to4, ...) and read the responses back via the webhook history UI (SSRF).\r\n\r\nDefine the reserved ranges once and reference them from both builtins: \"external\" excludes them and \"private\" includes them, keeping the two complementary so a private-based block-list also catches them.",
+  "head_sha": "b41c7b201d0d2eb015dcb57ebd363a4c37920547",
+  "base_sha": "4ba0a545f285c6a4d054a6ae4a891b5b4681ec1e"
+}

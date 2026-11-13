@@ -1,0 +1,1026 @@
+diff --git a/backend/internal/common/errors.go b/backend/internal/common/errors.go
+index 755e2d1e5c..9b8873db59 100644
+--- a/backend/internal/common/errors.go
++++ b/backend/internal/common/errors.go
+@@ -722,6 +722,28 @@ func (e *ProjectDetailsError) Error() string {
+ 	return fmt.Sprintf("Failed to get project details: %v", e.Err)
+ }
+ 
++type ProjectFileBadRequestError struct {
++	Err error
++}
++
++func (e *ProjectFileBadRequestError) Error() string {
++	return fmt.Sprintf("Invalid project file request: %v", e.Err)
++}
++
++type ProjectFileForbiddenError struct {
++	Err error
++}
++
++func (e *ProjectFileForbiddenError) Error() string {
++	return fmt.Sprintf("Forbidden project file path: %v", e.Err)
++}
++
++type ProjectFileNotFoundError struct{}
++
++func (e *ProjectFileNotFoundError) Error() string {
++	return "Project file not found"
++}
++
+ type ProjectRedeploymentError struct {
+ 	Err error
+ }
+diff --git a/backend/internal/huma/handlers/projects.go b/backend/internal/huma/handlers/projects.go
+index cd9adff16c..08ed1b28ad 100644
+--- a/backend/internal/huma/handlers/projects.go
++++ b/backend/internal/huma/handlers/projects.go
+@@ -93,6 +93,16 @@ type GetProjectOutput struct {
+ 	Body base.ApiResponse[project.Details]
+ }
+ 
++type GetProjectFileInput struct {
++	EnvironmentID string `path:"id" doc:"Environment ID"`
++	ProjectID     string `path:"projectId" doc:"Project ID"`
++	RelativePath  string `query:"relativePath" doc:"Path to the file relative to the project"`
++}
++
++type GetProjectFileOutput struct {
++	Body base.ApiResponse[project.IncludeFile]
++}
++
+ type RedeployProjectInput struct {
+ 	EnvironmentID string `path:"id" doc:"Environment ID"`
+ 	ProjectID     string `path:"projectId" doc:"Project ID"`
+@@ -254,6 +264,19 @@ func RegisterProjects(api huma.API, projectService *services.ProjectService) {
+ 		},
+ 	}, h.GetProject)
+ 
++	huma.Register(api, huma.Operation{
++		OperationID: "get-project-file",
++		Method:      http.MethodGet,
++		Path:        "/environments/{id}/projects/{projectId}/file",
++		Summary:     "Get a project file",
++		Description: "Get the contents of a single project-related file by relative path",
++		Tags:        []string{"Projects"},
++		Security: []map[string][]string{
++			{"BearerAuth": {}},
++			{"ApiKeyAuth": {}},
++		},
++	}, h.GetProjectFile)
++
+ 	huma.Register(api, huma.Operation{
+ 		OperationID: "redeploy-project",
+ 		Method:      http.MethodPost,
+@@ -549,6 +572,43 @@ func (h *ProjectHandler) GetProject(ctx context.Context, input *GetProjectInput)
+ 	}, nil
+ }
+ 
++func (h *ProjectHandler) GetProjectFile(ctx context.Context, input *GetProjectFileInput) (*GetProjectFileOutput, error) {
++	if h.projectService == nil {
++		return nil, huma.Error500InternalServerError("service not available")
++	}
++	if input.ProjectID == "" {
++		return nil, huma.Error400BadRequest((&common.ProjectIDRequiredError{}).Error())
++	}
++	if input.RelativePath == "" {
++		return nil, huma.Error400BadRequest("relativePath is required")
++	}
++
++	file, err := h.projectService.GetProjectFileContent(ctx, input.ProjectID, input.RelativePath)
++	if err != nil {
++		var badRequestErr *common.ProjectFileBadRequestError
++		var forbiddenErr *common.ProjectFileForbiddenError
++		var notFoundErr *common.ProjectFileNotFoundError
++
++		switch {
++		case errors.As(err, &badRequestErr):
++			return nil, huma.Error400BadRequest(err.Error())
++		case errors.As(err, &forbiddenErr):
++			return nil, huma.Error403Forbidden(err.Error())
++		case errors.As(err, &notFoundErr):
++			return nil, huma.Error404NotFound("project file not found")
++		default:
++			return nil, huma.Error500InternalServerError("internal error")
++		}
++	}
++
++	return &GetProjectFileOutput{
++		Body: base.ApiResponse[project.IncludeFile]{
++			Success: true,
++			Data:    file,
++		},
++	}, nil
++}
++
+ // RedeployProject redeploys a Docker Compose project.
+ func (h *ProjectHandler) RedeployProject(ctx context.Context, input *RedeployProjectInput) (*RedeployProjectOutput, error) {
+ 	if h.projectService == nil {
+diff --git a/backend/internal/services/project_service.go b/backend/internal/services/project_service.go
+index 8bec7d4838..c76f7473c3 100644
+--- a/backend/internal/services/project_service.go
++++ b/backend/internal/services/project_service.go
+@@ -643,6 +643,7 @@ func (s *ProjectService) GetProjectDetails(ctx context.Context, projectID string
+ 	// Load compose project for service definitions
+ 	composeFile, _ := projects.DetectComposeFile(proj.Path)
+ 	if composeFile != "" {
++		resp.ComposeFileName = filepath.Base(composeFile)
+ 		s.enrichWithComposeServiceConfigs(ctx, proj, composeFile, &resp)
+ 	}
+ 
+@@ -674,6 +675,82 @@ func (s *ProjectService) GetProjectDetails(ctx context.Context, projectID string
+ 	return resp, nil
+ }
+ 
++func (s *ProjectService) GetProjectFileContent(ctx context.Context, projectID, relativePath string) (project.IncludeFile, error) {
++	proj, err := s.GetProjectFromDatabaseByID(ctx, projectID)
++	if err != nil {
++		return project.IncludeFile{}, err
++	}
++	if strings.TrimSpace(relativePath) == "" {
++		return project.IncludeFile{}, &common.ProjectFileBadRequestError{Err: fmt.Errorf("relative path is required")}
++	}
++
++	composeFile, detectErr := projects.DetectComposeFile(proj.Path)
++	if detectErr == nil {
++		projectsDirSetting := s.settingsService.GetStringSetting(ctx, "projectsDirectory", "/app/data/projects")
++		projectsDirectory, _ := projects.GetProjectsDirectory(ctx, strings.TrimSpace(projectsDirSetting))
++		autoInjectEnv := s.settingsService.GetBoolSetting(ctx, "autoInjectEnv", false)
++		envLoader := projects.NewEnvLoader(projectsDirectory, filepath.Dir(composeFile), autoInjectEnv)
++		envMap, _, _ := envLoader.LoadEnvironment(ctx)
++
++		includes, parseErr := projects.ParseIncludes(composeFile, envMap, true)
++		if parseErr == nil {
++			for _, inc := range includes {
++				if inc.RelativePath == relativePath {
++					return project.IncludeFile{
++						Path:         inc.Path,
++						RelativePath: inc.RelativePath,
++						Content:      inc.Content,
++					}, nil
++				}
++			}
++		}
++	}
++
++	fullPath := filepath.Join(proj.Path, relativePath)
++	absProjectPath, err := filepath.Abs(proj.Path)
++	if err != nil {
++		return project.IncludeFile{}, fmt.Errorf("failed to resolve project path: %w", err)
++	}
++	absFilePath, err := filepath.Abs(fullPath)
++	if err != nil {
++		return project.IncludeFile{}, fmt.Errorf("failed to resolve file path: %w", err)
++	}
++	if !projects.IsSafeSubdirectory(absProjectPath, absFilePath) {
++		return project.IncludeFile{}, &common.ProjectFileForbiddenError{Err: fmt.Errorf("file path is outside project directory")}
++	}
++
++	info, err := os.Lstat(absFilePath)
++	if err != nil {
++		if os.IsNotExist(err) {
++			return project.IncludeFile{}, &common.ProjectFileNotFoundError{}
++		}
++		return project.IncludeFile{}, fmt.Errorf("failed to stat file: %w", err)
++	}
++	if info.IsDir() {
++		return project.IncludeFile{}, &common.ProjectFileBadRequestError{Err: fmt.Errorf("path refers to a directory")}
++	}
++	if info.Mode()&os.ModeSymlink != 0 {
++		return project.IncludeFile{}, &common.ProjectFileForbiddenError{Err: fmt.Errorf("symlink files are not supported")}
++	}
++
++	content, err := os.ReadFile(absFilePath)
++	if err != nil {
++		if os.IsNotExist(err) {
++			return project.IncludeFile{}, &common.ProjectFileNotFoundError{}
++		}
++		return project.IncludeFile{}, fmt.Errorf("failed to read file: %w", err)
++	}
++	if projects.IsBinaryProjectFileContent(content) {
++		return project.IncludeFile{}, &common.ProjectFileBadRequestError{Err: fmt.Errorf("binary files are not supported")}
++	}
++
++	return project.IncludeFile{
++		Path:         absFilePath,
++		RelativePath: relativePath,
++		Content:      string(content),
++	}, nil
++}
++
+ func (s *ProjectService) enrichWithIncludeFiles(ctx context.Context, projectPath string, resp *project.Details) {
+ 	composeFile, detectErr := projects.DetectComposeFile(projectPath)
+ 	if detectErr == nil {
+@@ -684,14 +761,13 @@ func (s *ProjectService) enrichWithIncludeFiles(ctx context.Context, projectPath
+ 		envLoader := projects.NewEnvLoader(projectsDirectory, filepath.Dir(composeFile), autoInjectEnv)
+ 		envMap, _, _ := envLoader.LoadEnvironment(ctx)
+ 
+-		includes, parseErr := projects.ParseIncludes(composeFile, envMap)
++		includes, parseErr := projects.ParseIncludes(composeFile, envMap, false)
+ 		if parseErr == nil {
+ 			var includeFiles []project.IncludeFile
+ 			for _, inc := range includes {
+ 				includeFiles = append(includeFiles, project.IncludeFile{
+ 					Path:         inc.Path,
+ 					RelativePath: inc.RelativePath,
+-					Content:      inc.Content,
+ 				})
+ 			}
+ 			resp.IncludeFiles = includeFiles
+diff --git a/backend/pkg/fswatch/watcher.go b/backend/pkg/fswatch/watcher.go
+index 6ca0632922..9b7602f961 100644
+--- a/backend/pkg/fswatch/watcher.go
++++ b/backend/pkg/fswatch/watcher.go
+@@ -334,4 +334,3 @@ func (fw *Watcher) isWatchableDirectory(path string) bool {
+ 
+ 	return resolvedInfo.IsDir()
+ }
+-
+diff --git a/backend/pkg/projects/fs_util.go b/backend/pkg/projects/fs_util.go
+index d071d1cb18..c6ed6f2f98 100644
+--- a/backend/pkg/projects/fs_util.go
++++ b/backend/pkg/projects/fs_util.go
+@@ -120,6 +120,14 @@ func GetTemplatesDirectory(ctx context.Context) (string, error) {
+ }
+ 
+ func ReadProjectDirectoryFiles(projectPath string, shownFiles map[string]bool, maxDepth int, skipDirectories string) ([]project.IncludeFile, error) {
++	return readProjectDirectoryFilesInternal(projectPath, shownFiles, maxDepth, skipDirectories, false)
++}
++
++func ReadProjectDirectoryFilesWithContent(projectPath string, shownFiles map[string]bool, maxDepth int, skipDirectories string) ([]project.IncludeFile, error) {
++	return readProjectDirectoryFilesInternal(projectPath, shownFiles, maxDepth, skipDirectories, true)
++}
++
++func readProjectDirectoryFilesInternal(projectPath string, shownFiles map[string]bool, maxDepth int, skipDirectories string, includeContent bool) ([]project.IncludeFile, error) {
+ 	if maxDepth <= 0 {
+ 		maxDepth = config.Load().ProjectScanMaxDepth
+ 	}
+@@ -132,7 +140,7 @@ func ReadProjectDirectoryFiles(projectPath string, shownFiles map[string]bool, m
+ 	}
+ 	defer func() { _ = root.Close() }()
+ 
+-	err = collectProjectDirectoryFilesInternal(root, ".", projectPath, shownFiles, &dirFiles, 0, maxDepth, projectScanSkipDirectorySetInternal(skipDirectories))
++	err = collectProjectDirectoryFilesInternal(root, ".", projectPath, shownFiles, &dirFiles, 0, maxDepth, projectScanSkipDirectorySetInternal(skipDirectories), includeContent)
+ 
+ 	return dirFiles, err
+ }
+@@ -165,6 +173,7 @@ func collectProjectDirectoryFilesInternal(
+ 	currentDepth int,
+ 	maxDepth int,
+ 	skipDirs map[string]bool,
++	includeContent bool,
+ ) error {
+ 	if currentDepth >= maxDepth {
+ 		return nil
+@@ -193,7 +202,7 @@ func collectProjectDirectoryFilesInternal(
+ 			if skipDirs[entry.Name()] {
+ 				continue
+ 			}
+-			if err := collectProjectDirectoryFilesInternal(root, relPath, projectPath, shownFiles, dirFiles, currentDepth+1, maxDepth, skipDirs); err != nil {
++			if err := collectProjectDirectoryFilesInternal(root, relPath, projectPath, shownFiles, dirFiles, currentDepth+1, maxDepth, skipDirs, includeContent); err != nil {
+ 				slog.Debug("Skipping unreadable project subdirectory", "relativePath", relPath, "error", err)
+ 			}
+ 			continue
+@@ -207,22 +216,26 @@ func collectProjectDirectoryFilesInternal(
+ 			continue
+ 		}
+ 
+-		content, err := root.ReadFile(relPath)
+-		if err != nil || isBinaryProjectFileContentInternal(content) {
+-			continue
+-		}
+-
+-		*dirFiles = append(*dirFiles, project.IncludeFile{
++		file := project.IncludeFile{
+ 			Path:         filepath.Join(projectPath, relPath),
+ 			RelativePath: relPath,
+-			Content:      string(content),
+-		})
++		}
++
++		if includeContent {
++			content, err := root.ReadFile(relPath)
++			if err != nil || IsBinaryProjectFileContent(content) {
++				continue
++			}
++			file.Content = string(content)
++		}
++
++		*dirFiles = append(*dirFiles, file)
+ 	}
+ 
+ 	return nil
+ }
+ 
+-func isBinaryProjectFileContentInternal(content []byte) bool {
++func IsBinaryProjectFileContent(content []byte) bool {
+ 	checkSize := min(len(content), 512)
+ 	return slices.Contains(content[:checkSize], 0)
+ }
+diff --git a/backend/pkg/projects/includes.go b/backend/pkg/projects/includes.go
+index 6035994eed..967cf14b8d 100644
+--- a/backend/pkg/projects/includes.go
++++ b/backend/pkg/projects/includes.go
+@@ -35,7 +35,7 @@ type IncludeFile struct {
+ 
+ // ParseIncludes reads a compose file and extracts all include directives.
+ // envMap is used to expand variables (e.g., ${VAR}) in include paths.
+-func ParseIncludes(composeFilePath string, envMap EnvMap) ([]IncludeFile, error) {
++func ParseIncludes(composeFilePath string, envMap EnvMap, includeContent bool) ([]IncludeFile, error) {
+ 	content, err := os.ReadFile(composeFilePath)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read compose file: %w", err)
+@@ -58,12 +58,12 @@ func ParseIncludes(composeFilePath string, envMap EnvMap) ([]IncludeFile, error)
+ 	switch v := includes.(type) {
+ 	case []any:
+ 		for _, item := range v {
+-			if include, err := parseIncludeItemInternal(item, composeDir, envMap); err == nil {
++			if include, err := parseIncludeItemInternal(item, composeDir, envMap, includeContent); err == nil {
+ 				includeFiles = append(includeFiles, include)
+ 			}
+ 		}
+ 	case string:
+-		if include, err := parseIncludeItemInternal(v, composeDir, envMap); err == nil {
++		if include, err := parseIncludeItemInternal(v, composeDir, envMap, includeContent); err == nil {
+ 			includeFiles = append(includeFiles, include)
+ 		}
+ 	}
+@@ -71,7 +71,7 @@ func ParseIncludes(composeFilePath string, envMap EnvMap) ([]IncludeFile, error)
+ 	return includeFiles, nil
+ }
+ 
+-func parseIncludeItemInternal(item any, baseDir string, envMap EnvMap) (IncludeFile, error) {
++func parseIncludeItemInternal(item any, baseDir string, envMap EnvMap, includeContent bool) (IncludeFile, error) {
+ 	var includePath string
+ 
+ 	switch v := item.(type) {
+@@ -101,16 +101,18 @@ func parseIncludeItemInternal(item any, baseDir string, envMap EnvMap) (IncludeF
+ 	fullPath = filepath.Clean(fullPath)
+ 
+ 	var content string
+-	fileContent, err := os.ReadFile(fullPath)
+-	if err != nil {
+-		if errors.Is(err, os.ErrNotExist) {
+-			// File doesn't exist yet - return empty content so it can be created
+-			content = "# This file will be created when you save changes\nservices:\n"
++	if includeContent {
++		fileContent, err := os.ReadFile(fullPath)
++		if err != nil {
++			if errors.Is(err, os.ErrNotExist) {
++				// File doesn't exist yet - return empty content so it can be created
++				content = "# This file will be created when you save changes\nservices:\n"
++			} else {
++				return IncludeFile{}, fmt.Errorf("failed to read include file %s: %w", includePath, err)
++			}
+ 		} else {
+-			return IncludeFile{}, fmt.Errorf("failed to read include file %s: %w", includePath, err)
++			content = string(fileContent)
+ 		}
+-	} else {
+-		content = string(fileContent)
+ 	}
+ 
+ 	relativePath := includePath
+diff --git a/backend/pkg/projects/includes_test.go b/backend/pkg/projects/includes_test.go
+index fe4c4c5a67..ab4d65fcdf 100644
+--- a/backend/pkg/projects/includes_test.go
++++ b/backend/pkg/projects/includes_test.go
+@@ -27,7 +27,7 @@ func TestParseIncludes_NormalizesRelativePaths(t *testing.T) {
+ 	requireNoError(os.WriteFile(includePath, []byte("services: {}\n"), 0o600))
+ 	requireNoError(os.WriteFile(composePath, []byte("include:\n  - ./includes/config.yaml\n"), 0o600))
+ 
+-	includes, err := ParseIncludes(composePath, nil)
++	includes, err := ParseIncludes(composePath, nil, false)
+ 	requireNoError(err)
+ 
+ 	if len(includes) != 1 {
+diff --git a/frontend/src/lib/services/project-service.ts b/frontend/src/lib/services/project-service.ts
+index e0477d4544..21ebb9abae 100644
+--- a/frontend/src/lib/services/project-service.ts
++++ b/frontend/src/lib/services/project-service.ts
+@@ -1,7 +1,7 @@
+ import { m } from '$lib/paraglide/messages';
+ import { environmentStore } from '$lib/stores/environment.store.svelte';
+ import type { Paginated, SearchPaginationSortRequest } from '$lib/types/pagination.type';
+-import type { Project, ProjectStatusCounts } from '$lib/types/project.type';
++import type { IncludeFile, Project, ProjectStatusCounts } from '$lib/types/project.type';
+ import { transformPaginationParams } from '$lib/utils/params.util';
+ import BaseAPIService from './api-service';
+ 
+@@ -111,6 +111,19 @@ export class ProjectService extends BaseAPIService {
+ 		return response.project ? response.project : (response as Project);
+ 	}
+ 
++	async getProjectFile(projectId: string, relativePath: string): Promise<IncludeFile> {
++		const envId = await this.resolveEnvironmentId();
++		return this.getProjectFileForEnvironment(envId, projectId, relativePath);
++	}
++
++	async getProjectFileForEnvironment(environmentId: string, projectId: string, relativePath: string): Promise<IncludeFile> {
++		return this.handleResponse<IncludeFile>(
++			this.api.get(`/environments/${environmentId}/projects/${projectId}/file`, {
++				params: { relativePath }
++			})
++		);
++	}
++
+ 	async getProjectStatusCounts(): Promise<ProjectStatusCounts> {
+ 		const envId = await this.resolveEnvironmentId();
+ 		return this.getProjectStatusCountsForEnvironment(envId);
+diff --git a/frontend/src/lib/types/project.type.ts b/frontend/src/lib/types/project.type.ts
+index 88792e8172..b89192128c 100644
+--- a/frontend/src/lib/types/project.type.ts
++++ b/frontend/src/lib/types/project.type.ts
+@@ -48,7 +48,7 @@ export interface ProjectService {
+ export interface IncludeFile {
+ 	path: string;
+ 	relativePath: string;
+-	content: string;
++	content?: string;
+ }
+ 
+ // RuntimeService contains live container status information
+@@ -85,6 +85,7 @@ export interface Project {
+ 	services?: ProjectService[];
+ 	runtimeServices?: RuntimeService[];
+ 	composeContent?: string;
++	composeFileName?: string;
+ 	envContent?: string;
+ 	includeFiles?: IncludeFile[];
+ 	directoryFiles?: IncludeFile[];
+diff --git a/frontend/src/routes/(app)/projects/[projectId]/+page.svelte b/frontend/src/routes/(app)/projects/[projectId]/+page.svelte
+index a868fabd42..ff4f9f443e 100644
+--- a/frontend/src/routes/(app)/projects/[projectId]/+page.svelte
++++ b/frontend/src/routes/(app)/projects/[projectId]/+page.svelte
+@@ -1,5 +1,5 @@
+ <script lang="ts">
+-	import type { Project } from '$lib/types/project.type';
++	import type { IncludeFile, Project } from '$lib/types/project.type';
+ 	import * as Tabs from '$lib/components/ui/tabs/index.js';
+ 	import * as TreeView from '$lib/components/ui/tree-view/index.js';
+ 	import * as Card from '$lib/components/ui/card';
+@@ -65,6 +65,7 @@
+ 	let originalEnvContent = $state(untrack(() => data.editorState.originalEnvContent || ''));
+ 	let includeFilesState = $state<Record<string, string>>({});
+ 	let originalIncludeFiles = $state<Record<string, string>>({});
++	let projectFilePromises: Record<string, Promise<IncludeFile> | undefined> = {};
+ 	const globalVariableMap = $derived.by(() =>
+ 		Object.fromEntries((data.globalVariables ?? []).map((item) => [item.key, item.value]))
+ 	);
+@@ -100,6 +101,7 @@
+ 	);
+ 	let canEditCompose = $derived(!isGitOpsManaged);
+ 	let canEditEnv = true;
++	let composeFileName = $derived(project?.composeFileName || 'compose.yaml');
+ 
+ 	let autoScrollStackLogs = $state(true);
+ 
+@@ -200,20 +202,45 @@
+ 			composeContent: details.composeContent ?? '',
+ 			envContent: details.envContent ?? '',
+ 			includeFiles: (details.includeFiles ?? []).map((file) => ({
+-				relativePath: file.relativePath,
+-				content: file.content
++				relativePath: file.relativePath
++			})),
++			directoryFiles: (details.directoryFiles ?? []).map((file) => ({
++				relativePath: file.relativePath
+ 			})),
+ 			runtimeServices: (details.runtimeServices ?? []).map((service) => ({
+ 				name: service.name,
+ 				status: service.status,
+ 				containerId: service.containerId,
+ 				containerName: service.containerName
+-			}))
++			})),
++			composeFileName: details.composeFileName ?? ''
+ 		});
+ 	}
+ 
+ 	function buildIncludeFilesMap(details: Project): Record<string, string> {
+-		return Object.fromEntries((details.includeFiles ?? []).map((file) => [file.relativePath, file.content]));
++		return Object.fromEntries((details.includeFiles ?? []).map((file) => [file.relativePath, file.content ?? '']));
++	}
++
++	function withLoadedProjectFileContent(details: Project): Project {
++		const existingIncludeFiles = project?.includeFiles ?? [];
++		const existingDirectoryFiles = project?.directoryFiles ?? [];
++
++		return {
++			...details,
++			includeFiles: (details.includeFiles ?? []).map((file) => ({
++				...file,
++				content:
++					file.content ??
++					includeFilesState[file.relativePath] ??
++					originalIncludeFiles[file.relativePath] ??
++					existingIncludeFiles.find((existingFile) => existingFile.relativePath === file.relativePath)?.content
++			})),
++			directoryFiles: (details.directoryFiles ?? []).map((file) => ({
++				...file,
++				content:
++					file.content ?? existingDirectoryFiles.find((existingFile) => existingFile.relativePath === file.relativePath)?.content
++			}))
++		};
+ 	}
+ 
+ 	function syncIncludeFileUiState(details: Project) {
+@@ -240,6 +267,7 @@
+ 	}
+ 
+ 	function applyProjectDetailsToEditor(details: Project, mode: ApplyProjectMode) {
++		details = withLoadedProjectFileContent(details);
+ 		project = details;
+ 		lastSeenProjectSignature = buildProjectSyncSignature(details);
+ 		syncIncludeFileUiState(details);
+@@ -278,20 +306,21 @@
+ 		const incomingProject = data.project;
+ 		if (!incomingProject) return;
+ 
+-		const incomingProjectSignature = buildProjectSyncSignature(incomingProject);
++		const normalizedProject = withLoadedProjectFileContent(incomingProject);
++		const incomingProjectSignature = buildProjectSyncSignature(normalizedProject);
+ 		const previousSignature = untrack(() => lastSeenProjectSignature);
+ 		if (incomingProjectSignature === previousSignature) return;
+ 
+ 		lastSeenProjectSignature = incomingProjectSignature;
+ 
+-		const projectChanged = untrack(() => lastAppliedProjectId) !== incomingProject.id;
++		const projectChanged = untrack(() => lastAppliedProjectId) !== normalizedProject.id;
+ 		if (projectChanged || !hasChanges) {
+-			applyProjectDetailsToEditor(incomingProject, projectChanged ? 'initialize' : 'refresh');
++			applyProjectDetailsToEditor(normalizedProject, projectChanged ? 'initialize' : 'refresh');
+ 			return;
+ 		}
+ 
+-		project = incomingProject;
+-		syncIncludeFileUiState(incomingProject);
++		project = normalizedProject;
++		syncIncludeFileUiState(normalizedProject);
+ 	});
+ 
+ 	$effect(() => {
+@@ -390,6 +419,102 @@
+ 		}
+ 	});
+ 
++	type ProjectFileKind = 'include' | 'directory';
++
++	function getProjectFileKey(projectId: string, kind: ProjectFileKind, relativePath: string): string {
++		return `${projectId}:${kind}:${relativePath}`;
++	}
++
++	function updateLoadedProjectFile(kind: ProjectFileKind, relativePath: string, content: string) {
++		if (!project) return;
++
++		if (kind === 'include') {
++			project = {
++				...project,
++				includeFiles: (project.includeFiles ?? []).map((file) =>
++					file.relativePath === relativePath ? { ...file, content } : file
++				)
++			};
++			includeFilesState = {
++				...includeFilesState,
++				[relativePath]: content
++			};
++			originalIncludeFiles = {
++				...originalIncludeFiles,
++				[relativePath]: content
++			};
++			return;
++		}
++
++		project = {
++			...project,
++			directoryFiles: (project.directoryFiles ?? []).map((file) =>
++				file.relativePath === relativePath ? { ...file, content } : file
++			)
++		};
++	}
++
++	function getProjectFileResource(kind: ProjectFileKind, relativePath: string): IncludeFile | Promise<IncludeFile> {
++		const currentProjectId = project?.id;
++		if (!currentProjectId) {
++			throw new Error('Project is not loaded');
++		}
++
++		const targetFile =
++			kind === 'include'
++				? project?.includeFiles?.find((file) => file.relativePath === relativePath)
++				: project?.directoryFiles?.find((file) => file.relativePath === relativePath);
++
++		if (!targetFile) {
++			throw new Error('Project file not found');
++		}
++
++		if (targetFile.content !== undefined) {
++			return targetFile;
++		}
++
++		const requestKey = getProjectFileKey(currentProjectId, kind, relativePath);
++		const existingPromise = projectFilePromises[requestKey];
++		if (existingPromise) {
++			return existingPromise;
++		}
++
++		const promise = (async () => {
++			const file = await projectService.getProjectFile(currentProjectId, relativePath);
++			updateLoadedProjectFile(kind, relativePath, file.content ?? '');
++			return {
++				...file,
++				content: file.content ?? ''
++			};
++		})().finally(() => {
++			delete projectFilePromises[requestKey];
++		});
++
++		projectFilePromises[requestKey] = promise;
++
++		return promise;
++	}
++
++	function selectComposeFile() {
++		selectedFile = 'compose';
++	}
++
++	function selectEnvFile() {
++		selectedFile = 'env';
++	}
++
++	function selectIncludeFile(relativePath: string) {
++		selectedFile = relativePath;
++	}
++
++	function selectDirectoryFile(relativePath: string) {
++		selectedFile = `dir:${relativePath}`;
++	}
++
++	function toggleIncludeFileTab(relativePath: string) {
++		selectedIncludeTab = selectedIncludeTab === relativePath ? null : relativePath;
++	}
++
+ 	const allComposeContents = $derived.by(() => {
+ 		return [$inputs.composeContent.value, ...Object.values(includeFilesState)].filter((value) => value.length > 0);
+ 	});
+@@ -405,6 +530,7 @@
+ 			result: await tryCatch(projectService.getProject(projectId)),
+ 			message: m.common_refresh_failed({ resource: m.project() }),
+ 			onSuccess: (updatedProject) => {
++				updatedProject = withLoadedProjectFileContent(updatedProject);
+ 				if (hasChanges && lastAppliedProjectId === updatedProject.id) {
+ 					project = updatedProject;
+ 					syncIncludeFileUiState(updatedProject);
+@@ -665,8 +791,8 @@
+ 										<Card.Content class="min-h-0 flex-1 overflow-auto p-2">
+ 											<TreeView.Root class="min-w-max p-2 whitespace-nowrap">
+ 												<TreeView.File
+-													name="compose.yaml"
+-													onclick={() => (selectedFile = 'compose')}
++													name={composeFileName}
++													onclick={selectComposeFile}
+ 													class={selectedFile === 'compose' ? 'bg-accent' : ''}
+ 												>
+ 													{#snippet icon()}
+@@ -674,11 +800,7 @@
+ 													{/snippet}
+ 												</TreeView.File>
+ 
+-												<TreeView.File
+-													name=".env"
+-													onclick={() => (selectedFile = 'env')}
+-													class={selectedFile === 'env' ? 'bg-accent' : ''}
+-												>
++												<TreeView.File name=".env" onclick={selectEnvFile} class={selectedFile === 'env' ? 'bg-accent' : ''}>
+ 													{#snippet icon()}
+ 														<FileTextIcon class="size-4 text-green-500" />
+ 													{/snippet}
+@@ -689,7 +811,7 @@
+ 														{#each project.includeFiles as includeFile (includeFile.relativePath)}
+ 															<TreeView.File
+ 																name={includeFile.relativePath}
+-																onclick={() => (selectedFile = includeFile.relativePath)}
++																onclick={() => selectIncludeFile(includeFile.relativePath)}
+ 																class={selectedFile === includeFile.relativePath ? 'bg-accent' : ''}
+ 															>
+ 																{#snippet icon()}
+@@ -704,7 +826,7 @@
+ 													{#each project.directoryFiles as dirFile (dirFile.relativePath)}
+ 														<TreeView.File
+ 															name={dirFile.relativePath}
+-															onclick={() => (selectedFile = `dir:${dirFile.relativePath}`)}
++															onclick={() => selectDirectoryFile(dirFile.relativePath)}
+ 															class={selectedFile === `dir:${dirFile.relativePath}` ? 'bg-accent' : ''}
+ 														>
+ 															{#snippet icon()}
+@@ -721,7 +843,7 @@
+ 										{#if selectedFile === 'compose'}
+ 											<CodePanel
+ 												bind:open={composeOpen}
+-												title="compose.yaml"
++												title={composeFileName}
+ 												language="yaml"
+ 												bind:value={$inputs.composeContent.value}
+ 												error={$inputs.composeContent.error ?? undefined}
+@@ -752,29 +874,53 @@
+ 											{@const dirRelPath = selectedFile.slice(4)}
+ 											{@const dirFile = project?.directoryFiles?.find((f) => f.relativePath === dirRelPath)}
+ 											{#if dirFile}
+-												<CodePanel
+-													open={true}
+-													title={dirFile.relativePath}
+-													language="yaml"
+-													value={dirFile.content}
+-													readOnly={true}
+-												/>
++												{#await getProjectFileResource('directory', dirRelPath)}
++													<div class="text-muted-foreground flex h-full min-h-0 items-center justify-center rounded-lg border">
++														{m.common_loading()}
++													</div>
++												{:then loadedFile}
++													<CodePanel
++														open={true}
++														title={loadedFile.relativePath}
++														language="yaml"
++														value={loadedFile.content ?? ''}
++														readOnly={true}
++													/>
++												{:catch error}
++													<div
++														class="text-destructive flex h-full min-h-0 items-center justify-center rounded-lg border px-4 text-sm"
++													>
++														{error.message}
++													</div>
++												{/await}
+ 											{/if}
+ 										{:else}
+ 											{@const includeFile = project?.includeFiles?.find((f) => f.relativePath === selectedFile)}
+ 											{#if includeFile}
+-												<CodePanel
+-													bind:open={includeFilesPanelStates[includeFile.relativePath]}
+-													title={includeFile.relativePath}
+-													language="yaml"
+-													bind:value={includeFilesState[includeFile.relativePath]}
+-													bind:hasErrors={includeFilesHasErrors[includeFile.relativePath]}
+-													bind:validationReady={includeFilesValidationReady[includeFile.relativePath]}
+-													fileId={`project:${projectId}:include:${includeFile.relativePath}`}
+-													originalValue={originalIncludeFiles[includeFile.relativePath]}
+-													enableDiff={true}
+-													editorContext={codeEditorContext}
+-												/>
++												{#await getProjectFileResource('include', includeFile.relativePath)}
++													<div class="text-muted-foreground flex h-full min-h-0 items-center justify-center rounded-lg border">
++														{m.common_loading()}
++													</div>
++												{:then _loadedFile}
++													<CodePanel
++														bind:open={includeFilesPanelStates[includeFile.relativePath]}
++														title={includeFile.relativePath}
++														language="yaml"
++														bind:value={includeFilesState[includeFile.relativePath]}
++														bind:hasErrors={includeFilesHasErrors[includeFile.relativePath]}
++														bind:validationReady={includeFilesValidationReady[includeFile.relativePath]}
++														fileId={`project:${projectId}:include:${includeFile.relativePath}`}
++														originalValue={originalIncludeFiles[includeFile.relativePath]}
++														enableDiff={true}
++														editorContext={codeEditorContext}
++													/>
++												{:catch error}
++													<div
++														class="text-destructive flex h-full min-h-0 items-center justify-center rounded-lg border px-4 text-sm"
++													>
++														{error.message}
++													</div>
++												{/await}
+ 											{/if}
+ 										{/if}
+ 									</div>
+@@ -802,8 +948,8 @@
+ 											<Card.Content class="min-h-0 flex-1 overflow-auto p-2">
+ 												<TreeView.Root class="min-w-max p-2 whitespace-nowrap">
+ 													<TreeView.File
+-														name="compose.yaml"
+-														onclick={() => (selectedFile = 'compose')}
++														name={composeFileName}
++														onclick={selectComposeFile}
+ 														class={selectedFile === 'compose' ? 'bg-accent' : ''}
+ 													>
+ 														{#snippet icon()}
+@@ -811,11 +957,7 @@
+ 														{/snippet}
+ 													</TreeView.File>
+ 
+-													<TreeView.File
+-														name=".env"
+-														onclick={() => (selectedFile = 'env')}
+-														class={selectedFile === 'env' ? 'bg-accent' : ''}
+-													>
++													<TreeView.File name=".env" onclick={selectEnvFile} class={selectedFile === 'env' ? 'bg-accent' : ''}>
+ 														{#snippet icon()}
+ 															<FileTextIcon class="size-4 text-green-500" />
+ 														{/snippet}
+@@ -826,7 +968,7 @@
+ 															{#each project.includeFiles as includeFile (includeFile.relativePath)}
+ 																<TreeView.File
+ 																	name={includeFile.relativePath}
+-																	onclick={() => (selectedFile = includeFile.relativePath)}
++																	onclick={() => selectIncludeFile(includeFile.relativePath)}
+ 																	class={selectedFile === includeFile.relativePath ? 'bg-accent' : ''}
+ 																>
+ 																	{#snippet icon()}
+@@ -841,7 +983,7 @@
+ 														{#each project.directoryFiles as dirFile (dirFile.relativePath)}
+ 															<TreeView.File
+ 																name={dirFile.relativePath}
+-																onclick={() => (selectedFile = `dir:${dirFile.relativePath}`)}
++																onclick={() => selectDirectoryFile(dirFile.relativePath)}
+ 																class={selectedFile === `dir:${dirFile.relativePath}` ? 'bg-accent' : ''}
+ 															>
+ 																{#snippet icon()}
+@@ -860,7 +1002,7 @@
+ 											{#if selectedFile === 'compose'}
+ 												<CodePanel
+ 													bind:open={composeOpen}
+-													title="compose.yaml"
++													title={composeFileName}
+ 													language="yaml"
+ 													bind:value={$inputs.composeContent.value}
+ 													error={$inputs.composeContent.error ?? undefined}
+@@ -891,29 +1033,53 @@
+ 												{@const dirRelPath = selectedFile.slice(4)}
+ 												{@const dirFile = project?.directoryFiles?.find((f) => f.relativePath === dirRelPath)}
+ 												{#if dirFile}
+-													<CodePanel
+-														open={true}
+-														title={dirFile.relativePath}
+-														language="yaml"
+-														value={dirFile.content}
+-														readOnly={true}
+-													/>
++													{#await getProjectFileResource('directory', dirRelPath)}
++														<div class="text-muted-foreground flex h-full min-h-0 items-center justify-center rounded-lg border">
++															{m.common_loading()}
++														</div>
++													{:then loadedFile}
++														<CodePanel
++															open={true}
++															title={loadedFile.relativePath}
++															language="yaml"
++															value={loadedFile.content ?? ''}
++															readOnly={true}
++														/>
++													{:catch error}
++														<div
++															class="text-destructive flex h-full min-h-0 items-center justify-center rounded-lg border px-4 text-sm"
++														>
++															{error.message}
++														</div>
++													{/await}
+ 												{/if}
+ 											{:else}
+ 												{@const includeFile = project?.includeFiles?.find((f) => f.relativePath === selectedFile)}
+ 												{#if includeFile}
+-													<CodePanel
+-														bind:open={includeFilesPanelStates[includeFile.relativePath]}
+-														title={includeFile.relativePath}
+-														language="yaml"
+-														bind:value={includeFilesState[includeFile.relativePath]}
+-														bind:hasErrors={includeFilesHasErrors[includeFile.relativePath]}
+-														bind:validationReady={includeFilesValidationReady[includeFile.relativePath]}
+-														fileId={`project:${projectId}:include:${includeFile.relativePath}`}
+-														originalValue={originalIncludeFiles[includeFile.relativePath]}
+-														enableDiff={true}
+-														editorContext={codeEditorContext}
+-													/>
++													{#await getProjectFileResource('include', includeFile.relativePath)}
++														<div class="text-muted-foreground flex h-full min-h-0 items-center justify-center rounded-lg border">
++															{m.common_loading()}
++														</div>
++													{:then _loadedFile}
++														<CodePanel
++															bind:open={includeFilesPanelStates[includeFile.relativePath]}
++															title={includeFile.relativePath}
++															language="yaml"
++															bind:value={includeFilesState[includeFile.relativePath]}
++															bind:hasErrors={includeFilesHasErrors[includeFile.relativePath]}
++															bind:validationReady={includeFilesValidationReady[includeFile.relativePath]}
++															fileId={`project:${projectId}:include:${includeFile.relativePath}`}
++															originalValue={originalIncludeFiles[includeFile.relativePath]}
++															enableDiff={true}
++															editorContext={codeEditorContext}
++														/>
++													{:catch error}
++														<div
++															class="text-destructive flex h-full min-h-0 items-center justify-center rounded-lg border px-4 text-sm"
++														>
++															{error.message}
++														</div>
++													{/await}
+ 												{/if}
+ 											{/if}
+ 										</div>
+@@ -931,10 +1097,7 @@
+ 													tone={selectedIncludeTab === includeFile.relativePath ? 'outline-primary' : 'ghost'}
+ 													size="sm"
+ 													class="shrink-0"
+-													onclick={() => {
+-														selectedIncludeTab =
+-															selectedIncludeTab === includeFile.relativePath ? null : includeFile.relativePath;
+-													}}
++													onclick={() => toggleIncludeFileTab(includeFile.relativePath)}
+ 													icon={FileTextIcon}
+ 													customLabel={includeFile.relativePath}
+ 												/>
+@@ -946,24 +1109,36 @@
+ 								{#if selectedIncludeTab}
+ 									{@const includeFile = project?.includeFiles?.find((f) => f.relativePath === selectedIncludeTab)}
+ 									{#if includeFile}
+-										<CodePanel
+-											bind:open={includeFilesPanelStates[includeFile.relativePath]}
+-											title={includeFile.relativePath}
+-											language="yaml"
+-											bind:value={includeFilesState[includeFile.relativePath]}
+-											bind:hasErrors={includeFilesHasErrors[includeFile.relativePath]}
+-											bind:validationReady={includeFilesValidationReady[includeFile.relativePath]}
+-											fileId={`project:${projectId}:include:${includeFile.relativePath}`}
+-											originalValue={originalIncludeFiles[includeFile.relativePath]}
+-											enableDiff={true}
+-											editorContext={codeEditorContext}
+-										/>
++										{#await getProjectFileResource('include', includeFile.relativePath)}
++											<div class="text-muted-foreground flex h-full min-h-0 items-center justify-center rounded-lg border">
++												{m.common_loading()}
++											</div>
++										{:then _loadedFile}
++											<CodePanel
++												bind:open={includeFilesPanelStates[includeFile.relativePath]}
++												title={includeFile.relativePath}
++												language="yaml"
++												bind:value={includeFilesState[includeFile.relativePath]}
++												bind:hasErrors={includeFilesHasErrors[includeFile.relativePath]}
++												bind:validationReady={includeFilesValidationReady[includeFile.relativePath]}
++												fileId={`project:${projectId}:include:${includeFile.relativePath}`}
++												originalValue={originalIncludeFiles[includeFile.relativePath]}
++												enableDiff={true}
++												editorContext={codeEditorContext}
++											/>
++										{:catch error}
++											<div
++												class="text-destructive flex h-full min-h-0 items-center justify-center rounded-lg border px-4 text-sm"
++											>
++												{error.message}
++											</div>
++										{/await}
+ 									{/if}
+ 								{:else if isTablet.current}
+ 									<div class="flex min-h-0 flex-1 flex-col gap-4">
+ 										<CodePanel
+ 											bind:open={composeOpen}
+-											title="compose.yaml"
++											title={composeFileName}
+ 											language="yaml"
+ 											bind:value={$inputs.composeContent.value}
+ 											error={$inputs.composeContent.error ?? undefined}
+@@ -1007,7 +1182,7 @@
+ 											<div class="flex min-h-0 flex-1 flex-col">
+ 												<CodePanel
+ 													bind:open={composeOpen}
+-													title="compose.yaml"
++													title={composeFileName}
+ 													language="yaml"
+ 													bind:value={$inputs.composeContent.value}
+ 													error={$inputs.composeContent.error ?? undefined}
+diff --git a/types/project/project.go b/types/project/project.go
+index 738b1c4d0d..3ea44b6c42 100644
+--- a/types/project/project.go
++++ b/types/project/project.go
+@@ -19,8 +19,16 @@ type IncludeFile struct {
+ 
+ 	// Content is the file content.
+ 	//
++	// Required: false
++	Content string `json:"content,omitempty"`
++}
++
++// FileContentRequest requests the contents of a single project-related file.
++type FileContentRequest struct {
++	// RelativePath is the path to the file relative to the project.
++	//
+ 	// Required: true
+-	Content string `json:"content"`
++	RelativePath string `json:"relativePath" query:"relativePath" binding:"required"`
+ }
+ 
+ // CreateProject is used to create a new project.
+@@ -238,6 +246,11 @@ type Details struct {
+ 	// Required: false
+ 	ComposeContent string `json:"composeContent,omitempty"`
+ 
++	// ComposeFileName is the detected compose file name for the project.
++	//
++	// Required: false
++	ComposeFileName string `json:"composeFileName,omitempty"`
++
+ 	// EnvContent is the environment file content.
+ 	//
+ 	// Required: false

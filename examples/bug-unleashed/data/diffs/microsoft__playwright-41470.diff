@@ -1,0 +1,39 @@
+diff --git a/packages/isomorphic/urlMatch.ts b/packages/isomorphic/urlMatch.ts
+index 8a7c106727dee..b8a8093f796cb 100644
+--- a/packages/isomorphic/urlMatch.ts
++++ b/packages/isomorphic/urlMatch.ts
+@@ -181,8 +181,8 @@ export function urlMatches(baseURL: string | undefined, urlString: string, match
+   if (isString(match))
+     match = new RegExp(resolveGlobToRegexPattern(baseURL, match, webSocketUrl));
+   if (isRegExp(match)) {
+-    const r = match.test(urlString);
+-    return r;
++    match.lastIndex = 0;
++    return match.test(urlString);
+   }
+   const url = parseURL(urlString);
+   if (!url)
+diff --git a/tests/page/interception.spec.ts b/tests/page/interception.spec.ts
+index ca3b6b0494bf8..470f0635ab32f 100644
+--- a/tests/page/interception.spec.ts
++++ b/tests/page/interception.spec.ts
+@@ -294,6 +294,19 @@ it('should work with regular expression passed from a different context', async
+   expect(intercepted).toBe(true);
+ });
+ 
++it('should intercept every request matching a global regexp', async ({ page, server }) => {
++  await page.goto(server.EMPTY_PAGE);
++  let intercepted = 0;
++  await page.route(/\/intercept-me/g, async route => {
++    ++intercepted;
++    await route.fulfill({ body: 'intercepted' });
++  });
++  const url = server.PREFIX + '/intercept-me';
++  for (let i = 0; i < 3; ++i)
++    expect(await page.evaluate(u => fetch(u, { cache: 'no-store' }).then(r => r.text()), url)).toBe('intercepted');
++  expect(intercepted).toBe(3);
++});
++
+ it('should not break remote worker importScripts', async ({ page, server }) => {
+   await page.route('**', async route => {
+     await route.continue();

@@ -1,0 +1,28 @@
+{
+  "case_id": "immich-app__immich-27715",
+  "repo": "immich-app/immich",
+  "pr": 27715,
+  "title": "fix(web): work around Chrome HDR image seam lines during zoom",
+  "language": "Svelte",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "immich-app__immich-27715__g1",
+  "target": {
+    "gid": "immich-app__immich-27715#g1",
+    "summary": "Replacing the display width and height dimensions with pre-scaled rasterWidth and rasterHeight and applying rasterScale to the image container breaks coordinate calculations for overlays. As a result, overlays such as OCR bounding boxes are rendered mispositioned in the top-left corner of the image.",
+    "paths": [
+      "web/src/lib/components/AdaptiveImage.svelte"
+    ],
+    "notes": [
+      "computation replaces display dimensions with raster dimensions without preserving displayWidth and displayHeight",
+      "raster dimensions and scale transform applied to container wrapping overlays",
+      "raster dimensions passed to ImageLayer that renders overlays for preview",
+      "raster dimensions passed to ImageLayer that renders overlays for original"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "8c35f9fa6589910071ba05d8252785f1b919eb94",
+  "base_sha": "3ab3d5cf43b983c32b64a1245d653973fc345900",
+  "snapshot": "repos/immich-app__immich/8c35f9fa6589910071ba05d8252785f1b919eb94",
+  "diff": "diffs/immich-app__immich-27715.diff"
+}

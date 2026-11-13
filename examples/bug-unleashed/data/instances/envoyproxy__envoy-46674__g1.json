@@ -1,0 +1,25 @@
+{
+  "case_id": "envoyproxy__envoy-46674",
+  "repo": "envoyproxy/envoy",
+  "pr": 46674,
+  "title": "fix: wasm remote code fetch race writing negative cache entry",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "envoyproxy__envoy-46674__g1",
+  "target": {
+    "gid": "envoyproxy__envoy-46674#g1",
+    "summary": "Returning false when a remote code fetch is already in progress causes concurrent createWasm() calls for the same WASM binary to immediately fail. When multiple configurations reference the same remote WASM code concurrently, subsequent callers fail to load the plugin instead of fetching the code.",
+    "paths": [
+      "source/extensions/common/wasm/wasm.cc"
+    ],
+    "notes": [
+      "faulty early return when remote code fetch is in progress"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ee81df2af3cc7d04313c2130cdafe6c0d54b5505",
+  "base_sha": "25826c1963d7241a8faeebacae0a6876f214a887",
+  "snapshot": "repos/envoyproxy__envoy/ee81df2af3cc7d04313c2130cdafe6c0d54b5505",
+  "diff": "diffs/envoyproxy__envoy-46674.diff"
+}

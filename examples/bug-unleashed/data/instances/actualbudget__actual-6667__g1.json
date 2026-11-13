@@ -1,0 +1,26 @@
+{
+  "case_id": "actualbudget__actual-6667",
+  "repo": "actualbudget/actual",
+  "pr": 6667,
+  "title": "lint: re-enable some react rules",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "actualbudget__actual-6667__g1",
+  "target": {
+    "gid": "actualbudget__actual-6667#g1",
+    "summary": "Adding `onUpdate` to hook dependency arrays causes unwanted re-executions on every render when the callback reference changes. This resets the date picker during keyboard navigation.",
+    "paths": [
+      "packages/desktop-client/src/components/select/DateSelect.tsx"
+    ],
+    "notes": [
+      "Unstable onUpdate callback added to hook dependency array in DatePicker",
+      "Unstable onUpdate callback added to useEffect dependency array in DateSelectDesktop resetting selected date"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "b6addf0abc54f53e2227cfcba2903167b4cdad8f",
+  "base_sha": "d01d0eacb89a6adfa677974a636682a8c8714a76",
+  "snapshot": "repos/actualbudget__actual/b6addf0abc54f53e2227cfcba2903167b4cdad8f",
+  "diff": "diffs/actualbudget__actual-6667.diff"
+}

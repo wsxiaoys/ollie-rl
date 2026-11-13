@@ -1,0 +1,16 @@
+{
+  "case_id": "rust-lang__rust-158089",
+  "repo": "rust-lang/rust",
+  "pr": 158089,
+  "title": "Fix invalid \"jump-to-def\" doc link generation when an item has a `derive` proc-macro",
+  "language": "Rust",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "rust-lang__rust-158089",
+  "target": null,
+  "siblings": [],
+  "head_sha": "813dbb9d195e736338c972c85d76a26a6da56ff5",
+  "base_sha": "c55fad5a9048ad0f7cff2a4867a297647af9392b",
+  "snapshot": "repos/rust-lang__rust/813dbb9d195e736338c972c85d76a26a6da56ff5",
+  "diff": "diffs/rust-lang__rust-158089.diff"
+}

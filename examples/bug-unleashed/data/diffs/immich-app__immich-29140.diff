@@ -1,0 +1,1483 @@
+diff --git a/open-api/immich-openapi-specs.json b/open-api/immich-openapi-specs.json
+index 014679b310720b..28faef6ef40508 100644
+--- a/open-api/immich-openapi-specs.json
++++ b/open-api/immich-openapi-specs.json
+@@ -16508,7 +16508,9 @@
+           },
+           "albumThumbnailAssetId": {
+             "description": "Thumbnail asset ID",
++            "format": "uuid",
+             "nullable": true,
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "albumUsers": {
+@@ -16551,6 +16553,8 @@
+           },
+           "id": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isActivityEnabled": {
+@@ -16793,6 +16797,8 @@
+           },
+           "id": {
+             "description": "API key ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "name": {
+@@ -17001,6 +17007,8 @@
+           },
+           "id": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isTrashed": {
+@@ -17379,6 +17387,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "error": {
+@@ -17494,6 +17504,8 @@
+         "properties": {
+           "id": {
+             "description": "Asset media ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "status": {
+@@ -17562,6 +17574,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "key": {
+@@ -17809,7 +17823,9 @@
+           },
+           "duplicateId": {
+             "description": "Duplicate group ID",
++            "format": "uuid",
+             "nullable": true,
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "duration": {
+@@ -17845,6 +17861,8 @@
+           },
+           "id": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isArchived": {
+@@ -17923,6 +17941,8 @@
+           },
+           "ownerId": {
+             "description": "Owner user ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "people": {
+@@ -18020,10 +18040,14 @@
+           },
+           "id": {
+             "description": "Stack ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "primaryAssetId": {
+             "description": "Primary asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -18159,6 +18183,8 @@
+           },
+           "id": {
+             "description": "ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "success": {
+@@ -18337,6 +18363,8 @@
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -18441,6 +18469,8 @@
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -18601,6 +18631,8 @@
+           "assetIds": {
+             "description": "Asset IDs in this archive",
+             "items": {
++              "format": "uuid",
++              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+               "type": "string"
+             },
+             "type": "array"
+@@ -18786,6 +18818,8 @@
+           },
+           "duplicateId": {
+             "description": "Duplicate group ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "suggestedKeepAssetIds": {
+@@ -19102,6 +19136,8 @@
+               "properties": {
+                 "id": {
+                   "description": "Integrity report item id",
++                  "format": "uuid",
++                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+                   "type": "string"
+                 },
+                 "path": {
+@@ -19276,6 +19312,8 @@
+           },
+           "id": {
+             "description": "Library ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "importPaths": {
+@@ -19291,6 +19329,8 @@
+           },
+           "ownerId": {
+             "description": "Owner user ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "refreshedAt": {
+@@ -19445,6 +19485,8 @@
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -19635,6 +19677,8 @@
+           },
+           "id": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "lat": {
+@@ -19835,6 +19879,8 @@
+           },
+           "id": {
+             "description": "Memory ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isSaved": {
+@@ -19850,6 +19896,8 @@
+           },
+           "ownerId": {
+             "description": "Owner user ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "seenAt": {
+@@ -20311,6 +20359,8 @@
+           },
+           "id": {
+             "description": "Notification ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "level": {
+@@ -20755,6 +20805,8 @@
+           },
+           "id": {
+             "description": "Person ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isFavorite": {
+@@ -20990,6 +21042,8 @@
+           },
+           "id": {
+             "description": "Person ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isFavorite": {
+@@ -21245,6 +21299,8 @@
+           },
+           "id": {
+             "description": "Plugin ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "methods": {
+@@ -22640,6 +22696,8 @@
+           },
+           "id": {
+             "description": "Version history entry ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "version": {
+@@ -22744,6 +22802,8 @@
+           },
+           "id": {
+             "description": "Session ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isPendingSyncReset": {
+@@ -22801,6 +22861,8 @@
+           },
+           "id": {
+             "description": "Session ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isPendingSyncReset": {
+@@ -23023,6 +23085,8 @@
+           },
+           "id": {
+             "description": "Shared link ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "key": {
+@@ -23048,6 +23112,8 @@
+           },
+           "userId": {
+             "description": "Owner user ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23389,10 +23455,14 @@
+           },
+           "id": {
+             "description": "Stack ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "primaryAssetId": {
+             "description": "Primary asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23666,6 +23736,8 @@
+         "properties": {
+           "albumId": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23678,10 +23750,14 @@
+         "properties": {
+           "albumId": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23695,10 +23771,14 @@
+         "properties": {
+           "albumId": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23712,10 +23792,14 @@
+         "properties": {
+           "albumId": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23729,6 +23813,8 @@
+         "properties": {
+           "albumId": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "role": {
+@@ -23736,6 +23822,8 @@
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23761,6 +23849,8 @@
+           },
+           "id": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isActivityEnabled": {
+@@ -23776,6 +23866,8 @@
+           },
+           "ownerId": {
+             "description": "Owner ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "thumbnailAssetId": {
+@@ -23819,6 +23911,8 @@
+           },
+           "id": {
+             "description": "Album ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isActivityEnabled": {
+@@ -23861,6 +23955,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23873,6 +23969,8 @@
+         "properties": {
+           "editId": {
+             "description": "Edit ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -23888,10 +23986,14 @@
+           },
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "id": {
+             "description": "Edit ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "parameters": {
+@@ -23919,6 +24021,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "city": {
+@@ -24096,6 +24200,8 @@
+         "properties": {
+           "assetFaceId": {
+             "description": "Asset face ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -24108,6 +24214,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "boundingBoxX1": {
+@@ -24136,6 +24244,8 @@
+           },
+           "id": {
+             "description": "Asset face ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "imageHeight": {
+@@ -24178,6 +24288,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "boundingBoxX1": {
+@@ -24214,6 +24326,8 @@
+           },
+           "id": {
+             "description": "Asset face ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "imageHeight": {
+@@ -24262,6 +24376,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "key": {
+@@ -24279,6 +24395,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "key": {
+@@ -24327,6 +24445,8 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "boxScore": {
+@@ -24336,6 +24456,8 @@
+           },
+           "id": {
+             "description": "OCR entry ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isVisible": {
+@@ -24462,6 +24584,8 @@
+           },
+           "id": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isEdited": {
+@@ -24496,6 +24620,8 @@
+           },
+           "ownerId": {
+             "description": "Owner ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "stackId": {
+@@ -24600,6 +24726,8 @@
+           },
+           "id": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isEdited": {
+@@ -24634,6 +24762,8 @@
+           },
+           "ownerId": {
+             "description": "Owner ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "stackId": {
+@@ -24712,6 +24842,8 @@
+           },
+           "id": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isAdmin": {
+@@ -24846,10 +24978,14 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "memoryId": {
+             "description": "Memory ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -24863,10 +24999,14 @@
+         "properties": {
+           "assetId": {
+             "description": "Asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "memoryId": {
+             "description": "Memory ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -24880,6 +25020,8 @@
+         "properties": {
+           "memoryId": {
+             "description": "Memory ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -24920,6 +25062,8 @@
+           },
+           "id": {
+             "description": "Memory ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isSaved": {
+@@ -24935,6 +25079,8 @@
+           },
+           "ownerId": {
+             "description": "Owner ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "seenAt": {
+@@ -24984,10 +25130,14 @@
+         "properties": {
+           "sharedById": {
+             "description": "Shared by ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "sharedWithId": {
+             "description": "Shared with ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -25005,10 +25155,14 @@
+           },
+           "sharedById": {
+             "description": "Shared by ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "sharedWithId": {
+             "description": "Shared with ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -25023,6 +25177,8 @@
+         "properties": {
+           "personId": {
+             "description": "Person ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -25060,6 +25216,8 @@
+           },
+           "id": {
+             "description": "Person ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "isFavorite": {
+@@ -25076,6 +25234,8 @@
+           },
+           "ownerId": {
+             "description": "Owner ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "updatedAt": {
+@@ -25141,6 +25301,8 @@
+         "properties": {
+           "stackId": {
+             "description": "Stack ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -25160,14 +25322,20 @@
+           },
+           "id": {
+             "description": "Stack ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "ownerId": {
+             "description": "Owner ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "primaryAssetId": {
+             "description": "Primary asset ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "updatedAt": {
+@@ -25210,6 +25378,8 @@
+         "properties": {
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -25225,6 +25395,8 @@
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           }
+         },
+@@ -25241,6 +25413,8 @@
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "value": {
+@@ -25284,6 +25458,8 @@
+           },
+           "id": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "name": {
+@@ -26470,6 +26646,8 @@
+           },
+           "id": {
+             "description": "Tag ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "name": {
+@@ -26993,6 +27171,8 @@
+           },
+           "userId": {
+             "description": "User ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "userName": {
+@@ -27635,6 +27815,8 @@
+           },
+           "id": {
+             "description": "Workflow ID",
++            "format": "uuid",
++            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})$",
+             "type": "string"
+           },
+           "name": {
+diff --git a/server/src/dtos/album.dto.ts b/server/src/dtos/album.dto.ts
+index ee6f2c07eb46cf..a66f912972a98a 100644
+--- a/server/src/dtos/album.dto.ts
++++ b/server/src/dtos/album.dto.ts
+@@ -100,21 +100,21 @@ const AlbumUserResponseSchema = z
+ 
+ const ContributorCountResponseSchema = z
+   .object({
+-    userId: z.string().describe('User ID'),
++    userId: z.uuidv4().describe('User ID'),
+     assetCount: z.int().min(0).describe('Number of assets contributed'),
+   })
+   .meta({ id: 'ContributorCountResponseDto' });
+ 
+ export const AlbumResponseSchema = z
+   .object({
+-    id: z.string().describe('Album ID'),
++    id: z.uuidv4().describe('Album ID'),
+     albumName: z.string().describe('Album name'),
+     description: z.string().describe('Album description'),
+     // TODO: use `isoDatetimeToDate` when using `ZodSerializerDto` on the controllers.
+     createdAt: z.string().meta({ format: 'date-time' }).describe('Creation date'),
+     // TODO: use `isoDatetimeToDate` when using `ZodSerializerDto` on the controllers.
+     updatedAt: z.string().meta({ format: 'date-time' }).describe('Last update date'),
+-    albumThumbnailAssetId: z.string().nullable().describe('Thumbnail asset ID'),
++    albumThumbnailAssetId: z.uuidv4().nullable().describe('Thumbnail asset ID'),
+     shared: z.boolean().describe('Is shared album'),
+     albumUsers: z
+       .array(AlbumUserResponseSchema)
+diff --git a/server/src/dtos/api-key.dto.ts b/server/src/dtos/api-key.dto.ts
+index 176812cc4f7053..470808e430cfe2 100644
+--- a/server/src/dtos/api-key.dto.ts
++++ b/server/src/dtos/api-key.dto.ts
+@@ -21,7 +21,7 @@ const ApiKeyUpdateSchema = z
+ 
+ const ApiKeyResponseSchema = z
+   .object({
+-    id: z.string().describe('API key ID'),
++    id: z.uuidv4().describe('API key ID'),
+     name: z.string().describe('API key name'),
+     createdAt: isoDatetimeToDate.describe('Creation date'),
+     updatedAt: isoDatetimeToDate.describe('Last update date'),
+diff --git a/server/src/dtos/asset-ids.response.dto.ts b/server/src/dtos/asset-ids.response.dto.ts
+index 346829e644e543..e86eee0973eb69 100644
+--- a/server/src/dtos/asset-ids.response.dto.ts
++++ b/server/src/dtos/asset-ids.response.dto.ts
+@@ -16,7 +16,7 @@ const AssetIdErrorReasonSchema = z
+ /** @deprecated Use `BulkIdResponseDto` instead */
+ const AssetIdsResponseSchema = z
+   .object({
+-    assetId: z.string().describe('Asset ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+     success: z.boolean().describe('Whether operation succeeded'),
+     error: AssetIdErrorReasonSchema.optional(),
+   })
+@@ -43,7 +43,7 @@ export const BulkIdsSchema = z
+ 
+ const BulkIdResponseSchema = z
+   .object({
+-    id: z.string().describe('ID'),
++    id: z.uuidv4().describe('ID'),
+     success: z.boolean().describe('Whether operation succeeded'),
+     error: BulkIdErrorReasonSchema.optional(),
+     errorMessage: z.string().optional(),
+diff --git a/server/src/dtos/asset-media-response.dto.ts b/server/src/dtos/asset-media-response.dto.ts
+index 0f27fc597466f7..b0c50794b95a1d 100644
+--- a/server/src/dtos/asset-media-response.dto.ts
++++ b/server/src/dtos/asset-media-response.dto.ts
+@@ -11,7 +11,7 @@ const AssetMediaStatusSchema = z.enum(AssetMediaStatus).describe('Upload status'
+ const AssetMediaResponseSchema = z
+   .object({
+     status: AssetMediaStatusSchema,
+-    id: z.string().describe('Asset media ID'),
++    id: z.uuidv4().describe('Asset media ID'),
+   })
+   .meta({ id: 'AssetMediaResponseDto' });
+ 
+@@ -34,7 +34,7 @@ const AssetRejectReasonSchema = z
+ 
+ const AssetBulkUploadCheckResultSchema = z
+   .object({
+-    id: z.string().describe('Asset ID'),
++    id: z.uuidv4().describe('Asset ID'),
+     action: AssetUploadActionSchema,
+     reason: AssetRejectReasonSchema.optional(),
+     assetId: z.string().optional().describe('Existing asset ID if duplicate'),
+diff --git a/server/src/dtos/asset-response.dto.ts b/server/src/dtos/asset-response.dto.ts
+index b5b0b04a2dc192..ba64286647b1af 100644
+--- a/server/src/dtos/asset-response.dto.ts
++++ b/server/src/dtos/asset-response.dto.ts
+@@ -24,7 +24,7 @@ import z from 'zod';
+ 
+ const SanitizedAssetResponseSchema = z
+   .object({
+-    id: z.string().describe('Asset ID'),
++    id: z.uuidv4().describe('Asset ID'),
+     type: AssetTypeSchema,
+     thumbhash: z
+       .string()
+@@ -52,8 +52,8 @@ export class SanitizedAssetResponseDto extends createZodDto(SanitizedAssetRespon
+ 
+ const AssetStackResponseSchema = z
+   .object({
+-    id: z.string().describe('Stack ID'),
+-    primaryAssetId: z.string().describe('Primary asset ID'),
++    id: z.uuidv4().describe('Stack ID'),
++    primaryAssetId: z.uuidv4().describe('Primary asset ID'),
+     assetCount: z.int().min(0).describe('Number of assets in stack'),
+   })
+   .meta({ id: 'AssetStackResponseDto' });
+@@ -65,7 +65,7 @@ export const AssetResponseSchema = SanitizedAssetResponseSchema.extend(
+       .string()
+       .meta({ format: 'date-time' })
+       .describe('The UTC timestamp when the asset was originally uploaded to Immich.'),
+-    ownerId: z.string().describe('Owner user ID'),
++    ownerId: z.uuidv4().describe('Owner user ID'),
+     owner: UserResponseSchema.optional(),
+     libraryId: z
+       .uuidv4()
+@@ -103,7 +103,7 @@ export const AssetResponseSchema = SanitizedAssetResponseSchema.extend(
+     people: z.array(PersonResponseSchema).optional(),
+     checksum: z.string().describe('Base64 encoded SHA1 hash'),
+     stack: AssetStackResponseSchema.nullish(),
+-    duplicateId: z.string().nullish().describe('Duplicate group ID'),
++    duplicateId: z.uuidv4().nullish().describe('Duplicate group ID'),
+     resized: z
+       .boolean()
+       .optional()
+diff --git a/server/src/dtos/asset.dto.ts b/server/src/dtos/asset.dto.ts
+index d7d680fb43c558..d9e668147a1412 100644
+--- a/server/src/dtos/asset.dto.ts
++++ b/server/src/dtos/asset.dto.ts
+@@ -148,7 +148,7 @@ const AssetMetadataResponseSchema = z
+   .meta({ id: 'AssetMetadataResponseDto' });
+ 
+ const AssetMetadataBulkResponseSchema = AssetMetadataResponseSchema.extend({
+-  assetId: z.string().describe('Asset ID'),
++  assetId: z.uuidv4().describe('Asset ID'),
+ }).meta({ id: 'AssetMetadataBulkResponseDto' });
+ 
+ const AssetCopySchema = z
+diff --git a/server/src/dtos/auth.dto.ts b/server/src/dtos/auth.dto.ts
+index 1f75401e332050..40b4e25b6d29d8 100644
+--- a/server/src/dtos/auth.dto.ts
++++ b/server/src/dtos/auth.dto.ts
+@@ -29,7 +29,7 @@ const LoginCredentialSchema = z
+ const LoginResponseSchema = z
+   .object({
+     accessToken: z.string().describe('Access token'),
+-    userId: z.string().describe('User ID'),
++    userId: z.uuidv4().describe('User ID'),
+     userEmail: toEmail.describe('User email'),
+     name: z.string().describe('User name'),
+     profileImagePath: z.string().describe('Profile image path'),
+diff --git a/server/src/dtos/download.dto.ts b/server/src/dtos/download.dto.ts
+index b44a6a7afcf6fd..c37fa5c113164c 100644
+--- a/server/src/dtos/download.dto.ts
++++ b/server/src/dtos/download.dto.ts
+@@ -14,7 +14,7 @@ const DownloadInfoSchema = z
+ const DownloadArchiveInfoSchema = z
+   .object({
+     size: z.int().describe('Archive size in bytes'),
+-    assetIds: z.array(z.string()).describe('Asset IDs in this archive'),
++    assetIds: z.array(z.uuidv4()).describe('Asset IDs in this archive'),
+   })
+   .meta({ id: 'DownloadArchiveInfo' });
+ 
+diff --git a/server/src/dtos/duplicate.dto.ts b/server/src/dtos/duplicate.dto.ts
+index 55427e36aa928b..66d14e605bacb4 100644
+--- a/server/src/dtos/duplicate.dto.ts
++++ b/server/src/dtos/duplicate.dto.ts
+@@ -4,7 +4,7 @@ import z from 'zod';
+ 
+ const DuplicateResponseSchema = z
+   .object({
+-    duplicateId: z.string().describe('Duplicate group ID'),
++    duplicateId: z.uuidv4().describe('Duplicate group ID'),
+     assets: z.array(AssetResponseSchema).describe('Duplicate assets'),
+     suggestedKeepAssetIds: z.array(z.uuidv4()).describe('Suggested asset IDs to keep based on file size and EXIF data'),
+   })
+diff --git a/server/src/dtos/integrity.dto.ts b/server/src/dtos/integrity.dto.ts
+index b4faf6005ec066..3b89b117ea676e 100644
+--- a/server/src/dtos/integrity.dto.ts
++++ b/server/src/dtos/integrity.dto.ts
+@@ -27,7 +27,7 @@ const IntegrityDeleteReportSchema = z.object({ type: IntegrityReport }).meta({ i
+ export class IntegrityDeleteReportDto extends createZodDto(IntegrityDeleteReportSchema) {}
+ 
+ const IntegrityReportResponseItemSchema = z.object({
+-  id: z.string().describe('Integrity report item id'),
++  id: z.uuidv4().describe('Integrity report item id'),
+   type: IntegrityReportSchema,
+   path: z.string().describe('Integrity report item path'),
+ });
+diff --git a/server/src/dtos/library.dto.ts b/server/src/dtos/library.dto.ts
+index aafdd9f7934177..0819be278e5df7 100644
+--- a/server/src/dtos/library.dto.ts
++++ b/server/src/dtos/library.dto.ts
+@@ -62,8 +62,8 @@ const ValidateLibraryResponseSchema = z
+ 
+ const LibraryResponseSchema = z
+   .object({
+-    id: z.string().describe('Library ID'),
+-    ownerId: z.string().describe('Owner user ID'),
++    id: z.uuidv4().describe('Library ID'),
++    ownerId: z.uuidv4().describe('Owner user ID'),
+     name: z.string().describe('Library name'),
+     assetCount: z.int().describe('Number of assets'),
+     importPaths: z.array(z.string()).describe('Import paths'),
+diff --git a/server/src/dtos/map.dto.ts b/server/src/dtos/map.dto.ts
+index 6a4776d49d42e7..f442850936e938 100644
+--- a/server/src/dtos/map.dto.ts
++++ b/server/src/dtos/map.dto.ts
+@@ -30,7 +30,7 @@ const MapMarkerSchema = z
+ 
+ const MapMarkerResponseSchema = z
+   .object({
+-    id: z.string().describe('Asset ID'),
++    id: z.uuidv4().describe('Asset ID'),
+     lat: z.number().meta({ format: 'double' }).describe('Latitude'),
+     lon: z.number().meta({ format: 'double' }).describe('Longitude'),
+     city: z.string().nullable().describe('City name'),
+diff --git a/server/src/dtos/memory.dto.ts b/server/src/dtos/memory.dto.ts
+index ce2e9fda6cd60d..324474a1e10e16 100644
+--- a/server/src/dtos/memory.dto.ts
++++ b/server/src/dtos/memory.dto.ts
+@@ -59,7 +59,7 @@ const MemoryStatisticsResponseSchema = z
+ 
+ const MemoryResponseSchema = z
+   .object({
+-    id: z.string().describe('Memory ID'),
++    id: z.uuidv4().describe('Memory ID'),
+     createdAt: isoDatetimeToDate.describe('Creation date'),
+     updatedAt: isoDatetimeToDate.describe('Last update date'),
+     deletedAt: isoDatetimeToDate.optional().describe('Deletion date'),
+@@ -67,7 +67,7 @@ const MemoryResponseSchema = z
+     seenAt: isoDatetimeToDate.optional().describe('Date when memory was seen'),
+     showAt: isoDatetimeToDate.optional().describe('Date when memory should be shown'),
+     hideAt: isoDatetimeToDate.optional().describe('Date when memory should be hidden'),
+-    ownerId: z.string().describe('Owner user ID'),
++    ownerId: z.uuidv4().describe('Owner user ID'),
+     type: MemoryTypeSchema,
+     data: OnThisDaySchema,
+     isSaved: z.boolean().describe('Is memory saved'),
+diff --git a/server/src/dtos/notification.dto.ts b/server/src/dtos/notification.dto.ts
+index f474cfc0a1ae83..04f937fc0063de 100644
+--- a/server/src/dtos/notification.dto.ts
++++ b/server/src/dtos/notification.dto.ts
+@@ -24,7 +24,7 @@ const TemplateSchema = z
+ 
+ const NotificationSchema = z
+   .object({
+-    id: z.string().describe('Notification ID'),
++    id: z.uuidv4().describe('Notification ID'),
+     createdAt: isoDatetimeToDate.describe('Creation date'),
+     level: NotificationLevelSchema,
+     type: NotificationTypeSchema,
+diff --git a/server/src/dtos/person.dto.ts b/server/src/dtos/person.dto.ts
+index 38e856b8c1b882..fa56ded1765de3 100644
+--- a/server/src/dtos/person.dto.ts
++++ b/server/src/dtos/person.dto.ts
+@@ -33,7 +33,7 @@ const PersonUpdateSchema = PersonCreateSchema.extend({
+ }).meta({ id: 'PersonUpdateDto' });
+ 
+ const PeopleUpdateItemSchema = PersonUpdateSchema.extend({
+-  id: z.string().describe('Person ID'),
++  id: z.uuidv4().describe('Person ID'),
+ }).meta({ id: 'PeopleUpdateItem' });
+ 
+ const PeopleUpdateSchema = z
+@@ -60,7 +60,7 @@ const PersonSearchSchema = z
+ 
+ export const PersonResponseSchema = z
+   .object({
+-    id: z.string().describe('Person ID'),
++    id: z.uuidv4().describe('Person ID'),
+     name: z.string().describe('Person name'),
+     // TODO: use `isoDateToDate` when using `ZodSerializerDto` on the controllers.
+     birthDate: z.string().meta({ format: 'date' }).describe('Person date of birth').nullable(),
+diff --git a/server/src/dtos/plugin.dto.ts b/server/src/dtos/plugin.dto.ts
+index 8ee695d61c34ef..777380a1073de4 100644
+--- a/server/src/dtos/plugin.dto.ts
++++ b/server/src/dtos/plugin.dto.ts
+@@ -32,7 +32,7 @@ const PluginMethodResponseSchema = z
+ 
+ const PluginResponseSchema = z
+   .object({
+-    id: z.string().describe('Plugin ID'),
++    id: z.uuidv4().describe('Plugin ID'),
+     name: z.string().describe('Plugin name'),
+     title: z.string().describe('Plugin title'),
+     description: z.string().describe('Plugin description'),
+diff --git a/server/src/dtos/server.dto.ts b/server/src/dtos/server.dto.ts
+index 03d45fab1cc336..0215558aab7ea9 100644
+--- a/server/src/dtos/server.dto.ts
++++ b/server/src/dtos/server.dto.ts
+@@ -73,7 +73,7 @@ const ServerVersionResponseSchema = z
+ 
+ const ServerVersionHistoryResponseSchema = z
+   .object({
+-    id: z.string().describe('Version history entry ID'),
++    id: z.uuidv4().describe('Version history entry ID'),
+     createdAt: isoDatetimeToDate.describe('When this version was first seen'),
+     version: z.string().describe('Version string'),
+   })
+@@ -81,7 +81,7 @@ const ServerVersionHistoryResponseSchema = z
+ 
+ const UsageByUserSchema = z
+   .object({
+-    userId: z.string().describe('User ID'),
++    userId: z.uuidv4().describe('User ID'),
+     userName: z.string().describe('User name'),
+     photos: z.int().describe('Number of photos'),
+     videos: z.int().describe('Number of videos'),
+diff --git a/server/src/dtos/session.dto.ts b/server/src/dtos/session.dto.ts
+index 424d1040531182..c81dac6d79bef2 100644
+--- a/server/src/dtos/session.dto.ts
++++ b/server/src/dtos/session.dto.ts
+@@ -18,7 +18,7 @@ const SessionUpdateSchema = z
+ 
+ const SessionResponseSchema = z
+   .object({
+-    id: z.string().describe('Session ID'),
++    id: z.uuidv4().describe('Session ID'),
+     createdAt: z.string().describe('Creation date'),
+     updatedAt: z.string().describe('Last update date'),
+     expiresAt: z.string().optional().describe('Expiration date'),
+diff --git a/server/src/dtos/shared-link.dto.ts b/server/src/dtos/shared-link.dto.ts
+index aebe6fcab10555..6763f6ab744554 100644
+--- a/server/src/dtos/shared-link.dto.ts
++++ b/server/src/dtos/shared-link.dto.ts
+@@ -53,10 +53,10 @@ const SharedLinkLoginSchema = z
+ 
+ const SharedLinkResponseSchema = z
+   .object({
+-    id: z.string().describe('Shared link ID'),
++    id: z.uuidv4().describe('Shared link ID'),
+     description: z.string().nullable().describe('Link description'),
+     password: z.string().nullable().describe('Has password'),
+-    userId: z.string().describe('Owner user ID'),
++    userId: z.uuidv4().describe('Owner user ID'),
+     key: z.string().describe('Encryption key (base64url)'),
+     type: SharedLinkTypeSchema,
+     createdAt: isoDatetimeToDate.describe('Creation date'),
+diff --git a/server/src/dtos/stack.dto.ts b/server/src/dtos/stack.dto.ts
+index 48354cec6b5fbb..1956974ba1d035 100644
+--- a/server/src/dtos/stack.dto.ts
++++ b/server/src/dtos/stack.dto.ts
+@@ -24,8 +24,8 @@ const StackUpdateSchema = z
+ 
+ const StackResponseSchema = z
+   .object({
+-    id: z.string().describe('Stack ID'),
+-    primaryAssetId: z.string().describe('Primary asset ID'),
++    id: z.uuidv4().describe('Stack ID'),
++    primaryAssetId: z.uuidv4().describe('Primary asset ID'),
+     assets: z.array(AssetResponseSchema),
+   })
+   .describe('Stack response')
+diff --git a/server/src/dtos/sync.dto.ts b/server/src/dtos/sync.dto.ts
+index 531ac6277c35d8..1d5fe64aa13f7a 100644
+--- a/server/src/dtos/sync.dto.ts
++++ b/server/src/dtos/sync.dto.ts
+@@ -19,7 +19,7 @@ import z from 'zod';
+ 
+ const SyncUserV1Schema = z
+   .object({
+-    id: z.string().describe('User ID'),
++    id: z.uuidv4().describe('User ID'),
+     name: z.string().describe('User name'),
+     email: z.string().describe('User email'),
+     avatarColor: UserAvatarColorSchema.nullish(),
+@@ -40,27 +40,27 @@ const SyncAuthUserV1Schema = SyncUserV1Schema.merge(
+   }),
+ ).meta({ id: 'SyncAuthUserV1' });
+ 
+-const SyncUserDeleteV1Schema = z.object({ userId: z.string().describe('User ID') }).meta({ id: 'SyncUserDeleteV1' });
++const SyncUserDeleteV1Schema = z.object({ userId: z.uuidv4().describe('User ID') }).meta({ id: 'SyncUserDeleteV1' });
+ 
+ const SyncPartnerV1Schema = z
+   .object({
+-    sharedById: z.string().describe('Shared by ID'),
+-    sharedWithId: z.string().describe('Shared with ID'),
++    sharedById: z.uuidv4().describe('Shared by ID'),
++    sharedWithId: z.uuidv4().describe('Shared with ID'),
+     inTimeline: z.boolean().describe('In timeline'),
+   })
+   .meta({ id: 'SyncPartnerV1' });
+ 
+ const SyncPartnerDeleteV1Schema = z
+   .object({
+-    sharedById: z.string().describe('Shared by ID'),
+-    sharedWithId: z.string().describe('Shared with ID'),
++    sharedById: z.uuidv4().describe('Shared by ID'),
++    sharedWithId: z.uuidv4().describe('Shared with ID'),
+   })
+   .meta({ id: 'SyncPartnerDeleteV1' });
+ 
+ const SyncAssetV1Schema = z
+   .object({
+-    id: z.string().describe('Asset ID'),
+-    ownerId: z.string().describe('Owner ID'),
++    id: z.uuidv4().describe('Asset ID'),
++    ownerId: z.uuidv4().describe('Owner ID'),
+     originalFileName: z.string().describe('Original file name'),
+     thumbhash: z.string().nullable().describe('Thumbhash'),
+     checksum: z.string().describe('Checksum'),
+@@ -84,8 +84,8 @@ const SyncAssetV1Schema = z
+ 
+ const SyncAssetV2Schema = z
+   .object({
+-    id: z.string().describe('Asset ID'),
+-    ownerId: z.string().describe('Owner ID'),
++    id: z.uuidv4().describe('Asset ID'),
++    ownerId: z.uuidv4().describe('Owner ID'),
+     originalFileName: z.string().describe('Original file name'),
+     thumbhash: z.string().nullable().describe('Thumbhash'),
+     checksum: z.string().describe('Checksum'),
+@@ -123,12 +123,12 @@ export class SyncAssetV1 extends createZodDto(SyncAssetV1Schema) {}
+ export class SyncAssetV2 extends createZodDto(SyncAssetV2Schema) {}
+ 
+ const SyncAssetDeleteV1Schema = z
+-  .object({ assetId: z.string().describe('Asset ID') })
++  .object({ assetId: z.uuidv4().describe('Asset ID') })
+   .meta({ id: 'SyncAssetDeleteV1' });
+ 
+ const SyncAssetExifV1Schema = z
+   .object({
+-    assetId: z.string().describe('Asset ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+     description: z.string().nullable().describe('Description'),
+     exifImageWidth: z.int().nullable().describe('Exif image width'),
+     exifImageHeight: z.int().nullable().describe('Exif image height'),
+@@ -158,7 +158,7 @@ const SyncAssetExifV1Schema = z
+ 
+ const SyncAssetMetadataV1Schema = z
+   .object({
+-    assetId: z.string().describe('Asset ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+     key: z.string().describe('Key'),
+     value: z.record(z.string(), z.unknown()).describe('Value'),
+   })
+@@ -166,15 +166,15 @@ const SyncAssetMetadataV1Schema = z
+ 
+ const SyncAssetMetadataDeleteV1Schema = z
+   .object({
+-    assetId: z.string().describe('Asset ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+     key: z.string().describe('Key'),
+   })
+   .meta({ id: 'SyncAssetMetadataDeleteV1' });
+ 
+ const SyncAssetEditV1Schema = z
+   .object({
+-    id: z.string().describe('Edit ID'),
+-    assetId: z.string().describe('Asset ID'),
++    id: z.uuidv4().describe('Edit ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+     action: AssetEditActionSchema,
+     parameters: z.record(z.string(), z.unknown()).describe('Edit parameters'),
+     sequence: z.int().describe('Edit sequence'),
+@@ -182,7 +182,7 @@ const SyncAssetEditV1Schema = z
+   .meta({ id: 'SyncAssetEditV1' });
+ 
+ const SyncAssetEditDeleteV1Schema = z
+-  .object({ editId: z.string().describe('Edit ID') })
++  .object({ editId: z.uuidv4().describe('Edit ID') })
+   .meta({ id: 'SyncAssetEditDeleteV1' });
+ 
+ @ExtraModel()
+@@ -199,28 +199,28 @@ export class SyncAssetEditV1 extends createZodDto(SyncAssetEditV1Schema) {}
+ class SyncAssetEditDeleteV1 extends createZodDto(SyncAssetEditDeleteV1Schema) {}
+ 
+ const SyncAlbumDeleteV1Schema = z
+-  .object({ albumId: z.string().describe('Album ID') })
++  .object({ albumId: z.uuidv4().describe('Album ID') })
+   .meta({ id: 'SyncAlbumDeleteV1' });
+ 
+ const SyncAlbumUserDeleteV1Schema = z
+   .object({
+-    albumId: z.string().describe('Album ID'),
+-    userId: z.string().describe('User ID'),
++    albumId: z.uuidv4().describe('Album ID'),
++    userId: z.uuidv4().describe('User ID'),
+   })
+   .meta({ id: 'SyncAlbumUserDeleteV1' });
+ 
+ const SyncAlbumUserV1Schema = z
+   .object({
+-    albumId: z.string().describe('Album ID'),
+-    userId: z.string().describe('User ID'),
++    albumId: z.uuidv4().describe('Album ID'),
++    userId: z.uuidv4().describe('User ID'),
+     role: AlbumUserRoleSchema,
+   })
+   .meta({ id: 'SyncAlbumUserV1' });
+ 
+ const SyncAlbumV1Schema = z
+   .object({
+-    id: z.string().describe('Album ID'),
+-    ownerId: z.string().describe('Owner ID'),
++    id: z.uuidv4().describe('Album ID'),
++    ownerId: z.uuidv4().describe('Owner ID'),
+     name: z.string().describe('Album name'),
+     description: z.string().describe('Album description'),
+     createdAt: isoDatetimeToDate.describe('Created at'),
+@@ -233,7 +233,7 @@ const SyncAlbumV1Schema = z
+ 
+ const SyncAlbumV2Schema = z
+   .object({
+-    id: z.string().describe('Album ID'),
++    id: z.uuidv4().describe('Album ID'),
+     name: z.string().describe('Album name'),
+     description: z.string().describe('Album description'),
+     createdAt: isoDatetimeToDate.describe('Created at'),
+@@ -246,15 +246,15 @@ const SyncAlbumV2Schema = z
+ 
+ const SyncAlbumToAssetV1Schema = z
+   .object({
+-    albumId: z.string().describe('Album ID'),
+-    assetId: z.string().describe('Asset ID'),
++    albumId: z.uuidv4().describe('Album ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+   })
+   .meta({ id: 'SyncAlbumToAssetV1' });
+ 
+ const SyncAlbumToAssetDeleteV1Schema = z
+   .object({
+-    albumId: z.string().describe('Album ID'),
+-    assetId: z.string().describe('Asset ID'),
++    albumId: z.uuidv4().describe('Album ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+   })
+   .meta({ id: 'SyncAlbumToAssetDeleteV1' });
+ 
+@@ -284,11 +284,11 @@ export function syncAlbumV2ToV1(
+ 
+ const SyncMemoryV1Schema = z
+   .object({
+-    id: z.string().describe('Memory ID'),
++    id: z.uuidv4().describe('Memory ID'),
+     createdAt: isoDatetimeToDate.describe('Created at'),
+     updatedAt: isoDatetimeToDate.describe('Updated at'),
+     deletedAt: isoDatetimeToDate.nullable().describe('Deleted at'),
+-    ownerId: z.string().describe('Owner ID'),
++    ownerId: z.uuidv4().describe('Owner ID'),
+     type: MemoryTypeSchema,
+     data: z.record(z.string(), z.unknown()).describe('Data'),
+     isSaved: z.boolean().describe('Is saved'),
+@@ -300,43 +300,43 @@ const SyncMemoryV1Schema = z
+   .meta({ id: 'SyncMemoryV1' });
+ 
+ const SyncMemoryDeleteV1Schema = z
+-  .object({ memoryId: z.string().describe('Memory ID') })
++  .object({ memoryId: z.uuidv4().describe('Memory ID') })
+   .meta({ id: 'SyncMemoryDeleteV1' });
+ 
+ const SyncMemoryAssetV1Schema = z
+   .object({
+-    memoryId: z.string().describe('Memory ID'),
+-    assetId: z.string().describe('Asset ID'),
++    memoryId: z.uuidv4().describe('Memory ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+   })
+   .meta({ id: 'SyncMemoryAssetV1' });
+ 
+ const SyncMemoryAssetDeleteV1Schema = z
+   .object({
+-    memoryId: z.string().describe('Memory ID'),
+-    assetId: z.string().describe('Asset ID'),
++    memoryId: z.uuidv4().describe('Memory ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+   })
+   .meta({ id: 'SyncMemoryAssetDeleteV1' });
+ 
+ const SyncStackV1Schema = z
+   .object({
+-    id: z.string().describe('Stack ID'),
++    id: z.uuidv4().describe('Stack ID'),
+     createdAt: isoDatetimeToDate.describe('Created at'),
+     updatedAt: isoDatetimeToDate.describe('Updated at'),
+-    primaryAssetId: z.string().describe('Primary asset ID'),
+-    ownerId: z.string().describe('Owner ID'),
++    primaryAssetId: z.uuidv4().describe('Primary asset ID'),
++    ownerId: z.uuidv4().describe('Owner ID'),
+   })
+   .meta({ id: 'SyncStackV1' });
+ 
+ const SyncStackDeleteV1Schema = z
+-  .object({ stackId: z.string().describe('Stack ID') })
++  .object({ stackId: z.uuidv4().describe('Stack ID') })
+   .meta({ id: 'SyncStackDeleteV1' });
+ 
+ const SyncPersonV1Schema = z
+   .object({
+-    id: z.string().describe('Person ID'),
++    id: z.uuidv4().describe('Person ID'),
+     createdAt: isoDatetimeToDate.describe('Created at'),
+     updatedAt: isoDatetimeToDate.describe('Updated at'),
+-    ownerId: z.string().describe('Owner ID'),
++    ownerId: z.uuidv4().describe('Owner ID'),
+     name: z.string().describe('Person name'),
+     birthDate: isoDatetimeToDate.nullable().describe('Birth date'),
+     isHidden: z.boolean().describe('Is hidden'),
+@@ -347,13 +347,13 @@ const SyncPersonV1Schema = z
+   .meta({ id: 'SyncPersonV1' });
+ 
+ const SyncPersonDeleteV1Schema = z
+-  .object({ personId: z.string().describe('Person ID') })
++  .object({ personId: z.uuidv4().describe('Person ID') })
+   .meta({ id: 'SyncPersonDeleteV1' });
+ 
+ const SyncAssetFaceV1Schema = z
+   .object({
+-    id: z.string().describe('Asset face ID'),
+-    assetId: z.string().describe('Asset ID'),
++    id: z.uuidv4().describe('Asset face ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+     personId: z.string().nullable().describe('Person ID'),
+     imageWidth: z.int().describe('Image width'),
+     imageHeight: z.int().describe('Image height'),
+@@ -371,12 +371,12 @@ const SyncAssetFaceV2Schema = SyncAssetFaceV1Schema.extend({
+ }).meta({ id: 'SyncAssetFaceV2' });
+ 
+ const SyncAssetFaceDeleteV1Schema = z
+-  .object({ assetFaceId: z.string().describe('Asset face ID') })
++  .object({ assetFaceId: z.uuidv4().describe('Asset face ID') })
+   .meta({ id: 'SyncAssetFaceDeleteV1' });
+ 
+ const SyncUserMetadataV1Schema = z
+   .object({
+-    userId: z.string().describe('User ID'),
++    userId: z.uuidv4().describe('User ID'),
+     key: UserMetadataKeySchema,
+     value: z.record(z.string(), z.unknown()).describe('User metadata value'),
+   })
+@@ -384,7 +384,7 @@ const SyncUserMetadataV1Schema = z
+ 
+ const SyncUserMetadataDeleteV1Schema = z
+   .object({
+-    userId: z.string().describe('User ID'),
++    userId: z.uuidv4().describe('User ID'),
+     key: UserMetadataKeySchema,
+   })
+   .meta({ id: 'SyncUserMetadataDeleteV1' });
+@@ -404,8 +404,8 @@ class SyncMemoryAssetDeleteV1 extends createZodDto(SyncMemoryAssetDeleteV1Schema
+ 
+ const SyncAssetOcrV1Schema = z
+   .object({
+-    id: z.string().describe('OCR entry ID'),
+-    assetId: z.string().describe('Asset ID'),
++    id: z.uuidv4().describe('OCR entry ID'),
++    assetId: z.uuidv4().describe('Asset ID'),
+ 
+     x1: z.number().meta({ format: 'double' }).describe('Top-left X coordinate (normalized 0–1)'),
+     y1: z.number().meta({ format: 'double' }).describe('Top-left Y coordinate (normalized 0–1)'),
+diff --git a/server/src/dtos/tag.dto.ts b/server/src/dtos/tag.dto.ts
+index dd679c97cb121d..cfbae551a814b0 100644
+--- a/server/src/dtos/tag.dto.ts
++++ b/server/src/dtos/tag.dto.ts
+@@ -40,7 +40,7 @@ const TagBulkAssetsResponseSchema = z
+ 
+ export const TagResponseSchema = z
+   .object({
+-    id: z.string().describe('Tag ID'),
++    id: z.uuidv4().describe('Tag ID'),
+     parentId: z.string().optional().describe('Parent tag ID'),
+     name: z.string().describe('Tag name'),
+     value: z.string().describe('Tag value (full path)'),
+diff --git a/server/src/dtos/user-profile.dto.ts b/server/src/dtos/user-profile.dto.ts
+index c3c91d3d954ae0..e4ab29b6d5c49d 100644
+--- a/server/src/dtos/user-profile.dto.ts
++++ b/server/src/dtos/user-profile.dto.ts
+@@ -11,7 +11,7 @@ export class CreateProfileImageDto {
+ 
+ const CreateProfileImageResponseSchema = z
+   .object({
+-    userId: z.string().describe('User ID'),
++    userId: z.uuidv4().describe('User ID'),
+     profileChangedAt: isoDatetimeToDate.describe('Profile image change date'),
+     profileImagePath: z.string().describe('Profile image file path'),
+   })
+diff --git a/server/src/dtos/workflow.dto.ts b/server/src/dtos/workflow.dto.ts
+index 1a2c2ac9f95f7f..b4269ea0c96be7 100644
+--- a/server/src/dtos/workflow.dto.ts
++++ b/server/src/dtos/workflow.dto.ts
+@@ -58,7 +58,7 @@ const WorkflowUpdateSchema = z
+ 
+ const WorkflowResponseSchema = z
+   .object({
+-    id: z.string().describe('Workflow ID'),
++    id: z.uuidv4().describe('Workflow ID'),
+     trigger: WorkflowTriggerSchema.describe('Workflow trigger type'),
+     name: z.string().nullable().describe('Workflow name'),
+     description: z.string().nullable().describe('Workflow description'),

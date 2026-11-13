@@ -1,0 +1,6 @@
+{
+  "title": "Fix reader context close race in markAsUsed",
+  "body": "#### Problem\r\nDuring a rolling restart (or any time a shard/index is removed), a search phase can look up a reader context and then call `markAsUsed` on it just as the context is being closed. When that happens the ref counter is already at zero, so `markAsUsed` throws a raw `IllegalStateException (\"already closed, can't increment ref count\")`.\r\n\r\nThis leaks an unexpected internal error to the coordinating node as a shard failure, instead of the normal **context is gone** signal that the search layer already knows how to handle. It surfaced as flakiness in `SearchDuringRollingRestartIT`, method `testSearchesSurviveRollingRestart`.\r\n\r\n#### Fix\r\n`ReaderContext#markAsUsed` now uses `tryIncRef` and, if the context was already closed, throws `SearchContextMissingException`.\r\n\r\nCloses #151828",
+  "head_sha": "2b408ccb1b5a336f66c0b98f80802b005af77195",
+  "base_sha": "d6efe5fa86c174764ca1c694fe110553c7500c32"
+}

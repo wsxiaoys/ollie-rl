@@ -1,0 +1,16 @@
+{
+  "case_id": "microsoft__playwright-41470",
+  "repo": "microsoft/playwright",
+  "pr": 41470,
+  "title": "fix(routing): `urlMatches` should reset `lastIndex` if given `/.../g` or `/.../y`",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "microsoft__playwright-41470",
+  "target": null,
+  "siblings": [],
+  "head_sha": "e42ecef07f468f5c760bd8137627a8624ffe6e06",
+  "base_sha": "166a44017ccca58e9b49c6daf1255c57491ffac9",
+  "snapshot": "repos/microsoft__playwright/e42ecef07f468f5c760bd8137627a8624ffe6e06",
+  "diff": "diffs/microsoft__playwright-41470.diff"
+}

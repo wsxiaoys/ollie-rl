@@ -1,0 +1,302 @@
+diff --git a/pkg/tsdb/grafana-postgresql-datasource/macros.go b/pkg/tsdb/grafana-postgresql-datasource/macros.go
+index f6b0f893da038..5701e6bb5e88f 100644
+--- a/pkg/tsdb/grafana-postgresql-datasource/macros.go
++++ b/pkg/tsdb/grafana-postgresql-datasource/macros.go
+@@ -15,6 +15,19 @@ import (
+ const rsIdentifier = `([_a-zA-Z0-9]+)`
+ const sExpr = `\$` + rsIdentifier + `\(([^\)]*)\)`
+ 
++var (
++	reBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
++	reLineComment  = regexp.MustCompile(`--[^\n]*`)
++)
++
++// stripSQLComments removes SQL line comments (--) and block comments (/* */)
++// from the query string.
++func stripSQLComments(sql string) string {
++	sql = reBlockComment.ReplaceAllString(sql, "")
++	sql = reLineComment.ReplaceAllString(sql, "")
++	return sql
++}
++
+ type postgresMacroEngine struct {
+ 	*sqleng.SQLMacroEngineBase
+ 	timescaledb bool
+@@ -28,6 +41,10 @@ func newPostgresMacroEngine(timescaledb bool) sqleng.SQLMacroEngine {
+ }
+ 
+ func (m *postgresMacroEngine) Interpolate(query *backend.DataQuery, timeRange backend.TimeRange, sql string) (string, error) {
++	// Strip SQL comments before macro interpolation so that only macros present
++	// in executable SQL are evaluated.
++	sql = stripSQLComments(sql)
++
+ 	// TODO: Handle error
+ 	rExp, _ := regexp.Compile(sExpr)
+ 	var macroError error
+diff --git a/pkg/tsdb/grafana-postgresql-datasource/sqleng/sql_engine.go b/pkg/tsdb/grafana-postgresql-datasource/sqleng/sql_engine.go
+index 61784b36e5175..3faca35faf503 100644
+--- a/pkg/tsdb/grafana-postgresql-datasource/sqleng/sql_engine.go
++++ b/pkg/tsdb/grafana-postgresql-datasource/sqleng/sql_engine.go
+@@ -360,20 +360,7 @@ func (e *DataSourceHandler) processFrame(frame *data.Frame, qm *dataQueryModel,
+ 			}
+ 		}
+ 		if qm.FillMissing != nil {
+-			// we align the start-time
+-			startUnixTime := qm.TimeRange.From.Unix() / int64(qm.Interval.Seconds()) * int64(qm.Interval.Seconds())
+-			alignedTimeRange := backend.TimeRange{
+-				From: time.Unix(startUnixTime, 0),
+-				To:   qm.TimeRange.To,
+-			}
+-
+-			var err error
+-			frame, err = sqlutil.ResampleWideFrame(frame, qm.FillMissing, alignedTimeRange, qm.Interval) //nolint:staticcheck
+-			if err != nil {
+-				logger.Error("Failed to resample dataframe", "err", err)
+-				frame.AppendNotices(data.Notice{Text: "Failed to resample dataframe", Severity: data.NoticeSeverityWarning})
+-				return
+-			}
++			frame = e.applyFill(frame, qm)
+ 		}
+ 	}
+ 
+@@ -821,6 +808,38 @@ func convertSQLValueColumnToFloat(frame *data.Frame, Index int) (*data.Frame, er
+ 	return frame, nil
+ }
+ 
++// applyFill resamples frame using the fill configuration in qm. If the number
++// of fill points would exceed the row limit the fill is skipped and a warning
++// notice is appended to the frame instead.
++func (e *DataSourceHandler) applyFill(frame *data.Frame, qm *dataQueryModel) *data.Frame {
++	startUnixTime := qm.TimeRange.From.Unix() / int64(qm.Interval.Seconds()) * int64(qm.Interval.Seconds())
++	alignedTimeRange := backend.TimeRange{
++		From: time.Unix(startUnixTime, 0),
++		To:   qm.TimeRange.To,
++	}
++
++	// Guard against excessive memory allocation from fill operations that span
++	// a very large time range relative to the fill interval.
++	numFillPoints := int64(alignedTimeRange.To.Sub(alignedTimeRange.From) / qm.Interval)
++	if numFillPoints > e.rowLimit {
++		e.log.Warn("Skipping fill: number of fill points exceeds row limit",
++			"numFillPoints", numFillPoints, "rowLimit", e.rowLimit)
++		frame.AppendNotices(data.Notice{
++			Text:     "Fill operation skipped: time range and interval would require more points than the configured row limit",
++			Severity: data.NoticeSeverityWarning,
++		})
++		return frame
++	}
++
++	var err error
++	frame, err = sqlutil.ResampleWideFrame(frame, qm.FillMissing, alignedTimeRange, qm.Interval) //nolint:staticcheck
++	if err != nil {
++		e.log.Error("Failed to resample dataframe", "err", err)
++		frame.AppendNotices(data.Notice{Text: "Failed to resample dataframe", Severity: data.NoticeSeverityWarning})
++	}
++	return frame
++}
++
+ func SetupFillmode(query *backend.DataQuery, interval time.Duration, fillmode string) error {
+ 	rawQueryProp := make(map[string]any)
+ 	queryBytes, err := query.JSON.MarshalJSON()
+diff --git a/pkg/tsdb/mssql/sqleng/macros.go b/pkg/tsdb/mssql/sqleng/macros.go
+index c0ab99cbd775e..1c1292187a5b1 100644
+--- a/pkg/tsdb/mssql/sqleng/macros.go
++++ b/pkg/tsdb/mssql/sqleng/macros.go
+@@ -13,6 +13,19 @@ import (
+ const rsIdentifier = `([_a-zA-Z0-9]+)`
+ const sExpr = `\$` + rsIdentifier + `\(([^\)]*)\)`
+ 
++var (
++	reBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
++	reLineComment  = regexp.MustCompile(`--[^\n]*`)
++)
++
++// stripSQLComments removes SQL line comments (--) and block comments (/* */)
++// from the query string.
++func stripSQLComments(sql string) string {
++	sql = reBlockComment.ReplaceAllString(sql, "")
++	sql = reLineComment.ReplaceAllString(sql, "")
++	return sql
++}
++
+ type msSQLMacroEngine struct {
+ 	*SQLMacroEngineBase
+ }
+@@ -23,6 +36,10 @@ func newMssqlMacroEngine() SQLMacroEngine {
+ 
+ func (m *msSQLMacroEngine) Interpolate(query *backend.DataQuery, timeRange backend.TimeRange,
+ 	sql string) (string, error) {
++	// Strip SQL comments before macro interpolation so that only macros present
++	// in executable SQL are evaluated.
++	sql = stripSQLComments(sql)
++
+ 	// TODO: Return any error
+ 	rExp, _ := regexp.Compile(sExpr)
+ 	var macroError error
+diff --git a/pkg/tsdb/mssql/sqleng/sql_engine.go b/pkg/tsdb/mssql/sqleng/sql_engine.go
+index f6997a720c5e4..16d821ccfc43d 100644
+--- a/pkg/tsdb/mssql/sqleng/sql_engine.go
++++ b/pkg/tsdb/mssql/sqleng/sql_engine.go
+@@ -461,25 +461,46 @@ func (e *DataSourceHandler) processResponse(qm *dataQueryModel, rows *sql.Rows,
+ 			}
+ 		}
+ 		if qm.FillMissing != nil {
+-			// we align the start-time
+-			startUnixTime := qm.TimeRange.From.Unix() / int64(qm.Interval.Seconds()) * int64(qm.Interval.Seconds())
+-			alignedTimeRange := backend.TimeRange{
+-				From: time.Unix(startUnixTime, 0),
+-				To:   qm.TimeRange.To,
+-			}
+-
+-			var err error
+-			frame, err = sqlutil.ResampleWideFrame(frame, qm.FillMissing, alignedTimeRange, qm.Interval) //nolint:staticcheck
+-			if err != nil {
+-				logger.Error("Failed to resample dataframe", "err", err)
+-				frame.AppendNotices(data.Notice{Text: "Failed to resample dataframe", Severity: data.NoticeSeverityWarning})
+-			}
++			frame = e.applyFill(frame, qm)
+ 		}
+ 	}
+ 
+ 	return frame
+ }
+ 
++// applyFill resamples frame using the fill configuration in qm. If the number
++// of fill points would exceed the row limit the fill is skipped and a warning
++// notice is appended to the frame instead.
++func (e *DataSourceHandler) applyFill(frame *data.Frame, qm *dataQueryModel) *data.Frame {
++	// we align the start-time
++	startUnixTime := qm.TimeRange.From.Unix() / int64(qm.Interval.Seconds()) * int64(qm.Interval.Seconds())
++	alignedTimeRange := backend.TimeRange{
++		From: time.Unix(startUnixTime, 0),
++		To:   qm.TimeRange.To,
++	}
++
++	// Guard against excessive memory allocation from fill operations that span
++	// a very large time range relative to the fill interval.
++	numFillPoints := int64(alignedTimeRange.To.Sub(alignedTimeRange.From) / qm.Interval)
++	if numFillPoints > e.rowLimit {
++		e.log.Warn("Skipping fill: number of fill points exceeds row limit",
++			"numFillPoints", numFillPoints, "rowLimit", e.rowLimit)
++		frame.AppendNotices(data.Notice{
++			Text:     "Fill operation skipped: time range and interval would require more points than the configured row limit",
++			Severity: data.NoticeSeverityWarning,
++		})
++		return frame
++	}
++
++	var err error
++	frame, err = sqlutil.ResampleWideFrame(frame, qm.FillMissing, alignedTimeRange, qm.Interval) //nolint:staticcheck
++	if err != nil {
++		logger.Error("Failed to resample dataframe", "err", err)
++		frame.AppendNotices(data.Notice{Text: "Failed to resample dataframe", Severity: data.NoticeSeverityWarning})
++	}
++	return frame
++}
++
+ // Interpolate provides global macros/substitutions for all sql datasources.
+ var Interpolate = func(query backend.DataQuery, timeRange backend.TimeRange, timeInterval string, sql string) string {
+ 	interval := query.Interval
+diff --git a/pkg/tsdb/mysql/macros.go b/pkg/tsdb/mysql/macros.go
+index 15b67672968f1..4a3725b315391 100644
+--- a/pkg/tsdb/mysql/macros.go
++++ b/pkg/tsdb/mysql/macros.go
+@@ -14,7 +14,22 @@ import (
+ const rsIdentifier = `([_a-zA-Z0-9]+)`
+ const sExpr = `\$` + rsIdentifier + `\(([^\)]*)\)`
+ 
+-var restrictedRegExp = regexp.MustCompile(`(?im)([\s]*show[\s]+grants|[\s,]session_user\([^\)]*\)|[\s,]current_user(\([^\)]*\))?|[\s,]system_user\([^\)]*\)|[\s,]user\([^\)]*\))([\s,;]|$)`)
++var (
++	restrictedRegExp = regexp.MustCompile(`(?im)([\s]*show[\s]+grants|[\s,]session_user\([^\)]*\)|[\s,]current_user(\([^\)]*\))?|[\s,]system_user\([^\)]*\)|[\s,]user\([^\)]*\))([\s,;]|$)`)
++	reBlockComment   = regexp.MustCompile(`(?s)/\*.*?\*/`)
++	reLineComment    = regexp.MustCompile(`--[^\n]*`)
++	reHashComment    = regexp.MustCompile(`#[^\n]*`)
++)
++
++// stripSQLComments removes SQL line comments (--, #) and block comments (/* */)
++// from the query string. MySQL supports # as a line comment delimiter in
++// addition to the standard -- and /* */ forms.
++func stripSQLComments(sql string) string {
++	sql = reBlockComment.ReplaceAllString(sql, "")
++	sql = reLineComment.ReplaceAllString(sql, "")
++	sql = reHashComment.ReplaceAllString(sql, "")
++	return sql
++}
+ 
+ type mySQLMacroEngine struct {
+ 	*sqleng.SQLMacroEngineBase
+@@ -37,6 +52,10 @@ func (m *mySQLMacroEngine) Interpolate(query *backend.DataQuery, timeRange backe
+ 		return "", fmt.Errorf("invalid query - %s", m.userError)
+ 	}
+ 
++	// Strip SQL comments before macro interpolation so that only macros present
++	// in executable SQL are evaluated.
++	sql = stripSQLComments(sql)
++
+ 	// TODO: Handle error
+ 	rExp, _ := regexp.Compile(sExpr)
+ 	var macroError error
+diff --git a/pkg/tsdb/mysql/sqleng/sql_engine.go b/pkg/tsdb/mysql/sqleng/sql_engine.go
+index 2d628b5c7f9d3..2eb3ddede7a86 100644
+--- a/pkg/tsdb/mysql/sqleng/sql_engine.go
++++ b/pkg/tsdb/mysql/sqleng/sql_engine.go
+@@ -349,19 +349,7 @@ func (e *DataSourceHandler) executeQuery(query backend.DataQuery, wg *sync.WaitG
+ 			}
+ 		}
+ 		if qm.FillMissing != nil {
+-			// we align the start-time
+-			startUnixTime := qm.TimeRange.From.Unix() / int64(qm.Interval.Seconds()) * int64(qm.Interval.Seconds())
+-			alignedTimeRange := backend.TimeRange{
+-				From: time.Unix(startUnixTime, 0),
+-				To:   qm.TimeRange.To,
+-			}
+-
+-			var err error
+-			frame, err = sqlutil.ResampleWideFrame(frame, qm.FillMissing, alignedTimeRange, qm.Interval) //nolint:staticcheck
+-			if err != nil {
+-				logger.Error("Failed to resample dataframe", "err", err)
+-				frame.AppendNotices(data.Notice{Text: "Failed to resample dataframe", Severity: data.NoticeSeverityWarning})
+-			}
++			frame = e.applyFill(frame, qm)
+ 		}
+ 	}
+ 
+@@ -572,6 +560,38 @@ func convertSQLValueColumnToFloat(frame *data.Frame, Index int) (*data.Frame, er
+ 	return frame, nil
+ }
+ 
++// applyFill resamples frame using the fill configuration in qm. If the number
++// of fill points would exceed the row limit the fill is skipped and a warning
++// notice is appended to the frame instead.
++func (e *DataSourceHandler) applyFill(frame *data.Frame, qm *dataQueryModel) *data.Frame {
++	startUnixTime := qm.TimeRange.From.Unix() / int64(qm.Interval.Seconds()) * int64(qm.Interval.Seconds())
++	alignedTimeRange := backend.TimeRange{
++		From: time.Unix(startUnixTime, 0),
++		To:   qm.TimeRange.To,
++	}
++
++	// Guard against excessive memory allocation from fill operations that span
++	// a very large time range relative to the fill interval.
++	numFillPoints := int64(alignedTimeRange.To.Sub(alignedTimeRange.From) / qm.Interval)
++	if numFillPoints > e.rowLimit {
++		e.log.Warn("Skipping fill: number of fill points exceeds row limit",
++			"numFillPoints", numFillPoints, "rowLimit", e.rowLimit)
++		frame.AppendNotices(data.Notice{
++			Text:     "Fill operation skipped: time range and interval would require more points than the configured row limit",
++			Severity: data.NoticeSeverityWarning,
++		})
++		return frame
++	}
++
++	var err error
++	frame, err = sqlutil.ResampleWideFrame(frame, qm.FillMissing, alignedTimeRange, qm.Interval) //nolint:staticcheck
++	if err != nil {
++		e.log.Error("Failed to resample dataframe", "err", err)
++		frame.AppendNotices(data.Notice{Text: "Failed to resample dataframe", Severity: data.NoticeSeverityWarning})
++	}
++	return frame
++}
++
+ func SetupFillmode(query *backend.DataQuery, interval time.Duration, fillmode string) error {
+ 	rawQueryProp := make(map[string]any)
+ 	queryBytes, err := query.JSON.MarshalJSON()

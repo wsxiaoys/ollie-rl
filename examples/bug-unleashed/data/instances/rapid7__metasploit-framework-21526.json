@@ -1,0 +1,16 @@
+{
+  "case_id": "rapid7__metasploit-framework-21526",
+  "repo": "rapid7/metasploit-framework",
+  "pr": 21526,
+  "title": "IPMI Scanner Bug Fixes",
+  "language": "Ruby",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "rapid7__metasploit-framework-21526",
+  "target": null,
+  "siblings": [],
+  "head_sha": "1d8f78e90a0b052dfe5dffd813e9646ae931aa11",
+  "base_sha": "5f926ffc7fd8277030f71681e709fdb7b2477aef",
+  "snapshot": "repos/rapid7__metasploit-framework/1d8f78e90a0b052dfe5dffd813e9646ae931aa11",
+  "diff": "diffs/rapid7__metasploit-framework-21526.diff"
+}

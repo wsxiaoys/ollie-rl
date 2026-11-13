@@ -1,0 +1,6 @@
+{
+  "title": "Fix accessing members of const/partial types",
+  "body": "In `PerformActionHelper`, use the unqualified type for lookup.\r\n\r\nIn `PerformInstanceBinding`, propagate qualifiers to the unbound element type's class type when doing the `ConvertToValueOrRefOfType` conversion, and to the element type when forming the `ClassElementAccess` instr (except for `partial`, which is only used if the member being accessed is `base`).\r\n\r\nIn handle_operator.cpp, prevent assignment to a reference to a const type.",
+  "head_sha": "9ba536898bbb01de23d5b7a926d319d04176bfc0",
+  "base_sha": "885b1110d51a009b4a0682488bdb4eccd925faae"
+}

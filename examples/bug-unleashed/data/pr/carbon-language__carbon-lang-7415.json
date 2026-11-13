@@ -1,0 +1,6 @@
+{
+  "title": "Allow derived->base conversions with compatible qualifiers",
+  "body": "Move the existing derived->base conversion earlier in `PerformBuiltinConversion`, into the block that handles qualifier conversions. This allows, for example, converting from `partial Derived` to `partial Base` -- see the tests in `toolchain/check/testdata/class/inheritance/derived_to_base.carbon`.",
+  "head_sha": "15e584be985c97ea7b9457ccbdcad663d33343c2",
+  "base_sha": "039b4e9b17d000635ff496ce109533e8e5f49aa4"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "Generic signature fixes",
+  "body": "Fixes #10837\r\n\r\n* Only emit generic signatures when they differ from the descriptor\r\n* Remove the convoluted logic for trying to guess whether a signature is needed, instead:\r\n  * after generation, we check if the signature is equal to the descriptor and ignore it if it is\r\n  * before generation, we check some extremely simple cases for which we know signatures aren't needed\r\n* Fix a number of edge cases, see test changes\r\n* Micro-optimizations to improve performance, such as iterating directly over list buffers instead of copying them to lists, not creating intermediate lists, etc.\r\n  * Overall perf (see last comment) is +/- the same as before\r\n\r\n## How much have you relied on LLM-based tools in this contribution?\r\n\r\nNot at all\r\n\r\n## How was the solution tested?\r\n\r\nAutomated tests",
+  "head_sha": "c1fb78679538539ed62481309c7c96ea3ffdadae",
+  "base_sha": "cf3cc7a841c83cfe946f742e235741b22a40b8d9"
+}

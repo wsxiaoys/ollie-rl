@@ -1,0 +1,6 @@
+{
+  "title": "p2p: reconsider orphans when missing inputs are mined",
+  "body": "We reconsider for mempool entry of missing inputs, we should reconsider for mining of them too.",
+  "head_sha": "9cc7dc50bdc9867d079ab7a111d39487a4566767",
+  "base_sha": "c90c23d388f66b7eef67f4c6f69184c088727d6a"
+}

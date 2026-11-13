@@ -1,0 +1,109 @@
+diff --git a/prepare/compiler-plugin-api/build.gradle.kts b/prepare/compiler-plugin-api/build.gradle.kts
+new file mode 100644
+index 00000000000000..81dacfd7da5499
+--- /dev/null
++++ b/prepare/compiler-plugin-api/build.gradle.kts
+@@ -0,0 +1,29 @@
++plugins {
++    id("common-configuration")
++    id("com.autonomousapps.dependency-analysis")
++    kotlin("jvm")
++}
++
++val artifactContent = configurations.dependencyScope("artifactContent") {
++    // Do not include stdlib as an embedded artifact.
++    exclude("org.jetbrains.kotlin", "kotlin-stdlib")
++}
++
++configurations.embedded {
++    extendsFrom(artifactContent)
++}
++
++dependencies {
++    // Add stdlib as a transitive dependency.
++    runtimeOnly(kotlinStdlib())
++
++    artifactContent(project(":compiler:fir:plugin.api"))
++    artifactContent(project(":compiler:ir.backend.common"))
++    artifactContent(project(":compiler:plugin-api"))
++}
++
++runtimeJar()
++sourcesJar()
++javadocJar()
++
++publish()
+diff --git a/repo/artifacts-tests/src/test/resources/org/jetbrains/kotlin/kotlin-compiler-plugin-api/kotlin-compiler-plugin-api.pom b/repo/artifacts-tests/src/test/resources/org/jetbrains/kotlin/kotlin-compiler-plugin-api/kotlin-compiler-plugin-api.pom
+new file mode 100644
+index 00000000000000..ea43412610691e
+--- /dev/null
++++ b/repo/artifacts-tests/src/test/resources/org/jetbrains/kotlin/kotlin-compiler-plugin-api/kotlin-compiler-plugin-api.pom
+@@ -0,0 +1,36 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project xmlns="http://maven.apache.org/POM/4.0.0" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
++  <modelVersion>4.0.0</modelVersion>
++  <groupId>org.jetbrains.kotlin</groupId>
++  <artifactId>kotlin-compiler-plugin-api</artifactId>
++  <version>ArtifactsTest.version</version>
++  <name>Kotlin Compiler Plugin Api</name>
++  <description>Kotlin Compiler Plugin Api</description>
++  <url>https://kotlinlang.org/</url>
++  <licenses>
++    <license>
++      <name>Apache-2.0</name>
++      <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
++    </license>
++  </licenses>
++  <developers>
++    <developer>
++      <name>Kotlin Team</name>
++      <organization>JetBrains</organization>
++      <organizationUrl>https://www.jetbrains.com</organizationUrl>
++    </developer>
++  </developers>
++  <scm>
++    <connection>scm:git:https://github.com/JetBrains/kotlin.git</connection>
++    <developerConnection>scm:git:https://github.com/JetBrains/kotlin.git</developerConnection>
++    <url>https://github.com/JetBrains/kotlin</url>
++  </scm>
++  <dependencies>
++    <dependency>
++      <groupId>org.jetbrains.kotlin</groupId>
++      <artifactId>kotlin-stdlib</artifactId>
++      <version>ArtifactsTest.version</version>
++      <scope>runtime</scope>
++    </dependency>
++  </dependencies>
++</project>
+diff --git a/repo/domains.dump.txt b/repo/domains.dump.txt
+index fbf1a61db2b47d..8eb3d3fc021b0a 100644
+--- a/repo/domains.dump.txt
++++ b/repo/domains.dump.txt
+@@ -322,6 +322,7 @@ Unknown:
+  - prepare/compiler-client-embeddable
+  - prepare/compiler-embeddable
+  - prepare/compiler-native-image
++ - prepare/compiler-plugin-api
+  - prepare/jklib-compiler
+  - prepare/kotlin-compiler-internal-test-framework
+  - prepare/kotlin-daemon-embeddable
+diff --git a/settings.gradle.kts b/settings.gradle.kts
+index c239174c66006f..26a605824f8ed6 100644
+--- a/settings.gradle.kts
++++ b/settings.gradle.kts
+@@ -365,6 +365,7 @@ include(
+     ":kotlin-compiler-embeddable",
+     ":kotlin-compiler-client-embeddable",
+     ":kotlin-compiler-native-image",
++    ":kotlin-compiler-plugin-api",
+     ":kotlin-klib-abi-reader",
+     ":kotlin-reflect",
+     ":compiler:tests-java8",
+@@ -796,6 +797,7 @@ project(":kotlin-jklib-compiler").projectDir = File("$rootDir/prepare/jklib-comp
+ project(":kotlin-compiler-embeddable").projectDir = File("$rootDir/prepare/compiler-embeddable")
+ project(":kotlin-compiler-client-embeddable").projectDir = File("$rootDir/prepare/compiler-client-embeddable")
+ project(":kotlin-compiler-native-image").projectDir = File("$rootDir/prepare/compiler-native-image")
++project(":kotlin-compiler-plugin-api").projectDir = File("$rootDir/prepare/compiler-plugin-api")
+ project(":kotlin-klib-abi-reader").projectDir = File("$rootDir/libraries/tools/klib-abi-reader")
+ project(":kotlin-preloader").projectDir = File("$rootDir/compiler/preloader")
+ project(":kotlin-build-common").projectDir = File("$rootDir/build-common")

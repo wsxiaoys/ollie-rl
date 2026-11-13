@@ -1,0 +1,29 @@
+{
+  "case_id": "rapid7__metasploit-framework-21266",
+  "repo": "rapid7/metasploit-framework",
+  "pr": 21266,
+  "title": "Log SMB services",
+  "language": "Ruby",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rapid7__metasploit-framework-21266__g1",
+  "target": {
+    "gid": "rapid7__metasploit-framework-21266#g1",
+    "summary": "report_smb_service assumes client responds to dispatcher.tcp_socket to retrieve peerhost and peerport, but SMBv1 connections use Rex::Proto::SMB::Client which lacks a dispatcher method. When connecting to an SMBv1 target, calling report_smb_service raises a NoMethodError, crashing module execution.",
+    "paths": [
+      "lib/msf/core/exploit/remote/smb/client.rb",
+      "lib/msf/core/exploit/remote/smb/client/ipc.rb"
+    ],
+    "notes": [
+      "faulty statements calling client.dispatcher without verifying the client supports it",
+      "definition of report_smb_service",
+      "call site of report_smb_service in smb_login",
+      "call site of report_smb_service in report_dcerpc_service"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "f3baacd158f82e39dc932ab7717434008dbf6131",
+  "base_sha": "37ff9f85303c769bc556772edf7295818ef2bb2e",
+  "snapshot": "repos/rapid7__metasploit-framework/f3baacd158f82e39dc932ab7717434008dbf6131",
+  "diff": "diffs/rapid7__metasploit-framework-21266.diff"
+}

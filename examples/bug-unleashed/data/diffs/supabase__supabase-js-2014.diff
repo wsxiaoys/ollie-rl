@@ -1,0 +1,15 @@
+diff --git a/packages/core/auth-js/src/GoTrueClient.ts b/packages/core/auth-js/src/GoTrueClient.ts
+index b5b1afd750..634ee99abb 100644
+--- a/packages/core/auth-js/src/GoTrueClient.ts
++++ b/packages/core/auth-js/src/GoTrueClient.ts
+@@ -1146,7 +1146,9 @@ export default class GoTrueClient {
+       }
+       if (data.session) {
+         await this._saveSession(data.session)
+-        await this._notifyAllSubscribers('SIGNED_IN', data.session)
++        setTimeout(async () => {
++          await this._notifyAllSubscribers('SIGNED_IN', data.session)
++        }, 0)
+       }
+       return this._returnResult({ data: { ...data, redirectType: redirectType ?? null }, error })
+     } catch (error) {

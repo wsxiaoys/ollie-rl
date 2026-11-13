@@ -1,0 +1,6 @@
+{
+  "title": "fix(android): don't block on the locale broadcast",
+  "body": "`setDeviceLocale` used to fire an ordered `am broadcast` and then wait for its result. Right after a snapshot resume the device's own GMS activity floods its broadcast queue, so that wait could hang all the way to the 120s socket timeout and show up as an `INFRA_ERROR`.\r\n\r\nNow it checks the current locale first and skips the broadcast when it already matches. If it does need to change, it fires the broadcast detached and confirms the change with getprop instead of waiting on the ordered result. A busy queue just means a quick retry, not a stuck job.\r\n\r\nThe ticket had two more ideas I did not do:\r\n\r\n1. Baking a default locale into the device image at build time. \r\n**_Not needed._** \r\nThe device is almost always already `en_US`, and the skip adapts to whatever the device really is, so baking would add a build step and an image rebuild for no real gain.\r\n\r\n2. Settle gate, waiting for the queue to calm down before firing. \r\n**_Not needed either._** \r\nWe already wait on just this one change instead of freezing the whole job, and reliably knowing when the queue is calm is messy. With the skip and the detached fire it barely helps.",
+  "head_sha": "551f11fb19060082d63b7a4c2f6c6c8e3d31d6c3",
+  "base_sha": "1b8564d514e4636ba106ddbebc651fdbf1b55297"
+}

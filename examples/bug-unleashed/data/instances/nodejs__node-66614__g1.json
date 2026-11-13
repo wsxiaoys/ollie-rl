@@ -1,0 +1,27 @@
+{
+  "case_id": "nodejs__node-66614",
+  "repo": "nodejs/node",
+  "pr": 66614,
+  "title": "sea: mount vfsArchive at layer 0 and in workers",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "nodejs__node-66614__g1",
+  "target": {
+    "gid": "nodejs__node-66614#g1",
+    "summary": "Worker threads unconditionally require `internal/vfs/sea` during startup even when not running in a single-executable application with a VFS archive. This causes every worker thread to eagerly load `internal/vfs/sea` and `internalBinding('sea')`, violating bootstrap isolation and breaking `parallel/test-bootstrap-modules`.",
+    "paths": [
+      "lib/internal/main/worker_thread.js",
+      "lib/internal/vfs/sea.js"
+    ],
+    "notes": [
+      "faulty statement: unconditionally requires internal/vfs/sea during worker startup",
+      "implementation of initSeaVfsInWorker called at worker startup"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a42d7ddd320734e961ee47abf356984e4e45e2a9",
+  "base_sha": "855e3f74b5868bd9a560e95dd82d70da92e307e3",
+  "snapshot": "repos/nodejs__node/a42d7ddd320734e961ee47abf356984e4e45e2a9",
+  "diff": "diffs/nodejs__node-66614.diff"
+}

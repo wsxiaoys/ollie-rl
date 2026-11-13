@@ -1,0 +1,6 @@
+{
+  "title": "SQL: Guard fill resampling in MSSQL, PostgreSQL and MySQL",
+  "body": "Applies patch 729",
+  "head_sha": "b3b10c2f7c05d359a835b55e0e21c89ac0bf70f4",
+  "base_sha": "437f6706fba7d3439b0460c07520bf8ce8ef5fa7"
+}

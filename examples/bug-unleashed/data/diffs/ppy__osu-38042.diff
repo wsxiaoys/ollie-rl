@@ -1,0 +1,125 @@
+diff --git a/osu.Game.Tests/Visual/Editing/TestSceneDifficultySwitching.cs b/osu.Game.Tests/Visual/Editing/TestSceneDifficultySwitching.cs
+index 457d4cee34ec..6f901459a7ef 100644
+--- a/osu.Game.Tests/Visual/Editing/TestSceneDifficultySwitching.cs
++++ b/osu.Game.Tests/Visual/Editing/TestSceneDifficultySwitching.cs
+@@ -10,6 +10,7 @@
+ using osu.Framework.Extensions;
+ using osu.Framework.Testing;
+ using osu.Game.Beatmaps;
++using osu.Game.Configuration;
+ using osu.Game.Overlays.Dialog;
+ using osu.Game.Rulesets;
+ using osu.Game.Rulesets.Catch;
+@@ -34,6 +35,9 @@ public partial class TestSceneDifficultySwitching : EditorTestScene
+         [Resolved]
+         private BeatmapManager beatmaps { get; set; }
+ 
++        [Resolved]
++        private OsuConfigManager config { get; set; } = null!;
++
+         private BeatmapSetInfo importedBeatmapSet;
+ 
+         public override void SetUpSteps()
+@@ -62,17 +66,21 @@ public void TestBasicSwitch()
+         [Test]
+         public void TestClockPositionPreservedBetweenSwitches()
+         {
++            AddStep("Set user audio offset", () => config.SetValue(OsuSetting.AudioOffset, 500.0));
++
+             BeatmapInfo targetDifficulty = null;
+             AddStep("seek editor to 00:05:00", () => EditorClock.Seek(5000));
+ 
+             AddStep("set target difficulty", () => targetDifficulty = importedBeatmapSet.Beatmaps.Last(beatmap => !beatmap.Equals(Beatmap.Value.BeatmapInfo)));
+             switchToDifficulty(() => targetDifficulty);
+             confirmEditingBeatmap(() => targetDifficulty);
+-            AddAssert("editor clock at 00:05:00", () => EditorClock.CurrentTime == 5000);
++            AddAssert("editor clock at 00:05:00", () => EditorClock.CurrentTime, () => Is.EqualTo(5000));
+ 
+             AddStep("exit editor", () => Stack.Exit());
+             // ensure editor loader didn't resume.
+             AddAssert("stack empty", () => Stack.CurrentScreen == null);
++
++            AddStep("Revert user audio offset", () => config.SetValue(OsuSetting.AudioOffset, 0.0));
+         }
+ 
+         [Test]
+diff --git a/osu.Game.Tests/Visual/Editing/TestSceneOpenEditorTimestamp.cs b/osu.Game.Tests/Visual/Editing/TestSceneOpenEditorTimestamp.cs
+index d080e2806b98..c95120bb410a 100644
+--- a/osu.Game.Tests/Visual/Editing/TestSceneOpenEditorTimestamp.cs
++++ b/osu.Game.Tests/Visual/Editing/TestSceneOpenEditorTimestamp.cs
+@@ -128,14 +128,12 @@ private void addStepScreenModeTo(EditorScreenMode screenMode) =>
+ 
+         private void assertOnScreenAt(EditorScreenMode screen, double time)
+         {
+-            AddAssert($"stayed on {screen} at {time}", () =>
+-                editor!.Mode.Value == screen
+-                && editorClock.CurrentTime == time
+-            );
++            AddAssert("screen is correct", () => editor!.Mode.Value, () => Is.EqualTo(screen));
++            AddAssert("time is correct", () => editorClock.CurrentTime, () => Is.EqualTo(time));
+         }
+ 
+-        private void assertMovedScreenTo(EditorScreenMode screen, string text = "moved to") =>
+-            AddAssert($"{text} {screen}", () => editor!.Mode.Value == screen);
++        private void assertMovedScreenTo(EditorScreenMode screen) =>
++            AddAssert("screen is correct", () => editor!.Mode.Value, () => Is.EqualTo(screen));
+ 
+         private void setUpEditor(RulesetInfo ruleset)
+         {
+diff --git a/osu.Game/Beatmaps/FramedBeatmapClock.cs b/osu.Game/Beatmaps/FramedBeatmapClock.cs
+index 2e4664c797b6..ccd0336fd6ab 100644
+--- a/osu.Game/Beatmaps/FramedBeatmapClock.cs
++++ b/osu.Game/Beatmaps/FramedBeatmapClock.cs
+@@ -55,6 +55,16 @@ public partial class FramedBeatmapClock : Component, IFrameBasedClock, IAdjustab
+ 
+         private Bindable<bool> experimentalAudio = null!;
+ 
++        /// <summary>
++        /// Store seek target for any <see cref="Seek"/> performed before <see cref="LoadState.Loaded"/>.
++        /// </summary>
++        /// <remarks>
++        /// Initial seeks must be delayed until the <see cref="FramedBeatmapClock"/> instance is fully loaded.
++        ///
++        /// If not, <see cref="TotalAppliedOffset"/> will not be in a correct state and result in a potentially
++        /// incorrect seek target.</remarks>
++        private double? initialSeek;
++
+         public bool IsRewinding { get; private set; }
+ 
+         public FramedBeatmapClock(bool applyOffsets, bool requireDecoupling, IClock? source = null)
+@@ -110,6 +120,12 @@ protected override void LoadComplete()
+                         userBeatmapOffsetClock.Offset = val;
+                     });
+             }
++
++            if (initialSeek != null)
++            {
++                Seek(initialSeek.Value);
++                initialSeek = null;
++            }
+         }
+ 
+         /// <summary>
+@@ -196,6 +212,13 @@ public void Stop()
+ 
+         public bool Seek(double position)
+         {
++            // TotalAppliedOffset will not be correct until fully loaded.
++            if (applyOffsets && !IsLoaded)
++            {
++                initialSeek = position;
++                return true;
++            }
++
+             bool success = decoupledTrack.Seek(position - TotalAppliedOffset);
+             finalClockSource.ProcessFrame();
+ 
+@@ -214,7 +237,7 @@ public double Rate
+ 
+         #region Delegation of IFrameBasedClock to clock with all offsets applied
+ 
+-        public double CurrentTime => finalClockSource.CurrentTime;
++        public double CurrentTime => initialSeek ?? finalClockSource.CurrentTime;
+ 
+         public bool IsRunning => finalClockSource.IsRunning;
+ 

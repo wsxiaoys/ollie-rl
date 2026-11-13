@@ -1,0 +1,195 @@
+diff --git a/firefox-ios/Client/Coordinators/SettingsCoordinator.swift b/firefox-ios/Client/Coordinators/SettingsCoordinator.swift
+index 695dd24e4f237..4a6cd5218278f 100644
+--- a/firefox-ios/Client/Coordinators/SettingsCoordinator.swift
++++ b/firefox-ios/Client/Coordinators/SettingsCoordinator.swift
+@@ -75,12 +75,22 @@ final class SettingsCoordinator: BaseCoordinator,
+         router.setRootViewController(settingsViewController)
+     }
+ 
+-    func start(with settingsSection: Route.SettingsSection) {
++    func start(with settingsSection: Route.SettingsSection, shouldResetNavigationStack: Bool = false) {
+         // We might already know the sub-settings page we want to show, but in some case we don't and
+         // the flow decision needs to be figured out by the view controller
+         if let viewController = getSettingsViewController(settingsSection: settingsSection) {
+-            router.push(viewController)
++            // If Settings is already showing a subpage, reset to root before opening the routed destination.
++            if shouldResetNavigationStack,
++               let root = router.rootViewController,
++               router.navigationController.viewControllers.count > 1 {
++                router.navigationController.setViewControllers([root, viewController], animated: false)
++            } else {
++                router.push(viewController)
++            }
+         } else {
++            if shouldResetNavigationStack, let root = router.rootViewController {
++                router.popToViewController(root, reason: .deeplink, animated: false)
++            }
+             assert(settingsViewController != nil)
+             settingsViewController?.handle(route: settingsSection)
+         }
+@@ -98,7 +108,7 @@ final class SettingsCoordinator: BaseCoordinator,
+     override func handle(route: Route) {
+         switch route {
+         case let .settings(section):
+-            start(with: section)
++            start(with: section, shouldResetNavigationStack: true)
+         default:
+             break
+         }
+@@ -198,7 +208,9 @@ final class SettingsCoordinator: BaseCoordinator,
+             return contentBlockerVC
+ 
+         case .browser:
+-            return BrowsingSettingsViewController(profile: profile, windowUUID: windowUUID)
++            let viewController = BrowsingSettingsViewController(profile: profile, windowUUID: windowUUID)
++            viewController.parentCoordinator = self
++            return viewController
+ 
+         case .toolbar:
+             // Toolbar position cannot be changed on iPad
+@@ -337,11 +349,11 @@ final class SettingsCoordinator: BaseCoordinator,
+     }
+ 
+     func pressedCreditCard() {
+-        findAndHandle(route: .settings(section: .creditCard))
++        settingsViewController?.handle(route: .creditCard)
+     }
+ 
+     func pressedRelayMask() {
+-        findAndHandle(route: .settings(section: .relayMask))
++        settingsViewController?.handle(route: .relayMask)
+     }
+ 
+     func pressedClearPrivateData() {
+@@ -358,7 +370,7 @@ final class SettingsCoordinator: BaseCoordinator,
+     }
+ 
+     func pressedPasswords() {
+-        findAndHandle(route: .settings(section: .password))
++        settingsViewController?.handle(route: .password)
+     }
+ 
+     func pressedNotifications() {
+diff --git a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Coordinators/SettingsCoordinatorTests.swift b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Coordinators/SettingsCoordinatorTests.swift
+index 6c0d90715fcd8..0ce9fa5825927 100644
+--- a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Coordinators/SettingsCoordinatorTests.swift
++++ b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Coordinators/SettingsCoordinatorTests.swift
+@@ -147,7 +147,9 @@ final class SettingsCoordinatorTests: XCTestCase {
+         subject.start(with: .browser)
+ 
+         XCTAssertEqual(mockRouter.pushCalled, 1)
+-        XCTAssertTrue(mockRouter.pushedViewController is BrowsingSettingsViewController)
++        let viewController = mockRouter.pushedViewController as? BrowsingSettingsViewController
++        XCTAssertNotNil(viewController)
++        XCTAssertTrue(viewController?.parentCoordinator === subject)
+     }
+ 
+     func testToolbarSettingsRoute_showsToolbarSettingsPage() throws {
+@@ -186,6 +188,64 @@ final class SettingsCoordinatorTests: XCTestCase {
+         XCTAssertTrue(mockRouter.pushedViewController is UIHostingController<AppIconSelectionView>)
+     }
+ 
++    func testAppIconSettingsRoute_whenStackIsDeep_replacesNavigationStack() throws {
++        let subject = createSubject()
++        let root = try XCTUnwrap(mockRouter.rootViewController)
++        let navigationController = try XCTUnwrap(mockRouter.navigationController as? MockNavigationController)
++        navigationController.viewControllers = [root, UIViewController()]
++
++        subject.handle(route: .settings(section: .appIcon))
++
++        XCTAssertEqual(mockRouter.pushCalled, 0)
++        XCTAssertEqual(navigationController.setViewControllersCalled, 1)
++        XCTAssertEqual(navigationController.viewControllers.count, 2)
++        XCTAssertTrue(navigationController.viewControllers.first === root)
++        XCTAssertTrue(navigationController.viewControllers.last is UIHostingController<AppIconSelectionView>)
++    }
++
++    func testAppIconSettingsRoute_whenAlreadyOnAppIcon_doesNotPushDuplicate() throws {
++        let subject = createSubject()
++        let root = try XCTUnwrap(mockRouter.rootViewController)
++        let navigationController = try XCTUnwrap(mockRouter.navigationController as? MockNavigationController)
++        let existingAppIcon = UIHostingController(
++            rootView: AppIconSelectionView(windowUUID: .XCTestDefaultUUID)
++        )
++        navigationController.viewControllers = [root, existingAppIcon]
++
++        subject.handle(route: .settings(section: .appIcon))
++
++        XCTAssertEqual(mockRouter.pushCalled, 0)
++        XCTAssertEqual(navigationController.viewControllers.count, 2)
++        XCTAssertTrue(navigationController.viewControllers.first === root)
++        XCTAssertTrue(navigationController.viewControllers.last is UIHostingController<AppIconSelectionView>)
++    }
++
++    func testGeneralSettingsRoute_whenStackIsDeep_popsToRoot() throws {
++        let subject = createSubject()
++        let root = try XCTUnwrap(mockRouter.rootViewController)
++        let navigationController = try XCTUnwrap(mockRouter.navigationController as? MockNavigationController)
++        navigationController.viewControllers = [root, UIViewController()]
++
++        subject.handle(route: .settings(section: .general))
++
++        XCTAssertEqual(mockRouter.popToViewControllerCalled, 1)
++        XCTAssertEqual(mockRouter.pushCalled, 0)
++        XCTAssertEqual(navigationController.setViewControllersCalled, 0)
++    }
++
++    func testHandleSettingsRoute_whenStackIsDeep_replacesNavigationStack() throws {
++        let subject = createSubject()
++        let root = try XCTUnwrap(mockRouter.rootViewController)
++        let navigationController = try XCTUnwrap(mockRouter.navigationController as? MockNavigationController)
++        navigationController.viewControllers = [root, UIViewController()]
++
++        _ = testCanHandleAndHandle(subject, route: .settings(section: .appIcon))
++
++        XCTAssertEqual(mockRouter.pushCalled, 0)
++        XCTAssertEqual(navigationController.setViewControllersCalled, 1)
++        XCTAssertTrue(navigationController.viewControllers.last is UIHostingController<AppIconSelectionView>)
++    }
++
+     // MARK: - Delegate
+     func testParentCoordinatorDelegate_calledWithURL() {
+         let subject = createSubject()
+@@ -489,6 +549,20 @@ final class SettingsCoordinatorTests: XCTestCase {
+         XCTAssertEqual(mockSettingsVC.savedRoute, .password)
+     }
+ 
++    func testPasswordSettingsRoute_whenStackIsDeep_handlesWithoutPopping() throws {
++        let subject = createSubject()
++        subject.settingsViewController = mockSettingsVC
++        let root = try XCTUnwrap(mockRouter.rootViewController)
++        let navigationController = try XCTUnwrap(mockRouter.navigationController as? MockNavigationController)
++        navigationController.viewControllers = [root, UIViewController()]
++
++        subject.pressedPasswords()
++
++        XCTAssertEqual(mockRouter.popToViewControllerCalled, 0)
++        XCTAssertEqual(mockSettingsVC.handleRouteCalled, 1)
++        XCTAssertEqual(mockSettingsVC.savedRoute, .password)
++    }
++
+     func testPrivacySettingsDelegate_pushedNotifications() {
+         let subject = createSubject()
+ 
+diff --git a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Mocks/MockNavigationController.swift b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Mocks/MockNavigationController.swift
+index 6a3c54fb4c9a2..053c745c9007e 100644
+--- a/firefox-ios/firefox-ios-tests/Tests/ClientTests/Mocks/MockNavigationController.swift
++++ b/firefox-ios/firefox-ios-tests/Tests/ClientTests/Mocks/MockNavigationController.swift
+@@ -19,6 +19,7 @@ class MockNavigationController: NavigationController {
+     var pushCalled = 0
+     var popViewCalled = 0
+     var popToViewControllerCalled = 0
++    var setViewControllersCalled = 0
+ 
+     func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)? = nil) {
+         presentCalled += 1
+@@ -43,7 +44,9 @@ class MockNavigationController: NavigationController {
+     }
+ 
+     func setViewControllers(_ viewControllers: [UIViewController], animated: Bool) {
++        setViewControllersCalled += 1
+         self.viewControllers = viewControllers
++        topViewController = viewControllers.last
+     }
+ 
+     func popToViewController(_ viewController: UIViewController, animated: Bool) -> [UIViewController]? {

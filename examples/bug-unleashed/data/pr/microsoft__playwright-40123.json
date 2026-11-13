@@ -1,0 +1,6 @@
+{
+  "title": "chore: move CLI options from FullConfigInternal to TestRunOptions",
+  "body": "## Summary\n- Extract per-run CLI options into a `TestRunOptions` type stored on `TestRun.options`\n- Move filter arrays (`loadFileFilters`, `preOnlyTestFilters`, `postShardTestFilters`) and `filteredProjects` to `TestRun`\n- `LastRunReporter.filterLastFailed()` now returns failed test IDs instead of mutating config",
+  "head_sha": "7c214f28aa27a0d99d5b2bfa601659921c1bcbda",
+  "base_sha": "bc5448504e6b486bb0ecf0fb6265ecf151e3b620"
+}

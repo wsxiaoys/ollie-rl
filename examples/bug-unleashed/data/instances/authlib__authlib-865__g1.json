@@ -1,0 +1,26 @@
+{
+  "case_id": "authlib__authlib-865",
+  "repo": "authlib/authlib",
+  "pr": 865,
+  "title": "Accept the issuer URL as a valid audience",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "authlib__authlib-865__g1",
+  "target": {
+    "gid": "authlib__authlib-865#g1",
+    "summary": "When get_audiences() returns an empty list (the default implementation in JWTBearerGrant), verify_claims only issues a deprecation warning instead of rejecting the token. This skips audience value validation and allows assertions intended for other recipients to be accepted, violating RFC 7523 Section 3.",
+    "paths": [
+      "authlib/oauth2/rfc7523/jwt_bearer.py"
+    ],
+    "notes": [
+      "faulty statement: verify_claims only emits a deprecation warning instead of rejecting the token when audiences is empty",
+      "definition of the method whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9a3c477544fcc0280718dbf020b0b869c1f42996",
+  "base_sha": "2b4502791e0bf67ba65ab82281fb29e00559008a",
+  "snapshot": "repos/authlib__authlib/9a3c477544fcc0280718dbf020b0b869c1f42996",
+  "diff": "diffs/authlib__authlib-865.diff"
+}

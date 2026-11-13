@@ -1,0 +1,25 @@
+{
+  "case_id": "bevyengine__bevy-23564",
+  "repo": "bevyengine/bevy",
+  "pr": 23564,
+  "title": "Fixes for rendering debug overlays",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "bevyengine__bevy-23564__g1",
+  "target": {
+    "gid": "bevyengine__bevy-23564#g1",
+    "summary": "Returning early when opaque and alpha-mask phases are empty skips the prepass render pass entirely. In scenes without opaque or alpha-masked geometry (such as transparent-only scenes or when using order-independent transparency), prepass textures like depth are left uncleared, causing rendering artifacts.",
+    "paths": [
+      "crates/bevy_core_pipeline/src/prepass/node.rs"
+    ],
+    "notes": [
+      "faulty early return skips prepass execution and depth clear when phases are empty"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "87782223b8f9445752c6961ac5ccf806103d93b3",
+  "base_sha": "3cf98a6130cf37060da89bc6a079b9d9c5dd05f4",
+  "snapshot": "repos/bevyengine__bevy/87782223b8f9445752c6961ac5ccf806103d93b3",
+  "diff": "diffs/bevyengine__bevy-23564.diff"
+}

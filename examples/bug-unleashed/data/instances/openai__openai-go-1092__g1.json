@@ -1,0 +1,26 @@
+{
+  "case_id": "openai__openai-go-1092",
+  "repo": "openai/openai-go",
+  "pr": 1092,
+  "title": "feat(websocket): add opt-in bounded session recovery",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "openai__openai-go-1092__g1",
+  "target": {
+    "gid": "openai__openai-go-1092#g1",
+    "summary": "When session recovery is enabled and Recv encounters a non-retryable error, calling s.fail(err) repeats physical connection cleanup from within Recv. This can deadlock if the underlying transport's close operation waits for the receiver to exit.",
+    "paths": [
+      "packages/websocket/session.go"
+    ],
+    "notes": [
+      "faulty statement: calling s.fail(err) repeats physical connection cleanup from within Recv",
+      "definition of Recv method whose behavior is wrong due to repeated transport cleanup"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c9e77a5b7a4a12bd3facfa72fc6eeaff6c418417",
+  "base_sha": "7818c28fa78beca9cd24a8f5e240a5ae37686625",
+  "snapshot": "repos/openai__openai-go/c9e77a5b7a4a12bd3facfa72fc6eeaff6c418417",
+  "diff": "diffs/openai__openai-go-1092.diff"
+}

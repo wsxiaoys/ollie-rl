@@ -1,0 +1,6 @@
+{
+  "title": "Add buffer reuse and copy on resize.",
+  "body": "Makes `ShaderStorageBuffer` have parity with `Image` vis-a-vis https://github.com/bevyengine/bevy/pull/22552.\r\n\r\nWe apply the same pattern used there here.",
+  "head_sha": "2e89e11109d3189b7e18c578f8a44cc27da5141e",
+  "base_sha": "487d9729c83324b591cfcc218c10b1d0457f53e5"
+}

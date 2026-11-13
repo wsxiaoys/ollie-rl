@@ -1,0 +1,6 @@
+{
+  "title": "fix: attribute pointer lock, keyboard lock and paste checks to the requesting frame",
+  "body": "- `pointerLock` / `keyboardLock` permission requests are made for the frame that called the API rather than always the primary main frame, so `setPermissionRequestHandler` sees that frame's `requestingUrl` / `isMainFrame`.\n- `document.execCommand('paste')` is allowed on transient user activation of the requesting frame (as in Chrome) instead of any recent interaction in the WebContents; otherwise the `clipboard-read` check decides as before.\n- Docs: drop the \"always appear to originate from the main frame\" notes.\n\nNotes: `pointerLock` and `keyboardLock` permission requests now report the requesting frame, and `execCommand('paste')` requires user activation in the frame that calls it.\n",
+  "head_sha": "6fdab9325f867e7785f1b0d73edda74b7af03401",
+  "base_sha": "c4755b50b4122fc6b096ca4440bbfd5f48d5b84b"
+}

@@ -1,0 +1,1003 @@
+diff --git a/docs/source/en/main_classes/video_processor.md b/docs/source/en/main_classes/video_processor.md
+index 7cc7e2208f34..f0aff5a67af7 100644
+--- a/docs/source/en/main_classes/video_processor.md
++++ b/docs/source/en/main_classes/video_processor.md
+@@ -96,6 +96,11 @@ print(processed_video_inputs.pixel_values_videos.shape)
+ [10, 3, 384, 384]
+ ```
+ 
++## VideoProcessorMixin
++
++[[autodoc]] video_processing_utils.VideoProcessorMixin
++
++
+ ## BaseVideoProcessor
+ 
+ [[autodoc]] video_processing_utils.BaseVideoProcessor
+diff --git a/src/transformers/__init__.py b/src/transformers/__init__.py
+index a62a64244b51..e393731cca98 100755
+--- a/src/transformers/__init__.py
++++ b/src/transformers/__init__.py
+@@ -353,7 +353,7 @@
+ else:
+     _import_structure.setdefault("image_processing_backends", [])
+     _import_structure["image_processing_backends"] += ["TorchvisionBackend"]
+-    _import_structure["video_processing_utils"] = ["BaseVideoProcessor"]
++    _import_structure["video_processing_utils"] = ["BaseVideoProcessor", "VideoProcessorMixin"]
+ 
+ # PyTorch-backed objects
+ try:
+@@ -807,6 +807,7 @@
+     from .utils.quantization_config import TorchAoConfig as TorchAoConfig
+     from .utils.quantization_config import VptqConfig as VptqConfig
+     from .video_processing_utils import BaseVideoProcessor as BaseVideoProcessor
++    from .video_processing_utils import VideoProcessorMixin as VideoProcessorMixin
+ else:
+     _import_structure = {k: set(v) for k, v in _import_structure.items()}
+ 
+diff --git a/src/transformers/models/auto/auto_factory.py b/src/transformers/models/auto/auto_factory.py
+index d892bc50b8b4..f75c256f6151 100644
+--- a/src/transformers/models/auto/auto_factory.py
++++ b/src/transformers/models/auto/auto_factory.py
+@@ -230,7 +230,8 @@ def from_config(cls, config, **kwargs):
+             else:
+                 repo_id = config.name_or_path
+             model_class = get_class_from_dynamic_module(class_ref, repo_id, **kwargs)
+-            cls.register(config.__class__, model_class, exist_ok=True)
++            if not has_local_code:
++                cls.register(config.__class__, model_class, exist_ok=True)
+             model_class.register_for_auto_class(auto_class=cls)
+             _ = kwargs.pop("code_revision", None)
+             model_class = add_generation_mixin_to_remote_model(model_class)
+@@ -386,7 +387,8 @@ def from_pretrained(cls, pretrained_model_name_or_path: str | os.PathLike[str],
+                 class_ref, pretrained_model_name_or_path, code_revision=code_revision, **hub_kwargs, **kwargs
+             )
+             _ = hub_kwargs.pop("code_revision", None)
+-            cls.register(config.__class__, model_class, exist_ok=True)
++            if not has_local_code:
++                cls.register(config.__class__, model_class, exist_ok=True)
+             model_class.register_for_auto_class(auto_class=cls)
+             model_class = add_generation_mixin_to_remote_model(model_class)
+             return model_class.from_pretrained(
+@@ -684,7 +686,7 @@ def register(self, key: type[PreTrainedConfig] | str, value: _LazyAutoMappingVal
+         # Transformers model/processor/... corresponding to the config)
+         # This is because remote/native is indistinguisable from the config class only in such cases, as they both use the same class - then
+         # `from_pretrained`/`from_config` are responsible to grab the correct class depending on whether `trust_remote_code` is True/False
+-        if getattr(key, "__module__", "").startswith("transformers."):
++        if not exist_ok and getattr(key, "__module__", "").startswith("transformers."):
+             return
+ 
+         # Register the new mapping (this will always take precedence in __getattr__ and __contains__ compared to base mapping)
+diff --git a/src/transformers/models/auto/auto_mappings.py b/src/transformers/models/auto/auto_mappings.py
+index 73682a481ce5..d6aad817bcd5 100644
+--- a/src/transformers/models/auto/auto_mappings.py
++++ b/src/transformers/models/auto/auto_mappings.py
+@@ -1004,37 +1004,37 @@
+ 
+ VIDEO_PROCESSOR_MAPPING_NAMES = OrderedDict(
+     [
+-        ("cohere_compass", "CohereCompassVideoProcessor"),
+-        ("cosmos3_edge", "Cosmos3EdgeVideoProcessor"),
+-        ("ernie4_5_vl_moe", "Ernie4_5_VLMoeVideoProcessor"),
+-        ("gemma4", "Gemma4VideoProcessor"),
+-        ("gemma4_unified", "Gemma4UnifiedVideoProcessor"),
+-        ("glm46v", "Glm46VVideoProcessor"),
+-        ("glm4v", "Glm4vVideoProcessor"),
+-        ("glm5_next", "Glm5NextVideoProcessor"),
+-        ("glmga", "GlmgaVideoProcessor"),
+-        ("instructblipvideo", "InstructBlipVideoVideoProcessor"),
+-        ("internvl", "InternVLVideoProcessor"),
+-        ("kimi_k25", "Kimi_K25VideoProcessor"),
+-        ("llava_next_video", "LlavaNextVideoVideoProcessor"),
+-        ("llava_onevision", "LlavaOnevisionVideoProcessor"),
+-        ("minicpmv4_6", "MiniCPMV4_6VideoProcessor"),
+-        ("minimax_m3_vl", "MiniMaxM3VLVideoProcessor"),
+-        ("muse_glimmer", "MuseGlimmerVideoProcessor"),
+-        ("nemotron_h_omni", "NemotronH_Omni_Reasoning_V3VideoProcessor"),
+-        ("pe_video", "PeVideoVideoProcessor"),
+-        ("perception_lm", "PerceptionLMVideoProcessor"),
+-        ("qwen2_vl", "Qwen2VLVideoProcessor"),
+-        ("qwen3_vl", "Qwen3VLVideoProcessor"),
+-        ("sam2_video", "Sam2VideoVideoProcessor"),
+-        ("smolvlm", "SmolVLMVideoProcessor"),
+-        ("timesformer", "TimesformerVideoProcessor"),
+-        ("video_llama_3", "VideoLlama3VideoProcessor"),
+-        ("video_llava", "VideoLlavaVideoProcessor"),
+-        ("videomae", "VideoMAEVideoProcessor"),
+-        ("videomt", "VideomtVideoProcessor"),
+-        ("vivit", "VivitVideoProcessor"),
+-        ("vjepa2", "VJEPA2VideoProcessor"),
++        ("cohere_compass", {"torchvision": "CohereCompassVideoProcessor"}),
++        ("cosmos3_edge", {"torchvision": "Cosmos3EdgeVideoProcessor"}),
++        ("ernie4_5_vl_moe", {"torchvision": "Ernie4_5_VLMoeVideoProcessor"}),
++        ("gemma4", {"torchvision": "Gemma4VideoProcessor"}),
++        ("gemma4_unified", {"torchvision": "Gemma4UnifiedVideoProcessor"}),
++        ("glm46v", {"torchvision": "Glm46VVideoProcessor"}),
++        ("glm4v", {"torchvision": "Glm4vVideoProcessor"}),
++        ("glm5_next", {"torchvision": "Glm5NextVideoProcessor"}),
++        ("glmga", {"torchvision": "GlmgaVideoProcessor"}),
++        ("instructblipvideo", {"torchvision": "InstructBlipVideoVideoProcessor"}),
++        ("internvl", {"torchvision": "InternVLVideoProcessor"}),
++        ("kimi_k25", {"torchvision": "Kimi_K25VideoProcessor"}),
++        ("llava_next_video", {"torchvision": "LlavaNextVideoVideoProcessor"}),
++        ("llava_onevision", {"torchvision": "LlavaOnevisionVideoProcessor"}),
++        ("minicpmv4_6", {"torchvision": "MiniCPMV4_6VideoProcessor"}),
++        ("minimax_m3_vl", {"torchvision": "MiniMaxM3VLVideoProcessor"}),
++        ("muse_glimmer", {"torchvision": "MuseGlimmerVideoProcessor"}),
++        ("nemotron_h_omni", {"torchvision": "NemotronH_Omni_Reasoning_V3VideoProcessor"}),
++        ("pe_video", {"torchvision": "PeVideoVideoProcessor"}),
++        ("perception_lm", {"torchvision": "PerceptionLMVideoProcessor"}),
++        ("qwen2_vl", {"torchvision": "Qwen2VLVideoProcessor"}),
++        ("qwen3_vl", {"torchvision": "Qwen3VLVideoProcessor"}),
++        ("sam2_video", {"torchvision": "Sam2VideoVideoProcessor"}),
++        ("smolvlm", {"torchvision": "SmolVLMVideoProcessor"}),
++        ("timesformer", {"torchvision": "TimesformerVideoProcessor"}),
++        ("video_llama_3", {"torchvision": "VideoLlama3VideoProcessor"}),
++        ("video_llava", {"torchvision": "VideoLlavaVideoProcessor"}),
++        ("videomae", {"torchvision": "VideoMAEVideoProcessor"}),
++        ("videomt", {"torchvision": "VideomtVideoProcessor"}),
++        ("vivit", {"torchvision": "VivitVideoProcessor"}),
++        ("vjepa2", {"torchvision": "VJEPA2VideoProcessor"}),
+     ]
+ )
+ 
+diff --git a/src/transformers/models/auto/image_processing_auto.py b/src/transformers/models/auto/image_processing_auto.py
+index 88a335a0d0f0..d48531a36910 100644
+--- a/src/transformers/models/auto/image_processing_auto.py
++++ b/src/transformers/models/auto/image_processing_auto.py
+@@ -438,14 +438,14 @@ def _value_matches(val, name: str) -> bool:
+             return getattr(val, "__name__", None) == name
+         return False
+ 
+-    for mapping_dict in IMAGE_PROCESSOR_MAPPING_NAMES.values():
+-        if any(_value_matches(v, base_class_name) for v in mapping_dict.values()):
+-            return mapping_dict
+-
+     for content in IMAGE_PROCESSOR_MAPPING._extra_content.values():
+         if any(_value_matches(v, base_class_name) for v in content.values()):
+             return content
+ 
++    for mapping_dict in IMAGE_PROCESSOR_MAPPING_NAMES.values():
++        if any(_value_matches(v, base_class_name) for v in mapping_dict.values()):
++            return mapping_dict
++
+     return None
+ 
+ 
+@@ -759,7 +759,7 @@ def register(
+             )
+ 
+         # Avoid resetting existing processors if we are passing partial updates
+-        if config_class in IMAGE_PROCESSOR_MAPPING._extra_content:
++        if config_class in IMAGE_PROCESSOR_MAPPING:
+             existing_mapping = IMAGE_PROCESSOR_MAPPING[config_class]
+             existing_mapping.update(image_processor_classes)
+             image_processor_classes = existing_mapping
+diff --git a/src/transformers/models/auto/video_processing_auto.py b/src/transformers/models/auto/video_processing_auto.py
+index ad8aca828f07..86929c161325 100644
+--- a/src/transformers/models/auto/video_processing_auto.py
++++ b/src/transformers/models/auto/video_processing_auto.py
+@@ -42,6 +42,7 @@
+     model_type_to_module_name,
+     replace_list_option_in_docstrings,
+ )
++from .image_processing_auto import _resolve_auto_map_class_ref
+ 
+ 
+ logger = logging.get_logger(__name__)
+@@ -50,58 +51,61 @@
+ if TYPE_CHECKING:
+     # This significantly improves completion suggestion performance when
+     # the transformers package is used with Microsoft's Pylance language server.
+-    VIDEO_PROCESSOR_MAPPING_NAMES: OrderedDict[str, tuple[str | None, str | None]] = OrderedDict()
++    VIDEO_PROCESSOR_MAPPING_NAMES: OrderedDict[str, dict[str, str | None]] = OrderedDict()
+ else:
+     # Merge non-standard mapping names with auto-inferred `VIDEO_PROCESSOR_MAPPING_NAMES`
+     MISSING_VIDEO_PROCESSOR_MAPPING_NAMES = OrderedDict(
+         [
+-            ("cosmos3_omni", "Qwen3VLVideoProcessor"),
+-            ("exaone4_5", "Qwen2VLVideoProcessor"),
+-            ("hyperclovax_vision_v2", "Qwen2VLVideoProcessor"),
+-            ("instructblip", "InstructBlipVideoVideoProcessor"),
+-            ("minicpmv4_7", "MiniCPMV4_6VideoProcessor"),
+-            ("pe_audio_video", "PeVideoVideoProcessor"),
+-            ("qwen2_5_omni", "Qwen2VLVideoProcessor"),
+-            ("qwen2_5_vl", "Qwen2VLVideoProcessor"),
+-            ("qwen3_5", "Qwen3VLVideoProcessor"),
+-            ("qwen3_5_moe", "Qwen3VLVideoProcessor"),
+-            ("qwen3_omni_moe", "Qwen2VLVideoProcessor"),
+-            ("qwen3_vl_moe", "Qwen3VLVideoProcessor"),
+-            ("qwen4_exp", "Qwen3VLVideoProcessor"),
+-            ("videoprism", "LlavaOnevisionVideoProcessor"),
++            ("cosmos3_omni", {"torchvision": "Qwen3VLVideoProcessor"}),
++            ("exaone4_5", {"torchvision": "Qwen2VLVideoProcessor"}),
++            ("hyperclovax_vision_v2", {"torchvision": "Qwen2VLVideoProcessor"}),
++            ("instructblip", {"torchvision": "InstructBlipVideoVideoProcessor"}),
++            ("minicpmv4_7", {"torchvision": "MiniCPMV4_6VideoProcessor"}),
++            ("pe_audio_video", {"torchvision": "PeVideoVideoProcessor"}),
++            ("qwen2_5_omni", {"torchvision": "Qwen2VLVideoProcessor"}),
++            ("qwen2_5_vl", {"torchvision": "Qwen2VLVideoProcessor"}),
++            ("qwen3_5", {"torchvision": "Qwen3VLVideoProcessor"}),
++            ("qwen3_5_moe", {"torchvision": "Qwen3VLVideoProcessor"}),
++            ("qwen3_omni_moe", {"torchvision": "Qwen2VLVideoProcessor"}),
++            ("qwen3_vl_moe", {"torchvision": "Qwen3VLVideoProcessor"}),
++            ("qwen4_exp", {"torchvision": "Qwen3VLVideoProcessor"}),
++            ("videoprism", {"torchvision": "LlavaOnevisionVideoProcessor"}),
+         ]
+     )
+     VIDEO_PROCESSOR_MAPPING_NAMES.update(MISSING_VIDEO_PROCESSOR_MAPPING_NAMES)
+ 
+-for model_type, video_processors in VIDEO_PROCESSOR_MAPPING_NAMES.items():
+-    fast_video_processor_class = video_processors
+-
++for model_type, video_processors_dict in VIDEO_PROCESSOR_MAPPING_NAMES.items():
+     # If the torchvision is not available, we set it to None
+     if not is_torchvision_available():
+-        fast_video_processor_class = None
++        video_processors_dict["torchvision"] = None
+ 
+-    VIDEO_PROCESSOR_MAPPING_NAMES[model_type] = fast_video_processor_class
++    VIDEO_PROCESSOR_MAPPING_NAMES[model_type] = video_processors_dict
+ 
+ VIDEO_PROCESSOR_MAPPING = _LazyAutoMapping(CONFIG_MAPPING_NAMES, VIDEO_PROCESSOR_MAPPING_NAMES)
+ 
+ 
+ def video_processor_class_from_name(class_name: str):
+-    for module_name, extractor in VIDEO_PROCESSOR_MAPPING_NAMES.items():
+-        if class_name == extractor:
+-            module_name = model_type_to_module_name(module_name)
+-
++    # 1. Custom classes registered at runtime via AutoVideoProcessor.register
++    for video_processors_dict in VIDEO_PROCESSOR_MAPPING._extra_content.values():
++        if video_processors_dict is None:
++            continue
++        for cls in video_processors_dict.values():
++            if isinstance(cls, type) and cls.__name__ == class_name:
++                return cls
++
++    # 2. Built-in classes: compare classes which is how LazyMapping stores data
++    for model_type, extractors_dict in VIDEO_PROCESSOR_MAPPING.items():
++        if extractors_dict is None:
++            continue
++        if class_name in extractors_dict.values():
++            module_name = model_type_to_module_name(model_type)
+             module = importlib.import_module(f".{module_name}", "transformers.models")
+             try:
+                 return getattr(module, class_name)
+             except AttributeError:
+                 continue
+ 
+-    for extractor in VIDEO_PROCESSOR_MAPPING._extra_content.values():
+-        if getattr(extractor, "__name__", None) == class_name:
+-            return extractor
+-
+-    # We did not find the class, but maybe it's because a dep is missing. In that case, the class will be in the main
+-    # init and we return the proper dummy to get an appropriate error message.
++    # 3. Dummy object fallback for missing deps
+     main_module = importlib.import_module("transformers")
+     if hasattr(main_module, class_name):
+         return getattr(main_module, class_name)
+@@ -109,6 +113,32 @@ def video_processor_class_from_name(class_name: str):
+     return None
+ 
+ 
++def _load_backend_class(video_processor_class_name: str, backend: str):
++    """
++    Load video processor class for a given backend. Uses the mapping from
++    VIDEO_PROCESSOR_MAPPING when `video_processor_class_name` is found in its
++    values (so config overrides and custom backends are respected). Falls
++    back to base+Pil convention for remote code / unknown processors.
++    """
++    mapping = {"torchvision": video_processor_class_name}
++    for mapping_dict in (
++        *VIDEO_PROCESSOR_MAPPING._extra_content.values(),
++        *VIDEO_PROCESSOR_MAPPING.values(),
++    ):
++        if any(
++            video_processor_class_name == (v if not isinstance(v, type) else v.__name__) for v in mapping_dict.values()
++        ):
++            mapping = mapping_dict
++            break
++
++    if (processor_class := mapping.get(backend)) is not None:
++        if isinstance(processor_class, str):
++            processor_class = video_processor_class_from_name(processor_class)
++        return processor_class
++    else:
++        raise ImportError(f"Video processor cannot be loaded - requested {backend} backend is not available.")
++
++
+ def get_video_processor_config(
+     pretrained_model_name_or_path: str | os.PathLike,
+     cache_dir: str | os.PathLike | None = None,
+@@ -315,6 +345,7 @@ def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+         >>> # video_processor = AutoVideoProcessor.from_pretrained("./test/saved_model/")
+         ```"""
+         config = kwargs.pop("config", None)
++        backend = kwargs.pop("backend", "torchvision")
+         trust_remote_code = kwargs.pop("trust_remote_code", None)
+         kwargs["_from_auto"] = True
+ 
+@@ -365,23 +396,29 @@ def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+                 # Continue to fallback logic below (AutoTokenizer, AutoImageProcessor, etc.)
+                 pass
+ 
++        # Map to the requested backend-processor if necessary, and save cls before backend filtering
++        resolved_video_processor_class = video_processor_class
+         if video_processor_class is not None:
+-            video_processor_class = video_processor_class_from_name(video_processor_class)
++            video_processor_class = _load_backend_class(video_processor_class, backend)
+ 
+         has_remote_code = video_processor_auto_map is not None
+         has_local_code = video_processor_class is not None or type(config) in VIDEO_PROCESSOR_MAPPING
+         explicit_local_code = False
+         if has_remote_code:
+             if has_local_code:
+-                local_video_processor_class = video_processor_class or VIDEO_PROCESSOR_MAPPING[type(config)]
++                local_video_processor_class = video_processor_class
++                if not video_processor_class:
++                    video_processor_mapping = VIDEO_PROCESSOR_MAPPING[type(config)]
++                    local_video_processor_class = (
++                        video_processor_mapping.get(backend) if video_processor_mapping is not None else None
++                    )
+                 explicit_local_code = (
+                     local_video_processor_class is not None
+                     and not local_video_processor_class.__module__.startswith("transformers.")
+                 )
+-            if "--" in video_processor_auto_map:
+-                upstream_repo = video_processor_auto_map.split("--")[0]
+-            else:
+-                upstream_repo = None
++
++            class_ref = _resolve_auto_map_class_ref(video_processor_auto_map, backend)
++            upstream_repo = class_ref.split("--")[0] if "--" in class_ref else None
+             trust_remote_code = resolve_trust_remote_code(
+                 trust_remote_code, pretrained_model_name_or_path, has_local_code, has_remote_code, upstream_repo
+             )
+@@ -396,12 +433,24 @@ def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+             return video_processor_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs)
+         # Last try: we use the VIDEO_PROCESSOR_MAPPING.
+         elif type(config) in VIDEO_PROCESSOR_MAPPING:
+-            video_processor_class = VIDEO_PROCESSOR_MAPPING[type(config)]
++            video_processor_mapping = VIDEO_PROCESSOR_MAPPING[type(config)]
++            video_processor_class = (
++                video_processor_mapping.get(backend) if video_processor_mapping is not None else video_processor_class
++            )
+             if video_processor_class is not None:
+                 return video_processor_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs)
+ 
++            if backend == "torchvision" and not is_torchvision_available():
++                raise ValueError(
++                    f"{pretrained_model_name_or_path} requires `torchvision` to be installed. Please install `torchvision` and try again."
++                )
++            else:
++                raise ValueError(
++                    f"Could not load any video processor class for {pretrained_model_name_or_path} with {backend} backend. "
++                    "Please install the backend dependencies or select another backend that is available in your environment."
++                )
+         # Raise a more informative error message if torchvision isn't found, otherwise just fallback to default
+-        if not is_torchvision_available():
++        if resolved_video_processor_class is not None and backend == "torchvision" and not is_torchvision_available():
+             raise ValueError(
+                 f"{pretrained_model_name_or_path} requires `torchvision` to be installed. Please install `torchvision` and try again."
+             )
+@@ -415,8 +464,9 @@ def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+     @staticmethod
+     def register(
+         config_class,
+-        video_processor_class,
+-        exist_ok=False,
++        video_processor_class: type | None = None,
++        video_processor_classes: dict[str, type] | None = None,
++        exist_ok: bool = False,
+     ):
+         """
+         Register a new video processor for this class.
+@@ -426,8 +476,23 @@ def register(
+                 The configuration corresponding to the model to register.
+             video_processor_class ([`BaseVideoProcessor`]):
+                 The video processor to register.
++            video_processor_classes (`dict[str, type]`, *optional*):
++                Dictionary mapping backend names to video processor classes. Allows registering custom backends.
++                Example: `{"pil": MyPilVideoProcessor, "torchvision": MyTorchvisionVideoProcessor, "custom": MyCustomVideoProcessor}`
++            exist_ok (`bool`, *optional*, defaults to `False`):
++                If `True`, allow overwriting existing registrations.
+         """
+-        VIDEO_PROCESSOR_MAPPING.register(config_class, video_processor_class, exist_ok=exist_ok)
++        if video_processor_classes is None:
++            # Legacy registering would pass a single torch-based class
++            video_processor_classes = {"torchvision": video_processor_class}
++
++        # Avoid resetting existing processors if we are passing partial updates
++        if config_class in VIDEO_PROCESSOR_MAPPING:
++            existing_mapping = VIDEO_PROCESSOR_MAPPING[config_class]
++            existing_mapping.update(video_processor_classes)
++            video_processor_classes = existing_mapping
++
++        VIDEO_PROCESSOR_MAPPING.register(config_class, video_processor_classes, exist_ok=exist_ok)
+ 
+ 
+ __all__ = ["VIDEO_PROCESSOR_MAPPING", "AutoVideoProcessor"]
+diff --git a/src/transformers/processing_utils.py b/src/transformers/processing_utils.py
+index 77bbe333181a..56bc8bb06fbc 100644
+--- a/src/transformers/processing_utils.py
++++ b/src/transformers/processing_utils.py
+@@ -135,7 +135,7 @@ def keys(self):
+     "tokenizer": ("PreTrainedTokenizerBase", "MistralCommonBackend"),
+     "feature_extractor": "FeatureExtractionMixin",
+     "image_processor": "ImageProcessingMixin",
+-    "video_processor": "BaseVideoProcessor",
++    "video_processor": "VideoProcessorMixin",
+ }
+ 
+ 
+diff --git a/src/transformers/utils/auto_docstring.py b/src/transformers/utils/auto_docstring.py
+index 52403074e627..6026e1aff2da 100644
+--- a/src/transformers/utils/auto_docstring.py
++++ b/src/transformers/utils/auto_docstring.py
+@@ -3101,8 +3101,9 @@ def format_args_docstring(docstring: str, model_name: str) -> str:
+     placeholders_dict = get_placeholders_dict(placeholders, model_name)
+     # replace the placeholders in the docstring with the values from the placeholders_dict
+     for placeholder, value in placeholders_dict.items():
+-        if isinstance(value, dict) and placeholder == "image_processor_class":
++        if isinstance(value, dict) and placeholder in ["image_processor_class", "video_processor_class"]:
+             value = value.get("torchvision", value.get("pil", None))
++            value = value or placeholder
+         if placeholder is not None:
+             docstring = docstring.replace(f"{{{placeholder}}}", value)
+     return docstring
+diff --git a/src/transformers/video_processing_utils.py b/src/transformers/video_processing_utils.py
+index 81b0cbf3409f..578cad3a0c28 100644
+--- a/src/transformers/video_processing_utils.py
++++ b/src/transformers/video_processing_utils.py
+@@ -25,7 +25,7 @@
+ 
+ from .dynamic_module_utils import custom_object_save
+ from .image_processing_backends import TorchvisionBackend
+-from .image_processing_utils import BatchFeature
++from .image_processing_utils import BaseImageProcessor, BatchFeature
+ from .image_utils import ChannelDimension, SizeDict, validate_kwargs
+ from .processing_utils import Unpack, VideosKwargs
+ from .utils import (
+@@ -73,27 +73,9 @@
+ logger = logging.get_logger(__name__)
+ 
+ 
+-@requires(backends=("vision", "torchvision"))
+-class BaseVideoProcessor(TorchvisionBackend):
+-    _auto_class = None
+-
+-    resample = None
+-    image_mean = None
+-    image_std = None
+-    size = None
+-    size_divisor = None
++class VideoProcessorMixin(BaseImageProcessor):
+     default_to_square = True
+-    crop_size = None
+-    do_resize = None
+-    do_center_crop = None
+-    do_rescale = None
+     rescale_factor = 1 / 255
+-    do_normalize = None
+-    do_convert_rgb = None
+-    do_sample_frames = None
+-    fps = None
+-    num_frames = None
+-    video_metadata = None
+     return_metadata = False
+     valid_kwargs = VideosKwargs
+     model_input_names = ["pixel_values_videos"]
+@@ -104,132 +86,17 @@ def __init__(self, **kwargs: Unpack[VideosKwargs]) -> None:
+     def __call__(self, videos, **kwargs) -> BatchFeature:
+         return self.preprocess(videos, **kwargs)
+ 
+-    def convert_to_rgb(
+-        self,
+-        video: "torch.Tensor",
+-    ) -> VideoInput:
+-        """
+-        Converts a video to RGB format.
+-
+-        Args:
+-            video (`"torch.Tensor"`):
+-                The video to convert.
+-
+-        Returns:
+-            `torch.Tensor`: The converted video.
+-        """
+-        video = tvF.grayscale_to_rgb(video)
+-        return convert_to_rgb(video, input_data_format=ChannelDimension.FIRST)
+-
+-    def sample_frames(
+-        self,
+-        metadata: VideoMetadata,
+-        num_frames: int | None = None,
+-        fps: int | float | None = None,
+-        **kwargs,
+-    ) -> np.ndarray:
+-        """
+-        Default sampling function which uniformly samples the desired number of frames between 0 and total number of frames.
+-        If `fps` is passed along with metadata, `fps` frames per second are sampled uniformly. Arguments `num_frames`
+-        and `fps` are mutually exclusive.
+-
+-        Args:
+-            metadata (`VideoMetadata`):
+-                Metadata of the video containing information about total duration, fps and total number of frames.
+-            num_frames (`int`, *optional*):
+-                Maximum number of frames to sample. Defaults to `self.num_frames`.
+-            fps (`int` or `float`, *optional*):
+-                Target frames to sample per second. Defaults to `self.fps`.
+-
+-        Returns:
+-            `np.ndarray`: Indices to sample video frames.
+-        """
+-        if fps is not None and num_frames is not None:
+-            raise ValueError("`num_frames` and `fps` are mutually exclusive arguments, please use only one!")
+-
+-        num_frames = num_frames if num_frames is not None else self.num_frames
+-        fps = fps if fps is not None else self.fps
+-        return default_sample_indices_fn(metadata=metadata, num_frames=num_frames, fps=fps, **kwargs)
+-
+-    def _decode_and_sample_videos(
+-        self,
+-        videos: VideoInput,
+-        video_metadata: VideoMetadata | dict,
+-        do_sample_frames: bool | None = None,
+-        sample_indices_fn: Callable | None = None,
+-    ) -> list["torch.Tensor"]:
+-        """
+-        Decode input videos and sample frames if needed.
+-        """
+-        videos = make_batched_videos(videos)
+-        video_metadata = make_batched_metadata(videos, video_metadata=video_metadata)
+-
+-        # Only sample frames if an array video is passed, otherwise first decode -> then sample
+-        if is_valid_video(videos[0]) and do_sample_frames:
+-            sampled_videos = []
+-            sampled_metadata = []
+-            for video, metadata in zip(videos, video_metadata):
+-                indices = sample_indices_fn(metadata=metadata)
+-                metadata.frames_indices = indices
+-                sampled_videos.append(video[indices])
+-                sampled_metadata.append(metadata)
+-            videos = sampled_videos
+-            video_metadata = sampled_metadata
+-        elif not is_valid_video(videos[0]):
+-            if isinstance(videos[0], list):
+-                # Videos sometimes are passed as a list of image URLs, especially through templates
+-                videos = [
+-                    torch.stack([self.process_image(image) for image in images], dim=0)
+-                    for images in self.fetch_images(videos)
+-                ]
+-                if do_sample_frames:
+-                    raise ValueError(
+-                        "Sampling frames from a list of images is not supported! Set `do_sample_frames=False`."
+-                    )
+-            else:
+-                videos, video_metadata = self.fetch_videos(videos, sample_indices_fn=sample_indices_fn)
+-
+-        return videos, video_metadata
++    def _prepare_input_videos(self, *args, **kwargs):
++        raise NotImplementedError
+ 
+-    def _prepare_input_videos(
+-        self,
+-        videos: VideoInput,
+-        do_convert_rgb: bool | None = None,
+-        input_data_format: str | ChannelDimension | None = None,
+-        device: str | None = None,
+-    ) -> list["torch.Tensor"]:
+-        """
+-        Prepare the input videos for processing.
+-        """
+-        processed_videos = []
+-        for video in videos:
+-            # `make_batched_videos` always returns a 4D array per video
+-            if isinstance(video, np.ndarray):
+-                # not using tvF.to_tensor as it doesn't handle (C, H, W) numpy arrays
+-                video = torch.from_numpy(video).contiguous()
++    def sample_frames(self, *args, **kwargs):
++        raise NotImplementedError
+ 
+-            # Infer the channel dimension format if not provided
+-            if input_data_format is None:
+-                input_data_format = infer_channel_dimension_format(video)
+-
+-            if input_data_format == ChannelDimension.LAST:
+-                video = video.permute(0, 3, 1, 2).contiguous()
+-
+-            if do_convert_rgb:
+-                video = self.convert_to_rgb(video)
+-
+-            if device is not None:
+-                video = video.to(device)
+-
+-            processed_videos.append(video)
+-        return processed_videos
++    def _decode_and_sample_videos(self, *args, **kwargs):
++        raise NotImplementedError
+ 
+     @auto_docstring
+-    def preprocess(
+-        self,
+-        videos: VideoInput,
+-        **kwargs: Unpack[VideosKwargs],
+-    ) -> BatchFeature:
++    def preprocess(self, videos: VideoInput, **kwargs: Unpack[VideosKwargs]) -> BatchFeature:
+         validate_kwargs(
+             captured_kwargs=kwargs.keys(),
+             valid_processor_keys=list(self.valid_kwargs.__annotations__.keys()) + ["return_tensors"],
+@@ -272,48 +139,6 @@ def preprocess(
+             preprocessed_videos["video_metadata"] = video_metadata
+         return preprocessed_videos
+ 
+-    def _preprocess(
+-        self,
+-        videos: list["torch.Tensor"],
+-        do_resize: bool,
+-        size: SizeDict,
+-        resample: "PILImageResampling | tvF.InterpolationMode | int | None",
+-        do_center_crop: bool,
+-        crop_size: SizeDict,
+-        do_rescale: bool,
+-        rescale_factor: float,
+-        do_normalize: bool,
+-        image_mean: float | list[float] | None,
+-        image_std: float | list[float] | None,
+-        return_tensors: str | TensorType | None = None,
+-        **kwargs,
+-    ) -> BatchFeature:
+-        # Group videos by size for batched resizing
+-        grouped_videos, grouped_videos_index = group_videos_by_shape(videos)
+-        resized_videos_grouped = {}
+-        for shape, stacked_videos in grouped_videos.items():
+-            if do_resize:
+-                stacked_videos = self.resize(stacked_videos, size=size, resample=resample)
+-            resized_videos_grouped[shape] = stacked_videos
+-        resized_videos = reorder_videos(resized_videos_grouped, grouped_videos_index)
+-
+-        # Group videos by size for further processing
+-        # Needed in case do_resize is False, or resize returns videos with different sizes
+-        grouped_videos, grouped_videos_index = group_videos_by_shape(resized_videos)
+-        processed_videos_grouped = {}
+-        for shape, stacked_videos in grouped_videos.items():
+-            if do_center_crop:
+-                stacked_videos = self.center_crop(stacked_videos, crop_size)
+-            # Fused rescale and normalize
+-            stacked_videos = self.rescale_and_normalize(
+-                stacked_videos, do_rescale, rescale_factor, do_normalize, image_mean, image_std
+-            )
+-            processed_videos_grouped[shape] = stacked_videos
+-
+-        processed_videos = reorder_videos(processed_videos_grouped, grouped_videos_index)
+-
+-        return BatchFeature(data={"pixel_values_videos": processed_videos}, tensor_type=return_tensors)
+-
+     @classmethod
+     def from_pretrained(
+         cls,
+@@ -758,8 +583,173 @@ def fetch_videos(self, video_url_or_urls: str | list[str] | list[list[str]], sam
+             return load_video(video_url_or_urls, backend=backend, sample_indices_fn=sample_indices_fn)
+ 
+ 
+-BaseVideoProcessor.push_to_hub = copy_func(BaseVideoProcessor.push_to_hub)
+-if BaseVideoProcessor.push_to_hub.__doc__ is not None:
+-    BaseVideoProcessor.push_to_hub.__doc__ = BaseVideoProcessor.push_to_hub.__doc__.format(
++@requires(backends=("vision", "torchvision"))
++class BaseVideoProcessor(VideoProcessorMixin, TorchvisionBackend):
++    def convert_to_rgb(
++        self,
++        video: "torch.Tensor",
++    ) -> VideoInput:
++        """
++        Converts a video to RGB format.
++
++        Args:
++            video (`"torch.Tensor"`):
++                The video to convert.
++
++        Returns:
++            `torch.Tensor`: The converted video.
++        """
++        video = tvF.grayscale_to_rgb(video)
++        return convert_to_rgb(video, input_data_format=ChannelDimension.FIRST)
++
++    def sample_frames(
++        self,
++        metadata: VideoMetadata,
++        num_frames: int | None = None,
++        fps: int | float | None = None,
++        **kwargs,
++    ) -> np.ndarray:
++        """
++        Default sampling function which uniformly samples the desired number of frames between 0 and total number of frames.
++        If `fps` is passed along with metadata, `fps` frames per second are sampled uniformly. Arguments `num_frames`
++        and `fps` are mutually exclusive.
++
++        Args:
++            metadata (`VideoMetadata`):
++                Metadata of the video containing information about total duration, fps and total number of frames.
++            num_frames (`int`, *optional*):
++                Maximum number of frames to sample. Defaults to `self.num_frames`.
++            fps (`int` or `float`, *optional*):
++                Target frames to sample per second. Defaults to `self.fps`.
++
++        Returns:
++            `np.ndarray`: Indices to sample video frames.
++        """
++        if fps is not None and num_frames is not None:
++            raise ValueError("`num_frames` and `fps` are mutually exclusive arguments, please use only one!")
++
++        num_frames = num_frames if num_frames is not None else self.num_frames
++        fps = fps if fps is not None else self.fps
++        return default_sample_indices_fn(metadata=metadata, num_frames=num_frames, fps=fps, **kwargs)
++
++    def _decode_and_sample_videos(
++        self,
++        videos: VideoInput,
++        video_metadata: VideoMetadata | dict,
++        do_sample_frames: bool | None = None,
++        sample_indices_fn: Callable | None = None,
++    ) -> list["torch.Tensor"]:
++        """
++        Decode input videos and sample frames if needed.
++        """
++        videos = make_batched_videos(videos)
++        video_metadata = make_batched_metadata(videos, video_metadata=video_metadata)
++
++        # Only sample frames if an array video is passed, otherwise first decode -> then sample
++        if is_valid_video(videos[0]) and do_sample_frames:
++            sampled_videos = []
++            sampled_metadata = []
++            for video, metadata in zip(videos, video_metadata):
++                indices = sample_indices_fn(metadata=metadata)
++                metadata.frames_indices = indices
++                sampled_videos.append(video[indices])
++                sampled_metadata.append(metadata)
++            videos = sampled_videos
++            video_metadata = sampled_metadata
++        elif not is_valid_video(videos[0]):
++            if isinstance(videos[0], list):
++                # Videos sometimes are passed as a list of image URLs, especially through templates
++                videos = [
++                    torch.stack([self.process_image(image) for image in images], dim=0)
++                    for images in self.fetch_images(videos)
++                ]
++                if do_sample_frames:
++                    raise ValueError(
++                        "Sampling frames from a list of images is not supported! Set `do_sample_frames=False`."
++                    )
++            else:
++                videos, video_metadata = self.fetch_videos(videos, sample_indices_fn=sample_indices_fn)
++
++        return videos, video_metadata
++
++    def _prepare_input_videos(
++        self,
++        videos: VideoInput,
++        do_convert_rgb: bool | None = None,
++        input_data_format: str | ChannelDimension | None = None,
++        device: str | None = None,
++    ) -> list["torch.Tensor"]:
++        """
++        Prepare the input videos for processing.
++        """
++        processed_videos = []
++        for video in videos:
++            # `make_batched_videos` always returns a 4D array per video
++            if isinstance(video, np.ndarray):
++                # not using tvF.to_tensor as it doesn't handle (C, H, W) numpy arrays
++                video = torch.from_numpy(video).contiguous()
++
++            # Infer the channel dimension format if not provided
++            if input_data_format is None:
++                input_data_format = infer_channel_dimension_format(video)
++
++            if input_data_format == ChannelDimension.LAST:
++                video = video.permute(0, 3, 1, 2).contiguous()
++
++            if do_convert_rgb:
++                video = self.convert_to_rgb(video)
++
++            if device is not None:
++                video = video.to(device)
++
++            processed_videos.append(video)
++        return processed_videos
++
++    def _preprocess(
++        self,
++        videos: list["torch.Tensor"],
++        do_resize: bool,
++        size: SizeDict,
++        resample: "PILImageResampling | tvF.InterpolationMode | int | None",
++        do_center_crop: bool,
++        crop_size: SizeDict,
++        do_rescale: bool,
++        rescale_factor: float,
++        do_normalize: bool,
++        image_mean: float | list[float] | None,
++        image_std: float | list[float] | None,
++        return_tensors: str | TensorType | None = None,
++        **kwargs,
++    ) -> BatchFeature:
++        # Group videos by size for batched resizing
++        grouped_videos, grouped_videos_index = group_videos_by_shape(videos)
++        resized_videos_grouped = {}
++        for shape, stacked_videos in grouped_videos.items():
++            if do_resize:
++                stacked_videos = self.resize(stacked_videos, size=size, resample=resample)
++            resized_videos_grouped[shape] = stacked_videos
++        resized_videos = reorder_videos(resized_videos_grouped, grouped_videos_index)
++
++        # Group videos by size for further processing
++        # Needed in case do_resize is False, or resize returns videos with different sizes
++        grouped_videos, grouped_videos_index = group_videos_by_shape(resized_videos)
++        processed_videos_grouped = {}
++        for shape, stacked_videos in grouped_videos.items():
++            if do_center_crop:
++                stacked_videos = self.center_crop(stacked_videos, crop_size)
++            # Fused rescale and normalize
++            stacked_videos = self.rescale_and_normalize(
++                stacked_videos, do_rescale, rescale_factor, do_normalize, image_mean, image_std
++            )
++            processed_videos_grouped[shape] = stacked_videos
++
++        processed_videos = reorder_videos(processed_videos_grouped, grouped_videos_index)
++
++        return BatchFeature(data={"pixel_values_videos": processed_videos}, tensor_type=return_tensors)
++
++
++VideoProcessorMixin.push_to_hub = copy_func(VideoProcessorMixin.push_to_hub)
++if VideoProcessorMixin.push_to_hub.__doc__ is not None:
++    VideoProcessorMixin.push_to_hub.__doc__ = VideoProcessorMixin.push_to_hub.__doc__.format(
+         object="video processor", object_class="AutoVideoProcessor", object_files="video processor file"
+     )
+diff --git a/tests/models/auto/test_image_processing_auto.py b/tests/models/auto/test_image_processing_auto.py
+index 1ba3ba050106..6d6b8b152ebd 100644
+--- a/tests/models/auto/test_image_processing_auto.py
++++ b/tests/models/auto/test_image_processing_auto.py
+@@ -243,6 +243,61 @@ def test_new_image_processor_registration(self):
+             if CustomConfig in IMAGE_PROCESSOR_MAPPING._extra_content:
+                 del IMAGE_PROCESSOR_MAPPING._extra_content[CustomConfig]
+ 
++    def test_image_processor_new_backend_registration(self):
++        class Cv2ImageProcessor(CLIPImageProcessor):
++            foo = True
++            do_rescale = False
++
++        try:
++            AutoImageProcessor.register(
++                CLIPConfig,
++                image_processor_classes={"cv2": Cv2ImageProcessor},
++                exist_ok=True,
++            )
++
++            with tempfile.TemporaryDirectory() as tmpdirname:
++                processor_tmpfile = Path(tmpdirname) / "preprocessor_config.json"
++                config_tmpfile = Path(tmpdirname) / "config.json"
++                json.dump(
++                    {
++                        "image_processor_type": "CLIPImageProcessor",
++                        "processor_class": "CLIPProcessor",
++                    },
++                    open(processor_tmpfile, "w", encoding="utf-8"),
++                )
++                json.dump({"model_type": "clip"}, open(config_tmpfile, "w", encoding="utf-8"))
++
++                cv2_processor = AutoImageProcessor.from_pretrained(tmpdirname, backend="cv2")
++                torch_processor = AutoImageProcessor.from_pretrained(tmpdirname, backend="torchvision")
++                default_processor = AutoImageProcessor.from_pretrained(tmpdirname)
++
++                self.assertEqual(cv2_processor.__class__.__name__, "Cv2ImageProcessor")
++                self.assertEqual(cv2_processor.foo, True)
++
++                self.assertEqual(torch_processor.__class__.__name__, "CLIPImageProcessor")
++                self.assertFalse(hasattr(torch_processor, "foo"))
++
++                self.assertEqual(default_processor.__class__.__name__, "CLIPImageProcessor")
++                self.assertFalse(hasattr(default_processor, "foo"))
++
++            # We can save any custom-backend processor and load it back with any backend
++            # As long as we save the `config`, the backend just get chosen at load-time
++            with tempfile.TemporaryDirectory() as tmp_dir:
++                cv2_processor.save_pretrained(tmp_dir)
++                new_video_processor = AutoImageProcessor.from_pretrained(tmp_dir, backend="torchvision")
++                self.assertEqual(new_video_processor.__class__.__name__, "CLIPImageProcessor")
++                self.assertFalse(hasattr(new_video_processor, "foo"))
++                self.assertFalse(new_video_processor.do_rescale)
++
++                new_video_processor = AutoImageProcessor.from_pretrained(tmp_dir, backend="cv2")
++                self.assertEqual(new_video_processor.__class__.__name__, "Cv2ImageProcessor")
++                self.assertTrue(hasattr(new_video_processor, "foo"))
++                self.assertFalse(new_video_processor.do_rescale)
++
++        finally:
++            if CLIPConfig in IMAGE_PROCESSOR_MAPPING._extra_content:
++                del IMAGE_PROCESSOR_MAPPING._extra_content[CLIPConfig]
++
+     def test_from_pretrained_dynamic_image_processor_conflict(self):
+         class NewImageProcessor(CLIPImageProcessor):
+             is_local = True
+diff --git a/tests/models/auto/test_video_processing_auto.py b/tests/models/auto/test_video_processing_auto.py
+index b7fbb933898a..ddb0a992fd81 100644
+--- a/tests/models/auto/test_video_processing_auto.py
++++ b/tests/models/auto/test_video_processing_auto.py
+@@ -231,6 +231,61 @@ def test_new_video_processor_registration(self):
+             if CustomConfig in VIDEO_PROCESSOR_MAPPING._extra_content:
+                 del VIDEO_PROCESSOR_MAPPING._extra_content[CustomConfig]
+ 
++    def test_video_processor_new_backend_registration(self):
++        class Cv2VideoProcessor(LlavaOnevisionVideoProcessor):
++            foo = True
++            do_rescale = False
++
++        try:
++            AutoVideoProcessor.register(
++                LlavaOnevisionConfig,
++                video_processor_classes={"cv2": Cv2VideoProcessor},
++                exist_ok=True,
++            )
++
++            with tempfile.TemporaryDirectory() as tmpdirname:
++                processor_tmpfile = Path(tmpdirname) / "video_preprocessor_config.json"
++                config_tmpfile = Path(tmpdirname) / "config.json"
++                json.dump(
++                    {
++                        "video_processor_type": "LlavaOnevisionVideoProcessor",
++                        "processor_class": "LlavaOnevisionProcessor",
++                    },
++                    open(processor_tmpfile, "w", encoding="utf-8"),
++                )
++                json.dump({"model_type": "llava_onevision"}, open(config_tmpfile, "w", encoding="utf-8"))
++
++                cv2_processor = AutoVideoProcessor.from_pretrained(tmpdirname, backend="cv2")
++                torch_processor = AutoVideoProcessor.from_pretrained(tmpdirname, backend="torchvision")
++                default_processor = AutoVideoProcessor.from_pretrained(tmpdirname)
++
++                self.assertEqual(cv2_processor.__class__.__name__, "Cv2VideoProcessor")
++                self.assertEqual(cv2_processor.foo, True)
++
++                self.assertEqual(torch_processor.__class__.__name__, "LlavaOnevisionVideoProcessor")
++                self.assertFalse(hasattr(torch_processor, "foo"))
++
++                self.assertEqual(default_processor.__class__.__name__, "LlavaOnevisionVideoProcessor")
++                self.assertFalse(hasattr(default_processor, "foo"))
++
++            # We can save any custom-backend processor and load it back with any backend
++            # As long as we save the `config`, the backend just get chosen at load-time
++            with tempfile.TemporaryDirectory() as tmp_dir:
++                cv2_processor.save_pretrained(tmp_dir)
++                new_video_processor = AutoVideoProcessor.from_pretrained(tmp_dir, backend="torchvision")
++                self.assertEqual(new_video_processor.__class__.__name__, "LlavaOnevisionVideoProcessor")
++                self.assertFalse(hasattr(new_video_processor, "foo"))
++                self.assertFalse(new_video_processor.do_rescale)
++
++                new_video_processor = AutoVideoProcessor.from_pretrained(tmp_dir, backend="cv2")
++                self.assertEqual(new_video_processor.__class__.__name__, "Cv2VideoProcessor")
++                self.assertTrue(hasattr(new_video_processor, "foo"))
++                self.assertFalse(new_video_processor.do_rescale)
++
++        finally:
++            if LlavaOnevisionConfig in VIDEO_PROCESSOR_MAPPING._extra_content:
++                del VIDEO_PROCESSOR_MAPPING._extra_content[LlavaOnevisionConfig]
++
+     def test_from_pretrained_dynamic_video_processor_conflict(self):
+         class NewVideoProcessor(LlavaOnevisionVideoProcessor):
+             is_local = True
+diff --git a/utils/check_auto.py b/utils/check_auto.py
+index ee1b7c18292c..7e81da33856a 100644
+--- a/utils/check_auto.py
++++ b/utils/check_auto.py
+@@ -145,7 +145,9 @@ def build_processor_mapping(
+                     processor_name = node.name
+ 
+         if processor_name is not None:
+-            processor_mapping[model_type] = processor_name
++            processor_mapping[model_type] = (
++                processor_name if "video_processing" not in processor_filename else {"torchvision": processor_name}
++            )
+ 
+     return processor_mapping
+ 

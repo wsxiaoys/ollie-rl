@@ -1,0 +1,6 @@
+{
+  "title": "CAM: Make adaptive operation skip finishing passes in pre-cleared regions",
+  "body": "Fixes #31052 (relates to #30831)\r\n\r\nBefore\r\n<img width=\"1912\" height=\"1133\" alt=\"20260629_16h35m31s_grim\" src=\"https://github.com/user-attachments/assets/c4c0b54b-08b2-4b8d-8c64-dc13d8479b3d\" />\r\n\r\nAfter\r\n<img width=\"1912\" height=\"1133\" alt=\"20260629_16h35m54s_grim\" src=\"https://github.com/user-attachments/assets/3a001045-8688-4e1d-9f98-f63835fcf4f3\" />\r\n\r\nIn addition to fixing the bug, I also cleaned up my previously-throwaway debug code and committed it under an `#ifdef` for easier future debugging.",
+  "head_sha": "1ff686ef81cc9cd8c718fa2bfec474d23560a95c",
+  "base_sha": "ba406c730396ec276004d5ef6c70d96a5a97488b"
+}

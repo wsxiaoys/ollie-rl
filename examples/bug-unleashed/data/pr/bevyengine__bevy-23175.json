@@ -1,0 +1,6 @@
+{
+  "title": "BrpRequest: remove jsonrpc field",
+  "body": "# Objective\r\n\r\n`BrpRequest` includes a useless `jsonrpc` field that must always be set to \"2.0\". Remove it.\r\n\r\nThis change could also be made to `BrpResponse`, ~~but that would be much more involved due to the `serde(flatten)` while also offering less benefit (as users need to create this struct less often).~~\r\n\r\nI've not added a migration guide because no advice is needed to migrate.\r\n\r\n## Testing\r\n\r\nRun the `server` + `client` example.",
+  "head_sha": "e1afa41b8096fcf34ac2d4b074fbd92b73ff2168",
+  "base_sha": "107cc2539fbb1f8a041b4a86eec307db1e9855e1"
+}

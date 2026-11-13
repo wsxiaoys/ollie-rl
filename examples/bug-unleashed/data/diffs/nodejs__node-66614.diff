@@ -1,0 +1,462 @@
+diff --git a/doc/api/cli.md b/doc/api/cli.md
+index 3822685d3d50..0c961abf4647 100644
+--- a/doc/api/cli.md
++++ b/doc/api/cli.md
+@@ -3936,6 +3936,10 @@ from anywhere else, such as the real file system, needs nothing added.
+ the command line's decision, and the environment must not be able to redirect
+ it.
+ 
++A [single executable application][] built with `"vfsArchive"` mounts that
++archive at the mount point reserved for `--vfs-load`, so `--vfs-load` cannot be
++used in it.
++
+ ```console
+ $ node --experimental-vfs --vfs-load=app.zip
+ ```
+diff --git a/doc/api/single-executable-applications.md b/doc/api/single-executable-applications.md
+index e5fa839a17f7..6f35f28d4b9d 100644
+--- a/doc/api/single-executable-applications.md
++++ b/doc/api/single-executable-applications.md
+@@ -296,6 +296,27 @@ executable only embeds the archive; read the files through the file system
+ APIs instead. `"vfsArchive"` requires `"useVfs": true` and cannot be
+ combined with `"assets"`.
+ 
++The archive is mounted at the mount point reserved for [`--vfs-load`][], which
++is the same in every thread, and worker threads mount it as well. A path into
++the archive, such as the main script's `__filename`, can therefore be loaded
++in a worker:
++
++```cjs
++const { Worker, isMainThread } = require('node:worker_threads');
++
++if (isMainThread) {
++  new Worker(__filename);
++} else {
++  // The worker runs the same script, from the same archive.
++  console.log(require('./lib/math.js').add(2, 3));
++}
++```
++
++Since that mount point is taken by the archive, `--vfs-load` cannot be used
++with `"vfsArchive"`: `--build-sea` rejects it in `"execArgv"`, and the
++executable rejects it at startup when it comes from `--node-options` or from
++the `execArgv` of a worker.
++
+ #### Snapshot and code caching limitations
+ 
+ `"useVfs": true` cannot be used together with `"useSnapshot": true` or
+@@ -786,6 +807,7 @@ to help us document them.
+ [Using native addons in the injected main script]: #using-native-addons-in-the-injected-main-script
+ [VFS documentation]: vfs.md
+ [Windows SDK]: https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/
++[`--vfs-load`]: cli.md#--vfs-loadsource
+ [`node:zlib`]: zlib.md
+ [`process.execPath`]: process.md#processexecpath
+ [`require()`]: modules.md#requireid
+diff --git a/doc/api/vfs.md b/doc/api/vfs.md
+index 3da056de5c06..ecadd05d75b8 100644
+--- a/doc/api/vfs.md
++++ b/doc/api/vfs.md
+@@ -223,7 +223,7 @@ const fs = require('node:fs');
+ const myVfs = vfs.create();
+ myVfs.writeFileSync('/data.txt', 'Hello');
+ const mountPoint = myVfs.mount();
+-// e.g. '/dev/null/vfs/0'
++// e.g. '/dev/null/vfs/1'
+ 
+ fs.readFileSync(`${mountPoint}/data.txt`, 'utf8'); // 'Hello'
+ ```
+diff --git a/doc/node.1 b/doc/node.1
+index 863c468eed10..81526393b615 100644
+--- a/doc/node.1
++++ b/doc/node.1
+@@ -2004,6 +2004,9 @@ from anywhere else, such as the real file system, needs nothing added.
+ \fB--vfs-load\fR is not permitted in \fBNODE_OPTIONS\fR: which entry point runs is
+ the command line's decision, and the environment must not be able to redirect
+ it.
++A single executable application built with \fB"vfsArchive"\fR mounts that
++archive at the mount point reserved for \fB--vfs-load\fR, so \fB--vfs-load\fR cannot be
++used in it.
+ .Bd -literal
+ $ node --experimental-vfs --vfs-load=app.zip
+ .Ed
+diff --git a/lib/internal/main/embedding.js b/lib/internal/main/embedding.js
+index cb88a443c40b..ff5aad4c17f0 100644
+--- a/lib/internal/main/embedding.js
++++ b/lib/internal/main/embedding.js
+@@ -16,7 +16,6 @@ const {
+   isExperimentalSeaWarningNeeded,
+   isSea,
+   isVfsEnabled,
+-  mainCodePath: seaMainCodePath,
+ } = internalBinding('sea');
+ const { emitExperimentalWarning } = require('internal/util');
+ const { emitWarningSync } = require('internal/process/warning');
+@@ -134,13 +133,12 @@ function embedderRunESM(content, filename) {
+  * @returns {string|null} The VFS path of the main script
+  */
+ function setUpSeaVfs(content) {
+-  const mainName = path.basename(seaMainCodePath || process.execPath);
+-  const { initSeaVfs } = require('internal/vfs/sea');
+-  const seaVfs = initSeaVfs({ extraFiles: { [mainName]: content } });
++  const { initSeaVfs, getSeaMainName } = require('internal/vfs/sea');
++  const seaVfs = initSeaVfs(content);
+   if (seaVfs === null) {
+     return null;
+   }
+-  return path.join(seaVfs.mountPoint, mainName);
++  return path.join(seaVfs.mountPoint, getSeaMainName());
+ }
+ /* c8 ignore stop */
+ 
+diff --git a/lib/internal/main/worker_thread.js b/lib/internal/main/worker_thread.js
+index e2b30de754a2..95904bb4ae65 100644
+--- a/lib/internal/main/worker_thread.js
++++ b/lib/internal/main/worker_thread.js
+@@ -152,6 +152,9 @@ port.on('message', (message) => {
+       if (getOptionValue('--import').length === 0) {
+         finishVfsMounts();
+       }
++      // Unlike the --vfs-load source, a SEA archive needs no provider that a
++      // preload could register, so its mount is never deferred.
++      require('internal/vfs/sea').initSeaVfsInWorker();
+     }
+ 
+     if (!hasStdin)
+diff --git a/lib/internal/vfs/sea.js b/lib/internal/vfs/sea.js
+index 0aafa7705f75..4bf2273c8bbc 100644
+--- a/lib/internal/vfs/sea.js
++++ b/lib/internal/vfs/sea.js
+@@ -9,8 +9,9 @@ const {
+   isVfsEnabled,
+   isVfsArchiveEnabled,
+   getAsset,
++  getMainCode,
++  mainCodePath,
+ } = internalBinding('sea');
+-const { kEmptyObject } = require('internal/util');
+ const {
+   codes: {
+     ERR_INVALID_STATE,
+@@ -29,14 +30,12 @@ let initialized = false;
+  * SEA main script is placed at the mount point root so bundled code can
+  * reach the assets through `__dirname`-relative paths and relative
+  * `require()` calls.
+- * @param {object} [options] Configuration options
+- * @param {Record<string, string|Buffer>} [options.extraFiles] Additional
+- *   files to serve alongside the assets (used for the SEA main script)
++ * @param {string|Buffer} mainCode The source of the SEA main script
+  * @returns {VirtualFileSystem|null} The mounted VFS, or null if not running
+  *   as a SEA or VFS is not enabled in the SEA configuration
+  * @throws {ERR_INVALID_STATE} If already initialized
+  */
+-function initSeaVfs(options = kEmptyObject) {
++function initSeaVfs(mainCode) {
+   if (initialized) {
+     throw new ERR_INVALID_STATE('SEA VFS is already initialized');
+   }
+@@ -46,25 +45,51 @@ function initSeaVfs(options = kEmptyObject) {
+     return null;
+   }
+ 
+-  const { VirtualFileSystem } = require('internal/vfs/file_system');
++  const { VirtualFileSystem, kLoadLayer } = require('internal/vfs/file_system');
+ 
++  const extraFiles = { __proto__: null, [getSeaMainName()]: mainCode };
++  const isArchive = isVfsArchiveEnabled();
+   let provider;
+-  if (isVfsArchiveEnabled()) {
+-    provider = createZipProvider(options.extraFiles);
++  if (isArchive) {
++    provider = createZipProvider(extraFiles);
+   } else {
+     const { SEAProvider } = require('internal/vfs/providers/sea');
+-    provider = new SEAProvider({ extraFiles: options.extraFiles });
++    provider = new SEAProvider({ extraFiles });
+   }
+   // The SEA warning already covers the feature; don't emit the
+   // VirtualFileSystem experimental warning for the implicit SEA mount.
++  // An archive is mounted where --vfs-load mounts its source, which is the
++  // same mount point in every thread, so a worker can reach the code in it.
+   const vfs = new VirtualFileSystem(provider, {
++    __proto__: null,
+     emitExperimentalWarning: false,
++    [kLoadLayer]: isArchive,
+   });
+   vfs.mount();
+ 
+   return vfs;
+ }
+ 
++/**
++ * Mounts the SEA virtual file system in a worker, when it is backed by a
++ * `"vfsArchive"`, so that a path into the mount in the main thread, such as
++ * the main script's `__filename`, is also valid in the worker.
++ */
++function initSeaVfsInWorker() {
++  if (isVfsArchiveEnabled()) {
++    initSeaVfs(getMainCode());
++  }
++}
++
++/**
++ * The name under which the SEA main script is placed at the mount point root.
++ * @returns {string}
++ */
++function getSeaMainName() {
++  const { basename } = require('path');
++  return basename(mainCodePath || process.execPath);
++}
++
+ // The reserved asset key under which --build-sea stores the ZIP archive
+ // named by "vfsArchive". Must match kVfsArchiveAssetName in src/node_sea.cc.
+ const kVfsArchiveAssetName = 'node:sea:vfs.zip';
+@@ -105,5 +130,7 @@ function createZipProvider(extraFiles) {
+ /* c8 ignore stop */
+ 
+ module.exports = {
++  getSeaMainName,
+   initSeaVfs,
++  initSeaVfsInWorker,
+ };
+diff --git a/src/node_options.cc b/src/node_options.cc
+index acd98e6b9276..d7373bf06186 100644
+--- a/src/node_options.cc
++++ b/src/node_options.cc
+@@ -316,6 +316,16 @@ void EnvironmentOptions::CheckOptions(std::vector<std::string>* errors,
+     errors->push_back("either --check or --eval can be used, not both");
+   }
+ 
++#ifndef DISABLE_SINGLE_EXECUTABLE_APPLICATION
++  // The archive takes the mount point reserved for the --vfs-load source.
++  if (!vfs_load_source.empty() && sea::IsSingleExecutable() &&
++      sea::FindSingleExecutableResource().use_vfs_archive()) {
++    errors->push_back(
++        "--vfs-load cannot be used in a single executable application "
++        "built with \"vfsArchive\"");
++  }
++#endif  // DISABLE_SINGLE_EXECUTABLE_APPLICATION
++
+   for (const std::string& pattern : permission::ParseEnvAllowList(allow_env)) {
+     if (!permission::IsValidEnvAllowPattern(pattern)) {
+       errors->push_back("--allow-env must be '*', a variable name, or a "
+diff --git a/src/node_sea.cc b/src/node_sea.cc
+index 065ec8285d9f..975df52d6efa 100644
+--- a/src/node_sea.cc
++++ b/src/node_sea.cc
+@@ -250,6 +250,10 @@ bool SeaResource::use_code_cache() const {
+   return static_cast<bool>(flags & SeaFlags::kUseCodeCache);
+ }
+ 
++bool SeaResource::use_vfs_archive() const {
++  return static_cast<bool>(flags & SeaFlags::kVfsArchive);
++}
++
+ const SeaResource& FindSingleExecutableResource() {
+   static const SeaResource sea_resource = []() -> SeaResource {
+     std::string_view blob = FindSingleExecutableBlob();
+@@ -277,12 +281,8 @@ void IsVfsEnabled(const FunctionCallbackInfo<Value>& args) {
+ }
+ 
+ void IsVfsArchiveEnabled(const FunctionCallbackInfo<Value>& args) {
+-  bool enabled = false;
+-  if (IsSingleExecutable()) {
+-    const SeaResource& sea_resource = FindSingleExecutableResource();
+-    enabled = static_cast<bool>(sea_resource.flags & SeaFlags::kVfsArchive);
+-  }
+-  args.GetReturnValue().Set(enabled);
++  args.GetReturnValue().Set(IsSingleExecutable() &&
++                            FindSingleExecutableResource().use_vfs_archive());
+ }
+ 
+ void IsExperimentalSeaWarningNeeded(const FunctionCallbackInfo<Value>& args) {
+@@ -636,6 +636,15 @@ std::optional<SeaConfig> ParseSingleExecutableConfig(
+               config_path);
+       return std::nullopt;
+     }
++    // The archive takes the mount point reserved for the --vfs-load source.
++    for (const std::string& arg : result.exec_argv) {
++      if (arg == "--vfs-load" || arg.starts_with("--vfs-load=")) {
++        FPrintF(stderr,
++                "\"vfsArchive\" cannot be used together with --vfs-load in "
++                "\"execArgv\"\n");
++        return std::nullopt;
++      }
++    }
+     // The archive is embedded as a single reserved asset.
+     result.flags |= SeaFlags::kIncludeAssets;
+   }
+@@ -966,6 +975,20 @@ void GetAssetKeys(const FunctionCallbackInfo<Value>& args) {
+   args.GetReturnValue().Set(result);
+ }
+ 
++// A worker has no main script handed to it, but places the SEA main script in
++// its virtual file system just as the main thread does.
++void GetMainCode(const FunctionCallbackInfo<Value>& args) {
++  CHECK_EQ(args.Length(), 0);
++  const SeaResource& sea_resource = FindSingleExecutableResource();
++  CHECK(!sea_resource.use_snapshot());
++  Local<Value> code;
++  if (ToV8Value(args.GetIsolate()->GetCurrentContext(),
++                sea_resource.main_code_or_snapshot)
++          .ToLocal(&code)) {
++    args.GetReturnValue().Set(code);
++  }
++}
++
+ MaybeLocal<Value> LoadSingleExecutableApplication(
+     const StartExecutionCallbackInfoWithModule& info) {
+   // Here we are currently relying on the fact that in NodeMainInstance::Run(),
+@@ -1048,6 +1071,7 @@ void Initialize(Local<Object> target,
+             IsExperimentalSeaWarningNeeded);
+   SetMethod(context, target, "getAsset", GetAsset);
+   SetMethod(context, target, "getAssetKeys", GetAssetKeys);
++  SetMethod(context, target, "getMainCode", GetMainCode);
+ }
+ 
+ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
+@@ -1057,6 +1081,7 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
+   registry->Register(IsExperimentalSeaWarningNeeded);
+   registry->Register(GetAsset);
+   registry->Register(GetAssetKeys);
++  registry->Register(GetMainCode);
+ }
+ 
+ }  // namespace sea
+diff --git a/src/node_sea.h b/src/node_sea.h
+index 32879e902273..b4c852eff4eb 100644
+--- a/src/node_sea.h
++++ b/src/node_sea.h
+@@ -64,6 +64,7 @@ struct SeaResource {
+ 
+   bool use_snapshot() const;
+   bool use_code_cache() const;
++  bool use_vfs_archive() const;
+ 
+   static constexpr size_t kHeaderSize = sizeof(kMagic) + sizeof(SeaFlags) +
+                                         sizeof(SeaExecArgvExtension) +
+diff --git a/test/fixtures/sea/vfs-zip/sea-config-vfs-load-rejected.json b/test/fixtures/sea/vfs-zip/sea-config-vfs-load-rejected.json
+new file mode 100644
+index 000000000000..6b42595460bd
+--- /dev/null
++++ b/test/fixtures/sea/vfs-zip/sea-config-vfs-load-rejected.json
+@@ -0,0 +1,7 @@
++{
++  "main": "sea.js",
++  "output": "sea-vfs-load-rejected",
++  "useVfs": true,
++  "vfsArchive": "assets.zip",
++  "execArgvExtension": "cli"
++}
+diff --git a/test/fixtures/sea/vfs-zip/sea.js b/test/fixtures/sea/vfs-zip/sea.js
+index eb26e0f59651..439728c78e1a 100644
+--- a/test/fixtures/sea/vfs-zip/sea.js
++++ b/test/fixtures/sea/vfs-zip/sea.js
+@@ -2,6 +2,19 @@
+ const fs = require('fs');
+ const path = require('path');
+ const assert = require('assert');
++const os = require('os');
++const { Worker, isMainThread, parentPort } = require('worker_threads');
++
++if (!isMainThread) {
++  // A worker mounts the archive too, at the same mount point, so the main
++  // script and the code next to it can be loaded from there.
++  parentPort.postMessage({
++    dirname: __dirname,
++    greeting: fs.readFileSync(path.join(__dirname, 'data', 'greeting.txt'), 'utf8'),
++    sum: require('./modules/math.js').add(2, 3),
++  });
++  return;
++}
+ 
+ // With "useVfsZip", the bundled assets are stored as a single ZIP archive
+ // and mounted through the ZipProvider. Everything is reachable through
+@@ -13,6 +26,9 @@ assert.strictEqual(path.basename(__filename), 'sea.js');
+ assert.strictEqual(require.main, module);
+ console.log('main script runs from', __filename);
+ 
++// The archive is mounted at the mount point reserved for --vfs-load.
++assert.strictEqual(__dirname, path.join(os.devNull, 'vfs', '0'));
++
+ // The main script itself is readable through fs.
+ assert.strictEqual(fs.existsSync(__filename), true);
+ 
+@@ -58,4 +74,17 @@ assert.notStrictEqual(a, b);
+ a[0] = 0;
+ assert.strictEqual(b.toString('utf8'), 'Hello from SEA VFS!');
+ 
+-console.log('All SEA VFS zip tests passed!');
++// The mount point is taken by the archive, so a worker cannot --vfs-load.
++assert.throws(() => new Worker(__filename, {
++  execArgv: ['--experimental-vfs', `--vfs-load=${__dirname}`],
++}), { code: 'ERR_WORKER_INVALID_EXEC_ARGV' });
++
++const worker = new Worker(__filename);
++worker.once('message', (message) => {
++  assert.deepStrictEqual(message, {
++    dirname: __dirname,
++    greeting: 'Hello from SEA VFS!',
++    sum: 5,
++  });
++  console.log('All SEA VFS zip tests passed!');
++});
+diff --git a/test/sea/test-build-sea-vfs-incompatible-options.js b/test/sea/test-build-sea-vfs-incompatible-options.js
+index 68bd520cb505..bd51ee12c166 100644
+--- a/test/sea/test-build-sea-vfs-incompatible-options.js
++++ b/test/sea/test-build-sea-vfs-incompatible-options.js
+@@ -141,3 +141,24 @@ skipIfBuildSEAIsNotSupported();
+       stderr: /"vfsArchive" field of .*vfs-archive-not-string\.json is not a string/,
+     });
+ }
++
++// Test: "vfsArchive" combined with --vfs-load in "execArgv"
++for (const arg of ['--vfs-load=assets.zip', '--vfs-load']) {
++  tmpdir.refresh();
++  const config = tmpdir.resolve('vfs-archive-vfs-load.json');
++  writeFileSync(config, JSON.stringify({
++    main: 'bundle.js',
++    output: 'sea',
++    useVfs: true,
++    vfsArchive: 'assets.zip',
++    execArgv: ['--experimental-vfs', arg],
++  }), 'utf8');
++  spawnSyncAndAssert(
++    process.execPath,
++    ['--build-sea', config], {
++      cwd: tmpdir.path,
++    }, {
++      status: 1,
++      stderr: /"vfsArchive" cannot be used together with --vfs-load in "execArgv"/,
++    });
++}
+diff --git a/test/sea/test-single-executable-application-vfs-zip.js b/test/sea/test-single-executable-application-vfs-zip.js
+index 57282f9022bd..6165d567de5b 100644
+--- a/test/sea/test-single-executable-application-vfs-zip.js
++++ b/test/sea/test-single-executable-application-vfs-zip.js
+@@ -57,4 +57,25 @@ main().then(common.mustCall(() => {
+       },
+     },
+   );
++
++  // The archive is mounted where --vfs-load would mount its source, so the
++  // executable rejects --vfs-load at startup. --build-sea already refuses it
++  // in "execArgv", so pass it through --node-options instead.
++  const rejectedFile = buildSEA(fixtures.path('sea', 'vfs-zip'), {
++    configPath: 'sea-config-vfs-load-rejected.json',
++  });
++  spawnSyncAndAssert(
++    rejectedFile,
++    ['--node-options=--experimental-vfs --vfs-load=assets.zip'],
++    {
++      env: {
++        ...process.env,
++        NODE_DEBUG_NATIVE: undefined,
++      },
++    },
++    {
++      status: 9,
++      stderr: /--vfs-load cannot be used in a single executable application built with "vfsArchive"/,
++    },
++  );
+ }));

@@ -1,0 +1,6 @@
+{
+  "title": "Don't generate bridge methods for inaccessible Java package-private methods",
+  "body": "\r\nFixes #25098\r\n\r\nWhen a Java class has a package-private method inheritance that has different signature after erasure,\r\nand a Scala class in a different package extends it, we should not generate a bridge method because the target method is inaccessible.\r\n\r\nFor example:\r\n```java\r\n// jpkg/JavaBase.java\r\npackage jpkg;\r\npublic class JavaBase {\r\n    Object getValue() { return \"base\"; }\r\n}\r\n\r\n// jpkg/JavaChild.java\r\npackage jpkg;\r\npublic class JavaChild extends JavaBase {\r\n    @Override\r\n    String getValue() { return \"child\"; }\r\n}\r\n```\r\n\r\n```scala\r\n// other/ScalaChild.scala\r\npackage other\r\nclass ScalaChild extends jpkg.JavaChild\r\n```\r\n\r\nPreviously, Scala would generate an unusable bridge method in ScalaChild:\r\n```java\r\npublic Object getValue() { return this.getValue(); }\r\n```\r\n\r\nThis bridge would fail at runtime with `IllegalAccessError` because it tries to call the package-private method from outside the package.\r\n\r\nThe fix adds an accessibility check in `Bridges.scala` to skip bridge generation when the target method is not accessible from the class being compiled.",
+  "head_sha": "514f16360d4d921c8323d9a16fd15e85a64da17b",
+  "base_sha": "1f0a6b980157f08c893511bebc86d4b216bcdfbe"
+}

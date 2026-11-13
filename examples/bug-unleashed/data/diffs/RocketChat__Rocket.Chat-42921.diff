@@ -1,0 +1,279 @@
+diff --git a/apps/meteor/client/meteor/login/saml.ts b/apps/meteor/client/meteor/login/saml.ts
+index a4682723fbbcf..3a999e29e7234 100644
+--- a/apps/meteor/client/meteor/login/saml.ts
++++ b/apps/meteor/client/meteor/login/saml.ts
+@@ -1,30 +1,15 @@
+ import { Random } from '@rocket.chat/random';
+-import { Accounts } from 'meteor/accounts-base';
+-import { Meteor } from 'meteor/meteor';
++import type { Meteor } from 'meteor/meteor';
+ 
+-import { type LoginCallback, handleLogin } from '../../lib/2fa/overrideLoginMethod';
++import { handleLogin } from '../../lib/2fa/overrideLoginMethod';
+ import { absoluteUrl } from '../../lib/absoluteUrl';
+ import { STORAGE_KEYS, removeStoredItem } from '../../lib/sdk/storage';
+ import { settings } from '../../lib/settings';
+-import { callLoginMethod } from '../accounts';
+-
+-declare module 'meteor/meteor' {
+-	// eslint-disable-next-line @typescript-eslint/no-namespace
+-	namespace Meteor {
+-		function loginWithSamlToken(credentialToken: string, callback?: LoginCallback): void;
+-
+-		function loginWithSaml(options: { provider: string; credentialToken?: string }): void;
+-	}
+-}
++import { callLoginMethod, registerLoginWithMethod } from '../accounts';
+ 
+ declare module 'meteor/accounts-base' {
+ 	// eslint-disable-next-line @typescript-eslint/no-namespace
+ 	namespace Accounts {
+-		export let saml: {
+-			credentialToken?: string;
+-			credentialSecret?: string;
+-		};
+-
+ 		/**
+ 		 * There is one case where the onlogout event is triggered with no user:
+ 		 * during the deletion, the user is logged out, and the framework try to get the user from the database.
+@@ -41,56 +26,43 @@ declare module 'meteor/service-configuration' {
+ 	}
+ }
+ 
+-if (!Accounts.saml) {
+-	Accounts.saml = {};
+-}
+-
+-const { logout } = Meteor;
+-
+-Meteor.logout = async function (...args) {
+-	const standardLogout = () => logout.apply(Meteor, args);
+-
++/** Ends the session at the SAML identity provider; resolves `false` when the caller should log out locally instead. */
++export const logoutFromSamlIdp = async (): Promise<boolean> => {
+ 	if (!settings.peek('SAML_Custom_Default')) {
+-		return standardLogout();
++		return false;
+ 	}
+ 
+ 	if (settings.peek('SAML_Custom_Default_logout_behaviour') === 'Local') {
+ 		console.info('SAML session not terminated, only the Rocket.Chat session is going to be killed');
+-		return standardLogout();
++		return false;
+ 	}
+ 
+ 	const provider = settings.peek('SAML_Custom_Default_provider');
+ 
+-	if (provider && settings.peek('SAML_Custom_Default_idp_slo_redirect_url')) {
+-		console.info('SAML session terminated via SLO');
+-
+-		const { sdk } = await import('../../lib/SDKClient');
+-		sdk
+-			.call('samlLogout', provider)
+-			.then((result) => {
+-				if (!result) {
+-					logout.apply(Meteor);
+-					return;
+-				}
+-
+-				// Remove the userId from the client to prevent calls to the server while the logout is processed.
+-				// If the logout fails, the userId will be reloaded on the resume call
+-				removeStoredItem(STORAGE_KEYS.USER_ID);
+-
+-				// A nasty bounce: 'result' has the SAML LogoutRequest but we need a proper 302 to redirected from the server.
+-				window.location.replace(absoluteUrl(`_saml/sloRedirect/${provider}/?redirect=${encodeURIComponent(result)}`));
+-			})
+-			.catch(() => logout.apply(Meteor));
+-		return;
++	if (!provider || !settings.peek('SAML_Custom_Default_idp_slo_redirect_url')) {
++		return false;
++	}
++
++	console.info('SAML session terminated via SLO');
++
++	const { sdk } = await import('../../lib/SDKClient');
++	const result = await sdk.call('samlLogout', provider).catch(() => undefined);
++
++	if (!result) {
++		return false;
+ 	}
+ 
+-	return standardLogout();
++	// Remove the userId from the client to prevent calls to the server while the logout is processed.
++	// If the logout fails, the userId will be reloaded on the resume call
++	removeStoredItem(STORAGE_KEYS.USER_ID);
++
++	// A nasty bounce: 'result' has the SAML LogoutRequest but we need a proper 302 to redirected from the server.
++	window.location.replace(absoluteUrl(`_saml/sloRedirect/${provider}/?redirect=${encodeURIComponent(result)}`));
++	return true;
+ };
+ 
+-Meteor.loginWithSaml = (options) => {
+-	options = options || {};
+-	const credentialToken = `id-${Random.id()}`;
+-	options.credentialToken = credentialToken;
++registerLoginWithMethod('loginWithSaml', (options: { provider: string; credentialToken?: string } = { provider: '' }) => {
++	options.credentialToken = `id-${Random.id()}`;
+ 
+ 	let url = `_saml/authorize/${options.provider}/${options.credentialToken}`;
+ 
+@@ -101,9 +73,9 @@ Meteor.loginWithSaml = (options) => {
+ 	}
+ 
+ 	window.location.href = url;
+-};
++});
+ 
+-const loginWithSamlToken = (credentialToken: string) =>
++const loginWithSamlTokenOnly = (credentialToken: string) =>
+ 	callLoginMethod({
+ 		methodArguments: [
+ 			{
+@@ -128,4 +100,4 @@ const loginWithSamlTokenAndTOTP = (credentialToken: string, code: string) =>
+ 		],
+ 	});
+ 
+-Meteor.loginWithSamlToken = handleLogin(loginWithSamlToken, loginWithSamlTokenAndTOTP);
++export const loginWithSamlToken = handleLogin(loginWithSamlTokenOnly, loginWithSamlTokenAndTOTP);
+diff --git a/apps/meteor/client/providers/UserProvider/UserProvider.tsx b/apps/meteor/client/providers/UserProvider/UserProvider.tsx
+index fc5d6059f3cfd..aad38e805a0dd 100644
+--- a/apps/meteor/client/providers/UserProvider/UserProvider.tsx
++++ b/apps/meteor/client/providers/UserProvider/UserProvider.tsx
+@@ -22,6 +22,7 @@ import { getDdpSdk } from '../../lib/sdk/ddpSdk';
+ import { settings } from '../../lib/settings';
+ import { userIdStore } from '../../lib/user';
+ import { logout } from '../../meteor/accounts';
++import { logoutFromSamlIdp } from '../../meteor/login/saml';
+ import { Users, Rooms, Subscriptions } from '../../stores';
+ import { useSamlInviteToken } from '../../views/invite/hooks/useSamlInviteToken';
+ 
+@@ -159,7 +160,12 @@ const UserProvider = ({ children }: UserProviderProps) => {
+ 			querySubscription,
+ 			queryRoom,
+ 			querySubscriptions,
+-			logout: async () => logout(),
++			logout: async () => {
++				if (await logoutFromSamlIdp()) {
++					return;
++				}
++				return logout();
++			},
+ 			onLogout: (cb) => {
+ 				return ee.on('logout', cb);
+ 			},
+diff --git a/apps/meteor/client/views/root/SAMLLoginRoute.spec.tsx b/apps/meteor/client/views/root/SAMLLoginRoute.spec.tsx
+index 2049fc97bf745..54856939a5ec4 100644
+--- a/apps/meteor/client/views/root/SAMLLoginRoute.spec.tsx
++++ b/apps/meteor/client/views/root/SAMLLoginRoute.spec.tsx
+@@ -1,11 +1,15 @@
+ import { MockedServerContext, MockedUserContext } from '@rocket.chat/mock-providers';
+ import { render } from '@testing-library/react';
+-import { Meteor } from 'meteor/meteor';
+ 
+ import SAMLLoginRoute from './SAMLLoginRoute';
+ import RouterContextMock from '../../../tests/mocks/client/RouterContextMock';
++import { loginWithSamlToken } from '../../meteor/login/saml';
+ import { useSamlInviteToken } from '../invite/hooks/useSamlInviteToken';
+ 
++jest.mock('../../meteor/login/saml', () => ({
++	loginWithSamlToken: jest.fn((_token: string, callback: () => void) => callback()),
++}));
++
+ jest.mock('../invite/hooks/useSamlInviteToken');
+ const mockUseSamlInviteToken = jest.mocked(useSamlInviteToken);
+ const navigateStub = jest.fn();
+@@ -17,7 +21,7 @@ beforeAll(() => {
+ beforeEach(() => {
+ 	jest.clearAllMocks();
+ 	navigateStub.mockClear();
+-	(Meteor.loginWithSamlToken as jest.Mock<any>).mockClear();
++	jest.mocked(loginWithSamlToken).mockClear();
+ });
+ 
+ it('should redirect to /home', async () => {
+@@ -73,8 +77,8 @@ it('should call loginWithSamlToken when component is mounted', async () => {
+ 		</MockedServerContext>,
+ 	);
+ 
+-	expect(Meteor.loginWithSamlToken).toHaveBeenCalledTimes(1);
+-	expect(Meteor.loginWithSamlToken).toHaveBeenLastCalledWith(undefined, expect.any(Function));
++	expect(loginWithSamlToken).toHaveBeenCalledTimes(1);
++	expect(loginWithSamlToken).toHaveBeenLastCalledWith(undefined, expect.any(Function));
+ });
+ 
+ it('should call loginWithSamlToken with the token when it is present', async () => {
+@@ -86,8 +90,8 @@ it('should call loginWithSamlToken with the token when it is present', async ()
+ 		</MockedUserContext>,
+ 	);
+ 
+-	expect(Meteor.loginWithSamlToken).toHaveBeenCalledTimes(1);
+-	expect(Meteor.loginWithSamlToken).toHaveBeenLastCalledWith('testToken', expect.any(Function));
++	expect(loginWithSamlToken).toHaveBeenCalledTimes(1);
++	expect(loginWithSamlToken).toHaveBeenLastCalledWith('testToken', expect.any(Function));
+ });
+ 
+ jest.mock('../../lib/buildAuthDeeplinkURL', () => ({ buildSamlDeepLinkURL: jest.fn() }));
+@@ -116,7 +120,7 @@ describe('native client handoff', () => {
+ 		);
+ 
+ 		// The browser must never authenticate: the app redeems the credential on its own connection.
+-		expect(Meteor.loginWithSamlToken).not.toHaveBeenCalled();
++		expect(loginWithSamlToken).not.toHaveBeenCalled();
+ 		expect(navigateStub).not.toHaveBeenCalled();
+ 
+ 		expect(buildSamlDeepLinkURL).toHaveBeenCalledTimes(1);
+@@ -134,6 +138,6 @@ describe('native client handoff', () => {
+ 		);
+ 
+ 		expect(buildSamlDeepLinkURL).not.toHaveBeenCalled();
+-		expect(Meteor.loginWithSamlToken).toHaveBeenCalledTimes(1);
++		expect(loginWithSamlToken).toHaveBeenCalledTimes(1);
+ 	});
+ });
+diff --git a/apps/meteor/client/views/root/SAMLLoginRoute.tsx b/apps/meteor/client/views/root/SAMLLoginRoute.tsx
+index 905cca1e87197..cc1d3e3fb5237 100644
+--- a/apps/meteor/client/views/root/SAMLLoginRoute.tsx
++++ b/apps/meteor/client/views/root/SAMLLoginRoute.tsx
+@@ -1,8 +1,8 @@
+ import { useRouter, useToastMessageDispatch, useSearchParameter } from '@rocket.chat/ui-contexts';
+-import { Meteor } from 'meteor/meteor';
+ import { useEffect, useRef } from 'react';
+ 
+ import { buildSamlDeepLinkURL } from '../../lib/buildAuthDeeplinkURL';
++import { loginWithSamlToken } from '../../meteor/login/saml';
+ import { useSamlInviteToken } from '../invite/hooks/useSamlInviteToken';
+ 
+ const SAMLLoginRoute = () => {
+@@ -31,7 +31,7 @@ const SAMLLoginRoute = () => {
+ 			return () => clearTimeout(timeout);
+ 		}
+ 
+-		Meteor.loginWithSamlToken(token, (error?: unknown) => {
++		void loginWithSamlToken(token, (error?: unknown) => {
+ 			if (error) {
+ 				dispatchToastMessage({ type: 'error', message: error });
+ 			}
+diff --git a/apps/meteor/tests/mocks/client/meteor.ts b/apps/meteor/tests/mocks/client/meteor.ts
+index 466ccc15b6b06..060e9db6fee9d 100644
+--- a/apps/meteor/tests/mocks/client/meteor.ts
++++ b/apps/meteor/tests/mocks/client/meteor.ts
+@@ -1,7 +1,6 @@
+ import { jest } from '@jest/globals';
+ 
+ export const Meteor = {
+-	loginWithSamlToken: jest.fn((_token, callback: () => void) => callback()),
+ 	connection: {
+ 		_stream: { on: jest.fn() },
+ 	},
+diff --git a/apps/meteor/vite/native/login.ts b/apps/meteor/vite/native/login.ts
+index 9e8696b4f7e65..f64f0e42dc6ab 100644
+--- a/apps/meteor/vite/native/login.ts
++++ b/apps/meteor/vite/native/login.ts
+@@ -1,5 +1,5 @@
+-// Login methods that run on client/meteor/accounts alone. The SAML one still
+-// depends on Meteor's client packages.
++// Login methods that run on client/meteor/accounts alone.
+ import '../../client/meteor/login/cas';
+ import '../../client/meteor/login/ldap';
+ import '../../client/meteor/login/password';
++import '../../client/meteor/login/saml';

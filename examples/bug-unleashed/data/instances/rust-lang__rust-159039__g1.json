@@ -1,0 +1,26 @@
+{
+  "case_id": "rust-lang__rust-159039",
+  "repo": "rust-lang/rust",
+  "pr": 159039,
+  "title": "resolve: fix effective visibilities for items in ambiguous glob sets",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rust-lang__rust-159039__g1",
+  "target": {
+    "gid": "rust-lang__rust-159039#g1",
+    "summary": "`update_decl_chain` recursively traverses `decl.ambiguity_vis_max` without tracking visited declarations or detecting cycles. When mutual glob imports form a cycle in their ambiguous glob sets, this causes infinite recursion and a compiler stack overflow.",
+    "paths": [
+      "compiler/rustc_resolve/src/effective_visibilities.rs"
+    ],
+    "notes": [
+      "unbounded recursive traversal of `ambiguity_vis_max` without cycle detection",
+      "definition of `update_decl_chain` whose behavior is faulty due to lack of cycle detection"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "159b9a0c557ed43c9be3d52a58b8cbf10fbc2f4f",
+  "base_sha": "3664b37017c529cad0f0ed259769f15743c21a6a",
+  "snapshot": "repos/rust-lang__rust/159b9a0c557ed43c9be3d52a58b8cbf10fbc2f4f",
+  "diff": "diffs/rust-lang__rust-159039.diff"
+}

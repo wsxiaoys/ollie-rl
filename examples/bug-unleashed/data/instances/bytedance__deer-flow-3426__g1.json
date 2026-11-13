@@ -1,0 +1,29 @@
+{
+  "case_id": "bytedance__deer-flow-3426",
+  "repo": "bytedance/deer-flow",
+  "pr": 3426,
+  "title": "fix(dev): exclude runtime state from gateway reload",
+  "language": "Shell",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "bytedance__deer-flow-3426__g1",
+  "target": {
+    "gid": "bytedance__deer-flow-3426#g1",
+    "summary": "Excluding the absolute path of backend/sandbox in uvicorn's --reload-exclude without ensuring the directory exists causes uvicorn to fall back to Path.glob(). On Python 3.12, globbing an absolute pattern raises NotImplementedError, crashing dev gateway startup on fresh checkouts.",
+    "paths": [
+      "docker/dev-entrypoint.sh",
+      "scripts/serve.sh"
+    ],
+    "notes": [
+      "mkdir fails to create /app/backend/sandbox before passing it to uvicorn --reload-exclude",
+      "mkdir fails to create $REPO_ROOT/backend/sandbox before passing it to uvicorn --reload-exclude",
+      "passes absolute path /app/backend/sandbox to uvicorn --reload-exclude without ensuring the directory exists",
+      "passes absolute path $REPO_ROOT/backend/sandbox to uvicorn --reload-exclude without ensuring the directory exists"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5070ea8427dfc5868f85109b875fe1331e5bc786",
+  "base_sha": "f725a963d5b6a95a9e01a9a44c23009d8325c8ad",
+  "snapshot": "repos/bytedance__deer-flow/5070ea8427dfc5868f85109b875fe1331e5bc786",
+  "diff": "diffs/bytedance__deer-flow-3426.diff"
+}

@@ -1,0 +1,26 @@
+{
+  "case_id": "vercel__next.js-95116",
+  "repo": "vercel/next.js",
+  "pr": 95116,
+  "title": "Avoid mutating `req.headers` when stripping internal headers",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "vercel__next.js-95116__g1",
+  "target": {
+    "gid": "vercel__next.js-95116#g1",
+    "summary": "Copying the request headers before sealing detaches the userland headers() view from the underlying request. Subsequent mutations to request headers (e.g., from a proxy or middleware) will not be reflected when reading headers(), returning stale values.",
+    "paths": [
+      "packages/next/src/server/async-storage/request-store.ts"
+    ],
+    "notes": [
+      "faulty statement copying headers before sealing, which detaches headers() from the request",
+      "definition of the function whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5720ba9591b2085d42a22fa00d6b1dee87ad11f2",
+  "base_sha": "61f8830a39db26dc0f95061ad2ea3b4723cee1f9",
+  "snapshot": "repos/vercel__next.js/5720ba9591b2085d42a22fa00d6b1dee87ad11f2",
+  "diff": "diffs/vercel__next.js-95116.diff"
+}

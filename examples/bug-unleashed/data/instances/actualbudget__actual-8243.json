@@ -1,0 +1,16 @@
+{
+  "case_id": "actualbudget__actual-8243",
+  "repo": "actualbudget/actual",
+  "pr": 8243,
+  "title": "EasyBank PayeeName fallback fix",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "actualbudget__actual-8243",
+  "target": null,
+  "siblings": [],
+  "head_sha": "d0d8e71d3ba4596d6a70d0c7aea9a300fbf248d5",
+  "base_sha": "0ccdc8dde225b79ba8ad3077c4040fcc1c4ad598",
+  "snapshot": "repos/actualbudget__actual/d0d8e71d3ba4596d6a70d0c7aea9a300fbf248d5",
+  "diff": "diffs/actualbudget__actual-8243.diff"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "Fix changing difficulty in editor potentially seeking incorrectly in presence of user/platform offsets",
+  "body": "Closes #38034.\r\n\r\nHoping the inline commentary is crafted enough to explain the issue and the resolution (if not it needs addressing).\r\n\r\nOne note: the linked issue can also be fixed with\r\n\r\n```diff\r\ndiff --git a/osu.Game/Screens/Edit/Editor.cs b/osu.Game/Screens/Edit/Editor.cs\r\nindex 9c9ec1364f..64f2e21f4f 100644\r\n--- a/osu.Game/Screens/Edit/Editor.cs\r\n+++ b/osu.Game/Screens/Edit/Editor.cs\r\n@@ -522,7 +522,7 @@ protected override void Dispose(bool isDisposing)\r\n         /// Restore the editor to a provided state.\r\n         /// </summary>\r\n         /// <param name=\"state\">The state to restore.</param>\r\n-        public void RestoreState([NotNull] EditorState state) => Schedule(() =>\r\n+        public void RestoreState([NotNull] EditorState state) => ScheduleAfterChildren(() =>\r\n         {\r\n             Mode.Value = state.Mode;\r\n             clock.Seek(state.Time);\r\n\r\n```\r\n\r\nbut this is localised and a similar issue may be raised elsewhere in the future. This PR applies a resolution which should hopefully hold tight(er) into the future.",
+  "head_sha": "6fadfdd272d6d3e50efa05ad9087dfd6367f48d8",
+  "base_sha": "bbbd3f6b12a662ad00e66720e9253a724c983cf5"
+}

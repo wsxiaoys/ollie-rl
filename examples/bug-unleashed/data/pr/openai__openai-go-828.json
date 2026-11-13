@@ -1,0 +1,6 @@
+{
+  "title": "fix: bound retry and polling delays",
+  "body": "## Summary\n- apply a local ceiling to server-suggested retry and polling intervals\n- keep explicit caller overrides for advanced use cases\n- make retry and polling waits stop promptly on context cancellation\n- add focused public-entrypoint and boundary regression coverage\n\n## Validation\n- `./scripts/lint`\n- `./scripts/check-go-mod`\n- full uncached root test suite against the mock server\n- focused race-enabled retry and polling tests\n- examples and external-consumer test suites\n- 32-bit compilation checks\n- exhaustive committed SDK review\n- exact-commit diff review",
+  "head_sha": "5cf9c29979e6c0082d431ebed4301aa0494f504c",
+  "base_sha": "9898c93f05d4a618b7ecc41b7359e084f9f95799"
+}

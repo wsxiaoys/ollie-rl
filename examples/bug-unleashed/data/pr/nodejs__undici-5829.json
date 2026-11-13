@@ -1,0 +1,6 @@
+{
+  "title": "fix: honor backpressure in decompression interceptor",
+  "body": "I made a mess of the original GHSA fix by treating a stream backpressure bug as a response-size policy decision.\n\nA 64 MiB limit answers a different question: how large a decoded response an application is willing to accept. It also rejects legitimate responses that can be consumed safely as streams. The correct fix is to honor the stream contract: stop pulling decoded output when the consumer pauses, propagate writable pressure from the decoder back to the transport, keep those pause reasons independent across retries, and wait to signal completion until the consumer resumes.\n\n`maxSize` still exists as an opt-in per-stage circuit breaker. It now defaults to `0`, leaving size policy to applications while backpressure keeps buffering tied to consumer demand.\n",
+  "head_sha": "409b1f499307725175ef7b32e8936fde3e44a0df",
+  "base_sha": "485c85c289150a40c26eaa7c133b65e9b868f0eb"
+}

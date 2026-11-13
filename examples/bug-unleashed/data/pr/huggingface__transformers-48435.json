@@ -1,0 +1,6 @@
+{
+  "title": "Allow nested rope params for tiny models",
+  "body": "<!-- ci-dashboard-badge:start -->\n[![CPU CI](https://transformers-ci.lor-e.huggingface.cool/badge/pr?pr=48435&event=pr-ci)](https://transformers-ci.lor-e.huggingface.cool/d/pytest-observability-by-pr/pytest-observability-branch?var-pr=48435) [![GPU run-slow](https://transformers-ci.lor-e.huggingface.cool/badge/pr?pr=48435&event=run-slow)](https://transformers-ci.lor-e.huggingface.cool/d/pytest-observability-by-pr/pytest-observability-branch?var-pr=48435)\n<!-- ci-dashboard-badge:end -->\n\n# What does this PR do?\r\n\r\nFixes https://github.com/huggingface/transformers/issues/48392, cc @albertvillanova",
+  "head_sha": "1c065700a7126ec099a504024e0f3ea912ca5a16",
+  "base_sha": "c119ec3cc37ab69642f39cca2de4187714002b08"
+}

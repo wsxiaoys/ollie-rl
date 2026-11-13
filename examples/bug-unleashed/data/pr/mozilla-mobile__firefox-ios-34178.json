@@ -1,0 +1,6 @@
+{
+  "title": "Add FXIOS-15939 [Homepage] Add tracker blocker module UI scaffolding",
+  "body": "## :scroll: Tickets\r\n[Jira ticket](https://mozilla-hub.atlassian.net/browse/FXIOS-15939)\r\n\r\n## :bulb: Description\r\nTitle.\r\n\r\nI also gave it the ol' \"Sort by name\" in the Homepage folder, hence a lot of files moving about.\r\n\r\n## :pencil: Checklist\r\n- [x] I filled in the ticket numbers and a description of my work\r\n- [x] I updated the PR name to follow our [PR naming guidelines](https://github.com/mozilla-mobile/firefox-ios/wiki/Pull-Request-Naming-Guide)\r\n- [x] I ensured unit tests pass and wrote tests for new code\r\n- [ ] If working on UI, I checked and implemented accessibility (Dynamic Text and VoiceOver)\r\n- [ ] If adding telemetry, I read the [data stewardship requirements](https://github.com/mozilla-mobile/firefox-ios/wiki/Adding-Glean-Telemetry-Events) and will request a data review\r\n- [ ] If adding or modifying strings, I read the [guidelines](https://github.com/mozilla-mobile/firefox-ios/wiki/How-to-add-and-modify-Strings) and will request a string review from l10n\r\n- [ ] If needed, I updated documentation and added comments to complex code\r\n\r\n",
+  "head_sha": "938710356673afae55ed9eaff94aab19a1d008bb",
+  "base_sha": "31ea8dd57e563ad0bdf0df815df3d05d757c693c"
+}

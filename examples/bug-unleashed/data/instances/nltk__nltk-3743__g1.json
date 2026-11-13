@@ -1,0 +1,28 @@
+{
+  "case_id": "nltk__nltk-3743",
+  "repo": "nltk/nltk",
+  "pr": 3743,
+  "title": "Sandbox Stanford JAR execution to nltk_data directories",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "nltk__nltk-3743__g1",
+  "target": {
+    "gid": "nltk__nltk-3743#g1",
+    "summary": "_authorize_private_dir appends caller-supplied directories to nltk.data.path when saving or loading a model. This permanently widens the global data search path for the process, allowing subsequent pathsec checks to trust arbitrary user-controlled paths.",
+    "paths": [
+      "nltk/tag/perceptron.py"
+    ],
+    "notes": [
+      "definition of the helper function that widens nltk.data.path",
+      "faulty statement appending untrusted caller directory to nltk.data.path",
+      "call site in save_to_json passing caller-supplied save location",
+      "call site in load_from_json passing caller-supplied model location"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "678c7fbc69217e463d9fd6744f5e76271df66a50",
+  "base_sha": "66bb636d024898d2d03f44b9c182187c712ee76f",
+  "snapshot": "repos/nltk__nltk/678c7fbc69217e463d9fd6744f5e76271df66a50",
+  "diff": "diffs/nltk__nltk-3743.diff"
+}

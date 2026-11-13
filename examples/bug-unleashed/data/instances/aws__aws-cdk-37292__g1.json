@@ -1,0 +1,28 @@
+{
+  "case_id": "aws__aws-cdk-37292",
+  "repo": "aws/aws-cdk",
+  "pr": 37292,
+  "title": "fix(lambda-nodejs): use direct spawn for local bundling",
+  "language": "TypeScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "aws__aws-cdk-37292__g1",
+  "target": {
+    "gid": "aws__aws-cdk-37292#g1",
+    "summary": "Executing spawn steps directly via exec fails on Windows when invoking .cmd shims (such as npx.cmd). Direct spawnSync cannot resolve batch file shims, failing with EINVAL and crashing local bundling.",
+    "paths": [
+      "packages/aws-cdk-lib/aws-lambda-nodejs/lib/bundling.ts",
+      "packages/aws-cdk-lib/aws-lambda-nodejs/lib/package-manager.ts"
+    ],
+    "notes": [
+      "faulty statement: directly spawns commands without handling Windows .cmd shims",
+      "helper producing the .cmd shim command array executed by direct spawn",
+      "definition of tryBundle executing the spawn steps"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "4217431b1175761cfaef30c1c54fa59d6a52db0c",
+  "base_sha": "c0849ea241c8f8707b26f07239aa1078b196bf1c",
+  "snapshot": "repos/aws__aws-cdk/4217431b1175761cfaef30c1c54fa59d6a52db0c",
+  "diff": "diffs/aws__aws-cdk-37292.diff"
+}

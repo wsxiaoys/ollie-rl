@@ -1,0 +1,1112 @@
+diff --git a/src/BrowserManager.ts b/src/BrowserManager.ts
+index 45d907c11..699c1613f 100644
+--- a/src/BrowserManager.ts
++++ b/src/BrowserManager.ts
+@@ -23,6 +23,13 @@ export interface BrowserManagerOptions {
+   logFile?: fs.WriteStream;
+ }
+ 
++/**
++ * Identity token for an in-flight connect/launch attempt. Instances carry no
++ * data and are never inspected structurally — only ever compared by
++ * reference (`!==`) — see BrowserManager#abandonPendingAttempt().
++ */
++class BrowserAttempt {}
++
+ export class BrowserManager {
+   #browser?: Browser;
+   #browserMode?: 'launched' | 'connected';
+@@ -32,6 +39,8 @@ export class BrowserManager {
+   #serverArgs: ParsedArguments;
+   #options: BrowserManagerOptions;
+ 
++  #browserAttempt: BrowserAttempt = new BrowserAttempt();
++
+   constructor(
+     serverArgs: ParsedArguments,
+     options: BrowserManagerOptions = {},
+@@ -126,20 +135,64 @@ export class BrowserManager {
+     if (this.#closingCount > 0) {
+       throw new Error('Browser was closed while initializing.');
+     }
++    // Captured before acquiring #mutex, not after: a caller queued here can
++    // have its own timeout fire (abandonPendingAttempt()) while it's still
++    // waiting for the lock. Capturing only after acquiring it would let such
++    // a call silently adopt the freshly-rotated token as its own baseline
++    // once the lock frees up, defeating the abandonment check entirely.
++    const attempt = this.#browserAttempt;
+     using _guard = await this.#mutex.acquire();
+     if (this.#closingCount > 0) {
+       throw new Error('Browser was closed while initializing.');
+     }
++    if (this.#browserAttempt !== attempt) {
++      // Abandoned while queued for the lock — #browser was never touched by
++      // this call, so bail immediately without #closeBrowser(), which could
++      // otherwise tear down a different, still-current attempt's browser.
++      throw new Error('Connection attempt was abandoned before it completed.');
++    }
+     if (!this.#browser?.connected) {
+       await this.#initBrowser();
+     }
+-    if (this.#closingCount > 0 || !this.#browser) {
++    if (
++      this.#closingCount > 0 ||
++      this.#browserAttempt !== attempt ||
++      !this.#browser
++    ) {
++      const reason =
++        this.#closingCount > 0
++          ? 'Browser was closed while initializing.'
++          : 'Connection attempt was abandoned before it completed.';
+       await this.#closeBrowser();
+-      throw new Error('Browser was closed while initializing.');
++      throw new Error(reason);
+     }
+     return this.#browser;
+   }
+ 
++  /**
++   * Signals that whoever was waiting on the in-flight ensureBrowser() call
++   * has given up (e.g. a tool-call timeout). There's no way to cancel a
++   * pending connect()/launch(), so this doesn't stop it — it rotates the
++   * token to a fresh value and clears #initPromise, so a late-resolving
++   * attempt gets discarded by #ensureBrowserLocked() instead of silently
++   * installed for a caller who already walked away.
++   *
++   * Also forgets the cached #browser, if any. This only ever fires from a
++   * getContext()-level timeout, which covers both ensureBrowser() and the
++   * McpContext initialization built on it — if ensureBrowser() already
++   * resolved and it's that later step hanging (e.g. a dead CDP transport),
++   * the token rotation alone does nothing, since #browser is already
++   * cached. Safe to forget unconditionally here: the tool mutex serializes
++   * every call, so there's no concurrent caller to disrupt.
++   */
++  abandonPendingAttempt(): void {
++    this.#browserAttempt = new BrowserAttempt();
++    this.#initPromise = undefined;
++    if (this.#browser) {
++      this.forget(this.#browser);
++    }
++  }
++
+   async #initBrowser(): Promise<Browser> {
+     if (
+       this.#serverArgs.browserUrl ||
+@@ -245,7 +298,9 @@ export class BrowserManager {
+       }
+       this.#browserMode = 'launched';
+       this.#browser = browser;
+-      return browser;
++      const launched = browser;
++      launched.once('disconnected', () => this.#evictIfCurrent(launched));
++      return launched;
+     } catch (error) {
+       await browser?.close().catch(() => {
+         // Best-effort cleanup if post-launch setup failed.
+@@ -355,6 +410,7 @@ export class BrowserManager {
+       logger?.('Connected Puppeteer');
+       this.#browserMode = 'connected';
+       this.#browser = connected;
++      connected.once('disconnected', () => this.#evictIfCurrent(connected));
+       return connected;
+     } catch (err) {
+       throw new Error(
+@@ -366,6 +422,57 @@ export class BrowserManager {
+     }
+   }
+ 
++  /**
++   * Clears the cached browser handle if it still matches `candidate`, so the
++   * next ensureBrowser() call establishes a fresh connection instead of
++   * reusing a handle that looks connected but is actually dead (e.g. its CDP
++   * transport died without ever emitting a `close`/`disconnected` event — as
++   * happens when an adb port-forward is torn down mid-call rather than
++   * closed cleanly).
++   *
++   * Also actively tears `candidate` down in the background: closes it if it
++   * was launched (so the Chrome subprocess doesn't leak), or disconnects if
++   * it was only connected to (so the transport and its listeners don't
++   * leak). This also settles any CDP call still pending against it —
++   * Puppeteer's connection disposal synchronously rejects in-flight
++   * callbacks — instead of leaving a hung call to leak forever.
++   */
++  forget(candidate: Browser): void {
++    if (this.#browser !== candidate) {
++      return;
++    }
++    const mode = this.#browserMode;
++    this.#browser = undefined;
++    this.#browserMode = undefined;
++    if (mode === 'launched') {
++      void candidate.close().catch(err => {
++        logger?.('Failed to close forgotten browser', err);
++      });
++    } else {
++      void candidate.disconnect().catch(err => {
++        logger?.('Failed to disconnect forgotten browser', err);
++      });
++    }
++  }
++
++  /**
++   * Handles a `disconnected` event fired by a browser we hold: clears the
++   * cached handle if it's still the current one, so the next ensureBrowser()
++   * call reconnects proactively rather than only discovering the staleness
++   * lazily on the next call's `!this.#browser?.connected` check. No teardown
++   * here — the browser is already disconnected/closed, that's why this
++   * fired — so this shares forget()'s identity guard without its cleanup,
++   * making a `disconnected` that fires late on an already-superseded browser
++   * a safe no-op.
++   */
++  #evictIfCurrent(candidate: Browser): void {
++    if (this.#browser !== candidate) {
++      return;
++    }
++    this.#browser = undefined;
++    this.#browserMode = undefined;
++  }
++
+   async #closeBrowser(): Promise<void> {
+     const browser = this.#browser;
+     const mode = this.#browserMode;
+diff --git a/src/ToolHandler.ts b/src/ToolHandler.ts
+index af4e578c4..832525bfe 100644
+--- a/src/ToolHandler.ts
++++ b/src/ToolHandler.ts
+@@ -10,7 +10,7 @@ import type {McpPage} from './McpPage.js';
+ import {McpResponse} from './McpResponse.js';
+ import {SlimMcpResponse} from './SlimMcpResponse.js';
+ import {ClearcutLogger} from './telemetry/ClearcutLogger.js';
+-import type {CallToolResult} from './third_party/index.js';
++import type {Browser, CallToolResult} from './third_party/index.js';
+ import {zod} from './third_party/index.js';
+ import {labels} from './tools/categories.js';
+ import {categoryToFlagName} from './config/category-options.js';
+@@ -25,6 +25,21 @@ import type {Mutex} from './third_party/index.js';
+ import {fileURLToPath, pathToFileURL} from 'node:url';
+ import {isLocalhost} from './utils/url.js';
+ 
++/**
++ * Upper bound on how long a single tool call may wait on the browser
++ * connection. Puppeteer normally rejects in-flight CDP calls when the
++ * underlying transport closes, but a transport that dies silently (e.g. an
++ * adb port-forward torn down mid-call, rather than closed cleanly) never
++ * fires `close`/`error`/`disconnected`, so the call would otherwise hang
++ * until an external (client-side) timeout gives up on the whole server. This
++ * bound turns that into a fast, clear error instead, and forgets the cached
++ * browser handle so the next call reconnects rather than reusing a handle
++ * that still looks connected.
++ */
++export const TOOL_CALL_TIMEOUT_MS = 60_000;
++
++class ToolCallTimeoutError extends Error {}
++
+ function buildDisabledMessage(
+   toolName: string,
+   flag: string,
+@@ -162,6 +177,8 @@ export class ToolHandler {
+     private readonly serverArgs: ParsedArguments,
+     private readonly getContext: () => Promise<McpContext>,
+     private readonly toolMutex: Mutex,
++    private readonly forgetBrowserOnTimeout: (browser: Browser) => void,
++    private readonly abandonPendingBrowserAttemptOnTimeout: () => void,
+   ) {
+     const {disabled, reason} = getToolStatusInfo(tool, serverArgs);
+     this.disabledReason = reason;
+@@ -171,6 +188,36 @@ export class ToolHandler {
+     this.registeredInputSchema = zod.object(this.inputSchema).strict();
+   }
+ 
++  /**
++   * Races a promise against TOOL_CALL_TIMEOUT_MS, calling onTimeout() if the
++   * timer wins. The loser of the race is left running — there is no way to
++   * cancel a pending Puppeteer call — but since nothing is left awaiting it,
++   * it cannot block subsequent tool calls.
++   */
++  async #raceWithTimeout<T>(
++    promise: Promise<T>,
++    onTimeout: () => void,
++  ): Promise<T> {
++    const timeoutError = new ToolCallTimeoutError(
++      `Tool "${this.tool.name}" timed out after ${TOOL_CALL_TIMEOUT_MS}ms waiting on the browser connection. The connection may have been lost (for example, the debugged browser or app restarted). It will be re-established automatically on the next tool call.`,
++    );
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    const timeout = new Promise<never>((_, reject) => {
++      timer = setTimeout(() => reject(timeoutError), TOOL_CALL_TIMEOUT_MS);
++      timer.unref?.();
++    });
++    try {
++      return await Promise.race([promise, timeout]);
++    } catch (err) {
++      if (err === timeoutError) {
++        onTimeout();
++      }
++      throw err;
++    } finally {
++      clearTimeout(timer);
++    }
++  }
++
+   handle = async (params: Record<string, unknown>): Promise<CallToolResult> => {
+     using _guard = await this.toolMutex.acquire();
+ 
+@@ -194,7 +241,15 @@ export class ToolHandler {
+       logger?.(
+         `${this.tool.name} request: ${JSON.stringify(params, null, '  ')}`,
+       );
+-      const context = await this.getContext();
++      // ensureBrowser() has no cancellation mechanism, so this timeout only
++      // stops us from waiting — the attempt itself keeps running abandoned.
++      // abandonPendingBrowserAttemptOnTimeout() tells BrowserManager to
++      // discard that attempt if it succeeds later instead of handing it to a
++      // subsequent caller — see BrowserManager#abandonPendingAttempt()'s doc
++      // comment for the full mechanism.
++      const context = await this.#raceWithTimeout(this.getContext(), () =>
++        this.abandonPendingBrowserAttemptOnTimeout(),
++      );
+       logger?.(`${this.tool.name} context: resolved`);
+       const response = this.serverArgs.slim
+         ? new SlimMcpResponse(this.serverArgs)
+@@ -204,53 +259,61 @@ export class ToolHandler {
+       if (context.consumeReconnectNotice()) {
+         response.setReconnectNotice();
+       }
+-      let page: McpPage | undefined;
+-      try {
+-        await validateToolFiles(this.tool, params, context);
+-        if (isPageScopedTool(this.tool)) {
+-          const pageId =
+-            typeof params.pageId === 'number' ? params.pageId : undefined;
+-          page =
+-            this.serverArgs.pageIdRouting &&
+-            pageId !== undefined &&
+-            !this.serverArgs.slim
+-              ? context.getPageById(pageId)
+-              : context.getSelectedMcpPage();
+-          await page?.init();
+-          response.setPage(page);
+-          if (this.tool.blockedByDialog) {
+-            page.throwIfDialogOpen();
++      // Shares one budget with tool.handler(): several tools' actual CDP
++      // calls happen in response.handle() instead (take_snapshot,
++      // list_pages, get_network_request, list_extensions), so it needs
++      // covering too. The closure below isn't cancelled on timeout — it
++      // keeps running abandoned — but nothing after this point observes its
++      // result.
++      const {content, structuredContent} = await this.#raceWithTimeout(
++        (async () => {
++          let page: McpPage | undefined;
++          try {
++            await validateToolFiles(this.tool, params, context);
++            if (isPageScopedTool(this.tool)) {
++              const pageId =
++                typeof params.pageId === 'number' ? params.pageId : undefined;
++              page =
++                this.serverArgs.pageIdRouting &&
++                pageId !== undefined &&
++                !this.serverArgs.slim
++                  ? context.getPageById(pageId)
++                  : context.getSelectedMcpPage();
++              await page?.init();
++              response.setPage(page);
++              if (this.tool.blockedByDialog) {
++                page.throwIfDialogOpen();
++              }
++              await this.tool.handler(
++                {
++                  params,
++                  page,
++                },
++                response,
++                context,
++              );
++            } else {
++              await this.tool.handler(
++                {
++                  params,
++                },
++                response,
++                context,
++              );
++            }
++          } catch (err) {
++            response.setError(err);
+           }
+-          await this.tool.handler(
+-            {
+-              params,
+-              page,
+-            },
+-            response,
+-            context,
+-          );
+-        } else {
+-          await this.tool.handler(
+-            {
+-              params,
+-            },
+-            response,
+-            context,
+-          );
+-        }
+-      } catch (err) {
+-        response.setError(err);
+-      }
+-      devToolsData = await context.getDevToolsData(page);
+-      pageUrl = context.getSelectedMcpPageUrl(page);
+-      // --experimentalDataFormat takes precedence over the legacy
+-      // --experimentalToonFormat.
+-      const dataFormat =
+-        this.serverArgs.experimentalDataFormat ??
+-        (this.serverArgs.experimentalToonFormat ? 'toon' : 'default');
+-      const {content, structuredContent} = await response.handle(
+-        context,
+-        dataFormat,
++          devToolsData = await context.getDevToolsData(page);
++          pageUrl = context.getSelectedMcpPageUrl(page);
++          // --experimentalDataFormat takes precedence over the legacy
++          // --experimentalToonFormat.
++          const dataFormat =
++            this.serverArgs.experimentalDataFormat ??
++            (this.serverArgs.experimentalToonFormat ? 'toon' : 'default');
++          return await response.handle(context, dataFormat);
++        })(),
++        () => this.forgetBrowserOnTimeout(context.browser),
+       );
+       const result: CallToolResult & {
+         structuredContent?: Record<string, unknown>;
+diff --git a/src/index.ts b/src/index.ts
+index 12f1a4ab4..0987bc558 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -289,6 +289,8 @@ export class McpServer {
+       this.#serverArgs,
+       () => this.#getContext(),
+       this.#toolMutex,
++      browser => this.#browserManager.forget(browser),
++      () => this.#browserManager.abandonPendingAttempt(),
+     );
+ 
+     this.#tools.set(tool.name, toolHandler);
+diff --git a/tests/ToolHandler.test.ts b/tests/ToolHandler.test.ts
+index 9013cea18..94ac634ea 100644
+--- a/tests/ToolHandler.test.ts
++++ b/tests/ToolHandler.test.ts
+@@ -18,7 +18,7 @@ import {McpPage} from '../src/McpPage.js';
+ import {McpResponse, type DataFormat} from '../src/McpResponse.js';
+ import {ClearcutLogger} from '../src/telemetry/ClearcutLogger.js';
+ import {zod} from '../src/third_party/index.js';
+-import {ToolHandler} from '../src/ToolHandler.js';
++import {TOOL_CALL_TIMEOUT_MS, ToolHandler} from '../src/ToolHandler.js';
+ import {ToolCategory} from '../src/tools/categories.js';
+ import {
+   definePageTool,
+@@ -70,6 +70,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     assert.strictEqual(toolHandler.disabled, false);
+@@ -115,6 +117,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     assert.strictEqual(toolHandler.disabled, false);
+@@ -156,6 +160,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     assert.strictEqual(toolHandler.disabled, false);
+@@ -213,6 +219,8 @@ describe('ToolHandler', () => {
+         serverArgs,
+         async () => mockContext,
+         new Mutex(),
++        sinon.spy(),
++        sinon.spy(),
+       ).handle({});
+ 
+       sinon.assert.calledOnceWithExactly(handleStub, mockContext, expected);
+@@ -288,6 +296,8 @@ describe('ToolHandler', () => {
+         serverArgs,
+         async () => mockContext,
+         toolMutex,
++        sinon.spy(),
++        sinon.spy(),
+       );
+ 
+       await toolHandler.handle({});
+@@ -335,6 +345,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const params = {
+@@ -389,6 +401,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     assert.strictEqual(toolHandler.disabled, true);
+@@ -420,6 +434,8 @@ describe('ToolHandler', () => {
+       defaultServerArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+     assert.strictEqual(defaultHandler.disabled, false);
+ 
+@@ -439,6 +455,8 @@ describe('ToolHandler', () => {
+       disabledServerArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+     assert.strictEqual(disabledHandler.disabled, true);
+ 
+@@ -467,6 +485,8 @@ describe('ToolHandler', () => {
+       cliServerArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+     assert.strictEqual(cliHandler.disabled, false);
+     const cliResult = await cliHandler.handle({function: '() => 1'});
+@@ -497,6 +517,8 @@ describe('ToolHandler', () => {
+       defaultServerArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+     assert.strictEqual(defaultHandler.disabled, false);
+ 
+@@ -516,6 +538,8 @@ describe('ToolHandler', () => {
+       disabledServerArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+     assert.strictEqual(disabledHandler.disabled, true);
+   });
+@@ -568,6 +592,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const testFile = path.resolve('/workspace/url-file.txt');
+@@ -644,6 +670,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const result = await toolHandler.handle({
+@@ -700,6 +728,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const testPath = path.resolve('/workspace/upload.png');
+@@ -757,6 +787,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const bundlePath = path.resolve('/workspace/app.swbn');
+@@ -817,6 +849,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const result = await toolHandler.handle({
+@@ -867,6 +901,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const result = await toolHandler.handle({
+@@ -915,6 +951,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const result = await toolHandler.handle({
+@@ -971,6 +1009,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const outputPath = path.resolve('/local/output.json');
+@@ -1032,6 +1072,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const result = await toolHandler.handle({
+@@ -1086,6 +1128,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockRemoteContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const remotePath = path.resolve('/remote/file.txt');
+@@ -1105,6 +1149,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockLocalContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     await localToolHandler.handle({remoteFile: remotePath});
+@@ -1158,6 +1204,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       toolMutex,
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const inputPath = path.resolve('/workspace/output.png');
+@@ -1209,6 +1257,8 @@ describe('ToolHandler', () => {
+       serverArgs,
+       async () => mockContext,
+       new Mutex(),
++      sinon.spy(),
++      sinon.spy(),
+     );
+ 
+     const result = await toolHandler.handle({
+@@ -1223,4 +1273,178 @@ describe('ToolHandler', () => {
+       filePaths: [],
+     });
+   });
++
++  it('times out a hung tool handler, fails fast, and forgets the browser', async () => {
++    const tool: ToolDefinition = {
++      name: 'hanging_tool',
++      description: 'A tool whose handler never resolves',
++      annotations: {
++        category: ToolCategory.NAVIGATION,
++        readOnlyHint: true,
++      },
++      schema: {},
++      blockedByDialog: false,
++      verifyFilesSchema: {},
++      handler: async () => {
++        return new Promise<void>(() => {
++          // Simulates a tool call awaiting a CDP response on a transport
++          // that died silently: it never resolves or rejects on its own.
++        });
++      },
++    };
++
++    const mockContext = sinon.createStubInstance(McpContext);
++    const mockProcess = sinon.createStubInstance(ChildProcess);
++    mockContext.browser = getMockBrowser({process: mockProcess});
++    const forgetBrowserSpy = sinon.spy();
++
++    const toolMutex = new Mutex();
++    const serverArgs = parseArguments('1.0.0', ['node', 'script.js'], {
++      CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: 'true',
++    });
++
++    const toolHandler = new ToolHandler(
++      tool,
++      serverArgs,
++      async () => mockContext,
++      toolMutex,
++      forgetBrowserSpy,
++      sinon.spy(),
++    );
++
++    const clock = sinon.useFakeTimers();
++    try {
++      const resultPromise = toolHandler.handle({});
++      await clock.tickAsync(TOOL_CALL_TIMEOUT_MS);
++      const result = await resultPromise;
++
++      assert.strictEqual(result.isError, true);
++      assert.match(
++        result.content[0].type === 'text' ? result.content[0].text : '',
++        /timed out/,
++      );
++      sinon.assert.calledOnceWithExactly(forgetBrowserSpy, mockContext.browser);
++    } finally {
++      clock.restore();
++    }
++  });
++
++  it('times out when response.handle() hangs, even if the tool handler resolves fast', async () => {
++    const tool: ToolDefinition = {
++      name: 'fast_handler_slow_response_tool',
++      description:
++        'A tool whose handler resolves immediately but whose CDP work happens in response.handle()',
++      annotations: {
++        category: ToolCategory.NAVIGATION,
++        readOnlyHint: true,
++      },
++      schema: {},
++      blockedByDialog: false,
++      verifyFilesSchema: {},
++      handler: async () => {
++        // Resolves immediately, like tools such as take_snapshot/list_pages
++        // whose actual CDP calls happen in response.handle() instead.
++      },
++    };
++
++    const mockContext = sinon.createStubInstance(McpContext);
++    const mockProcess = sinon.createStubInstance(ChildProcess);
++    mockContext.browser = getMockBrowser({process: mockProcess});
++    const forgetBrowserSpy = sinon.spy();
++    const handleStub = sinon.stub(McpResponse.prototype, 'handle').returns(
++      new Promise(() => {
++        // Simulates response.handle() making a CDP call on a transport
++        // that died silently: it never resolves or rejects on its own.
++      }),
++    );
++
++    const toolMutex = new Mutex();
++    const serverArgs = parseArguments('1.0.0', ['node', 'script.js'], {
++      CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: 'true',
++    });
++
++    const toolHandler = new ToolHandler(
++      tool,
++      serverArgs,
++      async () => mockContext,
++      toolMutex,
++      forgetBrowserSpy,
++      sinon.spy(),
++    );
++
++    const clock = sinon.useFakeTimers();
++    try {
++      const resultPromise = toolHandler.handle({});
++      await clock.tickAsync(TOOL_CALL_TIMEOUT_MS);
++      const result = await resultPromise;
++
++      assert.strictEqual(result.isError, true);
++      assert.match(
++        result.content[0].type === 'text' ? result.content[0].text : '',
++        /timed out/,
++      );
++      sinon.assert.calledOnce(handleStub);
++      sinon.assert.calledOnceWithExactly(forgetBrowserSpy, mockContext.browser);
++    } finally {
++      clock.restore();
++    }
++  });
++
++  it('times out when getContext() hangs, and abandons the pending connect', async () => {
++    const tool: ToolDefinition = {
++      name: 'hanging_context_tool',
++      description: 'A tool whose getContext() call never resolves',
++      annotations: {
++        category: ToolCategory.NAVIGATION,
++        readOnlyHint: true,
++      },
++      schema: {},
++      blockedByDialog: false,
++      verifyFilesSchema: {},
++      handler: async () => {
++        // Never reached: the timeout fires while still awaiting getContext().
++      },
++    };
++
++    const forgetBrowserSpy = sinon.spy();
++    const abandonPendingBrowserAttemptSpy = sinon.spy();
++
++    const toolMutex = new Mutex();
++    const serverArgs = parseArguments('1.0.0', ['node', 'script.js'], {
++      CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: 'true',
++    });
++
++    const toolHandler = new ToolHandler(
++      tool,
++      serverArgs,
++      () =>
++        new Promise(() => {
++          // Simulates BrowserManager#ensureBrowser() hanging on a half-open
++          // socket: it never resolves or rejects on its own.
++        }),
++      toolMutex,
++      forgetBrowserSpy,
++      abandonPendingBrowserAttemptSpy,
++    );
++
++    const clock = sinon.useFakeTimers();
++    try {
++      const resultPromise = toolHandler.handle({});
++      await clock.tickAsync(TOOL_CALL_TIMEOUT_MS);
++      const result = await resultPromise;
++
++      assert.strictEqual(result.isError, true);
++      assert.match(
++        result.content[0].type === 'text' ? result.content[0].text : '',
++        /timed out/,
++      );
++      sinon.assert.calledOnce(abandonPendingBrowserAttemptSpy);
++      // No resolved context/browser exists in this case, so it's
++      // abandonPendingBrowserAttemptOnTimeout that fires, not
++      // forgetBrowserOnTimeout.
++      sinon.assert.notCalled(forgetBrowserSpy);
++    } finally {
++      clock.restore();
++    }
++  });
+ });
+diff --git a/tests/browser.test.ts b/tests/browser.test.ts
+index 9d3a5272c..510133e04 100644
+--- a/tests/browser.test.ts
++++ b/tests/browser.test.ts
+@@ -302,6 +302,274 @@ describe('browser', () => {
+       sinon.assert.calledOnce(launchStub);
+       sinon.assert.calledOnceWithExactly(pptrBrowser.close);
+     });
++
++    describe('forget', () => {
++      it('does nothing when the candidate is not the current browser', async () => {
++        const pptrBrowser = createMockPuppeteerBrowser();
++        const other = createMockPuppeteerBrowser();
++        sinon.stub(puppeteer, 'launch').resolves(pptrBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({headless: true, isolated: true}),
++        );
++        await manager.ensureBrowser();
++
++        manager.forget(other);
++
++        sinon.assert.notCalled(other.close);
++        sinon.assert.notCalled(other.disconnect);
++        sinon.assert.notCalled(pptrBrowser.close);
++        sinon.assert.notCalled(pptrBrowser.disconnect);
++      });
++
++      it('disconnects the current browser when it was connected', async () => {
++        const pptrBrowser = createMockPuppeteerBrowser();
++        sinon.stub(puppeteer, 'connect').resolves(pptrBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({browserUrl: 'http://127.0.0.1:9222'}),
++        );
++        const browser = await manager.ensureBrowser();
++
++        manager.forget(browser);
++
++        sinon.assert.calledOnceWithExactly(pptrBrowser.disconnect);
++        sinon.assert.notCalled(pptrBrowser.close);
++      });
++
++      it('closes the current browser when it was launched', async () => {
++        const pptrBrowser = createMockPuppeteerBrowser();
++        sinon.stub(puppeteer, 'launch').resolves(pptrBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({headless: true, isolated: true}),
++        );
++        const browser = await manager.ensureBrowser();
++
++        manager.forget(browser);
++
++        sinon.assert.calledOnceWithExactly(pptrBrowser.close);
++        sinon.assert.notCalled(pptrBrowser.disconnect);
++      });
++    });
++
++    describe('push-based disconnect eviction', () => {
++      it('proactively evicts a disconnected browser without waiting for a lazy connected check', async () => {
++        const firstBrowser = createMockPuppeteerBrowser();
++        const secondBrowser = createMockPuppeteerBrowser();
++        const launchStub = sinon
++          .stub(puppeteer, 'launch')
++          .onFirstCall()
++          .resolves(firstBrowser)
++          .onSecondCall()
++          .resolves(secondBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({headless: true, isolated: true}),
++        );
++
++        const first = await manager.ensureBrowser();
++        assert.strictEqual(first, firstBrowser);
++
++        firstBrowser.emit('disconnected', undefined);
++
++        // The mock's `connected` getter still reports true — proves the next
++        // ensureBrowser() reconnected because of the push-based eviction,
++        // not because a lazy `!browser.connected` check caught it.
++        assert.strictEqual(firstBrowser.connected, true);
++
++        const second = await manager.ensureBrowser();
++        assert.strictEqual(second, secondBrowser);
++        sinon.assert.calledTwice(launchStub);
++      });
++
++      it('does not evict the current browser when disconnected fires on an already-superseded one', async () => {
++        const oldBrowser = createMockPuppeteerBrowser();
++        const newBrowser = createMockPuppeteerBrowser();
++        let oldConnected = true;
++        sinon.stub(oldBrowser, 'connected').get(() => oldConnected);
++        const launchStub = sinon
++          .stub(puppeteer, 'launch')
++          .onFirstCall()
++          .resolves(oldBrowser)
++          .onSecondCall()
++          .resolves(newBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({headless: true, isolated: true}),
++        );
++
++        const first = await manager.ensureBrowser();
++        assert.strictEqual(first, oldBrowser);
++
++        oldConnected = false;
++        const second = await manager.ensureBrowser();
++        assert.strictEqual(second, newBrowser);
++
++        oldBrowser.emit('disconnected', undefined);
++
++        const third = await manager.ensureBrowser();
++        assert.strictEqual(third, newBrowser);
++        sinon.assert.calledTwice(launchStub);
++      });
++    });
++
++    describe('abandonPendingAttempt', () => {
++      it('discards a connect() resolution that arrives after being abandoned, and a fresh call still succeeds', async () => {
++        const abandonedBrowser = createMockPuppeteerBrowser();
++        const freshBrowser = createMockPuppeteerBrowser();
++        const connectStarted = Promise.withResolvers<void>();
++        const connectDeferred = Promise.withResolvers<Browser>();
++        const connectStub = sinon
++          .stub(puppeteer, 'connect')
++          .onFirstCall()
++          .callsFake(() => {
++            connectStarted.resolve();
++            return connectDeferred.promise;
++          })
++          .onSecondCall()
++          .resolves(freshBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({browserUrl: 'http://127.0.0.1:9222'}),
++        );
++
++        const ensurePromise1 = manager.ensureBrowser();
++        await connectStarted.promise;
++
++        manager.abandonPendingAttempt();
++        const ensurePromise2 = manager.ensureBrowser();
++
++        connectDeferred.resolve(abandonedBrowser);
++
++        await assert.rejects(
++          ensurePromise1,
++          /Connection attempt was abandoned before it completed/,
++        );
++        assert.strictEqual(await ensurePromise2, freshBrowser);
++
++        sinon.assert.calledOnceWithExactly(abandonedBrowser.disconnect);
++        sinon.assert.notCalled(freshBrowser.disconnect);
++        sinon.assert.calledTwice(connectStub);
++      });
++
++      it('discards a launch() resolution that arrives after being abandoned, and a fresh call still succeeds', async () => {
++        const abandonedBrowser = createMockPuppeteerBrowser();
++        const freshBrowser = createMockPuppeteerBrowser();
++        const launchStarted = Promise.withResolvers<void>();
++        const launchDeferred = Promise.withResolvers<Browser>();
++        const launchStub = sinon
++          .stub(puppeteer, 'launch')
++          .onFirstCall()
++          .callsFake(() => {
++            launchStarted.resolve();
++            return launchDeferred.promise;
++          })
++          .onSecondCall()
++          .resolves(freshBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({headless: true, isolated: true}),
++        );
++
++        const ensurePromise1 = manager.ensureBrowser();
++        await launchStarted.promise;
++
++        manager.abandonPendingAttempt();
++        const ensurePromise2 = manager.ensureBrowser();
++
++        launchDeferred.resolve(abandonedBrowser);
++
++        await assert.rejects(
++          ensurePromise1,
++          /Connection attempt was abandoned before it completed/,
++        );
++        assert.strictEqual(await ensurePromise2, freshBrowser);
++
++        sinon.assert.calledOnceWithExactly(abandonedBrowser.close);
++        sinon.assert.notCalled(freshBrowser.close);
++        sinon.assert.calledTwice(launchStub);
++      });
++
++      it('discards a queued attempt whose own timeout fires while still waiting for the mutex', async () => {
++        const firstBrowser = createMockPuppeteerBrowser();
++        const launchStarted = Promise.withResolvers<void>();
++        const launchDeferred = Promise.withResolvers<Browser>();
++        const launchStub = sinon.stub(puppeteer, 'launch').callsFake(() => {
++          launchStarted.resolve();
++          return launchDeferred.promise;
++        });
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({headless: true, isolated: true}),
++        );
++
++        const ensurePromise1 = manager.ensureBrowser();
++        await launchStarted.promise;
++
++        // Abandon call 1's own caller while its launch() is still pending
++        // and still holding #mutex.
++        manager.abandonPendingAttempt();
++
++        // #initPromise was just cleared, so this starts a genuinely new
++        // #ensureBrowserLocked() call that queues on #mutex (call 1 hasn't
++        // released it yet) instead of sharing call 1's promise.
++        const ensurePromise2 = manager.ensureBrowser();
++        // Abandon call 2's own caller too, while call 2 is still queued
++        // waiting for #mutex — the exact race being guarded against: call 2
++        // must not silently adopt this rotation as its own baseline once it
++        // gets the lock.
++        manager.abandonPendingAttempt();
++
++        launchDeferred.resolve(firstBrowser);
++
++        await assert.rejects(
++          ensurePromise1,
++          /Connection attempt was abandoned before it completed/,
++        );
++        await assert.rejects(
++          ensurePromise2,
++          /Connection attempt was abandoned before it completed/,
++        );
++
++        // Call 2 was already abandoned before it ever reached the front of
++        // #mutex, so it must bail immediately instead of starting (and then
++        // silently keeping) a second, unwanted browser.
++        sinon.assert.calledOnce(launchStub);
++        sinon.assert.calledOnceWithExactly(firstBrowser.close);
++      });
++
++      it('forgets the already-cached browser when abandoned after ensureBrowser() already resolved', async () => {
++        const firstBrowser = createMockPuppeteerBrowser();
++        const secondBrowser = createMockPuppeteerBrowser();
++        const launchStub = sinon
++          .stub(puppeteer, 'launch')
++          .onFirstCall()
++          .resolves(firstBrowser)
++          .onSecondCall()
++          .resolves(secondBrowser);
++
++        const manager = new BrowserManager(
++          createMockParsedArguments({headless: true, isolated: true}),
++        );
++
++        const first = await manager.ensureBrowser();
++        assert.strictEqual(first, firstBrowser);
++
++        // Simulates a getContext()-level timeout firing after ensureBrowser()
++        // had already resolved — e.g. McpContext.from()'s own CDP
++        // initialization hanging on a transport that died silently. Token
++        // rotation alone wouldn't help here: there's no in-flight
++        // connect()/launch() left to discard, #browser is already cached.
++        manager.abandonPendingAttempt();
++
++        sinon.assert.calledOnceWithExactly(firstBrowser.close);
++
++        const second = await manager.ensureBrowser();
++        assert.strictEqual(second, secondBrowser);
++        sinon.assert.calledTwice(launchStub);
++      });
++    });
+   });
+ 
+   describe('rootSandboxLaunchError', () => {
+diff --git a/tests/mocks.ts b/tests/mocks.ts
+index f340b8792..4c09435e2 100644
+--- a/tests/mocks.ts
++++ b/tests/mocks.ts
+@@ -136,6 +136,21 @@ export function createMockPuppeteerBrowser(): sinon.SinonStubbedInstance<Browser
+   browser.disconnect.resolves();
+   browser.pages.resolves([]);
+   browser.process.returns(null);
++
++  const browserListener = mockListener();
++  browser.once.callsFake((eventName, handler) => {
++    const onceHandler = (data: unknown) => {
++      browserListener.off(eventName, onceHandler);
++      handler(data);
++    };
++    browserListener.on(eventName, onceHandler);
++    return browser;
++  });
++  browser.emit.callsFake((eventName, data) => {
++    browserListener.emit(eventName, data);
++    return true;
++  });
++
+   return browser;
+ }
+ 

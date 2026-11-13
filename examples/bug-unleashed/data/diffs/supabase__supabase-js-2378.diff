@@ -1,0 +1,134 @@
+diff --git a/packages/core/auth-js/src/GoTrueClient.ts b/packages/core/auth-js/src/GoTrueClient.ts
+index a24e2fdc75..7e9c9f816c 100644
+--- a/packages/core/auth-js/src/GoTrueClient.ts
++++ b/packages/core/auth-js/src/GoTrueClient.ts
+@@ -2305,7 +2305,7 @@ export default class GoTrueClient {
+       }
+ 
+       const session: Session | null = data.session
+-      const user: User = data.user
++      const user: User | null = data.user
+ 
+       if (session?.access_token) {
+         await this._saveSession(session as Session)
+diff --git a/packages/core/auth-js/src/lib/fetch.ts b/packages/core/auth-js/src/lib/fetch.ts
+index c820ba132c..574c80bc89 100644
+--- a/packages/core/auth-js/src/lib/fetch.ts
++++ b/packages/core/auth-js/src/lib/fetch.ts
+@@ -253,7 +253,9 @@ export function _sessionResponse(data: GoTrueSessionData): AuthResponse {
+     }
+   }
+ 
+-  const user: User = data.user ?? (data as User)
++  // Some /verify responses (e.g. secure email_change first-confirmation) return
++  // only `{ msg, code }` with no user and no session. Treat those as null user.
++  const user: User | null = data.user ?? null
+   return { data: { session, user }, error: null }
+ }
+ 
+diff --git a/packages/core/auth-js/test/GoTrueClient.test.ts b/packages/core/auth-js/test/GoTrueClient.test.ts
+index f83dba300e..20aecc2850 100644
+--- a/packages/core/auth-js/test/GoTrueClient.test.ts
++++ b/packages/core/auth-js/test/GoTrueClient.test.ts
+@@ -687,6 +687,39 @@ describe('GoTrueClient', () => {
+       expect(data.user).toBeNull()
+       expect(data.session).toBeNull()
+     })
++
++    test('verifyOtp() returns null user and session for email_change single-confirmation response', async () => {
++      // When secure email change is enabled, gotrue's POST /verify returns
++      // `{ msg, code }` (200 OK) after the first of two confirmations succeeds.
++      // The SDK must not surface that object as `data.user`.
++      const mockFetch = jest.fn().mockResolvedValue({
++        ok: true,
++        status: 200,
++        headers: new Headers(),
++        json: () =>
++          Promise.resolve({
++            code: '200',
++            msg: 'Confirmation link accepted. Please proceed to confirm link sent to the other email',
++          }),
++      })
++
++      const client = new GoTrueClient({
++        url: GOTRUE_URL_SIGNUP_ENABLED_AUTO_CONFIRM_ON,
++        autoRefreshToken: false,
++        persistSession: false,
++        storage: memoryLocalStorageAdapter(),
++        fetch: mockFetch as unknown as typeof fetch,
++      })
++
++      const { data, error } = await client.verifyOtp({
++        token_hash: 'token-hash',
++        type: 'email_change',
++      })
++
++      expect(error).toBeNull()
++      expect(data.user).toBeNull()
++      expect(data.session).toBeNull()
++    })
+   })
+ 
+   describe('signInWithOtp', () => {
+diff --git a/packages/core/auth-js/test/fetch.test.ts b/packages/core/auth-js/test/fetch.test.ts
+index 87d6aec3b2..5a1e2e3fa5 100644
+--- a/packages/core/auth-js/test/fetch.test.ts
++++ b/packages/core/auth-js/test/fetch.test.ts
+@@ -1,7 +1,7 @@
+ import { MockServer } from 'jest-mock-server'
+ import { API_VERSION_HEADER_NAME } from '../src/lib/constants'
+ import { AuthUnknownError, AuthApiError, AuthRetryableFetchError } from '../src/lib/errors'
+-import { _request, handleError } from '../src/lib/fetch'
++import { _request, _sessionResponse, handleError } from '../src/lib/fetch'
+ 
+ describe('fetch', () => {
+   const server = new MockServer()
+@@ -215,3 +215,48 @@ describe('handleError', () => {
+     })
+   })
+ })
++
++describe('_sessionResponse', () => {
++  test('returns session and user when the response carries an access token', () => {
++    const user = { id: 'user-id', email: 'user@example.com' } as any
++    const data = {
++      access_token: 'access-token',
++      refresh_token: 'refresh-token',
++      expires_in: 3600,
++      token_type: 'bearer',
++      user,
++    } as any
++
++    const result = _sessionResponse(data)
++
++    expect(result.error).toBeNull()
++    expect(result.data.user).toEqual(user)
++    expect(result.data.session).not.toBeNull()
++    expect(result.data.session?.access_token).toEqual('access-token')
++    expect(result.data.session?.user).toEqual(user)
++    expect(typeof result.data.session?.expires_at).toEqual('number')
++  })
++
++  test('returns null user and null session for the email_change single-confirmation response', () => {
++    // gotrue's POST /verify returns this body (200 OK) after the first of two
++    // confirmations succeeds when secure email change is enabled.
++    const data = {
++      code: '200',
++      msg: 'Confirmation link accepted. Please proceed to confirm link sent to the other email',
++    } as any
++
++    const result = _sessionResponse(data)
++
++    expect(result).toEqual({ data: { session: null, user: null }, error: null })
++  })
++
++  test('returns the user but no session when the response has a user but no access token', () => {
++    const user = { id: 'user-id', email: 'user@example.com' } as any
++
++    const result = _sessionResponse({ user } as any)
++
++    expect(result.error).toBeNull()
++    expect(result.data.session).toBeNull()
++    expect(result.data.user).toEqual(user)
++  })
++})

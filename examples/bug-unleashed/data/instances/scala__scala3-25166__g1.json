@@ -1,0 +1,25 @@
+{
+  "case_id": "scala__scala3-25166",
+  "repo": "scala/scala3",
+  "pr": 25166,
+  "title": "Don't generate bridge methods for inaccessible Java package-private methods",
+  "language": "Scala",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "scala__scala3-25166__g1",
+  "target": {
+    "gid": "scala__scala3-25166#g1",
+    "summary": "The accessibility check suppresses bridge method generation for Scala package-private (private[pkg]) methods extended from another package, even though they are emitted as public at the JVM level. This causes a runtime AbstractMethodError when calling covariant overrides across compilation boundaries.",
+    "paths": [
+      "compiler/src/dotty/tools/dotc/transform/Bridges.scala"
+    ],
+    "notes": [
+      "faulty accessibility check suppressing bridge methods for Scala private[pkg] methods instead of only Java package-private methods"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "514f16360d4d921c8323d9a16fd15e85a64da17b",
+  "base_sha": "1f0a6b980157f08c893511bebc86d4b216bcdfbe",
+  "snapshot": "repos/scala__scala3/514f16360d4d921c8323d9a16fd15e85a64da17b",
+  "diff": "diffs/scala__scala3-25166.diff"
+}

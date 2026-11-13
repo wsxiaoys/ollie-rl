@@ -1,0 +1,27 @@
+{
+  "case_id": "nodejs__node-65143",
+  "repo": "nodejs/node",
+  "pr": 65143,
+  "title": "stream: decouple transform backpressure changes",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "nodejs__node-65143__g1",
+  "target": {
+    "gid": "nodejs__node-65143#g1",
+    "summary": "When a write parks due to backpressure, writeContinuation executes without capturing and restoring the writer's async context. Consequently, when backpressure is relieved by a read, transform() and subsequent write steps run in the reader's AsyncLocalStorage context instead of the writer's.",
+    "paths": [
+      "lib/internal/webstreams/transformstream.js"
+    ],
+    "notes": [
+      "faulty writeContinuation executes without capturing and restoring the writer's async context",
+      "definition of transformStreamDefaultSinkWriteAlgorithm",
+      "call site where writeContinuation is enqueued when backpressure is relieved"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "015f238718c184c0aca3691ea4efe99ffc20b53f",
+  "base_sha": "d099639740a2269131fd1ec9cb211c1286822885",
+  "snapshot": "repos/nodejs__node/015f238718c184c0aca3691ea4efe99ffc20b53f",
+  "diff": "diffs/nodejs__node-65143.diff"
+}

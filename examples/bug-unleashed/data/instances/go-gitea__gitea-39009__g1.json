@@ -1,0 +1,26 @@
+{
+  "case_id": "go-gitea__gitea-39009",
+  "repo": "go-gitea/gitea",
+  "pr": 39009,
+  "title": "fix(repo): hide repositories of hidden owners",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "go-gitea__gitea-39009__g1",
+  "target": {
+    "gid": "go-gitea__gitea-39009#g1",
+    "summary": "In userAllPublicRepoCond, non-organization owners are filtered out whenever visibility is not VisibleTypePublic instead of checking against the viewer's visibility limit. This unconditionally excludes public repositories owned by limited individual users from broad repository listings for all callers, including logged-in users who have permission to view limited accounts.",
+    "paths": [
+      "models/repo/repo_list.go"
+    ],
+    "notes": [
+      "faulty condition unconditionally excluding non-public individual owners",
+      "definition of the function userAllPublicRepoCond"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a2f524e7c163eedaf8567b882263edaefd5214e5",
+  "base_sha": "fcc23af280e75543c2d91cd9b665fceabc096cb6",
+  "snapshot": "repos/go-gitea__gitea/a2f524e7c163eedaf8567b882263edaefd5214e5",
+  "diff": "diffs/go-gitea__gitea-39009.diff"
+}

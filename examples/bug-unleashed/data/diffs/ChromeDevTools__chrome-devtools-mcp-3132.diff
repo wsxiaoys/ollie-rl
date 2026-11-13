@@ -1,0 +1,351 @@
+diff --git a/docs/tool-reference.md b/docs/tool-reference.md
+index 558911671..b61c5d0df 100644
+--- a/docs/tool-reference.md
++++ b/docs/tool-reference.md
+@@ -298,7 +298,7 @@
+ 
+ ### `resize_page`
+ 
+-**Description:** Resizes the page's window so that the page has specified dimension
++**Description:** Resizes the page's window so that the page has specified dimension. If the browser clamps the window size, the actual page dimensions are reported.
+ 
+ **Parameters:**
+ 
+diff --git a/src/McpPage.ts b/src/McpPage.ts
+index 573e8b4a4..4f1289329 100644
+--- a/src/McpPage.ts
++++ b/src/McpPage.ts
+@@ -1429,6 +1429,45 @@ export class McpPage implements ContextPage {
+     });
+   }
+ 
++  async resize(
++    width: number,
++    height: number,
++  ): Promise<{width: number; height: number} | undefined> {
++    try {
++      const browser = this.pptrPage.browser();
++      const windowId = await this.pptrPage.windowId();
++      const bounds = await browser.getWindowBounds(windowId);
++
++      if (bounds.windowState === 'fullscreen') {
++        // Have to call this twice on Ubuntu when the window is in fullscreen mode.
++        await browser.setWindowBounds(windowId, {windowState: 'normal'});
++        await browser.setWindowBounds(windowId, {windowState: 'normal'});
++      } else if (bounds.windowState !== 'normal') {
++        await browser.setWindowBounds(windowId, {windowState: 'normal'});
++      }
++    } catch {
++      // Window APIs are not supported on all platforms
++    }
++    await this.pptrPage.resize({
++      contentWidth: width,
++      contentHeight: height,
++    });
++
++    if (this.getDialog()) {
++      return undefined;
++    }
++
++    // @ts-expect-error internal API
++    const client = this.pptrPage._client();
++    const metrics: Protocol.Page.GetLayoutMetricsResponse = await client.send(
++      'Page.getLayoutMetrics',
++    );
++    return {
++      width: metrics.cssLayoutViewport.clientWidth,
++      height: metrics.cssLayoutViewport.clientHeight,
++    };
++  }
++
+   /**
+    * We need to ignore favicon request as they make our test flaky
+    */
+diff --git a/src/config/cli-options.ts b/src/config/cli-options.ts
+index d8177a603..b39fad2e6 100644
+--- a/src/config/cli-options.ts
++++ b/src/config/cli-options.ts
+@@ -1754,7 +1754,7 @@ export const commands: Commands = {
+   },
+   resize_page: {
+     description:
+-      "Resizes the page's window so that the page has specified dimension",
++      "Resizes the page's window so that the page has specified dimension. If the browser clamps the window size, the actual page dimensions are reported.",
+     category: 'Emulation',
+     args: {
+       pageId: {
+diff --git a/src/tools/ToolDefinition.ts b/src/tools/ToolDefinition.ts
+index 78dbf1800..3b5e9bd89 100644
+--- a/src/tools/ToolDefinition.ts
++++ b/src/tools/ToolDefinition.ts
+@@ -536,6 +536,10 @@ export type ContextPage = Readonly<{
+     text: string[],
+     options?: {timeout?: number; visible?: boolean},
+   ): Promise<Element>;
++  resize(
++    width: number,
++    height: number,
++  ): Promise<{width: number; height: number} | undefined>;
+   getDevToolsPage(): Promise<Page | undefined>;
+   openDevTools(): Promise<Page | undefined>;
+   ensureDevToolsCommentBridge(
+diff --git a/src/tools/pages.ts b/src/tools/pages.ts
+index 1f1b49feb..d6177125e 100644
+--- a/src/tools/pages.ts
++++ b/src/tools/pages.ts
+@@ -352,7 +352,7 @@ export const navigatePage = definePageTool((args: ParsedArguments) => {
+ 
+ export const resizePage = definePageTool(() => ({
+   name: 'resize_page',
+-  description: `Resizes the page's window so that the page has specified dimension`,
++  description: `Resizes the page's window so that the page has specified dimension. If the browser clamps the window size, the actual page dimensions are reported.`,
+   annotations: {
+     category: ToolCategory.EMULATION,
+     readOnlyHint: false,
+@@ -366,27 +366,17 @@ export const resizePage = definePageTool(() => ({
+   verifyFilesSchema: {},
+   handler: async (request, response) => {
+     const page = request.page;
++    const {width, height} = request.params;
+ 
+-    try {
+-      const browser = page.pptrPage.browser();
+-      const windowId = await page.pptrPage.windowId();
+-
+-      const bounds = await browser.getWindowBounds(windowId);
+-
+-      if (bounds.windowState === 'fullscreen') {
+-        // Have to call this twice on Ubuntu when the window is in fullscreen mode.
+-        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+-        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+-      } else if (bounds.windowState !== 'normal') {
+-        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+-      }
+-    } catch {
+-      // Window APIs are not supported on all platforms
++    const actualSize = await page.resize(width, height);
++    if (
++      actualSize &&
++      (actualSize.width !== width || actualSize.height !== height)
++    ) {
++      response.appendResponseLine(
++        `Requested ${width}x${height}, page is ${actualSize.width}x${actualSize.height}`,
++      );
+     }
+-    await page.pptrPage.resize({
+-      contentWidth: request.params.width,
+-      contentHeight: request.params.height,
+-    });
+ 
+     response.setIncludePages(true);
+   },
+diff --git a/tests/McpPage.test.ts b/tests/McpPage.test.ts
+index 2d38bb52a..769e77668 100644
+--- a/tests/McpPage.test.ts
++++ b/tests/McpPage.test.ts
+@@ -25,6 +25,7 @@ import {
+   createMockCDPSession,
+   createMockDialog,
+   createMockMcpResponse,
++  createMockPuppeteerBrowser,
+   createMockPuppeteerPage,
+   createMockPuppeteerTarget,
+   createMockServerConfig,
+@@ -2209,6 +2210,107 @@ describe('McpPage', () => {
+     });
+   });
+ 
++  describe('resize()', () => {
++    it('resizes the page and returns the resulting cssLayoutViewport dimensions', async () => {
++      const {mcpPage, pptrPage} = await createMcpPage();
++      const browser = createMockPuppeteerBrowser();
++      pptrPage.browser.returns(browser);
++      pptrPage.windowId.resolves('win-1');
++      browser.getWindowBounds.resolves({windowState: 'normal'});
++      pptrPage.cdpSession.send.withArgs('Page.getLayoutMetrics').resolves({
++        cssLayoutViewport: {
++          clientWidth: 500,
++          clientHeight: 232,
++          pageX: 0,
++          pageY: 0,
++        },
++      });
++
++      const actualSize = await mcpPage.resize(100, 100);
++
++      sinon.assert.notCalled(browser.setWindowBounds);
++      sinon.assert.calledOnceWithExactly(pptrPage.resize, {
++        contentWidth: 100,
++        contentHeight: 100,
++      });
++      assert.deepStrictEqual(actualSize, {width: 500, height: 232});
++    });
++
++    it('restores normal window state from fullscreen twice before resizing', async () => {
++      const {mcpPage, pptrPage} = await createMcpPage();
++      const browser = createMockPuppeteerBrowser();
++      pptrPage.browser.returns(browser);
++      pptrPage.windowId.resolves('win-1');
++      browser.getWindowBounds.resolves({windowState: 'fullscreen'});
++      pptrPage.cdpSession.send.withArgs('Page.getLayoutMetrics').resolves({
++        cssLayoutViewport: {
++          clientWidth: 800,
++          clientHeight: 600,
++          pageX: 0,
++          pageY: 0,
++        },
++      });
++
++      const actualSize = await mcpPage.resize(800, 600);
++
++      sinon.assert.calledTwice(browser.setWindowBounds);
++      sinon.assert.calledWithExactly(
++        browser.setWindowBounds.firstCall,
++        'win-1',
++        {windowState: 'normal'},
++      );
++      sinon.assert.calledWithExactly(
++        browser.setWindowBounds.secondCall,
++        'win-1',
++        {windowState: 'normal'},
++      );
++      sinon.assert.calledOnceWithExactly(pptrPage.resize, {
++        contentWidth: 800,
++        contentHeight: 600,
++      });
++      assert.deepStrictEqual(actualSize, {width: 800, height: 600});
++    });
++
++    it('continues resizing when window bounds APIs are unsupported', async () => {
++      const {mcpPage, pptrPage} = await createMcpPage();
++      pptrPage.windowId.rejects(new Error('Window APIs not supported'));
++      pptrPage.cdpSession.send.withArgs('Page.getLayoutMetrics').resolves({
++        cssLayoutViewport: {
++          clientWidth: 700,
++          clientHeight: 500,
++          pageX: 0,
++          pageY: 0,
++        },
++      });
++
++      const actualSize = await mcpPage.resize(700, 500);
++
++      sinon.assert.calledOnceWithExactly(pptrPage.resize, {
++        contentWidth: 700,
++        contentHeight: 500,
++      });
++      assert.deepStrictEqual(actualSize, {width: 700, height: 500});
++    });
++
++    it('returns undefined without reading layout metrics when a dialog is open', async () => {
++      const {mcpPage, pptrPage} = await createMcpPage();
++      pptrPage.windowId.rejects(new Error('Window APIs not supported'));
++      pptrPage.emit('dialog', createMockDialog());
++
++      const actualSize = await mcpPage.resize(700, 500);
++
++      sinon.assert.calledOnceWithExactly(pptrPage.resize, {
++        contentWidth: 700,
++        contentHeight: 500,
++      });
++      sinon.assert.neverCalledWith(
++        pptrPage.cdpSession.send,
++        'Page.getLayoutMetrics',
++      );
++      assert.strictEqual(actualSize, undefined);
++    });
++  });
++
+   describe('dialogs', () => {
+     it('returns the dialog and throws when unhandled', async () => {
+       const {mcpPage, pptrPage} = await createMcpPage();
+diff --git a/tests/tools/pages.test.ts b/tests/tools/pages.test.ts
+index c02bcc0b5..150242d89 100644
+--- a/tests/tools/pages.test.ts
++++ b/tests/tools/pages.test.ts
+@@ -1537,6 +1537,85 @@ describe('pages', () => {
+       });
+     });
+ 
++    it('reports actual page dimensions when the browser clamps width or height', async () => {
++      const {page, response, context, args} = createHandlerMocks();
++      page.resize.resolves({width: 500, height: 100});
++
++      await resizePage(args).handler(
++        {
++          params: {width: 100, height: 100},
++          page,
++        },
++        response,
++        context,
++      );
++
++      sinon.assert.calledOnceWithExactly(page.resize, 100, 100);
++      sinon.assert.calledOnceWithExactly(
++        response.appendResponseLine,
++        'Requested 100x100, page is 500x100',
++      );
++      sinon.assert.calledOnceWithExactly(response.setIncludePages, true);
++
++      const heightMocks = createHandlerMocks();
++      heightMocks.page.resize.resolves({width: 800, height: 232});
++
++      await resizePage(heightMocks.args).handler(
++        {
++          params: {width: 800, height: 100},
++          page: heightMocks.page,
++        },
++        heightMocks.response,
++        heightMocks.context,
++      );
++
++      sinon.assert.calledOnceWithExactly(heightMocks.page.resize, 800, 100);
++      sinon.assert.calledOnceWithExactly(
++        heightMocks.response.appendResponseLine,
++        'Requested 800x100, page is 800x232',
++      );
++      sinon.assert.calledOnceWithExactly(
++        heightMocks.response.setIncludePages,
++        true,
++      );
++    });
++
++    it('does not append a size warning when the page matches requested dimensions', async () => {
++      const {page, response, context, args} = createHandlerMocks();
++      page.resize.resolves({width: 700, height: 500});
++
++      await resizePage(args).handler(
++        {
++          params: {width: 700, height: 500},
++          page,
++        },
++        response,
++        context,
++      );
++
++      sinon.assert.calledOnceWithExactly(page.resize, 700, 500);
++      sinon.assert.notCalled(response.appendResponseLine);
++      sinon.assert.calledOnceWithExactly(response.setIncludePages, true);
++    });
++
++    it('does not append a size line when the actual page size is unknown', async () => {
++      const {page, response, context, args} = createHandlerMocks();
++      page.resize.resolves(undefined);
++
++      await resizePage(args).handler(
++        {
++          params: {width: 700, height: 500},
++          page,
++        },
++        response,
++        context,
++      );
++
++      sinon.assert.calledOnceWithExactly(page.resize, 700, 500);
++      sinon.assert.notCalled(response.appendResponseLine);
++      sinon.assert.calledOnceWithExactly(response.setIncludePages, true);
++    });
++
+     it('resize when window state is normal', async () => {
+       await withMcpContext(async (response, context, args) => {
+         const page = context.getSelectedMcpPage().pptrPage;

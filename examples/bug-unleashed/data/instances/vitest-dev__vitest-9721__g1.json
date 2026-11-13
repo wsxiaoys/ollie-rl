@@ -1,0 +1,25 @@
+{
+  "case_id": "vitest-dev__vitest-9721",
+  "repo": "vitest-dev/vitest",
+  "pr": 9721,
+  "title": "refactor(utils): move `extractSourcemapFromFile` to utils",
+  "language": "TypeScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "vitest-dev__vitest-9721__g1",
+  "target": {
+    "gid": "vitest-dev__vitest-9721#g1",
+    "summary": "Caching result?.map in sourceMapCache causes sourcemaps for non-bundled files to persist without invalidation, resulting in stale sourcemaps and incorrect stack traces when files are modified in watch mode.",
+    "paths": [
+      "packages/browser/src/node/projectParent.ts"
+    ],
+    "notes": [
+      "faulty statement caching sourcemaps that are not invalidated on file modification"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "4be1217343210d3370e5b352b9ae16012410d75d",
+  "base_sha": "1d49874985a5b00f0c2ce291b3edd45f607bf534",
+  "snapshot": "repos/vitest-dev__vitest/4be1217343210d3370e5b352b9ae16012410d75d",
+  "diff": "diffs/vitest-dev__vitest-9721.diff"
+}

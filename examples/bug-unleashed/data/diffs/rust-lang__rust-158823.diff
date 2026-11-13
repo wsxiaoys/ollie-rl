@@ -1,0 +1,405 @@
+diff --git a/compiler/rustc_codegen_ssa/src/back/link.rs b/compiler/rustc_codegen_ssa/src/back/link.rs
+index 43d33d36704d3..1e4333d7a91e7 100644
+--- a/compiler/rustc_codegen_ssa/src/back/link.rs
++++ b/compiler/rustc_codegen_ssa/src/back/link.rs
+@@ -1,7 +1,7 @@
+ mod raw_dylib;
+ 
+ use std::collections::BTreeSet;
+-use std::ffi::OsString;
++use std::ffi::{OsStr, OsString};
+ use std::fs::{File, OpenOptions, read};
+ use std::io::{BufReader, BufWriter, Write};
+ use std::ops::{ControlFlow, Deref};
+@@ -1617,7 +1617,7 @@ fn link_sanitizer_runtime(
+     fn find_sanitizer_runtime(sess: &Session, filename: &str) -> PathBuf {
+         let path = sess.target_tlib_path.dir.join(filename);
+         if path.exists() {
+-            sess.target_tlib_path.dir.clone()
++            sess.target_tlib_path.dir.to_path_buf()
+         } else {
+             filesearch::make_target_lib_path(
+                 &sess.opts.sysroot.default,
+@@ -1914,10 +1914,10 @@ fn get_object_file_path(sess: &Session, name: &str, self_contained: bool) -> Pat
+             return file_path;
+         }
+     }
+-    for search_path in sess.target_filesearch().search_paths(PathKind::Native) {
+-        let file_path = search_path.dir.join(name);
+-        if file_path.exists() {
+-            return file_path;
++
++    for (_, path) in sess.target_filesearch().get_file_candidates(name, "", PathKind::Native) {
++        if path.file_name().map_or(false, |n| n == OsStr::new(name)) && path.exists() {
++            return path;
+         }
+     }
+     PathBuf::from(name)
+@@ -3475,12 +3475,12 @@ fn add_upstream_native_libraries(
+ fn rehome_sysroot_lib_dir(sess: &Session, lib_dir: &Path) -> PathBuf {
+     let sysroot_lib_path = &sess.target_tlib_path.dir;
+     let canonical_sysroot_lib_path =
+-        { try_canonicalize(sysroot_lib_path).unwrap_or_else(|_| sysroot_lib_path.clone()) };
++        { try_canonicalize(sysroot_lib_path).unwrap_or_else(|_| sysroot_lib_path.to_path_buf()) };
+ 
+     let canonical_lib_dir = try_canonicalize(lib_dir).unwrap_or_else(|_| lib_dir.to_path_buf());
+     if canonical_lib_dir == canonical_sysroot_lib_path {
+         // This path already had `fix_windows_verbatim_for_gcc()` applied if needed.
+-        sysroot_lib_path.clone()
++        sysroot_lib_path.to_path_buf()
+     } else {
+         fix_windows_verbatim_for_gcc(lib_dir)
+     }
+diff --git a/compiler/rustc_interface/src/passes.rs b/compiler/rustc_interface/src/passes.rs
+index b9ad57ac9d309..15bb0d5ddb266 100644
+--- a/compiler/rustc_interface/src/passes.rs
++++ b/compiler/rustc_interface/src/passes.rs
+@@ -179,7 +179,7 @@ fn configure_and_expand(
+         if cfg!(windows) {
+             old_path = env::var_os("PATH").unwrap_or(old_path);
+             let mut new_path = Vec::from_iter(
+-                sess.host_filesearch().search_paths(PathKind::Native).map(|p| p.dir.clone()),
++                sess.host_filesearch().search_paths(PathKind::Native).map(|p| p.dir.to_path_buf()),
+             );
+             for path in env::split_paths(&old_path) {
+                 if !new_path.contains(&path) {
+diff --git a/compiler/rustc_metadata/src/locator.rs b/compiler/rustc_metadata/src/locator.rs
+index 83a0977296b30..378f779556a9c 100644
+--- a/compiler/rustc_metadata/src/locator.rs
++++ b/compiler/rustc_metadata/src/locator.rs
+@@ -422,60 +422,52 @@ impl<'a> CrateLocator<'a> {
+         // given that `extra_filename` comes from the `-C extra-filename`
+         // option and thus can be anything, and the incorrect match will be
+         // handled safely in `extract_one`.
+-        for search_path in self.filesearch.search_paths(self.path_kind) {
+-            debug!("searching {}", search_path.dir.display());
+-            let spf = &search_path.files;
+-
+-            let mut should_check_staticlibs = true;
+-            for (prefix, suffix, kind) in [
+-                (rlib_prefix.as_str(), rlib_suffix, CrateFlavor::Rlib),
+-                (rmeta_prefix.as_str(), rmeta_suffix, CrateFlavor::Rmeta),
+-                (dylib_prefix, dylib_suffix, CrateFlavor::Dylib),
+-                (interface_prefix, interface_suffix, CrateFlavor::SDylib),
+-            ] {
+-                if prefix == staticlib_prefix && suffix == staticlib_suffix {
+-                    should_check_staticlibs = false;
+-                }
+-                if let Some(matches) = spf.query(prefix, suffix) {
+-                    for (hash, spf) in matches {
+-                        let spf_path = spf.path(&search_path.dir);
+-                        info!("lib candidate: {}", spf_path.display());
+-
+-                        let (rlibs, rmetas, dylibs, interfaces) =
+-                            candidates.entry(hash).or_default();
+-                        {
+-                            // As a performance optimisation we canonicalize the path and skip
+-                            // ones we've already seen. This allows us to ignore crates
+-                            // we know are exactual equal to ones we've already found.
+-                            // Going to the same crate through different symlinks does not change the result.
+-                            let path =
+-                                try_canonicalize(&spf_path).unwrap_or_else(|_| spf_path.clone());
+-                            if seen_paths.contains(&path) {
+-                                continue;
+-                            };
+-                            seen_paths.insert(path);
+-                        }
+-                        // Use the original path (potentially with unresolved symlinks),
+-                        // filesystem code should not care, but this is nicer for diagnostics.
+-                        match kind {
+-                            CrateFlavor::Rlib => rlibs.insert(spf_path),
+-                            CrateFlavor::Rmeta => rmetas.insert(spf_path),
+-                            CrateFlavor::Dylib => dylibs.insert(spf_path),
+-                            CrateFlavor::SDylib => interfaces.insert(spf_path),
+-                        };
+-                    }
+-                }
++        let mut should_check_staticlibs = true;
++        for (prefix, suffix, kind) in [
++            (rlib_prefix.as_str(), rlib_suffix, CrateFlavor::Rlib),
++            (rmeta_prefix.as_str(), rmeta_suffix, CrateFlavor::Rmeta),
++            (dylib_prefix, dylib_suffix, CrateFlavor::Dylib),
++            (interface_prefix, interface_suffix, CrateFlavor::SDylib),
++        ] {
++            if prefix == staticlib_prefix && suffix == staticlib_suffix {
++                should_check_staticlibs = false;
+             }
+-            if let Some(static_matches) = should_check_staticlibs
+-                .then(|| spf.query(staticlib_prefix, staticlib_suffix))
+-                .flatten()
++
++            for (hash, spf_path) in
++                self.filesearch.get_file_candidates(prefix, suffix, self.path_kind)
+             {
+-                for (_, spf) in static_matches {
+-                    crate_rejections.via_kind.push(CrateMismatch {
+-                        path: spf.path(&search_path.dir),
+-                        got: "static".to_string(),
+-                    });
++                info!("lib candidate: {}", spf_path.display());
++
++                let (rlibs, rmetas, dylibs, interfaces) = candidates.entry(hash).or_default();
++                {
++                    // As a performance optimisation we canonicalize the path and skip
++                    // ones we've already seen. This allows us to ignore crates
++                    // we know are exactual equal to ones we've already found.
++                    // Going to the same crate through different symlinks does not change the result.
++                    let path = try_canonicalize(&spf_path).unwrap_or_else(|_| spf_path.clone());
++                    if seen_paths.contains(&path) {
++                        continue;
++                    };
++                    seen_paths.insert(path);
+                 }
++                // Use the original path (potentially with unresolved symlinks),
++                // filesystem code should not care, but this is nicer for diagnostics.
++                match kind {
++                    CrateFlavor::Rlib => rlibs.insert(spf_path),
++                    CrateFlavor::Rmeta => rmetas.insert(spf_path),
++                    CrateFlavor::Dylib => dylibs.insert(spf_path),
++                    CrateFlavor::SDylib => interfaces.insert(spf_path),
++                };
++            }
++        }
++
++        if should_check_staticlibs {
++            for (_, path) in self.filesearch.get_file_candidates(
++                staticlib_prefix,
++                staticlib_suffix,
++                self.path_kind,
++            ) {
++                crate_rejections.via_kind.push(CrateMismatch { path, got: "static".to_string() });
+             }
+         }
+ 
+diff --git a/compiler/rustc_session/src/filesearch.rs b/compiler/rustc_session/src/filesearch.rs
+index b2290f92aae12..e1b3dcd94135a 100644
+--- a/compiler/rustc_session/src/filesearch.rs
++++ b/compiler/rustc_session/src/filesearch.rs
+@@ -1,18 +1,19 @@
+ //! A module for searching for libraries
+ 
+ use std::path::{Path, PathBuf};
+-use std::{env, fs};
++use std::sync::Arc;
++use std::{env, fs, iter};
+ 
+ use rustc_fs_util::try_canonicalize;
+ use rustc_target::spec::Target;
+ 
+ use crate::search_paths::{PathKind, SearchPath};
+ 
+-#[derive(Clone)]
+ pub struct FileSearch {
+     cli_search_paths: Vec<SearchPath>,
+     tlib_path: SearchPath,
+     use_implicit_sysroot_deps: bool,
++    files: Vec<FileSearchCandidate>,
+ }
+ 
+ impl FileSearch {
+@@ -32,27 +33,96 @@ impl FileSearch {
+             .chain(maybe_tlib.into_iter())
+     }
+ 
++    /// Return files from the search dirs of this filesearch that match the given `prefix` and
++    /// `suffix` and have the given `kind`.
++    pub fn get_file_candidates<'b>(
++        &'b self,
++        prefix: &'b str,
++        suffix: &'b str,
++        kind: PathKind,
++    ) -> impl Iterator<Item = (&'b str, PathBuf)> {
++        let exclude_sysroot = kind.matches(PathKind::Crate) && !self.use_implicit_sysroot_deps;
++
++        // The indices are clipped to have only a single iterator returned from this function, to
++        // avoid allocating it.
++        let start = self.files.partition_point(|v| *v.filename < *prefix).min(self.files.len());
++        let end = self.files[start..].partition_point(|v| v.filename.starts_with(prefix));
++        let prefixed_items = &self.files[start..][..end];
++
++        prefixed_items
++            .into_iter()
++            .filter(move |c| {
++                c.kind.matches(kind)
++                    && !(exclude_sysroot && c.from_sysroot)
++                    && c.filename.ends_with(suffix)
++            })
++            .map(|c| (&c.filename[prefix.len()..c.filename.len() - suffix.len()], c.path()))
++    }
++
+     pub fn new(
+         cli_search_paths: &[SearchPath],
+         tlib_path: &SearchPath,
+         target: &Target,
+         use_implicit_sysroot_deps: bool,
+     ) -> Self {
+-        let this = FileSearch {
++        let prefixes = ["lib", &target.staticlib_prefix, &target.dll_prefix];
++
++        // Load all files from all search paths, filter them by supported prefixes, and sort them,
++        // so that we can efficiently look them up in `get_file_candidates` via binary search.
++        let mut files: Vec<FileSearchCandidate> = Vec::with_capacity(cli_search_paths.len());
++        for (search_path, is_sysroot) in
++            cli_search_paths.iter().map(|path| (path, false)).chain(iter::once((tlib_path, true)))
++        {
++            let Ok(dir) = fs::read_dir(&search_path.dir) else {
++                continue;
++            };
++            files.extend(dir.filter_map(|entry| {
++                let entry = entry.ok()?;
++
++                let filename = entry.file_name();
++                let filename = filename.to_str()?;
++
++                if !prefixes.iter().any(|prefix| filename.starts_with(prefix)) {
++                    return None;
++                }
++                Some(FileSearchCandidate {
++                    dir: Arc::clone(&search_path.dir),
++                    filename: filename.into(),
++                    kind: search_path.kind,
++                    from_sysroot: is_sysroot,
++                })
++            }));
++        }
++        files.sort_unstable_by(|lhs, rhs| lhs.filename.cmp(&rhs.filename));
++
++        FileSearch {
+             cli_search_paths: cli_search_paths.to_owned(),
+             tlib_path: tlib_path.clone(),
+             use_implicit_sysroot_deps,
+-        };
+-        this.refine(&["lib", &target.staticlib_prefix, &target.dll_prefix])
++            files,
++        }
+     }
+-    // Produce a new file search from this search that has a smaller set of candidates.
+-    fn refine(mut self, allowed_prefixes: &[&str]) -> FileSearch {
+-        self.cli_search_paths
+-            .iter_mut()
+-            .for_each(|search_paths| search_paths.files.retain(allowed_prefixes));
+-        self.tlib_path.files.retain(allowed_prefixes);
++}
++
++/// This type stores `Box<str>` instead of `PathBuf` for the filename, because getting the
++/// `file_name` of a `PathBuf` allocates, which is unnecessary. We have to go through the files
++/// a lot of times, so storing file name and the directory separately saves time and memory.
++///
++/// The filename must be valid UTF-8. If it's not, the entry should be skipped, because all Rust
++/// output files are valid UTF-8, and so a non-UTF-8 filename couldn't be one we're looking for.
++#[derive(Debug)]
++struct FileSearchCandidate {
++    dir: Arc<Path>,
++    filename: Box<str>,
++    kind: PathKind,
++    /// Was this file added through the target sysroot?
++    from_sysroot: bool,
++}
+ 
+-        self
++impl FileSearchCandidate {
++    /// Constructs the full path to the file.
++    fn path(&self) -> PathBuf {
++        self.dir.join(&*self.filename)
+     }
+ }
+ 
+diff --git a/compiler/rustc_session/src/search_paths.rs b/compiler/rustc_session/src/search_paths.rs
+index cdf8cbd585c4b..a2b7d3e9fa09b 100644
+--- a/compiler/rustc_session/src/search_paths.rs
++++ b/compiler/rustc_session/src/search_paths.rs
+@@ -7,68 +7,11 @@ use rustc_target::spec::TargetTuple;
+ use crate::EarlyDiagCtxt;
+ use crate::filesearch::make_target_lib_path;
+ 
++/// Directory containing object/library files, passed through the command-line `-L` flag.
+ #[derive(Clone, Debug)]
+ pub struct SearchPath {
+     pub kind: PathKind,
+-    pub dir: PathBuf,
+-    pub files: FilesIndex,
+-}
+-
+-/// [FilesIndex] contains paths that can be efficiently looked up with (prefix, suffix) pairs.
+-#[derive(Clone, Debug)]
+-pub struct FilesIndex(Vec<SearchPathFile>);
+-
+-impl FilesIndex {
+-    /// Look up [SearchPathFile] by (prefix, suffix) pair.
+-    pub fn query<'s>(
+-        &'s self,
+-        prefix: &str,
+-        suffix: &str,
+-    ) -> Option<impl Iterator<Item = (String, &'s SearchPathFile)>> {
+-        let start = self.0.partition_point(|v| *v.file_name_str < *prefix);
+-        if start == self.0.len() {
+-            return None;
+-        }
+-        let end = self.0[start..].partition_point(|v| v.file_name_str.starts_with(prefix));
+-        let prefixed_items = &self.0[start..][..end];
+-
+-        let ret = prefixed_items.into_iter().filter_map(move |v| {
+-            v.file_name_str.ends_with(suffix).then(|| {
+-                (
+-                    String::from(
+-                        &v.file_name_str[prefix.len()..v.file_name_str.len() - suffix.len()],
+-                    ),
+-                    v,
+-                )
+-            })
+-        });
+-        Some(ret)
+-    }
+-    pub fn retain(&mut self, prefixes: &[&str]) {
+-        self.0.retain(|v| prefixes.iter().any(|prefix| v.file_name_str.starts_with(prefix)));
+-    }
+-}
+-/// The obvious implementation of `SearchPath::files` is a `Vec<PathBuf>`. But
+-/// it is searched repeatedly by `find_library_crate`, and the searches involve
+-/// checking the prefix and suffix of the filename of each `PathBuf`. This is
+-/// doable, but very slow, because it involves calls to `file_name` and
+-/// `extension` that are themselves slow.
+-///
+-/// This type augments the `PathBuf` with an `String` containing the
+-/// `PathBuf`'s filename. The prefix and suffix checking is much faster on the
+-/// `String` than the `PathBuf`. (The filename must be valid UTF-8. If it's
+-/// not, the entry should be skipped, because all Rust output files are valid
+-/// UTF-8, and so a non-UTF-8 filename couldn't be one we're looking for.)
+-#[derive(Clone, Debug)]
+-pub struct SearchPathFile {
+-    file_name_str: Arc<str>,
+-}
+-
+-impl SearchPathFile {
+-    /// Constructs the full path to the file.
+-    pub fn path(&self, dir: &Path) -> PathBuf {
+-        dir.join(&*self.file_name_str)
+-    }
++    pub dir: Arc<Path>,
+ }
+ 
+ #[derive(PartialEq, Clone, Copy, Debug, Hash, Eq, Encodable, Decodable, StableHash)]
+@@ -134,21 +77,7 @@ impl SearchPath {
+         Self::new(PathKind::All, make_target_lib_path(sysroot, triple))
+     }
+ 
+-    pub fn new(kind: PathKind, dir: PathBuf) -> Self {
+-        // Get the files within the directory.
+-        let mut files = match std::fs::read_dir(&dir) {
+-            Ok(files) => files
+-                .filter_map(|e| {
+-                    e.ok().and_then(|e| {
+-                        e.file_name().to_str().map(|s| SearchPathFile { file_name_str: s.into() })
+-                    })
+-                })
+-                .collect::<Vec<SearchPathFile>>(),
+-
+-            Err(..) => Default::default(),
+-        };
+-        files.sort_unstable_by(|lhs, rhs| lhs.file_name_str.cmp(&rhs.file_name_str));
+-        let files = FilesIndex(files);
+-        SearchPath { kind, dir, files }
++    fn new(kind: PathKind, dir: PathBuf) -> Self {
++        SearchPath { kind, dir: dir.into() }
+     }
+ }

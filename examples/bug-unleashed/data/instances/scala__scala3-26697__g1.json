@@ -1,0 +1,27 @@
+{
+  "case_id": "scala__scala3-26697",
+  "repo": "scala/scala3",
+  "pr": 26697,
+  "title": "Emit `synchronized` methods explicitly on the JVM",
+  "language": "Scala",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "scala__scala3-26697__g1",
+  "target": {
+    "gid": "scala__scala3-26697#g1",
+    "summary": "Matching `Select(This(_), nme.synchronized_)` matches outer `this` references (such as `Outer.this.synchronized`), incorrectly transforming blocks synchronized on an outer instance into `synchronized` methods locking on the inner instance.",
+    "paths": [
+      "compiler/src/dotty/tools/dotc/transform/SimplifySynchronized.scala"
+    ],
+    "notes": [
+      "faulty pattern match that matches Outer.this",
+      "definition of transformDefDef, the method whose behavior is wrong",
+      "definition of helper function extractSynchronized containing the faulty match"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "54670ffe89bc73ee762ced3a9ee4d6b0c2f09073",
+  "base_sha": "7e87811fc448c22c6ed091d0e7eaf337889a6888",
+  "snapshot": "repos/scala__scala3/54670ffe89bc73ee762ced3a9ee4d6b0c2f09073",
+  "diff": "diffs/scala__scala3-26697.diff"
+}

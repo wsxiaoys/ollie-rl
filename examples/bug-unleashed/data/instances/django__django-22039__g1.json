@@ -1,0 +1,29 @@
+{
+  "case_id": "django__django-22039",
+  "repo": "django/django",
+  "pr": 22039,
+  "title": "Fixed #23424 -- Corrected tokenization of verbatim blocks.",
+  "language": "Python",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "django__django-22039__g1",
+  "target": {
+    "gid": "django__django-22039#g1",
+    "summary": "The _raw_start_re, _comment_end_re, and _verbatim_end_re regular expressions require whitespace after the opening block delimiter. When comment or verbatim tags are written without whitespace (such as {%comment%} or {%endverbatim%}), they are not recognized, causing template parsing failures and improper tokenization of raw block contents.",
+    "paths": [
+      "django/template/base.py"
+    ],
+    "notes": [
+      "faulty regex requires whitespace after opening block delimiter for raw start tags",
+      "faulty regex requires whitespace after opening block delimiter for endcomment tags",
+      "faulty regex requires whitespace after opening block delimiter for endverbatim tags",
+      "call site relying on _raw_start_re to detect raw block tags",
+      "call sites returning _comment_end_re and _verbatim_end_re in _raw_end_tag_re"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "8dd0670301b53752638575c410fba05117378223",
+  "base_sha": "f1d11117c6a3e227ce7cdd263cf0743f0eb73070",
+  "snapshot": "repos/django__django/8dd0670301b53752638575c410fba05117378223",
+  "diff": "diffs/django__django-22039.diff"
+}

@@ -1,0 +1,16 @@
+{
+  "case_id": "nodejs__node-63973",
+  "repo": "nodejs/node",
+  "pr": 63973,
+  "title": "stream: handle setEncoding after buffered data",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "nodejs__node-63973",
+  "target": null,
+  "siblings": [],
+  "head_sha": "bccc5df85064c3bef3c56743da7a7ecb49209963",
+  "base_sha": "d001e26f406441b86c8b243b7b2a4212b850aa31",
+  "snapshot": "repos/nodejs__node/bccc5df85064c3bef3c56743da7a7ecb49209963",
+  "diff": "diffs/nodejs__node-63973.diff"
+}

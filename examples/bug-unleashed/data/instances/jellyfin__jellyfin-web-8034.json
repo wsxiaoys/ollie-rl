@@ -1,0 +1,16 @@
+{
+  "case_id": "jellyfin__jellyfin-web-8034",
+  "repo": "jellyfin/jellyfin-web",
+  "pr": 8034,
+  "title": "Add audiobooks to the authors tab",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "jellyfin__jellyfin-web-8034",
+  "target": null,
+  "siblings": [],
+  "head_sha": "6bcd4893504a3bb0e7bd90ac7be249786b400e7b",
+  "base_sha": "5fd5996b020396167598c9360095c0da722157d1",
+  "snapshot": "repos/jellyfin__jellyfin-web/6bcd4893504a3bb0e7bd90ac7be249786b400e7b",
+  "diff": "diffs/jellyfin__jellyfin-web-8034.diff"
+}

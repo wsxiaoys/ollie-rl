@@ -1,0 +1,25 @@
+{
+  "case_id": "QwenLM__qwen-code-3567",
+  "repo": "QwenLM/qwen-code",
+  "pr": 3567,
+  "title": "fix(cli): respect OPENAI_MODEL precedence in CLI model resolution",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "QwenLM__qwen-code-3567__g1",
+  "target": {
+    "gid": "QwenLM__qwen-code-3567#g1",
+    "summary": "Prioritizing OPENAI_MODEL and QWEN_MODEL ahead of settings.model?.name causes model selections saved in settings (such as via /model) to be silently overridden whenever OPENAI_MODEL is set in the environment.",
+    "paths": [
+      "packages/cli/src/utils/modelConfigUtils.ts"
+    ],
+    "notes": [
+      "faulty precedence prioritizing OPENAI_MODEL and QWEN_MODEL over settings.model?.name when resolving requestedModel"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "daa055ff902d4c4e888d84fef367e4413c5682d6",
+  "base_sha": "4e0a37549dde69e0b368b985d44d0866d4d6752e",
+  "snapshot": "repos/QwenLM__qwen-code/daa055ff902d4c4e888d84fef367e4413c5682d6",
+  "diff": "diffs/QwenLM__qwen-code-3567.diff"
+}

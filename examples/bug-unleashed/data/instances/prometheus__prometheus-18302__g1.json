@@ -1,0 +1,32 @@
+{
+  "case_id": "prometheus__prometheus-18302",
+  "repo": "prometheus/prometheus",
+  "pr": 18302,
+  "title": "tsdb: cache collected head chunks on ChunkReader for O(1) lookup",
+  "language": "Go",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "prometheus__prometheus-18302__g1",
+  "target": {
+    "gid": "prometheus__prometheus-18302#g1",
+    "summary": "Cache validation only checks the head pointer and mmapped chunk count, failing to detect head-chunk truncation where older chunks are removed and s.firstChunkID advances. Lookups against the stale cached slice return data for the wrong chunk or fail with storage.ErrNotFound.",
+    "paths": [
+      "tsdb/head_read.go",
+      "tsdb/ooo_head_read.go"
+    ],
+    "notes": [
+      "faulty cache validation condition omitting firstChunkID check",
+      "cache fields in headChunkReader missing firstChunkID tracking",
+      "definition of getOrCollectHeadChunks",
+      "cache state recording missing firstChunkID",
+      "call site retrieving and passing cached head chunks",
+      "lookup indexing into cached head chunks relying on firstChunkID-derived offset",
+      "call site delegating to getOrCollectHeadChunks"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ce57b3d3c449744f8317593bd40e59df552eefcb",
+  "base_sha": "5d0bc055ef3b2d3f008cc69a7a10e7f1501e01d5",
+  "snapshot": "repos/prometheus__prometheus/ce57b3d3c449744f8317593bd40e59df552eefcb",
+  "diff": "diffs/prometheus__prometheus-18302.diff"
+}
