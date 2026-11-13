@@ -112,8 +112,23 @@ export const runsPageQuery = (
 export const runQuery = (tunerId: string, runId: string) =>
   queryOptions({
     queryKey: ["run", tunerId, runId],
-    queryFn: () => getRun(tunerId, runId),
-    refetchInterval: 5000,
+    queryFn: () => getRun(tunerId, runId, false),
+    // Poll only while the run is still in flight. A terminal run never changes,
+    // so stop polling instead of re-downloading it every interval.
+    refetchInterval: (query) =>
+      query.state.data?.run.status === "in_flight" ? 5000 : false,
+  });
+
+// Full transcript for a run: the same detail payload with each completion's
+// request/response attached. Fetched only on demand (the "load full
+// transcript" toggle) because those payloads embed the whole accumulated
+// conversation per turn and grow ~quadratically with turn count. A recorded
+// completion is immutable, so it is never re-fetched.
+export const runTranscriptQuery = (tunerId: string, runId: string) =>
+  queryOptions({
+    queryKey: ["run", tunerId, runId, "transcript"],
+    queryFn: () => getRun(tunerId, runId, true),
+    staleTime: Infinity,
   });
 
 export const completionQuery = (

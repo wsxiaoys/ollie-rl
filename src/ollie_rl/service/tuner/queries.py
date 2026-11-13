@@ -180,6 +180,49 @@ def _build_reward_distribution(
     )
 
 
+def _completion_item(
+    completion: ChatCompletionModel, include_payloads: bool
+) -> ChatCompletionItem:
+    """Build the DTO for one recorded chat completion.
+
+    The summary fields are read straight from the stored JSON without
+    validating the (potentially huge) ``request``/``response`` payloads, so the
+    default run-detail response stays small. The full payloads are validated
+    and attached only when ``include_payloads`` is set -- ``request`` is the
+    whole accumulated conversation at that turn, so validating it for every
+    completion is what made large runs quadratic.
+    """
+    request = completion.request
+    response = completion.response
+    messages = request.get("messages")
+    choices = response.get("choices")
+    first_choice = choices[0] if isinstance(choices, list) and choices else {}
+    usage = response.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    details = usage.get("completion_tokens_details")
+    details = details if isinstance(details, dict) else {}
+    finish_reason = (
+        first_choice.get("finish_reason") if isinstance(first_choice, dict) else None
+    )
+    return ChatCompletionItem(
+        id=completion.id,
+        policy_generation=completion.policy_generation,
+        created_at=completion.created_at,
+        duration_ms=completion.duration_ms,
+        message_count=len(messages) if isinstance(messages, list) else None,
+        finish_reason=finish_reason,
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+        reasoning_tokens=details.get("reasoning_tokens"),
+        request=(
+            ChatCompletionRequest.model_validate(request) if include_payloads else None
+        ),
+        response=(
+            ChatCompletion.model_validate(response) if include_payloads else None
+        ),
+    )
+
+
 class QueryMixin(TunerServiceBase):
     """Dashboard/observability reads over tuners, runs, and completions."""
 
@@ -1015,10 +1058,23 @@ class QueryMixin(TunerServiceBase):
         )
         return ListRunsResponse(runs=items, next_cursor=next_cursor)
 
-    async def get_run_details(self, tuner_id: str, run_id: str) -> RunDetailResponse:
+    async def get_run_details(
+        self,
+        tuner_id: str,
+        run_id: str,
+        *,
+        include_payloads: bool = False,
+    ) -> RunDetailResponse:
         """
         Return a single run plus its chat completions (oldest first) so the
         full request/response transcript can be visualized.
+
+        By default each completion carries only payload-free summary fields.
+        Pass ``include_payloads=True`` to also attach the full
+        ``request``/``response``. Those payloads embed the whole accumulated
+        conversation at each turn, so a full transcript grows ~quadratically
+        with turn count; the dashboard opens runs against the summaries and
+        fetches the transcript only on demand.
         """
         async with self.async_session() as session:
             run_result = await session.execute(
@@ -1073,17 +1129,7 @@ class QueryMixin(TunerServiceBase):
             finish_reason_by_run.get(run_id) == "length",
             finish_reason_by_run.get(run_id) == "content_filter",
         )
-        completion_items = [
-            ChatCompletionItem(
-                id=c.id,
-                policy_generation=c.policy_generation,
-                created_at=c.created_at,
-                duration_ms=c.duration_ms,
-                request=ChatCompletionRequest.model_validate(c.request),
-                response=ChatCompletion.model_validate(c.response),
-            )
-            for c in completions
-        ]
+        completion_items = [_completion_item(c, include_payloads) for c in completions]
         return RunDetailResponse(run=run_item, completions=completion_items)
 
     async def get_completion_details(

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import type { ChatCompletionItem } from "../api/types";
+import type { ChatCompletionPayload } from "../api/types";
 import { completionQuery } from "../api/queries";
 import { ChatTranscript } from "../components/ChatTranscript";
 import { PrettyJson } from "../components/PrettyJson";
@@ -27,9 +27,10 @@ export function CompletionDetailPage() {
   if (!data) return null;
 
   // Reuse the run transcript renderer for the single completion. The detail
-  // response is a superset of `ChatCompletionItem`, so it renders the prompt
-  // messages and the response turn exactly as they appear in the run view.
-  const item: ChatCompletionItem = {
+  // response is a superset of `ChatCompletionItem` and always carries the
+  // request/response payloads, so it renders the prompt messages and the
+  // response turn exactly as they appear in the run view.
+  const item: ChatCompletionPayload = {
     id: data.id,
     policy_generation: data.policy_generation,
     created_at: data.created_at,

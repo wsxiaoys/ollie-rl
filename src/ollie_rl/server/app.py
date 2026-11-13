@@ -467,15 +467,34 @@ async def list_runs(
     response_model=RunDetailResponse,
     tags=[WEB_DASHBOARD_TAG],
 )
-async def get_run(tuner_id: str, run_id: str) -> RunDetailResponse:
+async def get_run(
+    tuner_id: str,
+    run_id: str,
+    include_payloads: bool = Query(
+        default=False,
+        description=(
+            "Attach each completion's full request/response payloads. Omitted "
+            "by default: each request embeds the whole accumulated "
+            "conversation at that turn, so a large run's full transcript "
+            "grows ~quadratically with turn count. Leave false for the "
+            "compact summary; set true to load the full transcript."
+        ),
+    ),
+) -> RunDetailResponse:
     """
-    Return a single run and its chat completions (oldest first) so the full
-    request/response transcript can be visualized.
+    Return a single run and its chat completions (oldest first).
+
+    By default each completion carries only payload-free summary fields
+    (message count, finish reason, and token usage). Pass
+    `?include_payloads=true` to also attach the full request/response so the
+    transcript can be visualized.
     """
     from ollie_rl.service.tuner import RunNotFoundError
 
     try:
-        return await services.tuner.get_run_details(tuner_id, run_id)
+        return await services.tuner.get_run_details(
+            tuner_id, run_id, include_payloads=include_payloads
+        )
     except RunNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

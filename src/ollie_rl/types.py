@@ -450,7 +450,15 @@ class RewardDistributionResponse(BaseModel):
 
 
 class ChatCompletionItem(BaseModel):
-    """A single recorded LLM request/response inside a run."""
+    """A single recorded LLM request/response inside a run.
+
+    `request` is the whole accumulated conversation at that turn, so it grows
+    with the trajectory and a run's full transcript payload grows ~quadratically
+    with turn count. The full payloads are therefore optional and omitted by
+    default; the run-detail endpoint returns the payload-free summary fields
+    below so a compact list needs no follow-up fetch, and a client fetches the
+    transcript explicitly. See `get_run_details(include_payloads=...)`.
+    """
 
     id: str
     policy_generation: int
@@ -458,8 +466,19 @@ class ChatCompletionItem(BaseModel):
     # Wall-clock generation latency in milliseconds. `None` only for legacy
     # rows written before this column existed.
     duration_ms: Optional[int] = None
-    request: ChatCompletionRequest
-    response: ChatCompletion
+    # Payload-free summary fields, always populated (derived without validating
+    # the blob-heavy `request`/`response`), so the compact run view needs no
+    # second fetch. `message_count` is the prompt length; the token fields come
+    # from the response `usage`.
+    message_count: Optional[int] = None
+    finish_reason: Optional[str] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
+    # Full payloads, populated only when explicitly requested. `None` in the
+    # default (payload-free) response.
+    request: Optional[ChatCompletionRequest] = None
+    response: Optional[ChatCompletion] = None
 
 
 class RunDetailResponse(BaseModel):
