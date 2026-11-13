@@ -15,6 +15,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -445,6 +446,78 @@ async def submit_reward(
         )
 
 
+async def list_runs(client: httpx.AsyncClient, tuner_id: str) -> list[dict[str, Any]]:
+    """Every run under a tuner, following `next_cursor` pages of 500."""
+    runs: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, Any] = {"limit": 500}
+        if cursor:
+            params["cursor"] = cursor
+        response = await client.get(f"/tuners/{tuner_id}/runs", params=params)
+        response.raise_for_status()
+        body = response.json()
+        runs.extend(body.get("runs") or [])
+        cursor = body.get("next_cursor")
+        if not cursor:
+            return runs
+
+
+async def salvage_run_findings(
+    client: httpx.AsyncClient, tuner_id: str, run_id: str
+) -> tuple[tuple[reward.Finding, ...], tuple[str, ...]]:
+    """Recover the last `<review_findings>` from a run's recorded completions.
+
+    The CLI's model turns are persisted server-side, so a run whose process
+    died can still be scored. Returns `((), (reason,))` instead of raising when
+    the transcript cannot be fetched or holds no completions; a malformed
+    `<review_findings>` is reported by `reward.parse_findings`.
+    """
+    try:
+        response = await client.get(
+            f"/tuners/{tuner_id}/runs/{run_id}",
+            params={"include_payloads": "true"},
+        )
+        response.raise_for_status()
+        completions = response.json().get("completions") or []
+        # One NDJSON line per completion so `parse_findings` sees the whole
+        # transcript and picks the agent's final `<review_findings>`.
+        lines: list[str] = []
+        for completion in completions:
+            choices = (completion.get("response") or {}).get("choices") or []
+            message = choices[0].get("message") if choices else None
+            content = (message or {}).get("content")
+            if content:
+                lines.append(json.dumps({"content": content}))
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+        return (), (f"could not read run completions: {error}",)
+
+    if not lines:
+        return (), ("run recorded no completions to salvage",)
+    return reward.parse_findings("\n".join(lines))
+
+
+async def salvage_run(
+    client: httpx.AsyncClient,
+    tuner_id: str,
+    task: ReviewTask,
+    run_id: str,
+    judge: reward.Judge,
+) -> tuple[tuple[reward.Finding, ...], reward.RewardResult]:
+    """Score and record a reward for a run from its recorded completions.
+
+    The reward endpoint is write-once and the lease may have expired, so a
+    rejected `PUT` (403) means this salvage is over, not that the driver should
+    stop. Raises when the transcript holds no scoreable `<review_findings>`.
+    """
+    findings, parse_errors = await salvage_run_findings(client, tuner_id, run_id)
+    if not findings and parse_errors:
+        raise RuntimeError("; ".join(parse_errors))
+    result = await reward.score_example(task.example, findings, judge)
+    await submit_reward(client, tuner_id, run_id, result.total)
+    return findings, result
+
+
 async def execute_run(
     number: int,
     client: httpx.AsyncClient,
@@ -457,7 +530,7 @@ async def execute_run(
 ) -> None:
     print(
         f"[driver] run {number:04d} {task.split}/{task.kind} "
-        f"task={task.example_id} started",
+        f"task={task.example_id} run={run_id} started",
         flush=True,
     )
     try:
@@ -474,7 +547,22 @@ async def execute_run(
         result = await reward.score_example(task.example, findings, judge)
         await submit_reward(client, tuner_id, run_id, result.total)
     except Exception as error:  # noqa: BLE001 - one failed rollout must not stop peers
-        print(f"[driver] run {number:04d} {task.example_id} failed: {error}")
+        # The CLI records every model turn before it dies, so a run that already
+        # emitted `<review_findings>` can still be scored from its transcript
+        # instead of squatting its group until the server lease expires.
+        try:
+            findings, result = await salvage_run(client, tuner_id, task, run_id, judge)
+        except Exception:  # noqa: BLE001 - salvage is best-effort
+            print(f"[driver] run {number:04d} {task.example_id} failed: {error}")
+            return
+        matched = (
+            f"matched={result.matched_severity}" if result.matched else "matched=no"
+        )
+        print(
+            f"[driver] run {number:04d} {task.example_id} salvaged "
+            f"reward={result.total:.2f} {matched} findings={len(findings)} "
+            f"| {error}"
+        )
         return
 
     split_stats = stats[task.split]
@@ -488,6 +576,69 @@ async def execute_run(
     )
     for error in (*parse_errors, *result.errors):
         print(f"[driver] run {number:04d} note: {error[-500:]}")
+
+
+async def salvage_orphaned_runs(
+    client: httpx.AsyncClient,
+    tuner_id: str,
+    tasks: dict[str, ReviewTask],
+    judge: reward.Judge,
+    min_age: float,
+) -> None:
+    """Reward runs a killed predecessor driver left `in_flight`.
+
+    A driver that dies mid-flight leaves its Ollie CLIs running and its runs
+    unrewarded; each one blocks its datum's group until the server lease
+    expires, stalling the tuner. Salvage them the same way a failed rollout is
+    salvaged. Best-effort: a failed sweep must not abort startup.
+    """
+    try:
+        runs = await list_runs(client, tuner_id)
+    except Exception as error:  # noqa: BLE001 - a failed sweep must not abort startup
+        print(f"[driver] salvage sweep skipped: {error}")
+        return
+
+    now = datetime.now(timezone.utc)
+    orphans: list[dict[str, Any]] = []
+    for run in runs:
+        if run.get("status") != "in_flight" or run.get("reward") is not None:
+            continue
+        if not run.get("completion_count"):
+            continue
+        created_at = run.get("created_at")
+        if not isinstance(created_at, str):
+            continue
+        try:
+            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if (now - created).total_seconds() > min_age:
+            orphans.append(run)
+
+    recovered = 0
+    for run in orphans:
+        run_id = run["run_id"]
+        # `datum_id` is the prepared example id, the same key `load_tasks` uses.
+        task = tasks.get(run.get("datum_id"))
+        if task is None:
+            print(
+                f"[driver] salvage sweep: run {run_id} has no loaded example "
+                f"for datum {run.get('datum_id')}"
+            )
+            continue
+        try:
+            findings, result = await salvage_run(client, tuner_id, task, run_id, judge)
+        except Exception as error:  # noqa: BLE001 - one bad run must not stop the sweep
+            print(f"[driver] salvage sweep: run {run_id} skipped: {error}")
+            continue
+        recovered += 1
+        print(
+            f"[driver] salvage sweep: run {run_id} {task.example_id} "
+            f"recovered reward={result.total:.2f} findings={len(findings)}"
+        )
+    print(f"[driver] salvage sweep: {recovered} run(s) recovered")
 
 
 async def async_main(args: argparse.Namespace) -> int:
@@ -546,6 +697,9 @@ async def async_main(args: argparse.Namespace) -> int:
             trainer_params=trainer_params,
         )
         await warn_unless_centering(client, tuner_id)
+        # Clear runs a killed predecessor driver abandoned before this driver
+        # starts competing with them for group slots.
+        await salvage_orphaned_runs(client, tuner_id, tasks, judge, args.run_timeout)
 
         slots = asyncio.Semaphore(args.concurrency)
 
