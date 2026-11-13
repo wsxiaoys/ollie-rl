@@ -1,0 +1,295 @@
+diff --git a/docs/api/session.md b/docs/api/session.md
+index b29ad93ce5f7f..7fa6ae420e3df 100644
+--- a/docs/api/session.md
++++ b/docs/api/session.md
+@@ -1001,7 +1001,7 @@ win.webContents.session.setCertificateVerifyProc((request, callback) => {
+     * `hand-tracking` - Request access to hand tracking data in WebXR sessions via the [WebXR Hand Input API](https://developer.mozilla.org/en-US/docs/Web/API/XRHand).
+     * `hid` - Request access to HID devices via the [WebHID API](https://developer.mozilla.org/en-US/docs/Web/API/WebHID_API).
+     * `idle-detection` - Request access to the user's idle state via the [IdleDetector API](https://developer.mozilla.org/en-US/docs/Web/API/IdleDetector).
+-    * `keyboardLock` - Request capture of keypresses for any or all of the keys on the physical keyboard via the [Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/lock). These requests always appear to originate from the main frame.
++    * `keyboardLock` - Request capture of keypresses for any or all of the keys on the physical keyboard via the [Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/lock).
+     * `local-fonts` - Request access to the user's locally installed fonts via the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API).
+     * `local-network` - Request access to devices on the user's local network via [Local Network Access](https://github.com/explainers-by-googlers/local-network-access).
+     * `local-network-access` - Request access to devices on the user's local network via [Local Network Access](https://github.com/explainers-by-googlers/local-network-access). This is the original permission type; newer Chromium versions split it into `local-network` and `loopback-network`.
+@@ -1016,7 +1016,7 @@ win.webContents.session.setCertificateVerifyProc((request, callback) => {
+     * `payment-handler` - Request to handle payment requests via the [Payment Handler API](https://developer.mozilla.org/en-US/docs/Web/API/Payment_Handler_API).
+     * `periodic-background-sync` - Request to run periodic tasks in the background via the [Web Periodic Background Synchronization API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Periodic_Background_Synchronization_API).
+     * `persistent-storage` - Request that the origin's storage is not cleared under storage pressure via [`StorageManager.persist()`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist).
+-    * `pointerLock` - Request to directly interpret mouse movements as an input method via the [Pointer Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Pointer_Lock_API). These requests always appear to originate from the main frame.
++    * `pointerLock` - Request to directly interpret mouse movements as an input method via the [Pointer Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Pointer_Lock_API).
+     * `screen-wake-lock` - Request to keep the screen awake via the [Screen Wake Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API).
+     * `sensors` - Request access to device sensors such as the accelerometer and gyroscope via the [Sensor APIs](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
+     * `serial` - Request access to serial devices via the [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API).
+@@ -1099,7 +1099,7 @@ session.defaultSession.setPermissionRequestHandler((webContents, permission, cal
+     * `hand-tracking` - Access hand tracking data in WebXR sessions via the [WebXR Hand Input API](https://developer.mozilla.org/en-US/docs/Web/API/XRHand).
+     * `hid` - Access the HID protocol to manipulate HID devices via the [WebHID API](https://developer.mozilla.org/en-US/docs/Web/API/WebHID_API).
+     * `idle-detection` - Access the user's idle state via the [IdleDetector API](https://developer.mozilla.org/en-US/docs/Web/API/IdleDetector).
+-    * `keyboardLock` - Capture keypresses for any or all of the keys on the physical keyboard via the [Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/lock). These requests always appear to originate from the main frame.
++    * `keyboardLock` - Capture keypresses for any or all of the keys on the physical keyboard via the [Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/lock).
+     * `local-fonts` - Access the user's locally installed fonts via the [Local Font Access API](https://developer.mozilla.org/en-US/docs/Web/API/Local_Font_Access_API).
+     * `local-network` - Access devices on the user's local network via [Local Network Access](https://github.com/explainers-by-googlers/local-network-access).
+     * `local-network-access` - Access devices on the user's local network via [Local Network Access](https://github.com/explainers-by-googlers/local-network-access). This is the original permission type; newer Chromium versions split it into `local-network` and `loopback-network`.
+@@ -1114,7 +1114,7 @@ session.defaultSession.setPermissionRequestHandler((webContents, permission, cal
+     * `payment-handler` - Handle payment requests via the [Payment Handler API](https://developer.mozilla.org/en-US/docs/Web/API/Payment_Handler_API).
+     * `periodic-background-sync` - Run periodic tasks in the background via the [Web Periodic Background Synchronization API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Periodic_Background_Synchronization_API).
+     * `persistent-storage` - Keep the origin's storage from being cleared under storage pressure via [`StorageManager.persist()`](https://developer.mozilla.org/en-US/docs/Web/API/StorageManager/persist).
+-    * `pointerLock` - Directly interpret mouse movements as an input method via the [Pointer Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Pointer_Lock_API). These requests always appear to originate from the main frame.
++    * `pointerLock` - Directly interpret mouse movements as an input method via the [Pointer Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Pointer_Lock_API).
+     * `screen-wake-lock` - Keep the screen awake via the [Screen Wake Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API).
+     * `sensors` - Access device sensors such as the accelerometer and gyroscope via the [Sensor APIs](https://developer.mozilla.org/en-US/docs/Web/API/Sensor_APIs).
+     * `serial` - Read from and write to serial devices with the [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API).
+diff --git a/shell/browser/electron_web_contents_utility_handler_impl.cc b/shell/browser/electron_web_contents_utility_handler_impl.cc
+index 7288f79971be5..6dca7bc1934bc 100644
+--- a/shell/browser/electron_web_contents_utility_handler_impl.cc
++++ b/shell/browser/electron_web_contents_utility_handler_impl.cc
+@@ -81,14 +81,16 @@ void ElectronWebContentsUtilityHandlerImpl::CanAccessClipboardDeprecated(
+     const blink::LocalFrameToken& frame_token,
+     CanAccessClipboardDeprecatedCallback callback) {
+   if (render_frame_host_token_.frame_token == frame_token) {
+-    // Paste requires either (1) user activation, ...
+-    if (web_contents()->HasRecentInteraction()) {
++    content::RenderFrameHost* render_frame_host = GetRenderFrameHost();
++    // Paste requires either (1) transient user activation on the requesting
++    // frame (activation propagates from a frame to its ancestors, not to
++    // unrelated frames in the page), ...
++    if (render_frame_host->HasTransientUserActivation()) {
+       std::move(callback).Run(blink::mojom::PermissionStatus::GRANTED);
+       return;
+     }
+ 
+     // (2) granted permission, ...
+-    content::RenderFrameHost* render_frame_host = GetRenderFrameHost();
+     content::BrowserContext* browser_context =
+         render_frame_host->GetBrowserContext();
+     content::PermissionController* permission_controller =
+diff --git a/shell/browser/web_contents_permission_helper.cc b/shell/browser/web_contents_permission_helper.cc
+index f2db6a8b90719..8fff3d6f78647 100644
+--- a/shell/browser/web_contents_permission_helper.cc
++++ b/shell/browser/web_contents_permission_helper.cc
+@@ -9,9 +9,12 @@
+ 
+ #include "components/content_settings/core/common/content_settings.h"
+ #include "components/webrtc/media_stream_devices_controller.h"
++#include "content/browser/web_contents/web_contents_impl.h"  // nogncheck
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/permission_descriptor_util.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
++#include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/web_contents_user_data.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+ #include "shell/browser/electron_browser_context.h"
+@@ -29,6 +32,25 @@ using blink::mojom::MediaStreamType;
+ 
+ namespace {
+ 
++// Returns the local-root frame in |web_contents|' primary frame tree that owns
++// |widget|, i.e. the document that asked for pointer or keyboard lock. Falls
++// back to the primary main frame if the widget is unknown.
++content::RenderFrameHost* FrameForLockWidget(
++    content::WebContents* web_contents,
++    content::RenderWidgetHost* widget) {
++  content::RenderFrameHost* result = nullptr;
++  if (widget) {
++    web_contents->GetPrimaryMainFrame()->ForEachRenderFrameHostWithAction(
++        [&](content::RenderFrameHost* rfh) {
++          if (rfh->GetRenderWidgetHost() != widget)
++            return content::RenderFrameHost::FrameIterationAction::kContinue;
++          result = rfh;
++          return content::RenderFrameHost::FrameIterationAction::kStop;
++        });
++  }
++  return result ? result : web_contents->GetPrimaryMainFrame();
++}
++
+ constexpr std::string_view MediaStreamTypeToString(
+     blink::mojom::MediaStreamType type) {
+   switch (type) {
+@@ -317,8 +339,15 @@ void WebContentsPermissionHelper::RequestPointerLockPermission(
+     bool last_unlocked_by_target,
+     base::OnceCallback<void(content::WebContents*, bool, bool, bool)>
+         callback) {
+-  RequestPermission(web_contents_->GetPrimaryMainFrame(),
+-                    blink::PermissionType::POINTER_LOCK,
++  // content records the requesting widget before asking the delegate, so the
++  // request can be attributed to the frame that called requestPointerLock()
++  // rather than to the top-level document. GetPointerLockWidget() only
++  // answers once the lock is held; the pending widget is only exposed through
++  // this accessor.
++  auto* requesting_frame = FrameForLockWidget(
++      web_contents_, static_cast<content::WebContentsImpl*>(web_contents_)
++                         ->mouse_lock_widget_for_testing());
++  RequestPermission(requesting_frame, blink::PermissionType::POINTER_LOCK,
+                     base::BindOnce(std::move(callback), web_contents_,
+                                    user_gesture, last_unlocked_by_target),
+                     user_gesture);
+@@ -327,9 +356,11 @@ void WebContentsPermissionHelper::RequestPointerLockPermission(
+ void WebContentsPermissionHelper::RequestKeyboardLockPermission(
+     bool esc_key_locked,
+     base::OnceCallback<void(content::WebContents*, bool, bool)> callback) {
++  auto* requesting_frame = FrameForLockWidget(
++      web_contents_, static_cast<content::WebContentsImpl*>(web_contents_)
++                         ->GetKeyboardLockWidget());
+   RequestPermission(
+-      web_contents_->GetPrimaryMainFrame(),
+-      blink::PermissionType::KEYBOARD_LOCK,
++      requesting_frame, blink::PermissionType::KEYBOARD_LOCK,
+       base::BindOnce(std::move(callback), web_contents_, esc_key_locked));
+ }
+ 
+diff --git a/spec/chromium-spec.ts b/spec/chromium-spec.ts
+index a23621bba4f3c..f488449cc4a21 100644
+--- a/spec/chromium-spec.ts
++++ b/spec/chromium-spec.ts
+@@ -4598,6 +4598,49 @@ describe('navigator.clipboard.write', () => {
+   });
+ });
+ 
++describe('pointer lock permission request', () => {
++  let server: http.Server;
++  let crossOriginUrl: string;
++  before(async () => {
++    server = http.createServer((_req, res) => {
++      res.setHeader('content-type', 'text/html');
++      res.end('<!doctype html><body>frame</body>');
++    });
++    crossOriginUrl = (await listen(server)).url;
++  });
++  after(() => server.close());
++  afterEach(closeAllWindows);
++
++  it('is attributed to the frame that called requestPointerLock()', async () => {
++    const ses = session.fromPartition(`pointer-lock-${Math.random()}`);
++    const w = new BrowserWindow({ show: true, webPreferences: { session: ses } });
++    await w.loadFile(path.join(fixturesPath, 'pages', 'blank.html'));
++    await w.webContents.executeJavaScript(`new Promise((resolve) => {
++      const f = document.createElement('iframe');
++      f.src = ${JSON.stringify(crossOriginUrl)};
++      f.onload = resolve;
++      document.body.appendChild(f);
++    })`);
++    const iframe = w.webContents.mainFrame.frames[0];
++    const requests: { wc: Electron.WebContents; permission: string; details: any }[] = [];
++    ses.setPermissionRequestHandler((wc, permission, callback, details) => {
++      requests.push({ wc, permission, details });
++      callback(false);
++    });
++    w.webContents.focus();
++    const result = await iframe.executeJavaScript(
++      "document.body.requestPointerLock().then(() => 'locked', (e) => e.name)",
++      true
++    );
++    expect(result).to.not.equal('locked');
++    const request = requests.find((r) => r.permission === 'pointerLock');
++    expect(request).to.exist();
++    expect(request!.wc).to.equal(w.webContents);
++    expect(request!.details.requestingUrl).to.equal(`${crossOriginUrl}/`);
++    expect(request!.details.isMainFrame).to.equal(false);
++  });
++});
++
+ describe('paste execCommand', () => {
+   const readClipboard = async (w: BrowserWindow) => {
+     if (!w.webContents.isFocused()) {
+@@ -4606,6 +4649,8 @@ describe('paste execCommand', () => {
+       await focus;
+     }
+ 
++    // No user gesture: these tests exercise the permission path, and a
++    // gesture on the requesting frame allows paste by itself.
+     return w.webContents.executeJavaScript(
+       `
+       new Promise((resolve) => {
+@@ -4621,7 +4666,7 @@ describe('paste execCommand', () => {
+         document.execCommand('paste');
+       });
+     `,
+-      true
++      false
+     );
+   };
+ 
+@@ -4746,6 +4791,83 @@ describe('paste execCommand', () => {
+     const paste = await readClipboard(childWindow);
+     expect(paste).to.equal(text);
+   });
++
++  describe('user activation', () => {
++    // A cross-origin iframe next to a main frame that the user just clicked in.
++    let server: http.Server;
++    let crossOriginUrl: string;
++    before(async () => {
++      server = http.createServer((_req, res) => {
++        res.setHeader('content-type', 'text/html');
++        res.end('<!doctype html><body contenteditable>frame</body>');
++      });
++      crossOriginUrl = (await listen(server)).url;
++    });
++    after(() => server.close());
++
++    const pasteIn = (frame: Electron.WebFrameMain) =>
++      frame.executeJavaScript(
++        `new Promise((resolve) => {
++          const timeout = setTimeout(() => resolve(''), 1000);
++          document.addEventListener('paste', (event) => {
++            clearTimeout(timeout);
++            event.preventDefault();
++            resolve(event.clipboardData.getData('text'));
++          }, { once: true });
++          document.execCommand('paste');
++        })`,
++        false
++      );
++
++    const clickMainFrame = async (w: BrowserWindow) => {
++      if (!w.webContents.isFocused()) {
++        const focus = once(w.webContents, 'focus');
++        w.webContents.focus();
++        await focus;
++      }
++      w.webContents.sendInputEvent({ type: 'mouseDown', x: 5, y: 5, button: 'left', clickCount: 1 });
++      w.webContents.sendInputEvent({ type: 'mouseUp', x: 5, y: 5, button: 'left', clickCount: 1 });
++      await waitUntil(
++        async () => (await w.webContents.mainFrame.executeJavaScript('navigator.userActivation.isActive')) === true
++      );
++    };
++
++    it('lets the frame the user interacted with paste without a permission grant', async () => {
++      const w = new BrowserWindow({ show: true, webPreferences: { enableDeprecatedPaste: true, session: ses } });
++      await w.loadFile(path.join(fixturesPath, 'pages', 'blank.html'));
++      const text = 'paste with activation';
++      clipboard.writeText(text);
++      await clickMainFrame(w);
++      expect(await pasteIn(w.webContents.mainFrame)).to.equal(text);
++    });
++
++    it('does not extend a click in the main frame to a cross-origin iframe', async () => {
++      const w = new BrowserWindow({ show: true, webPreferences: { enableDeprecatedPaste: true, session: ses } });
++      await w.loadFile(path.join(fixturesPath, 'pages', 'blank.html'));
++      await w.webContents.executeJavaScript(`new Promise((resolve) => {
++        const f = document.createElement('iframe');
++        f.style.cssText = 'position:absolute;top:200px;left:0;width:200px;height:100px';
++        f.src = ${JSON.stringify(crossOriginUrl)};
++        f.onload = resolve;
++        document.body.appendChild(f);
++      })`);
++      const iframe = w.webContents.mainFrame.frames[0];
++      const checks: string[] = [];
++      ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
++        if (permission === 'deprecated-sync-clipboard-read') checks.push(requestingOrigin);
++        return false;
++      });
++      const text = 'main frame click, iframe paste';
++      clipboard.writeText(text);
++      await clickMainFrame(w);
++      expect(await pasteIn(iframe)).to.equal('');
++      // The iframe had no activation of its own, so the decision went to the
++      // check handler, attributed to the iframe.
++      expect(checks).to.not.be.empty();
++      for (const origin of checks) expect(origin).to.equal(`${crossOriginUrl}/`);
++      expect(await clipboard.readText()).to.equal(text);
++    });
++  });
+ });
+ 
+ ifdescribe(process.platform !== 'linux')('navigator.setAppBadge/clearAppBadge', () => {

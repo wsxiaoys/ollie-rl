@@ -1,0 +1,43 @@
+diff --git a/resources/js/components/command-palette/CommandPalette.vue b/resources/js/components/command-palette/CommandPalette.vue
+index b0e194d619e..99d1b1d33f4 100644
+--- a/resources/js/components/command-palette/CommandPalette.vue
++++ b/resources/js/components/command-palette/CommandPalette.vue
+@@ -76,9 +76,11 @@ const aggregatedItems = computed(() => [
+ 
+ const results = computed(() => {
+     let items = aggregatedItems.value.map(item => normalizeItem(item));
++    let filterableItems = items.filter(item => item.category !== 'Content Search');
++    const highlightClasses = 'text-blue-600 dark:text-blue-400 underline underline-offset-4 decoration-blue-200 dark:decoration-blue-600/45';
+ 
+     let filtered = fuzzysort
+-        .go(query.value, items, {
++        .go(query.value, filterableItems, {
+             all: true,
+             keys: ['text'],
+             scoreFn: fuzzysortScoringAlgorithm,
+@@ -86,11 +88,24 @@ const results = computed(() => {
+         .map(result => {
+             return {
+                 score: result._score,
+-                html: result[0].highlight('<span class="text-blue-600 dark:text-blue-400 underline underline-offset-4 decoration-blue-200 dark:decoration-blue-600/45">', '</span>'),
++                html: result[0].highlight(`<span class="${highlightClasses}">`, '</span>'),
+                 ...result.obj,
+             };
+         });
+ 
++	let contentSearchResults = items
++		.filter(item => item.category === 'Content Search')
++		.map(item => {
++			let result = fuzzysort.single(query.value, item.text);
++
++			return {
++				...item,
++				html: result?.highlight(`<span class="${highlightClasses}">`, '</span>') || item.text,
++			};
++		});
++
++    filtered = [...contentSearchResults, ...filtered];
++
+     let categoryOrder = query.value
+         ? uniq(filtered.map(item => item.category))
+         : serverCategories;

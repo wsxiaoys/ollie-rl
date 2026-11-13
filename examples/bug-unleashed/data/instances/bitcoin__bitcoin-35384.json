@@ -1,0 +1,16 @@
+{
+  "case_id": "bitcoin__bitcoin-35384",
+  "repo": "bitcoin/bitcoin",
+  "pr": 35384,
+  "title": "util: Check write failures before renaming settings.json",
+  "language": "C++",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "bitcoin__bitcoin-35384",
+  "target": null,
+  "siblings": [],
+  "head_sha": "0654511e1b935d22fe6c88e3f5d5c7b336516222",
+  "base_sha": "1e169a8a6cb8ed0221042a9abbd121167ee02b29",
+  "snapshot": "repos/bitcoin__bitcoin/0654511e1b935d22fe6c88e3f5d5c7b336516222",
+  "diff": "diffs/bitcoin__bitcoin-35384.diff"
+}

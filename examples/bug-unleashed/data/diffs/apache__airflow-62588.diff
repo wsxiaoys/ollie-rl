@@ -1,0 +1,83 @@
+diff --git a/airflow-core/src/airflow/secrets/environment_variables.py b/airflow-core/src/airflow/secrets/environment_variables.py
+index ff67f1de2a8e0..5fb85732d712e 100644
+--- a/airflow-core/src/airflow/secrets/environment_variables.py
++++ b/airflow-core/src/airflow/secrets/environment_variables.py
+@@ -20,6 +20,7 @@
+ from __future__ import annotations
+ 
+ import os
++import re
+ 
+ from airflow.secrets import BaseSecretsBackend
+ 
+@@ -31,6 +32,9 @@ class EnvironmentVariablesBackend(BaseSecretsBackend):
+     """Retrieves Connection object and Variable from environment variable."""
+ 
+     def get_conn_value(self, conn_id: str, team_name: str | None = None) -> str | None:
++        if self._is_team_specific_accessed_as_global(conn_id, team_name):
++            return None
++
+         if team_name and (
+             team_var := os.environ.get(f"{CONN_ENV_PREFIX}_{team_name.upper()}___" + conn_id.upper())
+         ):
+@@ -47,6 +51,9 @@ def get_variable(self, key: str, team_name: str | None = None) -> str | None:
+         :param team_name: Team name associated to the task trying to access the variable (if any)
+         :return: Variable Value
+         """
++        if self._is_team_specific_accessed_as_global(key, team_name):
++            return None
++
+         if team_name and (
+             team_var := os.environ.get(f"{VAR_ENV_PREFIX}_{team_name.upper()}___" + key.upper())
+         ):
+@@ -54,3 +61,7 @@ def get_variable(self, key: str, team_name: str | None = None) -> str | None:
+             return team_var
+ 
+         return os.environ.get(VAR_ENV_PREFIX + key.upper())
++
++    @staticmethod
++    def _is_team_specific_accessed_as_global(secret_id: str, team_name: str | None = None) -> bool:
++        return team_name is None and bool(re.fullmatch(r"_[^_]+___.+", secret_id))
+diff --git a/airflow-core/tests/unit/always/test_secrets.py b/airflow-core/tests/unit/always/test_secrets.py
+index 3aabc5d19a174..dfa39352b92be 100644
+--- a/airflow-core/tests/unit/always/test_secrets.py
++++ b/airflow-core/tests/unit/always/test_secrets.py
+@@ -24,6 +24,7 @@
+ from airflow.configuration import ensure_secrets_loaded, initialize_secrets_backends
+ from airflow.models import Connection, Variable
+ from airflow.sdk import SecretCache
++from airflow.sdk.exceptions import AirflowNotFoundException
+ 
+ from tests_common.test_utils.config import conf_vars
+ from tests_common.test_utils.db import clear_db_variables
+@@ -119,6 +120,17 @@ def test_backend_fallback_to_env_var(self, mock_get_connection):
+ 
+         assert conn.get_uri() == "mysql://airflow:airflow@host:5432/airflow"
+ 
++    @pytest.mark.db_test
++    @mock.patch.dict(
++        "os.environ",
++        {
++            "AIRFLOW_CONN__TEAM___TEST_MYSQL": "mysql://airflow:airflow@host:5432/airflow",
++        },
++    )
++    def test_connection_env_var_do_not_access_team_specific(self):
++        with pytest.raises(AirflowNotFoundException, match=r"The conn_id `_team___test_mysql` isn't defined"):
++            Connection.get_connection_from_secrets(conn_id="_team___test_mysql")
++
+ 
+ @skip_if_force_lowest_dependencies_marker
+ @pytest.mark.db_test
+@@ -204,3 +216,12 @@ def test_backend_variable_order(self, mock_secret_get, mock_meta_get):
+ 
+         mock_secret_get.return_value = "a_secret_value"
+         assert Variable.get(key="not_myvar") == "a_secret_value"
++
++    @mock.patch.dict(
++        "os.environ",
++        {
++            "AIRFLOW_VAR__TEAM___MYVAR": "value",
++        },
++    )
++    def test_variable_env_var_do_not_access_team_specific(self):
++        assert Variable.get_variable_from_secrets(key="_team___myvar") is None

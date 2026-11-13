@@ -1,0 +1,16 @@
+{
+  "case_id": "rizinorg__rizin-6555",
+  "repo": "rizinorg/rizin",
+  "pr": 6555,
+  "title": "Fix performance for GOT offset lookup via a lookup table.",
+  "language": "C",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "rizinorg__rizin-6555",
+  "target": null,
+  "siblings": [],
+  "head_sha": "1cc7517b0a206492b84e91b686c51e15e846fb1b",
+  "base_sha": "53e89992717c20cfe90bd143d78ec83bca0f1cce",
+  "snapshot": "repos/rizinorg__rizin/1cc7517b0a206492b84e91b686c51e15e846fb1b",
+  "diff": "diffs/rizinorg__rizin-6555.diff"
+}

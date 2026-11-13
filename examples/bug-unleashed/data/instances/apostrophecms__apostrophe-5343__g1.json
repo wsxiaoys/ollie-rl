@@ -1,0 +1,25 @@
+{
+  "case_id": "apostrophecms__apostrophe-5343",
+  "repo": "apostrophecms/apostrophe",
+  "pr": 5343,
+  "title": "Fix styles sanitization and duplicates",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apostrophecms__apostrophe-5343__g1",
+  "target": {
+    "gid": "apostrophecms__apostrophe-5343#g1",
+    "summary": "Outputting req.data.global.stylesStylesheet as unescaped raw content inside a style tag allows style breakout (e.g., via </style>) and arbitrary script execution (XSS).",
+    "paths": [
+      "packages/apostrophe/modules/@apostrophecms/styles/lib/methods.js"
+    ],
+    "notes": [
+      "faulty statement using raw instead of escaped text allows style breakout and XSS"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "49be3be74ff282bc6eb771179e1f40b084c74bb2",
+  "base_sha": "47d9f7c423aca259613551d22e57bc2ce1adbc63",
+  "snapshot": "repos/apostrophecms__apostrophe/49be3be74ff282bc6eb771179e1f40b084c74bb2",
+  "diff": "diffs/apostrophecms__apostrophe-5343.diff"
+}

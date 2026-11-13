@@ -1,0 +1,1019 @@
+diff --git a/compiler/src/dotty/tools/backend/jvm/BCodeHelpers.scala b/compiler/src/dotty/tools/backend/jvm/BCodeHelpers.scala
+index f058dc2a618f..7aef58bf77d8 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BCodeHelpers.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BCodeHelpers.scala
+@@ -330,11 +330,12 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader, val bTypes: WellKnownBTypes) ex
+      *
+      * @param sym   The symbol for which to generate a signature.
+      * @param owner The owner of `sym`.
++     * @param descriptor The descriptor of the symbol; the signature is unnecessary if they are equal.
+      * @return The generic signature of `sym` before erasure, as specified in the Java Virtual
+      *         Machine Specification, §4.3.4, or `null` if `sym` doesn't need a generic signature.
+      * @see https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.3.4
+      */
+-    def getGenericSignature(sym: Symbol, owner: Symbol)(using Context): String | Null = {
++    def getGenericSignature(sym: Symbol, owner: Symbol, descriptor: String | Null)(using Context): String | Null = {
+       atPhase(erasurePhase) {
+         // Finding the member's type is nontrivial because of erasure and how it interacts with other phases.
+         def computeMemberType(): Type = {
+@@ -359,15 +360,20 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader, val bTypes: WellKnownBTypes) ex
+ 
+               // there might be a getter created after erasure by the mixin phase,
+               // and if so we must use the information that the mixin phase stored for it.
++              // However, we can't do this if the result is a primitive, since field generic signatures can only be reference types (JVMS §4.7.9.1)
+               val mixinGetter = atPhase(mixinPhase.next) { sym.getter }
+               if mixinGetter.exists then mixinPhase.asInstanceOf[Mixin].mixinGenericInfos.get(mixinGetter) match
+-                case Some(ExprType(genericInfo)) => return genericInfo // since we're looking for the getter, we get an ExprType
++                case Some(ExprType(genericInfo)) if !genericInfo.isPrimitiveValueType => return genericInfo // since we're looking for the getter, we get an ExprType
+                 case _ => ()
+ 
+           owner.denot.thisType.memberInfo(sym)
+         }
+ 
+-        getGenericSignatureHelper(sym, owner, computeMemberType()).orNull
++        if ctx.base.settings.XnoGenericSig.value then null
++        else
++          val genSig = getGenericSignatureHelper(sym, owner, computeMemberType())
++          if genSig == null || (descriptor != null && descriptor.contentEquals(genSig)) then null
++          else genSig.toString
+       }
+     }
+ 
+@@ -397,12 +403,12 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader, val bTypes: WellKnownBTypes) ex
+       )
+ 
+       // TODO needed? for(ann <- m.annotations) { ann.symbol.initialize }
+-      val jgensig = getStaticForwarderGenericSignature(m, module)
++      val jReturnType = bTypeLoader.bTypeFromType(methodInfo.resultType)
++      val mdesc = MethodBType(paramJavaTypes, jReturnType).descriptor
++      val jgensig = getStaticForwarderGenericSignature(m, module, mdesc)
+       val (throws, others) = m.annotations.partition(_.symbol eq defn.ThrowsAnnot)
+       val thrownExceptions: List[String] = getExceptions(throws)
+ 
+-      val jReturnType = bTypeLoader.bTypeFromType(methodInfo.resultType)
+-      val mdesc = MethodBType(paramJavaTypes, jReturnType).descriptor
+       val mirrorMethodName = m.javaSimpleName
+       val lengthOk = if jgensig ne null then BCodeUtils.checkConstantStringLength(jgensig)
+                                         else BCodeUtils.checkConstantStringLength(mirrorMethodName, mdesc)
+@@ -591,23 +597,18 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader, val bTypes: WellKnownBTypes) ex
+ 
+   } // end of class JMirrorBuilder
+ 
+-  private def getGenericSignatureHelper(sym: Symbol, owner: Symbol, memberTpe: Type)(using Context): Option[String] = {
+-    if (needsGenericSignature(sym)) {
+-      val erasedTypeSym = TypeErasure.fullErasure(sym.denot.info).typeSymbol
+-      if (erasedTypeSym.isPrimitiveValueClass) {
+-        // Suppress signatures for symbols whose types erase in the end to primitive
+-        // value types. This is needed to fix #7416.
+-        None
+-      } else {
+-        val jsOpt = GenericSignatures.javaSig(sym, memberTpe)
+-        if (ctx.settings.XverifySignatures.value) {
+-          jsOpt.foreach(verifySignature(sym, _))
+-        }
+-
+-        jsOpt
+-      }
++  private def getGenericSignatureHelper(sym: Symbol, owner: Symbol, memberTpe: Type)(using Context): java.lang.StringBuilder | Null = {
++    val erasedTypeSym = TypeErasure.fullErasure(sym.denot.info).typeSymbol
++    if (erasedTypeSym.isPrimitiveValueClass) {
++      // Suppress signatures for symbols whose types erase in the end to primitive
++      // value types. This is needed to fix #7416.
++      null
+     } else {
+-      None
++      val jsOpt = GenericSignatures.javaSig(sym, memberTpe)
++      if (jsOpt != null && ctx.settings.XverifySignatures.value) {
++        verifySignature(sym, jsOpt.toString)
++      }
++      jsOpt
+     }
+   }
+ 
+@@ -637,32 +638,21 @@ trait BCodeHelpers(val bTypeLoader: BTypeLoader, val bTypes: WellKnownBTypes) ex
+     }
+   }
+ 
+-  // @M don't generate java generics sigs for (members of) implementation
+-  // classes, as they are monomorphic (TODO: ok?)
+-  private final def needsGenericSignature(sym: Symbol)(using Context): Boolean = !(
+-    // pp: this condition used to include sym.hasexpandedname, but this leads
+-    // to the total loss of generic information if a private member is
+-    // accessed from a closure: both the field and the accessor were generated
+-    // without it.  This is particularly bad because the availability of
+-    // generic information could disappear as a consequence of a seemingly
+-    // unrelated change.
+-      ctx.base.settings.XnoGenericSig.value
+-    || sym.is(Artifact)
+-    || sym.isAllOf(LiftedMethod)
+-    || sym.is(Bridge)
+-  )
+-
+-  private def getStaticForwarderGenericSignature(sym: Symbol, moduleClass: Symbol)(using Context): String = {
++  private def getStaticForwarderGenericSignature(sym: Symbol, moduleClass: Symbol, descriptor: String | Null)(using Context): String | Null = {
+     // scala/bug#3452 Static forwarder generation uses the same erased signature as the method if forwards to.
+     // By rights, it should use the signature as-seen-from the module class, and add suitable
+     // primitive and value-class boxing/unboxing.
+     // But for now, just like we did in mixin, we just avoid writing a wrong generic signature
+     // (one that doesn't erase to the actual signature). See run/t3452b for a test case.
+ 
+-    val memberTpe = atPhase(erasurePhase) { moduleClass.denot.thisType.memberInfo(sym) }
+-    val erasedMemberType = ElimErasedValueType.elimEVT(TypeErasure.transformInfo(sym, memberTpe))
+-    if (erasedMemberType =:= sym.denot.info)
+-      getGenericSignatureHelper(sym, moduleClass, memberTpe).orNull
++    if !ctx.base.settings.XnoGenericSig.value then
++      val memberTpe = atPhase(erasurePhase) { moduleClass.denot.thisType.memberInfo(sym) }
++      val erasedMemberType = ElimErasedValueType.elimEVT(TypeErasure.transformInfo(sym, memberTpe))
++      if (erasedMemberType =:= sym.denot.info)
++        val gensig = getGenericSignatureHelper(sym, moduleClass, memberTpe)
++        if gensig == null || descriptor.contentEquals(gensig) then null
++        else gensig.toString
++      else null
+     else null
+   }
+ }
+diff --git a/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala b/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala
+index b16764fe77ad..b5dc3ba140c7 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala
+@@ -332,7 +332,7 @@ trait BCodeSkelBuilder extends BCodeHelpers {
+ 
+       val flags = BCodeUtils.javaFlags(claszSymbol)
+ 
+-      val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
++      val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner, null)
+       val lengthOk = if thisSignature ne null then BCodeUtils.checkConstantStringLength(thisSignature)
+                                               else BCodeUtils.checkConstantStringLength(thisName)
+       if !lengthOk then
+@@ -387,7 +387,8 @@ trait BCodeSkelBuilder extends BCodeHelpers {
+     }
+ 
+     def addClassField(f: Symbol)(using Context): Unit = {
+-      val javagensig = getGenericSignature(f, claszSymbol)
++      val descriptor = symInfoTK(f).descriptor
++      val javagensig = getGenericSignature(f, claszSymbol, descriptor)
+       val flags = javaFieldFlags(f)
+ 
+       assert(!f.isStaticMember || !claszSymbol.is(Trait) || !f.is(Mutable),
+@@ -396,7 +397,7 @@ trait BCodeSkelBuilder extends BCodeHelpers {
+       val jfield = new asm.tree.FieldNode(
+         flags,
+         f.javaSimpleName,
+-        symInfoTK(f).descriptor,
++        descriptor,
+         javagensig,
+         null // no initial value
+       )
+@@ -707,7 +708,8 @@ trait BCodeSkelBuilder extends BCodeHelpers {
+      */
+     private def initJMethod(flags: Int, params: List[Symbol])(using Context): Unit = {
+ 
+-      val jgensig = getGenericSignature(methSymbol, claszSymbol)
++      val mdesc = bTypeLoader.methodBTypeFromSymbol(methSymbol).descriptor
++      val jgensig = getGenericSignature(methSymbol, claszSymbol, mdesc)
+       val (excs, others) = methSymbol.annotations.partition(_.symbol eq defn.ThrowsAnnot)
+       val thrownExceptions: List[String] = getExceptions(excs)
+ 
+@@ -715,7 +717,6 @@ trait BCodeSkelBuilder extends BCodeHelpers {
+         if (isMethSymStaticCtor) CLASS_CONSTRUCTOR_NAME
+         else jMethodName
+ 
+-      val mdesc = bTypeLoader.methodBTypeFromSymbol(methSymbol).descriptor
+       val lengthOk = if jgensig ne null then BCodeUtils.checkConstantStringLength(jgensig)
+                                         else BCodeUtils.checkConstantStringLength(bytecodeName, mdesc)
+       if !lengthOk then
+diff --git a/compiler/src/dotty/tools/backend/jvm/BTypeLoader.scala b/compiler/src/dotty/tools/backend/jvm/BTypeLoader.scala
+index 88586611712a..f06b2671fcf3 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BTypeLoader.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BTypeLoader.scala
+@@ -199,7 +199,7 @@ final class BTypeLoader(primitives: ScalaPrimitives, inlineInfoLoader: () => Opt
+       //     def f = { class E }
+       //   }
+       // The class D is added as a member of class C. The reason is that the InnerClass attribute
+-      // for D will containt class "C" and NOT the module class "C$" as the outer class of D.
++      // for D will contain class "C" and NOT the module class "C$" as the outer class of D.
+       // This is done by buildNestedInfo, the reason is Java compatibility, see comment in BTypes.
+       // For consistency, the InnerClass entry for D needs to be present in C - to Java it looks
+       // like D is a member of C, not C$.
+@@ -294,7 +294,7 @@ final class BTypeLoader(primitives: ScalaPrimitives, inlineInfoLoader: () => Opt
+         if (innerClassSym.isAnonymousClass || innerClassSym.isAnonymousFunction) None
+         else {
+           val original = innerClassSym.initial
+-          Some(atPhase(original.validFor.lastPhaseId)(innerClassSym.name).mangledString) // moduleSuffix for module classes
++          Some(atPhase(original.validFor.lastPhaseId)(innerClassSym.targetName).mangledString) // moduleSuffix for module classes
+         }
+       }
+ 
+diff --git a/compiler/src/dotty/tools/dotc/core/TypeErasure.scala b/compiler/src/dotty/tools/dotc/core/TypeErasure.scala
+index 37ac623714ab..9228f99a5a90 100644
+--- a/compiler/src/dotty/tools/dotc/core/TypeErasure.scala
++++ b/compiler/src/dotty/tools/dotc/core/TypeErasure.scala
+@@ -482,7 +482,7 @@ object TypeErasure:
+     if compareErasedGlb(tp1, tp2) <= 0 then tp1 else tp2
+ 
+   /** Overload of `erasedGlb` to compare more than two types at once. */
+-  def erasedGlb(tps: List[Type])(using Context): Type =
++  def erasedGlb(tps: Iterable[Type])(using Context): Type =
+     tps.min(using (a,b) => compareErasedGlb(a, b))
+ 
+   /** A comparison function that induces a total order on erased types,
+diff --git a/compiler/src/dotty/tools/dotc/core/TypeUtils.scala b/compiler/src/dotty/tools/dotc/core/TypeUtils.scala
+index 5b06ffee5f51..5f2a45f7402b 100644
+--- a/compiler/src/dotty/tools/dotc/core/TypeUtils.scala
++++ b/compiler/src/dotty/tools/dotc/core/TypeUtils.scala
+@@ -20,8 +20,19 @@ class TypeUtils:
+     def isErasedValueType(using Context): Boolean =
+       self.isInstanceOf[ErasedValueType]
+ 
+-    def isPrimitiveValueType(using Context): Boolean =
+-      self.classSymbol.isPrimitiveValueClass
++    def isPrimitiveValueType(using Context): Boolean = self match
++      case tp: TypeRef =>
++        val sym = tp.symbol
++        if sym.isClass then sym.isPrimitiveValueClass
++        else tp.superType.isPrimitiveValueType
++      case tp: TypeProxy =>
++        tp.superType.isPrimitiveValueType
++      case tp: ClassInfo =>
++        tp.cls.isPrimitiveValueClass
++      case _ =>
++        // anything else definitely can't be one (e.g., AndType),
++        // so let's not waste time constructing a ClassSymbol
++        false
+ 
+     /** Is this type a checked exception? This is the case if the type
+      *  derives from Exception but not from RuntimeException. According to
+diff --git a/compiler/src/dotty/tools/dotc/transform/GenericSignatures.scala b/compiler/src/dotty/tools/dotc/transform/GenericSignatures.scala
+index 02af8476d5e5..1faa14a31bb2 100644
+--- a/compiler/src/dotty/tools/dotc/transform/GenericSignatures.scala
++++ b/compiler/src/dotty/tools/dotc/transform/GenericSignatures.scala
+@@ -10,15 +10,13 @@ import core.Flags.*
+ import core.Names.Name
+ import core.NameOps.isContextFunction
+ import core.Symbols.*
+-import core.TypeApplications.{EtaExpansion, TypeParamInfo}
+-import core.TypeErasure.{erasedGlb, erasure, fullErasure, isGenericArrayElement, tupleArity}
++import core.TypeApplications.TypeParamInfo
++import core.TypeErasure.*
+ import core.Types.*
+ import core.classfile.ClassfileConstants
++import dotty.tools.dotc.core.Decorators.i
+ 
+-import config.Printers.transforms
+-import reporting.trace
+ import java.lang.StringBuilder
+-
+ import scala.annotation.tailrec
+ import scala.collection.mutable.ListBuffer
+ 
+@@ -32,21 +30,29 @@ object GenericSignatures {
+    *
+    *  @param sym0 The symbol for which to define the signature
+    *  @param info The type of the symbol
+-   *  @return The signature if it could be generated, `None` otherwise.
++   *  @return The signature if it could be generated, `null` otherwise.
+    */
+-  def javaSig(sym0: Symbol, info: Type)(using Context): Option[String] =
+-    // Avoid generating a signature for non-class local symbols.
+-    if (sym0.isLocal && !sym0.isClass) None
+-    else atPhase(erasurePhase)(javaSig0(sym0, info))
+-
+-  private final def javaSig0(sym0: Symbol, info: Type)(using Context): Option[String] = {
+-    // This works as long as mangled names are always valid Java identifiers,
+-    // if we change our name encoding, we'll have to `throw new UnknownSig` here for
+-    // names which are not valid Java identifiers (see git history of this method).
++  def javaSig(sym0: Symbol, info: Type)(using Context): StringBuilder | Null =
++    if mayNeedSignature(sym0, info) then atPhase(erasurePhase)(javaSig0(sym0, info))
++    else null
++
++  private def mayNeedSignature(sym0: Symbol, info: Type)(using Context) = {
++    def mayNeedSignature(t: Type): Boolean = t match
++      case ExprType(e) => mayNeedSignature(e)
++      case MethodTpe(_, ps, res) => (!sym0.isConstructor && mayNeedSignature(res)) || ps.exists(mayNeedSignature)
++      case _: TypeRef => !t.isAny && !t.isAnyRef && !t.isRef(defn.StringClass, skipRefined = false) && !t.isPrimitiveValueType
++      case _ => true
++
++    // Non-class local symbols definitely don't need one, they're not observable
++    if sym0.isLocal && !sym0.isClass then false
++    else mayNeedSignature(info)
++  }
++
++  private def javaSig0(sym0: Symbol, info: Type)(using Context): StringBuilder = {
++    // This works as long as mangled names are always valid Java identifiers (see git history of this method).
+     def sanitizeName(name: Name): String = name.mangledString
+ 
+     val builder = new StringBuilder(64)
+-    val isTraitSignature = sym0.enclosingClass.is(Trait)
+ 
+     // Track class type parameter names that are shadowed by method type parameters
+     // Used to trigger renaming of method type parameters to avoid conflicts
+@@ -70,25 +76,22 @@ object GenericSignatures {
+     def superSig(cls: Symbol, parents: List[Type]): Unit = {
+       def isInterfaceOrTrait(sym: Symbol) = sym.is(PureInterface) || sym.is(Trait)
+ 
+-      // a signature should always start with a class
+-      def ensureClassAsFirstParent(tps: List[Type]) = tps match {
+-        case Nil => defn.ObjectType :: Nil
+-        case head :: tail if isInterfaceOrTrait(head.typeSymbol) => defn.ObjectType :: tps
+-        case _ => tps
+-      }
+-
+       val minParents = minimizeParents(cls, parents)
+       val validParents =
+-        if (isTraitSignature)
++        if sym0.enclosingClass.is(Trait) then
+           // java is unthrilled about seeing interfaces inherit from classes
+           minParents filter (p => isInterfaceOrTrait(p.classSymbol))
+         else minParents
+ 
+-      val ps = ensureClassAsFirstParent(validParents)
+-      ps.foreach(boxedSig)
++      // a signature should always start with a class
++      validParents.headOption match
++        case None => boxedSig(defn.ObjectType)
++        case Some(head) if isInterfaceOrTrait(head.typeSymbol) => boxedSig(defn.ObjectType)
++        case _ => ()
++      validParents.foreach(boxedSig)
+     }
+ 
+-    def boxedSig(tp: Type): Unit = jsig(tp.widenDealias, vcBoxing = ValueClassBoxing.Box)
++    inline def boxedSig(tp: Type): Unit = jsig(tp.widenDealias, vcBoxing = ValueClassBoxing.Box)
+ 
+     /** The signature of the upper-bound of a type parameter.
+      *
+@@ -123,7 +126,7 @@ object GenericSignatures {
+      *  that cannot appear in the signature have been replaced
+      *  by their upper-bound.
+      */
+-    def flattenedIntersection(tp: AndType)(using Context): List[Type] =
++    def flattenedIntersection(tp: AndType)(using Context): Iterable[Type] =
+       val parents = ListBuffer[Type]()
+ 
+       def collect(parent: Type, parents: ListBuffer[Type]): Unit = parent.widenDealias match
+@@ -139,14 +142,14 @@ object GenericSignatures {
+           parents += parent
+ 
+       collect(tp, parents)
+-      parents.toList
++      parents
+     end flattenedIntersection
+ 
+     /** Split the `parents` of an intersection into two subsets:
+      *  those whose individual erasure matches the overall erasure
+      *  of the intersection and the others.
+      */
+-    def splitIntersection(parents: List[Type])(using Context): (List[Type], List[Type]) =
++    def splitIntersection(parents: Iterable[Type])(using Context): (Iterable[Type], Iterable[Type]) =
+       val erasedParents = parents.map(erasure)
+       val erasedTp = erasedGlb(erasedParents)
+       parents.zip(erasedParents)
+@@ -162,7 +165,7 @@ object GenericSignatures {
+       boundsSig(hiBounds(param.paramInfo.bounds))
+     }
+ 
+-    def polyParamSig(tparams: List[TypeParamInfo]): Unit =
++    def polyParamSig(tparams: Iterable[TypeParamInfo]): Unit =
+       if (tparams.nonEmpty) {
+         builder.append('<')
+         tparams.foreach(tparamSig)
+@@ -190,16 +193,6 @@ object GenericSignatures {
+         jsig(finalType)
+     }
+ 
+-    // Anything which could conceivably be a module (i.e. isn't known to be
+-    // a type parameter or similar) must go through here or the signature is
+-    // likely to end up with Foo<T>.Empty where it needs Foo<T>.Empty$.
+-    def fullNameInSig(sym: Symbol): Unit = {
+-      assert(sym.isClass)
+-      // Time travel necessary so we get the full name after inner classes have been lifted to package scope
+-      val name = atPhase(flattenPhase.next) { sanitizeName(sym.fullName).replace('.', '/') }
+-      builder.append('L').append(name)
+-    }
+-
+     def classSig(sym: Symbol, pre: Type = NoType, args: List[Type] = Nil): Unit = {
+       def argSig(tp: Type): Unit =
+         tp.dealias match {
+@@ -239,33 +232,20 @@ object GenericSignatures {
+               // Hence the widenNullaryMethod.
+         }
+ 
+-      if (pre.exists) {
+-        val preRebound = pre.baseType(sym.owner) // #2585
+-        if (needsJavaSig(preRebound, Nil)) {
+-          val i = builder.length()
+-          jsig(preRebound)
+-          if (builder.charAt(i) == 'L') {
+-            builder.delete(builder.length() - 1, builder.length())// delete ';'
+-                                                                  // If the prefix is a module, drop the '$'. Classes (or modules) nested in modules
+-                                                                  // are separated by a single '$' in the filename: `object o { object i }` is o$i$.
+-            if (preRebound.typeSymbol.is(ModuleClass))
+-              builder.delete(builder.length() - 1, builder.length())
+-
+-            // Ensure every '.' in the generated signature immediately follows
+-            // a close angle bracket '>'.  Any which do not are replaced with '$'.
+-            // This arises due to multiply nested classes in the face of the
+-            // rewriting explained at rebindInnerClass.
+-
+-            // TODO revisit this. Does it align with javac for code that can be expressed in both languages?
+-            val delimiter = if (builder.charAt(builder.length() - 1) == '>') '.' else '$'
+-            builder.append(delimiter).append(sanitizeName(sym.name))
+-          }
+-          else fullNameInSig(sym)
+-        }
+-        else fullNameInSig(sym)
++      assert(sym.isClass)
++      pre.widen match {
++        // If the class is an inner class of a generic class, we must emit the outer generic class with its parameters
++        // (see test `inner-of-generic` for an example of Java compatibility)
++        case RefOrAppliedType(preSym, prePre, preArgs) if preArgs.nonEmpty =>
++          classSig(preSym, prePre, preArgs)
++          builder.replace(builder.length() - 1, builder.length(), ".") // instead of ending the outer name with ';', we add an inner name
++          builder.append(sanitizeName(sym.targetName))
++        // For the rest, we time-travel so we get the full name after inner classes have been lifted to package scope
++        case _ =>
++          val name = atPhase(flattenPhase.next) { sanitizeName(sym.fullName).replace('.', '/') }
++          builder.append('L')
++          builder.append(name)
+       }
+-      else fullNameInSig(sym)
+-
+       if (args.nonEmpty) {
+         builder.append('<')
+         args foreach argSig
+@@ -278,7 +258,17 @@ object GenericSignatures {
+       case Box, Unbox, UnboxOnlyPrimitives
+ 
+     def jsig(tp0: Type, toplevel: Boolean = false, vcBoxing: ValueClassBoxing = ValueClassBoxing.Unbox): Unit = {
+-      inline def jsig1(tp0: Type): Unit = jsig(tp0)
++      def arraySig(elemtp: Type): Unit =
++        if (isGenericArrayElement(elemtp, isScala2 = false))
++          jsig(defn.ObjectType)
++        else
++          builder.append(ClassfileConstants.ARRAY_TAG)
++          elemtp match
++            case TypeBounds(lo, hi) => jsig(hi.widenDealias)
++            // derived VCs are not unboxed inside arrays,
++            // i.e., `Array[VC]` where `class VC(n: X) extends AnyVal`
++            // is `[LVC;`, not `[LX;`
++            case _ => jsig(elemtp, vcBoxing = ValueClassBoxing.UnboxOnlyPrimitives)
+ 
+       val tp = tp0.dealias
+       tp match {
+@@ -290,11 +280,10 @@ object GenericSignatures {
+           // don't emit type param name if the param is upper-bounded by a primitive type (including via a value class)
+           if erasedUnderlying.isPrimitiveValueType then
+             jsig(erasedUnderlying, toplevel = toplevel, vcBoxing = vcBoxing)
+-          else {
++          else
+             val name = sanitizeName(ref.paramName.lastPart)
+             val nameToUse = methodTypeParamRenaming.getOrElse(name, name)
+             typeParamSigWithName(nameToUse)
+-          }
+ 
+         case ref: TermRef if ref.symbol.isGetter =>
+           // If the type of a val is a TermRef to another val, generating the generic signature
+@@ -313,83 +302,79 @@ object GenericSignatures {
+           jsig(ref.underlying, toplevel = toplevel, vcBoxing = vcBoxing)
+ 
+         case defn.ArrayOf(elemtp) =>
+-          if (isGenericArrayElement(elemtp, isScala2 = false))
+-            jsig1(defn.ObjectType)
+-          else
+-            builder.append(ClassfileConstants.ARRAY_TAG)
+-            elemtp match
+-              case TypeBounds(lo, hi) => jsig1(hi.widenDealias)
+-              // derived VCs are not unboxed inside arrays,
+-              // i.e., `Array[VC]` where `class VC(n: X) extends AnyVal`
+-              // is `[LVC;`, not `[LX;`
+-              case _ => jsig(elemtp, vcBoxing = ValueClassBoxing.UnboxOnlyPrimitives)
++          arraySig(elemtp)
++
++        case JavaArrayType(elemtp) =>
++          arraySig(elemtp)
+ 
+         case RefOrAppliedType(sym, pre, args) =>
+-          if (sym == defn.PairClass && tupleArity(tp) > Definitions.MaxTupleArity)
+-            jsig1(defn.TupleXXLClass.typeRef)
+-          else if (isTypeParameterInSig(sym, sym0)) {
++          if isTypeParameterInSig(sym, sym0) then
+             assert(!sym.isAliasType || sym.info.isLambdaSub, "Unexpected alias type: " + sym)
+-            typeParamSig(sym.name.lastPart)
+-          }
+-          else if (defn.specialErasure.contains(sym))
+-            jsig1(defn.specialErasure(sym).typeRef)
+-          else if (sym == defn.UnitClass || sym == defn.BoxedUnitModule)
+-            jsig1(defn.BoxedUnitClass.typeRef)
+-          else if (sym == defn.NothingClass)
+-            builder.append("Lscala/runtime/Nothing$;")
+-          else if (sym == defn.NullClass)
+-            builder.append("Lscala/runtime/Null$;")
+-          else if (sym.isPrimitiveValueClass)
+-            // TODO, but a few tests need fixing / disabling until a newer scalac is ingested,
+-            // replace the next 2 lines with: if (vcBoxing == ValueClassBoxing.Box || sym == defn.UnitClass) jsig1(defn.boxedClass(sym).typeRef)
+-            if (vcBoxing == ValueClassBoxing.Box) jsig1(defn.ObjectType)
+-            else if (sym == defn.UnitClass) jsig1(defn.BoxedUnitClass.typeRef)
+-            else builder.append(defn.typeTag(sym.info))
+-          else if (sym.isDerivedValueClass) {
+-            if (vcBoxing == ValueClassBoxing.Unbox) {
+-              val underlying = ValueClasses.underlyingOfValueClass(sym.asClass)
+-              val seenUnderlying = underlying.asSeenFrom(tp, sym)
+-              // For binary compatibility with Scala 2, as documented in TypeErasure,
+-              // we need to special cases for polymorphic value classes:
+-              // `Foo[X]` erases to `X` except that primitives use their boxed type,
+-              // and `Bar[X]` for `class Bar[A](x: Array[A]) extends AnyVal` erases like the definition-site `Array[A]`.
+-              // The end-to-end binary compatibility is checked by i8001
+-              // There are more targeted tests for generic signatures at i24276 and t6344
+-              val compatibleUnderlying =
+-                if seenUnderlying.isPrimitiveValueType && !underlying.isPrimitiveValueType then defn.boxedType(seenUnderlying)
+-                else if underlying.derivesFrom(defn.ArrayClass) then erasure(underlying)
+-                else seenUnderlying
+-              jsig(compatibleUnderlying, toplevel = toplevel)
+-            } else classSig(sym, pre, args)
+-          }
+-          else if (defn.isSyntheticFunctionClass(sym)) {
+-            val erasedSym = defn.functionTypeErasure(sym).typeSymbol
+-            classSig(erasedSym, pre, if (erasedSym.typeParams.isEmpty) Nil else args)
+-          }
+-          else if sym.isClass then
+-            classSig(sym, pre, args)
+-          else
+-            jsig(erasure(tp), toplevel = toplevel, vcBoxing = vcBoxing)
+-
+-        case ExprType(restpe) if toplevel =>
+-          builder.append("()")
+-          methodResultSig(restpe)
++            typeParamSig(sym.targetName.lastPart)
++          else defn.specialErasure.get(sym) match
++            case Some(special) =>
++              jsig(special.typeRef)
++            case None =>
++              if (sym == defn.PairClass && tupleArity(tp) > Definitions.MaxTupleArity)
++                jsig(defn.TupleXXLClass.typeRef)
++              else if (sym == defn.UnitClass || sym == defn.BoxedUnitModule)
++                jsig(defn.BoxedUnitClass.typeRef)
++              else if (sym == defn.NothingClass)
++                builder.append("Lscala/runtime/Nothing$;")
++              else if (sym == defn.NullClass)
++                builder.append("Lscala/runtime/Null$;")
++              else if (sym.isPrimitiveValueClass)
++                // TODO, but a few tests need fixing / disabling until a newer scalac is ingested,
++                // replace the next 2 lines with: if (vcBoxing == ValueClassBoxing.Box || sym == defn.UnitClass) jsig(defn.boxedClass(sym).typeRef)
++                if (vcBoxing == ValueClassBoxing.Box) jsig(defn.ObjectType)
++                else if (sym == defn.UnitClass) jsig(defn.BoxedUnitClass.typeRef)
++                else builder.append(defn.typeTag(sym.info))
++              else if (sym.isDerivedValueClass) {
++                if (vcBoxing == ValueClassBoxing.Unbox) {
++                  val underlying = ValueClasses.underlyingOfValueClass(sym.asClass)
++                  val seenUnderlying = underlying.asSeenFrom(tp, sym)
++                  // For binary compatibility with Scala 2, as documented in TypeErasure,
++                  // we need to special cases for polymorphic value classes:
++                  // `Foo[X]` erases to `X` except that primitives use their boxed type,
++                  // and `Bar[X]` for `class Bar[A](x: Array[A]) extends AnyVal` erases like the definition-site `Array[A]`.
++                  // The end-to-end binary compatibility is checked by i8001
++                  // There are more targeted tests for generic signatures at i24276 and t6344
++                  val compatibleUnderlying =
++                    if seenUnderlying.isPrimitiveValueType && !underlying.isPrimitiveValueType then defn.boxedType(seenUnderlying)
++                    else if underlying.derivesFrom(defn.ArrayClass) then erasure(underlying)
++                    else seenUnderlying
++                  jsig(compatibleUnderlying, toplevel = toplevel)
++                } else classSig(sym, pre, args)
++              }
++              else if (defn.isSyntheticFunctionClass(sym)) {
++                val erasedSym = defn.functionTypeErasure(sym).typeSymbol
++                classSig(erasedSym, pre, if (erasedSym.typeParams.isEmpty) Nil else args)
++              }
++              else if sym.isClass then
++                classSig(sym, pre, args)
++              else
++                jsig(erasure(tp), toplevel = toplevel, vcBoxing = vcBoxing)
+ 
+         case ExprType(restpe) =>
+-          jsig1(defn.FunctionType(0).appliedTo(restpe))
++          if toplevel then
++            builder.append("()")
++            methodResultSig(restpe)
++          else
++            jsig(defn.FunctionType(0).appliedTo(restpe))
+ 
+         case mtd: MethodOrPoly =>
+-          val (tparams, vparams, rte) = collectMethodParams(mtd)
+-          if (toplevel && !sym0.isConstructor) {
++          val collectTParams = toplevel && !sym0.isConstructor
++          val (tparams, vparams, rte) = collectMethodParams(mtd, collectTParams)
++          if (tparams != null) {
+             if (sym0.is(Method)) {
+-              val (usedMethodTypeParamNames, usedClassTypeParams) = collectUsedTypeParams(vparams :+ rte, sym0)
++              val (usedMethodTypeParamNames, usedClassTypeParams) = collectUsedTypeParams(vparams, rte, sym0)
+               val methodTypeParamNames = tparams.map(tp => sanitizeName(tp.paramName.lastPart)).toSet
+               // Only add class type parameters to shadowedClassTypeParamNames if they are:
+               // 1. Referenced in the method signature, AND
+               // 2. Shadowed by a method type parameter with the same name
+               // This will trigger renaming of the method type parameter
+               usedClassTypeParams.foreach { classTypeParam =>
+-                val classTypeParamName = sanitizeName(classTypeParam.name)
++                val classTypeParamName = sanitizeName(classTypeParam.targetName)
+                 if methodTypeParamNames.contains(classTypeParamName) then
+                   shadowedClassTypeParamNames += classTypeParamName
+               }
+@@ -397,7 +382,7 @@ object GenericSignatures {
+             polyParamSig(tparams)
+           }
+           builder.append('(')
+-          for vparam <- vparams do jsig1(vparam)
++          for vparam <- vparams do jsig(vparam)
+           builder.append(')')
+           methodResultSig(rte)
+ 
+@@ -405,7 +390,7 @@ object GenericSignatures {
+           // Special case for nullable union types whose underlying type is not a value class.
+           // For example, `T | Null` where `T` is a type parameter becomes `T` in the signature;
+           // `Int | Null` still becomes `Object`.
+-          jsig1(tp1)
++          jsig(tp1)
+ 
+         case tp: AndType =>
+           // Only intersections appearing as the upper-bound of a type parameter
+@@ -433,51 +418,43 @@ object GenericSignatures {
+         case hktl: HKTypeLambda =>
+           jsig(hktl.finalResultType, toplevel, vcBoxing)
+ 
++        case ErasedValueType(tycon, underlying) =>
++          if vcBoxing == ValueClassBoxing.Unbox || (vcBoxing == ValueClassBoxing.UnboxOnlyPrimitives && underlying.isPrimitiveValueType)
++          then jsig(underlying, toplevel, vcBoxing)
++          else jsig(tycon, toplevel, vcBoxing)
++
+         case _ =>
+           val etp = erasure(tp)
+-          if (etp eq tp) throw new UnknownSig
+-          else jsig(etp, toplevel, vcBoxing)
++          assert(etp ne tp, i"$tp erases to itself")
++          jsig(etp, toplevel, vcBoxing)
+       }
+     }
+-    val throwsArgs = sym0.annotations flatMap ThrownException.unapply
+-    if (needsJavaSig(info, throwsArgs))
+-      try {
+-        jsig(info, toplevel = true)
+-        throwsArgs.foreach { t =>
++    jsig(info, toplevel = true)
++    for annot <- sym0.annotations do
++      annot match
++        case ThrownException(e) =>
+           builder.append('^')
+-          jsig(t, toplevel = true)
+-        }
+-        Some(builder.toString)
+-      }
+-      catch { case _: UnknownSig => None }
+-    else None
++          jsig(e, toplevel = true)
++        case _ => ()
++    builder
+   }
+ 
+-  private class UnknownSig extends Exception
+-
+   /* Drop redundant types (ones which are implemented by some other parent) from the immediate parents.
+    * This is important on Android because there is otherwise an interface explosion.
+    */
+-  private def minimizeParents(cls: Symbol, parents: List[Type])(using Context): List[Type] = if (parents.isEmpty) parents else {
+-    // val requiredDirect: Symbol => Boolean = requiredDirectInterfaces.getOrElse(cls, Set.empty)
+-    var rest   = parents.tail
+-    var leaves = collection.mutable.ListBuffer.empty[Type] += parents.head
+-    while (rest.nonEmpty) {
+-      val candidate = rest.head
++  private def minimizeParents(cls: Symbol, parents: Iterable[Type])(using Context): Iterable[Type] = if (parents.isEmpty) parents else {
++    var leaves = collection.mutable.ListBuffer.empty[Type]
++    for candidate <- parents do
+       val candidateSym = candidate.typeSymbol
+-      // val required = requiredDirect(candidateSym) || !leaves.exists(t => t.typeSymbol isSubClass candidateSym)
+       val required = !leaves.exists(t => t.typeSymbol.isSubClass(candidateSym))
+       if (required) {
+         leaves = leaves filter { t =>
+           val ts = t.typeSymbol
+           !(ts.is(Trait) || ts.is(PureInterface)) || !candidateSym.isSubClass(ts)
+-          // requiredDirect(ts) || !ts.isTraitOrInterface || !candidateSym.isSubClass(ts)
+         }
+         leaves += candidate
+       }
+-      rest = rest.tail
+-    }
+-    leaves.toList
++    leaves
+   }
+ 
+   private def hiBounds(bounds: TypeBounds)(using Context): List[Type] = bounds.hi.widenDealias match {
+@@ -535,14 +512,14 @@ object GenericSignatures {
+             case _ => ResolvedAppliedType.NotResolved
+         case _ => ResolvedAppliedType.NotResolved
+ 
++    @tailrec
+     def unapply(tp: Type)(using Context): Option[(Symbol, Type, List[Type])] = tp match
++      case TypeRef(pre, _) if !tp.typeSymbol.isAliasType =>
++        Some((tp.typeSymbol, pre, Nil))
+       case TypeParamRef(_, _) =>
+         Some((tp.typeSymbol, tp, Nil))
+       case TermParamRef(_, _) =>
+         Some((tp.termSymbol, tp, Nil))
+-      case TypeRef(pre, _) if !tp.typeSymbol.isAliasType =>
+-        val sym = tp.typeSymbol
+-        Some((sym, pre, Nil))
+       case a @ AppliedType(pre, args) =>
+         resolveAppliedType(a) match
+           case ResolvedAppliedType.Resolved(resolved) => unapply(resolved)
+@@ -552,40 +529,8 @@ object GenericSignatures {
+         None
+   }
+ 
+-  private def needsJavaSig(tp: Type, throwsArgs: List[Type])(using Context): Boolean = !ctx.settings.XnoGenericSig.value && {
+-      def needs(tp: Type) = (new NeedsSigCollector).apply(false, tp)
+-      needs(tp) || throwsArgs.exists(needs)
+-  }
+-
+-  private class NeedsSigCollector(using Context) extends TypeAccumulator[Boolean] {
+-    override def apply(x: Boolean, tp: Type): Boolean =
+-      if (!x)
+-        tp.dealias match {
+-          case RefinedType(parent, refinedName, refinedInfo) =>
+-            val sym = parent.typeSymbol
+-            if (sym == defn.ArrayClass) foldOver(x, refinedInfo)
+-            else true
+-          case tref @ TypeRef(pre, name) =>
+-            val sym = tref.typeSymbol
+-            if (sym.is(TypeParam) || sym.typeParams.nonEmpty) true
+-            else if (sym.isClass) foldOver(x, rebindInnerClass(pre, sym)) // #2585
+-            else foldOver(x, pre)
+-          case PolyType(_, _) =>
+-            true
+-          case ClassInfo(_, _, parents, _, _) =>
+-            foldOver(tp.typeParams.nonEmpty, parents)
+-          case AnnotatedType(tpe, _) =>
+-            foldOver(x, tpe)
+-          case ExprType(tpe) =>
+-            true
+-          case tp =>
+-            foldOver(x, tp)
+-        }
+-      else x
+-  }
+-
+-  private def collectMethodParams(mtd: MethodOrPoly)(using Context): (List[TypeParamInfo], List[Type], Type) =
+-    val tparams = ListBuffer.empty[TypeParamInfo]
++  private def collectMethodParams(mtd: MethodOrPoly, collectTParams: Boolean)(using Context): (Iterable[TypeParamInfo] | Null, Iterable[Type], Type) =
++    val tparams = if collectTParams then ListBuffer.empty[TypeParamInfo] else null
+     val vparams = ListBuffer.empty[Type]
+ 
+     @tailrec def recur(tpe: Type): Type = tpe match
+@@ -603,19 +548,18 @@ object GenericSignatures {
+           case _ =>
+             recur(mtd.resType)
+       case PolyType(tps, tpe) =>
+-        tparams ++= tps
++        if tparams != null then tparams ++= tps
+         recur(tpe)
+       case _ =>
+         tpe
+     end recur
+ 
+     val rte = recur(mtd)
+-    (tparams.toList, vparams.toList, rte)
++    (tparams, vparams, rte)
+   end collectMethodParams
+ 
+   /** Collect type parameters that are actually used in the given types. */
+-  private def collectUsedTypeParams(types: List[Type], initialSymbol: Symbol)(using Context): (Set[Name], Set[Symbol]) =
+-    assert(initialSymbol.is(Method))
++  private def collectUsedTypeParams(types: Iterable[Type], resType: Type, initialSymbol: Symbol)(using Context): (Set[Name], Set[Symbol]) =
+     def isTypeParameterInMethSig(sym: Symbol, initialSymbol: Symbol)(using Context) =
+       !sym.maybeOwner.isTypeParam && // check if it's not higher order type param
+         sym.isTypeParam && sym.owner == initialSymbol
+@@ -633,6 +577,7 @@ object GenericSignatures {
+       case _ =>
+ 
+     types.foreach(collect)
++    collect(resType)
+     (usedMethodTypeParamNames.toSet, usedClassTypeParams.toSet)
+   end collectUsedTypeParams
+ }
+diff --git a/compiler/src/dotty/tools/dotc/transform/TreeChecker.scala b/compiler/src/dotty/tools/dotc/transform/TreeChecker.scala
+index d98589d22386..e725eaef939e 100644
+--- a/compiler/src/dotty/tools/dotc/transform/TreeChecker.scala
++++ b/compiler/src/dotty/tools/dotc/transform/TreeChecker.scala
+@@ -48,7 +48,8 @@ class TreeChecker extends Phase with SymTransformer {
+   def testDuplicate(sym: Symbol, registry: mutable.Map[String, Symbol], typ: String)(using Context): Unit = {
+     val name = sym.javaClassName
+     val isDuplicate = this.flatClasses && registry.contains(name)
+-    assert(!isDuplicate, s"$typ defined twice $sym ${sym.id} ${registry(name).id}")
++    // Allow users to define a class "java" even on the JVM
++    assert(!isDuplicate || name == "java", s"$typ defined twice $sym ${sym.id} ${registry(name).id}")
+     registry(name) = sym
+   }
+ 
+diff --git a/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala b/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala
+index 22d2515cd382..7c3b8c9eb768 100644
+--- a/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala
++++ b/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala
+@@ -1724,9 +1724,9 @@ class DottyBytecodeTests extends DottyBytecodeTest {
+     checkBCode(source) { dir =>
+       val clsIn      = dir.lookupName("Foo.class", directory = false).input
+       val clsNode    = loadClassNode(clsIn)
+-      def testSig(methodName: String, expectedSignature: String) = {
+-        val signature = clsNode.methods.asScala.filter(_.name == methodName).map(_.signature)
+-        assertEquals(List(expectedSignature), signature)
++      def testSig(methodName: String, expectedDescriptor: String) = {
++        val descriptor = clsNode.methods.asScala.filter(_.name == methodName).map(_.desc)
++        assertEquals(List(expectedDescriptor), descriptor)
+       }
+       testSig("foo", "()I")
+       testSig("bar", "()I")
+@@ -2059,6 +2059,35 @@ class DottyBytecodeTests extends DottyBytecodeTest {
+       assert(clsNode.methods.asScala.exists(_.name == "test"))
+     }
+   }
++
++  @Test def presenceOfGenericSignatures = {
++    val source =
++      """|object Test:
++         |  def no0(x: Int): Unit = ()
++         |  def no1(x: Array[Int]): Array[Int] = x
++         |  def no2(x: String): String = x
++         |  def no3(): Array[String] = Array.empty
++         |
++         |  def yes0[A](x: A): A = x
++         |  def yes1[A, B](x: A): B = ???
++         |  def yes2[A](x: Int): Unit = ()
++         |  def yes3[A](x: Array[A]): A = x(0)
++         |
++         |  @scala.annotation.varargs def v(x: String*): String = x(0)
++         |""".stripMargin
++    checkBCode(source) { dir =>
++      val clsIn = dir.lookupName("Test$.class", directory = false).input
++      val clsNode = loadClassNode(clsIn)
++      for noMeth <- clsNode.methods.asScala if noMeth.name.startsWith("no") do
++        assert(noMeth.signature == null, s"${noMeth.name} should not have a signature but does: ${noMeth.signature}")
++      for yesMeth <- clsNode.methods.asScala if yesMeth.name.startsWith("yes") do
++        assert(yesMeth.signature != null, s"${yesMeth.name} should have a signature but does not")
++      // regression test for issue #10837
++      val varargMeths = clsNode.methods.asScala.filter(_.name.startsWith("v"))
++      val bridge = varargMeths.filter(_.desc == "([Ljava/lang/String;)Ljava/lang/String;").head
++      assert(bridge.signature == null, "vararg bridges should not have generic signatures")
++    }
++  }
+ }
+ 
+ object invocationReceiversTestCode {
+diff --git a/tests/generic-java-signatures/derivedNames.scala b/tests/generic-java-signatures/derivedNames.scala
+index 0cc5bc8a1ab7..f1da9c2828d5 100644
+--- a/tests/generic-java-signatures/derivedNames.scala
++++ b/tests/generic-java-signatures/derivedNames.scala
+@@ -7,9 +7,9 @@ object Test {
+     val out1 = "Test$Foo.Test$Foo$A<Test.Test$Foo<T1>.B$>" // Windows
+     val out2 = "Test$Foo$A<Test$Foo<T1>$B$>"               // Linux, OSX and sometimes Windows
+     if (scala.util.Properties.isWin)
+-      assert(returnType.toString == out1 || returnType.toString == out2)
++      assert(returnType.toString == out1 || returnType.toString == out2, s"returnType $returnType but expected one of '$out1' or '$out2'")
+     else
+-      assert(returnType.toString == out2)
++      assert(returnType.toString == out2, s"returnType $returnType but expected $out2")
+   }
+   class Foo[T1] {
+     class A[T2]
+diff --git a/tests/generic-java-signatures/inner-of-generic.check b/tests/generic-java-signatures/inner-of-generic.check
+new file mode 100644
+index 000000000000..79ebd0860f49
+--- /dev/null
++++ b/tests/generic-java-signatures/inner-of-generic.check
+@@ -0,0 +1,2 @@
++ok
++ok
+diff --git a/tests/generic-java-signatures/inner-of-generic/Defs_1.scala b/tests/generic-java-signatures/inner-of-generic/Defs_1.scala
+new file mode 100644
+index 000000000000..cceebb49835a
+--- /dev/null
++++ b/tests/generic-java-signatures/inner-of-generic/Defs_1.scala
+@@ -0,0 +1,10 @@
++package genericouterinnermember
++
++class Outer[A]:
++  class Inner:
++    def use(a: A): A = a
++  @annotation.targetName("InnerX")
++  class Inner2:
++    def use(a: A): A = a
++  def inner: Inner = new Inner
++  def inner2: Inner2 = new Inner2
+diff --git a/tests/generic-java-signatures/inner-of-generic/Test_3.scala b/tests/generic-java-signatures/inner-of-generic/Test_3.scala
+new file mode 100644
+index 000000000000..6d82ef765b11
+--- /dev/null
++++ b/tests/generic-java-signatures/inner-of-generic/Test_3.scala
+@@ -0,0 +1,8 @@
++import genericouterinnermember.*
++
++object Test:
++  def main(args: Array[String]): Unit =
++    val outer = new Outer[String]
++    println(Use_2.use(outer))
++    println(Use_2.use2(outer))
++
+diff --git a/tests/generic-java-signatures/inner-of-generic/Use_2.java b/tests/generic-java-signatures/inner-of-generic/Use_2.java
+new file mode 100644
+index 000000000000..5ca6e8dd0f27
+--- /dev/null
++++ b/tests/generic-java-signatures/inner-of-generic/Use_2.java
+@@ -0,0 +1,10 @@
++package genericouterinnermember;
++
++public class Use_2 {
++    public static String use(Outer<String> outer) {
++        return outer.inner().use("ok");
++    }
++    public static String use2(Outer<String> outer) {
++        return outer.inner2().use("ok");
++    }
++}
+diff --git a/tests/generic-java-signatures/targetName.check b/tests/generic-java-signatures/targetName.check
+new file mode 100644
+index 000000000000..d68d943f780a
+--- /dev/null
++++ b/tests/generic-java-signatures/targetName.check
+@@ -0,0 +1,17 @@
++fooClass
++Foo$A<java.lang.Object>
++Foo$A<java.lang.String>
++---
++fooComplex
++Foo$A<Foo$B<Foo$C$>>
++Foo$B<Foo$A<java.lang.String>>
++---
++fooObj
++class Foo$C$
++Foo$A<java.lang.String>
++class Foo$C$
++---
++fooTrait
++Foo$B<java.lang.Object>
++Foo$B<java.lang.String>
++---
+diff --git a/tests/generic-java-signatures/targetName.scala b/tests/generic-java-signatures/targetName.scala
+new file mode 100644
+index 000000000000..d0232698f86b
+--- /dev/null
++++ b/tests/generic-java-signatures/targetName.scala
+@@ -0,0 +1,28 @@
++import scala.annotation.targetName
++
++class Foo {
++  @targetName("A")
++  class X[T]
++
++  @targetName("B")
++  trait XT[T]
++
++  @targetName("C")
++  object XO
++
++  def fooClass(a: X[Object]): X[String] = ???
++  def fooTrait(a: XT[Object]): XT[String] = ???
++  def fooObj(a: XO.type, b: X[String]): XO.type = ???
++  def fooComplex(a: X[XT[XO.type]]): XT[X[String]] = ???
++}
++
++object Test {
++  def main(args: Array[String]): Unit = {
++    classOf[Foo].getMethods.filter(_.getName.startsWith("foo")).sortBy(_.getName).foreach(m =>
++      println(m.getName)
++      m.getGenericParameterTypes.foreach(println)
++      println(m.getGenericReturnType)
++      println("---")
++    )
++  }
++}
+diff --git a/tests/run/targetName-modules-1/Test_2.java b/tests/run/targetName-modules-1/Test_2.java
+index e92e602362c6..04b54baab515 100644
+--- a/tests/run/targetName-modules-1/Test_2.java
++++ b/tests/run/targetName-modules-1/Test_2.java
+@@ -4,6 +4,6 @@ public class Test_2 {
+ 
+   public static void main(String[] args) {
+     assert Outer$.A.foo() == 23;
+-    assert Outer$A$.MODULE$.foo() == 23;
++    assert Outer.A$.MODULE$.foo() == 23;
+   }
+ }
+diff --git a/tests/run/targetName-modules-2/Test_2.java b/tests/run/targetName-modules-2/Test_2.java
+index 7d48407a6ded..2bfa07b3d83d 100644
+--- a/tests/run/targetName-modules-2/Test_2.java
++++ b/tests/run/targetName-modules-2/Test_2.java
+@@ -3,8 +3,8 @@
+ public class Test_2 {
+ 
+   public static void main(String[] args) {
+-    assert new Outer$A(101).i() == 101;
+-    assert new Outer$A(Outer$A.$lessinit$greater$default$1()).i() == 101;
+-    assert new Outer$A(Outer$A$.MODULE$.$lessinit$greater$default$1()).i() == 101;
++    assert new Outer.A(101).i() == 101;
++    assert new Outer.A(Outer.A.$lessinit$greater$default$1()).i() == 101;
++    assert new Outer.A(Outer.A$.MODULE$.$lessinit$greater$default$1()).i() == 101;
+   }
+ }

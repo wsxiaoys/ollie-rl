@@ -1,0 +1,26 @@
+{
+  "case_id": "go-gitea__gitea-38039",
+  "repo": "go-gitea/gitea",
+  "pr": 38039,
+  "title": "fix(hostmatcher): block reserved IP ranges from external/private filters",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "go-gitea__gitea-38039__g1",
+  "target": {
+    "gid": "go-gitea__gitea-38039#g1",
+    "summary": "MatchBuiltinPrivate checks isPrivateIP, which matches reserved special-purpose ranges such as Azure WireServer (168.63.129.16) and IPv6 transition tunnels alongside standard private networks. If MatchBuiltinPrivate is used in an allow-list, requests to sensitive cloud metadata and reserved internal endpoints are permitted, re-introducing SSRF vulnerabilities.",
+    "paths": [
+      "modules/hostmatcher/hostmatcher.go"
+    ],
+    "notes": [
+      "faulty check where MatchBuiltinPrivate matches reserved special-purpose IPs via isPrivateIP",
+      "definition of isPrivateIP helper which incorrectly classifies reserved special-purpose IP ranges as private"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "b41c7b201d0d2eb015dcb57ebd363a4c37920547",
+  "base_sha": "4ba0a545f285c6a4d054a6ae4a891b5b4681ec1e",
+  "snapshot": "repos/go-gitea__gitea/b41c7b201d0d2eb015dcb57ebd363a4c37920547",
+  "diff": "diffs/go-gitea__gitea-38039.diff"
+}

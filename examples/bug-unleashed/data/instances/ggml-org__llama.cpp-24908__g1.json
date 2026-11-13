@@ -1,0 +1,28 @@
+{
+  "case_id": "ggml-org__llama.cpp-24908",
+  "repo": "ggml-org/llama.cpp",
+  "pr": 24908,
+  "title": "Add MiniMax-M3 (MSA: MiniMax Sparse Attention) support",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "ggml-org__llama.cpp-24908__g1",
+  "target": {
+    "gid": "ggml-org__llama.cpp-24908#g1",
+    "summary": "FFN layers in graph construction do not pass quantization scale tensors to build_ffn and build_moe_ffn, causing quantized weights (such as NVFP4 or MXFP8) to be evaluated unscaled and outputting garbled text.",
+    "paths": [
+      "src/models/minimax-m3.cpp"
+    ],
+    "notes": [
+      "leading dense FFN call passes NULL instead of quantization scale tensors",
+      "routed experts MoE call does not forward scale tensors to build_moe_ffn",
+      "shared expert FFN call passes NULL instead of quantization scale tensors",
+      "definition of graph constructor containing the unscaled FFN calls"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5d5ed01cf17a6d2225ab3f28c8061136e63f45de",
+  "base_sha": "ff067f76dd8e9e05f0528056f1274adf01a54d70",
+  "snapshot": "repos/ggml-org__llama.cpp/5d5ed01cf17a6d2225ab3f28c8061136e63f45de",
+  "diff": "diffs/ggml-org__llama.cpp-24908.diff"
+}

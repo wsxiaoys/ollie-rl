@@ -1,0 +1,6 @@
+{
+  "title": "cargo clean: Add target directory validation",
+  "body": "*[View all comments](https://triagebot.infra.rust-lang.org/gh-comments/rust-lang/cargo/pull/16712)*\r\n\r\n### What does this PR try to resolve?\r\n\r\nFixes #9192 \r\n\r\nImplements the checks mentioned in [this comment](https://github.com/rust-lang/cargo/issues/9192#issuecomment-3517689516)\r\n\r\nTo summarise, when `cargo clean` is run with a specified target directory:\r\n- If a target directory is explicitly passed via `--target-dir`: check if a valid `CACHEDIR.TAG` exists in the target directory and hard error otherwise.\r\n- In other cases where target directory is specified(via env vars or build config): ~~emit a future incompat warning if the target directory does not contain a valid `CACHEDIR.TAG`~~ No longer this case. See <https://github.com/rust-lang/cargo/pull/16712#issuecomment-4035491505>\r\n\r\n### Tests\r\n\r\nI've added 3 sets of unit tests for:\r\n- When `--target-dir` is used explicitly\r\n- When target directory is specified via the build config\r\n- When target directory is specified via the `CARGO_TARGET_DIR` env variable \r\n\r\nLet me know if there is a case I've missed or if i need to merge multiple tests into a single one.",
+  "head_sha": "ac8856a2969e132c2434f2cce28d5d5330c15529",
+  "base_sha": "ddb37b06aba4dcf791fde56dd9fcf73ae7d05f7f"
+}

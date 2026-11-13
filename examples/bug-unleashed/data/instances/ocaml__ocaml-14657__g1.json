@@ -1,0 +1,28 @@
+{
+  "case_id": "ocaml__ocaml-14657",
+  "repo": "ocaml/ocaml",
+  "pr": 14657,
+  "title": "Ephemerons: avoid the quadratic garbage-collection blowup on all GC cycles except the first one",
+  "language": "C",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ocaml__ocaml-14657__g1",
+  "target": {
+    "gid": "ocaml__ocaml-14657#g1",
+    "summary": "Removing `ephe_next_round()` from `mark()` causes `num_domains_to_mark` to be decremented before requesting the next ephemeron round. This creates a data race where another domain can observe `num_domains_to_mark == 0` and treat marking as complete, resulting in a GC deadlock.",
+    "paths": [
+      "runtime/major_gc.c"
+    ],
+    "notes": [
+      "faulty statement: deferred call to ephe_next_round() added after mark() decrements num_domains_to_mark",
+      "context lines in mark() where ephe_next_round() was removed before decrementing num_domains_to_mark",
+      "copy of the same faulty pattern: deferred call to ephe_next_round() added after mark() in empty_mark_stack()",
+      "copy of the same faulty pattern: deferred call to ephe_next_round() added after mark() in ephe_mark()"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ee2be1335707295ae639d7be854a3e4566367169",
+  "base_sha": "8326a40dbc8e3380f60a29c4b5a8d2e478d8fc57",
+  "snapshot": "repos/ocaml__ocaml/ee2be1335707295ae639d7be854a3e4566367169",
+  "diff": "diffs/ocaml__ocaml-14657.diff"
+}

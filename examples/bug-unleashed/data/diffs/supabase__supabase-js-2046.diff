@@ -1,0 +1,303 @@
+diff --git a/packages/core/supabase-js/src/lib/constants.ts b/packages/core/supabase-js/src/lib/constants.ts
+index 101927de43..fe50014fbf 100644
+--- a/packages/core/supabase-js/src/lib/constants.ts
++++ b/packages/core/supabase-js/src/lib/constants.ts
+@@ -15,7 +15,137 @@ if (typeof Deno !== 'undefined') {
+   JS_ENV = 'node'
+ }
+ 
+-export const DEFAULT_HEADERS = { 'X-Client-Info': `supabase-js-${JS_ENV}/${version}` }
++export function getClientPlatform(): string | null {
++  // @ts-ignore
++  if (typeof process !== 'undefined' && process.platform) {
++    // @ts-ignore
++    const platform = process.platform
++    if (platform === 'darwin') return 'macOS'
++    if (platform === 'win32') return 'Windows'
++    if (platform === 'linux') return 'Linux'
++    if (platform === 'android') return 'Android'
++  }
++
++  // @ts-ignore
++  if (typeof navigator !== 'undefined') {
++    // Modern User-Agent Client Hints API
++    // @ts-ignore
++    if (navigator.userAgentData && navigator.userAgentData.platform) {
++      // @ts-ignore
++      const platform = navigator.userAgentData.platform
++      if (platform === 'macOS') return 'macOS'
++      if (platform === 'Windows') return 'Windows'
++      if (platform === 'Linux') return 'Linux'
++      if (platform === 'Android') return 'Android'
++      if (platform === 'iOS') return 'iOS'
++    }
++  }
++
++  return null
++}
++
++export function getClientPlatformVersion(): string | null {
++  // Node.js / Bun environment
++  // @ts-ignore
++  if (typeof process !== 'undefined' && process.versions && process.versions.node) {
++    try {
++      // @ts-ignore
++      const os = require('os')
++      return os.release()
++    } catch (error) {
++      return null
++    }
++  }
++
++  // Deno environment
++  // @ts-ignore
++  if (typeof Deno !== 'undefined' && Deno.osRelease) {
++    try {
++      // @ts-ignore
++      return Deno.osRelease()
++    } catch (error) {
++      return null
++    }
++  }
++
++  // Browser environment
++  // @ts-ignore
++  if (typeof navigator !== 'undefined') {
++    // Modern User-Agent Client Hints API
++    // @ts-ignore
++    if (navigator.userAgentData && navigator.userAgentData.platformVersion) {
++      // @ts-ignore
++      return navigator.userAgentData.platformVersion
++    }
++  }
++
++  return null
++}
++
++export function getClientRuntime(): string | null {
++  // @ts-ignore
++  if (typeof Deno !== 'undefined') {
++    return 'deno'
++  }
++  // @ts-ignore
++  if (typeof Bun !== 'undefined') {
++    return 'bun'
++  }
++  // @ts-ignore
++  if (typeof process !== 'undefined' && process.versions && process.versions.node) {
++    return 'node'
++  }
++  return null
++}
++
++export function getClientRuntimeVersion(): string | null {
++  // @ts-ignore
++  if (typeof Deno !== 'undefined' && Deno.version) {
++    // @ts-ignore
++    return Deno.version.deno
++  }
++  // @ts-ignore
++  if (typeof Bun !== 'undefined' && Bun.version) {
++    // @ts-ignore
++    return Bun.version
++  }
++  // @ts-ignore
++  if (typeof process !== 'undefined' && process.versions && process.versions.node) {
++    // @ts-ignore
++    return process.versions.node
++  }
++  return null
++}
++
++function buildHeaders() {
++  const headers: Record<string, string> = {
++    'X-Client-Info': `supabase-js-${JS_ENV}/${version}`,
++  }
++
++  const platform = getClientPlatform()
++  if (platform) {
++    headers['X-Supabase-Client-Platform'] = platform
++  }
++
++  const platformVersion = getClientPlatformVersion()
++  if (platformVersion) {
++    headers['X-Supabase-Client-Platform-Version'] = platformVersion
++  }
++
++  const runtime = getClientRuntime()
++  if (runtime) {
++    headers['X-Supabase-Client-Runtime'] = runtime
++  }
++
++  const runtimeVersion = getClientRuntimeVersion()
++  if (runtimeVersion) {
++    headers['X-Supabase-Client-Runtime-Version'] = runtimeVersion
++  }
++
++  return headers
++}
++
++export const DEFAULT_HEADERS = buildHeaders()
+ 
+ export const DEFAULT_GLOBAL_OPTIONS = {
+   headers: DEFAULT_HEADERS,
+diff --git a/packages/core/supabase-js/test/unit/constants.test.ts b/packages/core/supabase-js/test/unit/constants.test.ts
+index 38fb3df104..90f9396ca2 100644
+--- a/packages/core/supabase-js/test/unit/constants.test.ts
++++ b/packages/core/supabase-js/test/unit/constants.test.ts
+@@ -5,7 +5,12 @@ import {
+   DEFAULT_AUTH_OPTIONS,
+   DEFAULT_REALTIME_OPTIONS,
+ } from '../../src/lib/constants'
+-import { version } from '../../src/lib/version'
++import {
++  getClientPlatform,
++  getClientPlatformVersion,
++  getClientRuntime,
++  getClientRuntimeVersion,
++} from '../../src/lib/constants'
+ 
+ describe('constants', () => {
+   const originalEnv = process.env
+@@ -80,6 +85,141 @@ describe('constants', () => {
+       const { DEFAULT_HEADERS: newHeaders } = require('../../src/lib/constants')
+ 
+       expect(newHeaders['X-Client-Info']).toContain('supabase-js-web')
++
++      // X-Client-Info should always be present
++      expect(DEFAULT_HEADERS).toHaveProperty('X-Client-Info')
++
++      // Other headers should only be present if they can be detected
++      Object.keys(DEFAULT_HEADERS).forEach((key) => {
++        expect(typeof DEFAULT_HEADERS[key]).toBe('string')
++        expect(DEFAULT_HEADERS[key].length).toBeGreaterThan(0)
++      })
++    })
++
++    describe('Client Platform Detection', () => {
++      test('getClientPlatform returns platform or null', () => {
++        const platform = getClientPlatform()
++        expect(platform === null || typeof platform === 'string').toBe(true)
++        if (platform) {
++          expect(platform.length).toBeGreaterThan(0)
++          expect(['macOS', 'Windows', 'Linux', 'iOS', 'Android'].includes(platform)).toBe(true)
++        }
++      })
++
++      test('getClientPlatformVersion returns version string or null', () => {
++        const version = getClientPlatformVersion()
++        expect(version === null || typeof version === 'string').toBe(true)
++        if (version) {
++          expect(version.length).toBeGreaterThan(0)
++        }
++      })
++
++      test('getClientPlatformVersion returns OS version, not runtime version in Node.js', () => {
++        // Only run this test in Node.js environment
++        if (typeof process !== 'undefined' && process.versions && process.versions.node) {
++          const platformVersion = getClientPlatformVersion()
++          const runtimeVersion = getClientRuntimeVersion()
++
++          // Both should exist in Node.js environment
++          expect(platformVersion).not.toBeNull()
++          expect(runtimeVersion).not.toBeNull()
++
++          // They should be DIFFERENT values
++          if (platformVersion && runtimeVersion) {
++            expect(platformVersion).not.toBe(runtimeVersion)
++
++            // Platform version should NOT match Node.js version format
++            expect(platformVersion).not.toBe(process.version.slice(1))
++            expect(platformVersion).not.toBe(process.versions.node)
++          }
++        }
++      })
++
++      test('getClientPlatformVersion uses os.release() in Node.js', () => {
++        // Only run this test in Node.js environment
++        if (typeof process !== 'undefined' && process.versions && process.versions.node) {
++          const platformVersion = getClientPlatformVersion()
++          const os = require('os')
++          const expectedVersion = os.release()
++
++          expect(platformVersion).toBe(expectedVersion)
++        }
++      })
++
++      test('X-Supabase-Client-Platform-Version header contains OS version, not runtime version', () => {
++        const headers = DEFAULT_HEADERS
++
++        if (
++          headers['X-Supabase-Client-Platform-Version'] &&
++          headers['X-Supabase-Client-Runtime-Version']
++        ) {
++          const platformVersion = headers['X-Supabase-Client-Platform-Version']
++          const runtimeVersion = headers['X-Supabase-Client-Runtime-Version']
++
++          // Platform version should be different from runtime version
++          expect(platformVersion).not.toBe(runtimeVersion)
++
++          // In Node.js, ensure platform version is not the Node.js version
++          if (typeof process !== 'undefined' && process.versions && process.versions.node) {
++            expect(platformVersion).not.toBe(process.version.slice(1))
++            expect(platformVersion).not.toBe(process.versions.node)
++          }
++        }
++      })
++    })
++
++    describe('Client Runtime Detection', () => {
++      test('getClientRuntime returns runtime or null', () => {
++        const runtime = getClientRuntime()
++        expect(runtime === null || typeof runtime === 'string').toBe(true)
++        if (runtime) {
++          expect(runtime.length).toBeGreaterThan(0)
++          expect(['node', 'deno', 'bun'].includes(runtime)).toBe(true)
++        }
++      })
++
++      test('getClientRuntimeVersion returns version string or null', () => {
++        const version = getClientRuntimeVersion()
++        expect(version === null || typeof version === 'string').toBe(true)
++        if (version) {
++          expect(version.length).toBeGreaterThan(0)
++        }
++      })
++    })
++
++    describe('Header Constants', () => {
++      test('X-Client-Info header format', () => {
++        const header = DEFAULT_HEADERS['X-Client-Info']
++        expect(header).toMatch(/^supabase-js-.+\/\d+\.\d+\.\d+/)
++      })
++
++      test('X-Client-Info is always present', () => {
++        expect(DEFAULT_HEADERS).toHaveProperty('X-Client-Info')
++      })
++
++      test('Optional headers are only present when detected', () => {
++        // Test that optional headers are either not present or have valid values
++        const optionalHeaders = [
++          'X-Supabase-Client-Platform',
++          'X-Supabase-Client-Platform-Version',
++          'X-Supabase-Client-Runtime',
++          'X-Supabase-Client-Runtime-Version',
++        ]
++
++        optionalHeaders.forEach((headerName) => {
++          if (DEFAULT_HEADERS[headerName]) {
++            expect(typeof DEFAULT_HEADERS[headerName]).toBe('string')
++            expect(DEFAULT_HEADERS[headerName].length).toBeGreaterThan(0)
++          }
++        })
++      })
++
++      test('All present headers are properly formatted', () => {
++        Object.values(DEFAULT_HEADERS).forEach((value) => {
++          expect(typeof value).toBe('string')
++          expect(value.length).toBeGreaterThan(0)
++        })
++      })
+     })
+ 
+     test('should detect React Native environment', () => {

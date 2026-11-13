@@ -1,0 +1,469 @@
+diff --git a/librz/arch/meson.build b/librz/arch/meson.build
+index 3cd4b2eda66..7d86bee3b17 100644
+--- a/librz/arch/meson.build
++++ b/librz/arch/meson.build
+@@ -461,6 +461,7 @@ arch_common_sources = [
+   'labels.c',
+   'meta.c',
+   'no_rtti.c',
++  'objc_rtti.c',
+   'omf_process.c',
+   'op.c',
+   'parse.c',
+diff --git a/librz/arch/objc_rtti.c b/librz/arch/objc_rtti.c
+new file mode 100644
+index 00000000000..9ad48f252f3
+--- /dev/null
++++ b/librz/arch/objc_rtti.c
+@@ -0,0 +1,78 @@
++// SPDX-FileCopyrightText: 2025 tushar3q34 <tushar3q34@gmail.com>
++// SPDX-FileCopyrightText: 2026 historicattle <sirigere.naren@gmail.com>
++// SPDX-License-Identifier: LGPL-3.0-only
++
++#include "analysis_private.h"
++
++static const RzBinSymbol *get_objc_superclass(RzAnalysis *analysis, const RzPVector /*<RzBinSymbol *>*/ *symbols, const RzBinSymbol *meta_info) {
++	ut64 addr;
++	if (!analysis->iob.read_at(analysis->iob.io, meta_info->vaddr + 8, (ut8 *)&addr, 8)) {
++		return NULL;
++	}
++
++	void **it;
++	rz_pvector_foreach (symbols, it) {
++		if (!it) {
++			continue;
++		}
++		RzBinSymbol *super_meta = *it;
++		if (!super_meta) {
++			continue;
++		}
++		if (super_meta->vaddr == addr) {
++			return super_meta;
++		}
++	}
++	return NULL;
++}
++
++static void add_objc_superclass(RzAnalysis *analysis, RzPVector /*<SdbKv *>*/ *classes, RzBinSymbol *meta_class, const RzBinSymbol *meta_superclass) {
++	if (!strstr(meta_superclass->name, "_OBJC_METACLASS_$_")) {
++		return;
++	}
++	// meta class info symbol is of the form _OBJC_METACLASS_$_<class_name>
++	const size_t meta_len = strlen("_OBJC_METACLASS_$_");
++	char *class_name = meta_class->name + meta_len;
++	char *superclass_name = rz_str_dup(meta_superclass->name + meta_len);
++	RzAnalysisBaseClass base = { .class_name = superclass_name, .offset = 0 };
++	rz_analysis_class_base_set(analysis, class_name, &base);
++	rz_analysis_class_base_fini(&base);
++}
++
++/**
++ * \brief Recover Objective-C Runtime Type Information (RTTI)
++ *
++ * This function iterates over the binary symbols to find Objective-C
++ * metaclass structures and reconstructs the class hierarchy
++ *
++ * \param analysis Pointer to the RzAnalysis structure
++ */
++RZ_API void rz_analysis_rtti_objc(RZ_NONNULL RzAnalysis *analysis) {
++	RzPVector *classes = rz_analysis_class_get_all(analysis, false);
++	if (!classes) {
++		return;
++	}
++	RzBinObject *o = rz_bin_cur_object(analysis->binb.bin);
++	if (!o) {
++		return;
++	}
++	const RzPVector *symbols = rz_bin_object_get_symbols(o);
++	void **it;
++	rz_pvector_foreach (symbols, it) {
++		if (!it) {
++			continue;
++		}
++		RzBinSymbol *sym = *it;
++		if (!sym) {
++			continue;
++		}
++		const RzBinSymbol *meta_superclass = NULL;
++		if (strstr(sym->name, "_OBJC_METACLASS_$_")) {
++			meta_superclass = get_objc_superclass(analysis, symbols, sym);
++		}
++		if (meta_superclass) {
++			add_objc_superclass(analysis, classes, sym, meta_superclass);
++		}
++	}
++	rz_pvector_free(classes);
++}
+diff --git a/librz/arch/rtti.c b/librz/arch/rtti.c
+index 4940fb544a4..627eb32e526 100644
+--- a/librz/arch/rtti.c
++++ b/librz/arch/rtti.c
+@@ -93,6 +93,9 @@ RZ_API void rz_analysis_rtti_recover_all(RzAnalysis *analysis) {
+ 	case RZ_BIN_LANGUAGE_SWIFT:
+ 		rz_analysis_rtti_swift(analysis);
+ 		break;
++	case RZ_BIN_LANGUAGE_OBJC:
++		rz_analysis_rtti_objc(analysis);
++		// fallthrough
+ 	default: {
+ 		RVTableContext context;
+ 		rz_analysis_vtable_begin(analysis, &context);
+diff --git a/librz/core/devirtualize_objc.c b/librz/core/devirtualize_objc.c
+index cedebbb9ef3..2760878517f 100644
+--- a/librz/core/devirtualize_objc.c
++++ b/librz/core/devirtualize_objc.c
+@@ -1,4 +1,5 @@
+ // SPDX-FileCopyrightText: 2025 tushar3q34 <tushar3q34@gmail.com>
++// SPDX-FileCopyrightText: 2026 historicattle <sirigere.naren@gmail.com>
+ // SPDX-License-Identifier: LGPL-3.0-only
+ 
+ #include <rz_util.h>
+@@ -53,6 +54,10 @@ static void track_init(RzCore *core) {
+ 
+ static ut64 get_reg_value(RzAnalysis *analysis, const char *reg_name) {
+ 	RzAnalysisILVM *vm = rz_analysis_get_il_vm(analysis);
++	if (!vm || !vm->vm) {
++		return UT64_MAX;
++	}
++
+ 	RzILVal *il_c_reg = rz_il_vm_get_var_value(vm->vm, RZ_IL_VAR_KIND_GLOBAL, reg_name);
+ 	if (!il_c_reg) {
+ 		return UT64_MAX;
+@@ -66,6 +71,28 @@ static ut64 get_reg_value(RzAnalysis *analysis, const char *reg_name) {
+ 	return val;
+ }
+ 
++static ut64 get_mem_value(RzAnalysis *analysis, ut64 addr, ut8 bytes) {
++	RzAnalysisILVM *vm = rz_analysis_get_il_vm(analysis);
++	if (!vm || !vm->vm) {
++		return UT64_MAX;
++	}
++
++	RzBitVector *addr_bv = rz_bv_new_from_ut64(rz_analysis_get_bits(analysis), addr);
++	if (!addr_bv) {
++		return UT64_MAX;
++	}
++
++	RzBitVector *val_bv = rz_il_vm_mem_loadw(vm->vm, 0, addr_bv, bytes * 8);
++	rz_bv_free(addr_bv);
++	if (!val_bv) {
++		return UT64_MAX;
++	}
++
++	ut64 val = rz_bv_to_ut64(val_bv);
++	rz_bv_free(val_bv);
++	return val;
++}
++
+ static RZ_OWN char *get_message_dispatch_method(RzCore *core, ut64 meta_class_addr, ut64 meth_str_addr) {
+ 	RzBinFile *bf = rz_bin_cur(core->bin);
+ 	void **it;
+@@ -139,6 +166,7 @@ static RzSetU *allocator_xrefs(RzAnalysis *analysis) {
+ 			rz_list_foreach (xref_list, itt, xref) {
+ 				rz_set_u_add(xref_addrs, xref->from);
+ 			}
++			rz_list_free(xref_list);
+ 		}
+ 	}
+ 	return xref_addrs;
+@@ -180,6 +208,11 @@ static void devirtualize_msg_dispatch(RzCore *core, RzSetU *msg_dispatch_addr) {
+ 	ut64 start = function->addr; // start of the function
+ 	ut64 end = rz_analysis_function_max_addr(function);
+ 	RzAnalysisOp *op = rz_analysis_op_new();
++	if (!op) {
++		rz_set_u_free(xref_addrs);
++		return;
++	}
++
+ 	track_init(core);
+ 
+ 	ut8 *bytes = malloc(end - start);
+@@ -231,6 +264,89 @@ static void devirtualize_msg_dispatch(RzCore *core, RzSetU *msg_dispatch_addr) {
+ 	free(bytes);
+ }
+ 
++static void devirtualize_msg_super_dispatch(RzCore *core, RzSetU *msg_super_dispatch_addr) {
++	RzAnalysisFunction *function = rz_analysis_get_fcn_in(core->analysis, core->offset, RZ_ANALYSIS_FCN_TYPE_ROOT);
++	if (!function) {
++		function = rz_analysis_get_fcn_in(core->analysis, core->offset, RZ_ANALYSIS_FCN_TYPE_NULL);
++	}
++	if (!function) {
++		RZ_LOG_ERROR("Cannot find function at 0x%08" PFMT64x "\n", core->offset);
++		return;
++	}
++
++	const char *cl_reg = rz_analysis_cc_arg(core->analysis, function->cc, 0);
++	const char *m_reg = rz_analysis_cc_arg(core->analysis, function->cc, 1);
++	const char *ret_reg = rz_analysis_cc_ret(core->analysis, function->cc);
++	RzSetU *xref_addrs = allocator_xrefs(core->analysis);
++	ut8 ptr_size = rz_analysis_get_bits(core->analysis) / 8;
++
++	ut64 start = function->addr;
++	ut64 end = rz_analysis_function_max_addr(function);
++	RzAnalysisOp *op = rz_analysis_op_new();
++	if (!op) {
++		rz_set_u_free(xref_addrs);
++		return;
++	}
++
++	track_init(core);
++	ut8 *bytes = malloc(end - start);
++	if (!rz_io_read_at_mapped(core->io, start, bytes, end - start)) {
++		RZ_LOG_ERROR("Cannot read at offset 0x%08" PFMT64x "\n", start);
++	}
++
++	ut64 offset = 0;
++	bool refresh_vm = false;
++	while (start < end) {
++		if (rz_analysis_op(core->analysis, op, start, bytes + offset, end - start, RZ_ANALYSIS_OP_MASK_ALL) < 1) {
++			break;
++		}
++		if (refresh_vm) {
++			rz_core_analysis_il_reinit(core);
++			refresh_vm = false;
++		}
++
++		refresh_vm = is_branch_type_to_method(op);
++		rz_core_il_step(core, 1);
++		if (rz_set_u_contains(xref_addrs, start)) {
++			ut64 val = get_reg_value(core->analysis, cl_reg);
++			rz_analysis_il_vm_set_unsigned(core->analysis, ret_reg, val);
++		}
++
++		if (rz_set_u_contains(msg_super_dispatch_addr, op->addr)) {
++			ut64 vf_addr = get_reg_value(core->analysis, m_reg);
++			ut64 super_struct_addr = get_reg_value(core->analysis, cl_reg);
++			ut64 superclass_addr = UT64_MAX;
++			if (super_struct_addr != UT64_MAX) {
++				ut64 current_class_addr = get_mem_value(core->analysis, super_struct_addr + ptr_size, ptr_size);
++				if (current_class_addr != UT64_MAX) {
++					superclass_addr = get_mem_value(core->analysis, current_class_addr + ptr_size, ptr_size);
++				}
++			}
++
++			if (superclass_addr != UT64_MAX) {
++				char *vmethod_name = get_message_dispatch_method(core, superclass_addr, vf_addr);
++				if (vmethod_name) {
++					RzStrBuf *comment = rz_strbuf_new(NULL);
++					rz_strbuf_setf(comment, "Super message dispatch to %s", vmethod_name);
++					const char *str_comment = rz_strbuf_drain(comment);
++					rz_core_meta_comment_add(core, str_comment, start);
++					add_virtual_xrefs(core->analysis, vmethod_name, op->addr);
++					RZ_FREE(str_comment);
++					RZ_FREE(vmethod_name);
++				}
++			}
++		}
++		start += op->size;
++		offset += op->size;
++		core->offset = start;
++		rz_analysis_op_fini(op);
++	}
++
++	rz_set_u_free(xref_addrs);
++	rz_analysis_op_free(op);
++	RZ_FREE(bytes);
++}
++
+ static char *construct_reloc_name(RZ_NONNULL RzBinReloc *reloc, RZ_NULLABLE const char *name, bool demangle) {
+ 	RzStrBuf *buf = rz_strbuf_new("");
+ 	if (!buf) {
+@@ -265,6 +381,22 @@ static char *construct_reloc_name(RZ_NONNULL RzBinReloc *reloc, RZ_NULLABLE cons
+ 	return rz_strbuf_drain(buf);
+ }
+ 
++static RzSetU *get_xrefs(RzAnalysis *analysis, RzVector /*<ut64>*/ *addrs) {
++	RzSetU *xrefs = rz_set_u_new();
++	ut64 *itt;
++	rz_vector_foreach (addrs, itt) {
++		ut64 addr = *itt;
++		RzList *xref_list = rz_analysis_xrefs_get_to(analysis, addr);
++		RzListIter *it;
++		RzAnalysisXRef *xref;
++		rz_list_foreach (xref_list, it, xref) {
++			rz_set_u_add(xrefs, xref->from);
++		}
++		rz_list_free(xref_list);
++	}
++	return xrefs;
++}
++
+ /**
+  * \brief devirtualize Objective-C message dispatch methods
+  *
+@@ -281,52 +413,66 @@ RZ_IPI void rz_core_analysis_devirtualize_objc_methods(RZ_NULLABLE RzCore *core)
+ 		return;
+ 	}
+ 
++	ut64 original_offset = core->offset;
++
+ 	// Check if the binary file has message dispatch methods
+ 	// First find in symbols, then in relocs
+ 	bool msg_dispatch = false;
++	bool msg_super_dispatch = false;
++
+ 	RzVector *msg_dispatch_addrs = rz_vector_new(sizeof(ut64), NULL, NULL);
++	RzVector *msg_super_dispatch_addrs = rz_vector_new(sizeof(ut64), NULL, NULL);
++	if (!msg_dispatch_addrs || !msg_super_dispatch_addrs) {
++		rz_vector_free(msg_dispatch_addrs);
++		rz_vector_free(msg_super_dispatch_addrs);
++		return;
++	}
+ 
+ 	const RzPVector *symbols = rz_bin_object_get_symbols(bf->o);
+ 	void **iter;
+ 	rz_pvector_foreach (symbols, iter) {
+ 		RzBinSymbol *symbol = *iter;
+-		if (!rz_str_cmp(symbol->name, "objc_msgSend", -1)) {
++		if (RZ_STR_EQ(symbol->name, "objc_msgSend")) {
+ 			msg_dispatch = true;
+ 			rz_vector_push(msg_dispatch_addrs, &(symbol->vaddr));
+-			break;
++		} else if (RZ_STR_EQ(symbol->name, "objc_msgSendSuper2")) {
++			msg_super_dispatch = true;
++			rz_vector_push(msg_super_dispatch_addrs, &(symbol->vaddr));
+ 		}
+ 	}
+ 
+ 	RzBinRelocStorage *relocs = rz_bin_object_patch_relocs(bf, obj);
+-	for (size_t i = 0; i < relocs->relocs_count; i++) {
++	for (ut64 i = 0; relocs && i < relocs->relocs_count; i++) {
+ 		RzBinReloc *reloc = relocs->relocs[i];
+ 		bool demangle = rz_config_get_b(core->config, "bin.demangle");
+ 		char *name = construct_reloc_name(reloc, NULL, demangle);
+-		if (!rz_str_cmp(name, "objc_msgSend", -1)) {
++		if (RZ_STR_EQ(name, "objc_msgSend")) {
+ 			msg_dispatch = true;
+ 			rz_vector_push(msg_dispatch_addrs, &(reloc->vaddr));
++		} else if (RZ_STR_EQ(name, "objc_msgSendSuper2")) {
++			msg_super_dispatch = true;
++			rz_vector_push(msg_super_dispatch_addrs, &(reloc->vaddr));
+ 		}
+ 		free(name);
+ 	}
+ 
+-	RzSetU *msg_dispatch_xref_addr = rz_set_u_new();
+-
+ 	// Note all xrefs to message dispatch
+-	ut64 *itt;
+-	rz_vector_foreach (msg_dispatch_addrs, itt) {
+-		ut64 addr = *itt;
+-		RzList *xref_list = rz_analysis_xrefs_get_to(core->analysis, addr);
+-		RzListIter *it;
+-		RzAnalysisXRef *xref;
+-		rz_list_foreach (xref_list, it, xref) {
+-			rz_set_u_add(msg_dispatch_xref_addr, xref->from);
+-		}
+-		rz_list_free(xref_list);
+-	}
+-	rz_vector_free(msg_dispatch_addrs);
++	RzSetU *msg_dispatch_xref_addr = get_xrefs(core->analysis, msg_dispatch_addrs);
+ 
++	rz_vector_free(msg_dispatch_addrs);
+ 	if (msg_dispatch) {
+ 		devirtualize_msg_dispatch(core, msg_dispatch_xref_addr);
+ 	}
++
+ 	rz_set_u_free(msg_dispatch_xref_addr);
+-}
+\ No newline at end of file
++	core->offset = original_offset;
++	RzSetU *msg_super_dispatch_xref_addr = get_xrefs(core->analysis, msg_super_dispatch_addrs);
++
++	rz_vector_free(msg_super_dispatch_addrs);
++	if (msg_super_dispatch) {
++		devirtualize_msg_super_dispatch(core, msg_super_dispatch_xref_addr);
++	}
++
++	rz_set_u_free(msg_super_dispatch_xref_addr);
++	core->offset = original_offset;
++}
+diff --git a/librz/include/rz_analysis.h b/librz/include/rz_analysis.h
+index f802847044b..76194e3b364 100644
+--- a/librz/include/rz_analysis.h
++++ b/librz/include/rz_analysis.h
+@@ -2052,6 +2052,7 @@ RZ_API void rz_analysis_rtti_msvc_print_base_class_descriptor(RVTableContext *co
+ RZ_API bool rz_analysis_rtti_msvc_print_at_vtable(RVTableContext *context, ut64 addr, RzOutputMode mode, bool strict);
+ RZ_API void rz_analysis_rtti_msvc_recover_all(RVTableContext *vt_context, RzList /*<RVTableInfo *>*/ *vtables);
+ RZ_API void rz_analysis_rtti_swift(RzAnalysis *analysis);
++RZ_API void rz_analysis_rtti_objc(RZ_NONNULL RzAnalysis *analysis);
+ 
+ RZ_API char *rz_analysis_rtti_itanium_demangle_class_name(RVTableContext *context, const char *name);
+ RZ_API bool rz_analysis_rtti_itanium_print_at_vtable(RVTableContext *context, ut64 addr, RzOutputMode mode);
+diff --git a/test/db/cmd/cmd_acll b/test/db/cmd/cmd_acll
+index 8624cb50f33..6bd98a8d2a6 100644
+--- a/test/db/cmd/cmd_acll
++++ b/test/db/cmd/cmd_acll
+@@ -577,4 +577,24 @@ nth        addr  vt_offset type        name
+                                      |  main_Shepherd  |
+                                      `-----------------'
+ EOF
++RUN
++
++NAME=Analyze class inheritance in objc
++FILE=bins/mach0/arm64-objc-bin
++CMDS=<<EOF
++aaa
++acll
++EOF
++EXPECT=<<EOF
++[Animal]
++nth        addr  vt_offset type    name  
++-----------------------------------------
++  1 0x100003e1c ---------- DEFAULT speak
++
++[Dog: Animal]
++nth        addr  vt_offset type    name  
++-----------------------------------------
++  1 0x100003e48 ---------- DEFAULT speak
++
++EOF
+ RUN
+\ No newline at end of file
+diff --git a/test/db/cmd/cmd_avD b/test/db/cmd/cmd_avD
+index d9e59ac784d..5ce577a795c 100644
+--- a/test/db/cmd/cmd_avD
++++ b/test/db/cmd/cmd_avD
+@@ -1221,4 +1221,41 @@ EXPECT=<<EOF
+ |           ;-- pc:
+ \           0x100007964      brk   1
+ EOF
++RUN
++
++NAME=objc msgSendSuper dispatch
++FILE=bins/mach0/arm64-objc-bin
++CMDS=<<EOF
++aaaa
++avD @ method.Dog.speak
++pdf @ method.Dog.speak
++EOF
++EXPECT=<<EOF
++            ;-- public int Dog::speak():
++            ;-- func.100003e48:
++/ method.Dog.speak(int64_t arg1, int64_t arg2);
++|           ; arg int64_t arg1 @ x0
++|           ; arg int64_t arg2 @ x1
++|           ; var int64_t var_10h @ stack - 0x10
++|           0x100003e48      sub   sp, sp, 0x30                        ; public int Dog::speak()
++|           0x100003e4c      stp   fp, lr, [var_10h]
++|           0x100003e50      add   fp, sp, 0x20
++|           0x100003e54      stur  x0, [fp, -8]                        ; arg1
++|           0x100003e58      str   x1, [sp, 0x10]                      ; arg2
++|           0x100003e5c      adrp  x0, reloc.NSLog                     ; 0x100004000
++|           0x100003e60      add   x0, x0, 0x50                        ; 0x100004050 ; u"8\U00000001\U00000001"
++|           0x100003e64      bl    sym.imp.NSLog
++|           0x100003e68      ldur  x8, [fp, -8]
++|           0x100003e6c      mov   x0, sp                              ; void *instance
++|           0x100003e70      str   x8, [sp]
++|           0x100003e74      adrp  x8, reloc.NSLog                     ; 0x100004000
++|           0x100003e78      ldr   x8, [x8, 0x88]                      ; [0x100004088:4]=0x8178 ; "x\x81"
++|           0x100003e7c      str   x8, [sp, 8]
++|           0x100003e80      adrp  x8, sym.__OBJC_METACLASS_RO___Animal ; 0x100008000
++|           0x100003e84      ldr   x1, [x8, 0x120]                     ; [0x100003f96:4]=0x61657073 ; "speak" ; char *selector
++|           0x100003e88      bl    sym.imp.objc_msgSendSuper2          ; Super message dispatch to method_Animal_speak ; void *objc_msgSendSuper2(void *instance, char *selector)
++|           0x100003e8c      ldp   fp, lr, [var_10h]
++|           0x100003e90      add   sp, sp, 0x30
++\           0x100003e94      ret
++EOF
+ RUN
+\ No newline at end of file

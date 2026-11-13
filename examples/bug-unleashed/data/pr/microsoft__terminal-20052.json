@@ -1,0 +1,6 @@
+{
+  "title": "Fix various KKP encoding issues",
+  "body": "NOTE:\r\nThis commit changes our input model to treat all\r\nCtrl-Alt combinations as an AltGr modifier by default.\r\nCtrl+Alt+/ will not produce `\"\\x1b\\x1f\"` anymore.\r\n\r\nThis fixes the following issues:\r\n* Base-key report of non-ASCII keys was broken\r\n* AltGr on international keyboards would spam\r\n  Ctrl/Alt up/down events repeatedly forever\r\n* KKP doesn't report modifier key repeats\r\n* AltGr+Key combinations were reported as Ctrl+Alt+key\r\n  but should've been just plain Key-But-Modified\r\n\r\nCloses #19977\r\n\r\n## Validation Steps Performed\r\nThis cannot be easily tested in unit tests, due to\r\nthe dependence on international keyboard layouts.\r\nIt appears to work correctly from what I can tell.",
+  "head_sha": "9354b5c7f6536316dc32251e55ef284be285512d",
+  "base_sha": "eeb9f7a805420291c30b323e1c5187bcf392496e"
+}

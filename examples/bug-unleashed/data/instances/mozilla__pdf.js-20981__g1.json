@@ -1,0 +1,26 @@
+{
+  "case_id": "mozilla__pdf.js-20981",
+  "repo": "mozilla/pdf.js",
+  "pr": 20981,
+  "title": "Make text selection more visible (bug 1879559)",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mozilla__pdf.js-20981__g1",
+  "target": {
+    "gid": "mozilla__pdf.js-20981#g1",
+    "summary": "Selection ranges whose start or end boundaries fall outside tracked text layers are skipped entirely. As a result, visual selection highlighting fails during 'Select All', where DOM selection boundaries typically fall on ancestor containers rather than individual text layers.",
+    "paths": [
+      "src/display/draw_layer.js"
+    ],
+    "notes": [
+      "faulty statement that skips selection ranges when boundary points fall outside tracked text layers",
+      "definition of the method whose selection range handling is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "957e004e38faa2f0175d905ef09fb3ee85347961",
+  "base_sha": "f500cffd2e650914f46b3cb3e31653ef71a23f33",
+  "snapshot": "repos/mozilla__pdf.js/957e004e38faa2f0175d905ef09fb3ee85347961",
+  "diff": "diffs/mozilla__pdf.js-20981.diff"
+}

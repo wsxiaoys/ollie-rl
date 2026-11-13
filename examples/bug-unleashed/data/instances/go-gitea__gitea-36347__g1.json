@@ -1,0 +1,25 @@
+{
+  "case_id": "go-gitea__gitea-36347",
+  "repo": "go-gitea/gitea",
+  "pr": 36347,
+  "title": "Release attachments must belong to the intended repo",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "go-gitea__gitea-36347__g1",
+  "target": {
+    "gid": "go-gitea__gitea-36347#g1",
+    "summary": "Comparing ctx.Repo.Repository.ID against attach.RepoID rejects valid attachment requests with a 404 Not Found whenever attach.RepoID is 0 (such as legacy attachments) or differs from the repository of the linked issue or release.",
+    "paths": [
+      "routers/web/repo/attachment.go"
+    ],
+    "notes": [
+      "faulty repository check rejecting valid requests with 404"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5d0b2b613b67a5fc1fb3c2f9665d2cadbf8deff7",
+  "base_sha": "7b5de594cd92e30b9c3d40ffda119acad794cc64",
+  "snapshot": "repos/go-gitea__gitea/5d0b2b613b67a5fc1fb3c2f9665d2cadbf8deff7",
+  "diff": "diffs/go-gitea__gitea-36347.diff"
+}

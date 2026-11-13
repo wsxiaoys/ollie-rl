@@ -1,0 +1,25 @@
+{
+  "case_id": "elastic__eui-9889",
+  "repo": "elastic/eui",
+  "pr": 9889,
+  "title": "[Chore] Check for v[0-9]* tag",
+  "language": "Shell",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "elastic__eui-9889__g1",
+  "target": {
+    "gid": "elastic__eui-9889#g1",
+    "summary": "Piping into `head -1` causes upstream commands in the pipeline to fail with SIGPIPE when `head` closes the pipe after reading the first line. Under `set -eo pipefail`, this produces exit code 141 and crashes docs deployment builds.",
+    "paths": [
+      ".buildkite/scripts/deploy_docs/step_setup.sh"
+    ],
+    "notes": [
+      "faulty command pipeline piped into head causing SIGPIPE under pipefail"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "aaf5f01b7e15bba333fe3630e39d0e09d699dfb9",
+  "base_sha": "0b24a86c66cebe0d198d1a80aa2abeb67eec6389",
+  "snapshot": "repos/elastic__eui/aaf5f01b7e15bba333fe3630e39d0e09d699dfb9",
+  "diff": "diffs/elastic__eui-9889.diff"
+}

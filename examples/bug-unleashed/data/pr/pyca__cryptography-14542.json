@@ -1,0 +1,6 @@
+{
+  "title": "Further restrict DNS wildcards in name constraint matching",
+  "body": "",
+  "head_sha": "e1ad4499605e1c5ac55eaf18280e9441c1d4bc52",
+  "base_sha": "0447989b1d423200360a4a96a716b2981594f147"
+}

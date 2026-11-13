@@ -1,0 +1,27 @@
+{
+  "case_id": "bitcoin__bitcoin-35986",
+  "repo": "bitcoin/bitcoin",
+  "pr": 35986,
+  "title": "p2p: reconsider orphans when missing inputs are mined",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "bitcoin__bitcoin-35986__g1",
+  "target": {
+    "gid": "bitcoin__bitcoin-35986#g1",
+    "summary": "BlockConnected passes m_opts.m_rng to AddChildrenToWorkSet while running on the validation thread without holding g_msgproc_mutex. When an orphan with multiple announcers is reconsidered, this causes a data race with message processing on the non-thread-safe RNG.",
+    "paths": [
+      "src/node/txdownloadman_impl.cpp",
+      "src/node/txorphanage.cpp"
+    ],
+    "notes": [
+      "faulty call passing non-thread-safe m_opts.m_rng from validation thread without holding g_msgproc_mutex",
+      "definition of the method that takes and uses the non-thread-safe RNG parameter"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9cc7dc50bdc9867d079ab7a111d39487a4566767",
+  "base_sha": "c90c23d388f66b7eef67f4c6f69184c088727d6a",
+  "snapshot": "repos/bitcoin__bitcoin/9cc7dc50bdc9867d079ab7a111d39487a4566767",
+  "diff": "diffs/bitcoin__bitcoin-35986.diff"
+}

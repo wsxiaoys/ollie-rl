@@ -1,0 +1,30 @@
+{
+  "case_id": "elastic__elasticsearch-151875",
+  "repo": "elastic/elasticsearch",
+  "pr": 151875,
+  "title": "Use a bulk scorer for rescoring vectors",
+  "language": "Java",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "elastic__elasticsearch-151875__g1",
+  "target": {
+    "gid": "elastic__elasticsearch-151875#g1",
+    "summary": "When bulk-scoring vector candidates in batches of 32, if the remaining number of candidates for a scorer is smaller than the batch size, the bulk scorer attempts to read past the end of the candidate iterator, causing tests to fail on exhausted iterators.",
+    "paths": [
+      "server/src/main/java/org/elasticsearch/search/vectors/RescoreKnnVectorQuery.java"
+    ],
+    "notes": [
+      "faulty statement invoking bulk scorer that reads past the end of the candidate iterator",
+      "definition of the DocIdSetIterator passed into the bulk scorer",
+      "batch size calculation for bulk scoring up to BULK_SCORE_SIZE candidates",
+      "definition of the scoreEntries helper method",
+      "call site bulk-scoring remaining vector candidates after exhausting the conjunction",
+      "call site bulk-scoring buffered vector candidates when the prefetch ring buffer is full"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9291f53fc758a4d9009a550a7b9b955907bb641c",
+  "base_sha": "0e7ef0e4715390b3e0b3e10e1fbe7e4ef1cebc70",
+  "snapshot": "repos/elastic__elasticsearch/9291f53fc758a4d9009a550a7b9b955907bb641c",
+  "diff": "diffs/elastic__elasticsearch-151875.diff"
+}

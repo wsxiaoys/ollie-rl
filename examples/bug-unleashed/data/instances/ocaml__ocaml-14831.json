@@ -1,0 +1,16 @@
+{
+  "case_id": "ocaml__ocaml-14831",
+  "repo": "ocaml/ocaml",
+  "pr": 14831,
+  "title": "Fix wrong source location in warning 60 on non-aliasable module substitutions (#12745)",
+  "language": "OCaml",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "ocaml__ocaml-14831",
+  "target": null,
+  "siblings": [],
+  "head_sha": "4a58e0af6249d054b2eca29bb5bd30686c205e76",
+  "base_sha": "a4f936ba08debb69c5ec8a38772a722eff35d990",
+  "snapshot": "repos/ocaml__ocaml/4a58e0af6249d054b2eca29bb5bd30686c205e76",
+  "diff": "diffs/ocaml__ocaml-14831.diff"
+}

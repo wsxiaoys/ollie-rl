@@ -1,0 +1,1467 @@
+diff --git a/.depend b/.depend
+index eb84ffb21858..d70c321d4254 100644
+--- a/.depend
++++ b/.depend
+@@ -10714,10 +10714,15 @@ testsuite/tools/expect.cmo : \
+     parsing/pprintast.cmi \
+     parsing/parsetree.cmi \
+     parsing/parse.cmi \
++    typing/out_type.cmi \
+     utils/misc.cmi \
+     driver/main_args.cmi \
++    parsing/longident.cmi \
+     parsing/location.cmi \
++    utils/local_store.cmi \
+     utils/load_path.cmi \
++    lambda/lambda.cmi \
++    typing/env.cmi \
+     driver/compmisc.cmi \
+     driver/compenv.cmi \
+     utils/clflags.cmi \
+@@ -10732,10 +10737,15 @@ testsuite/tools/expect.cmx : \
+     parsing/pprintast.cmx \
+     parsing/parsetree.cmi \
+     parsing/parse.cmx \
++    typing/out_type.cmx \
+     utils/misc.cmx \
+     driver/main_args.cmx \
++    parsing/longident.cmx \
+     parsing/location.cmx \
++    utils/local_store.cmx \
+     utils/load_path.cmx \
++    lambda/lambda.cmx \
++    typing/env.cmx \
+     driver/compmisc.cmx \
+     driver/compenv.cmx \
+     utils/clflags.cmx \
+diff --git a/Changes b/Changes
+index 435890250ba0..07ce7351fc6d 100644
+--- a/Changes
++++ b/Changes
+@@ -324,6 +324,10 @@ Working version
+ - #14759: expose the function parsing OCAMLRUNPARAM for easier testing
+   (Gabriel Scherer, view by Antonin Décimo and Nicolás Ojeda Bär)
+ 
++- #14643: Test `-recypes` in addition to `-principal` in expect tests. Run all
++  test variants in the same invocation.
++  (Stefan Muenzel, review by Alistar O'Brien and Florian Angeletti)
++
+ ### Build system:
+ 
+ - #14552: Export `AR` and `ARFLAGS` in Makefile.config.
+diff --git a/lambda/lambda.ml b/lambda/lambda.ml
+index c479f921e911..986255448e63 100644
+--- a/lambda/lambda.ml
++++ b/lambda/lambda.ml
+@@ -696,6 +696,9 @@ let next_raise_count () =
+   incr raise_count ;
+   !raise_count
+ 
++let reset_raise_count () =
++  raise_count := 0
++
+ (* Anticipated staticraise, for guards *)
+ let staticfail = Lstaticraise (0,[])
+ 
+diff --git a/lambda/lambda.mli b/lambda/lambda.mli
+index 3829b3cebfe2..ef73c9d51a9c 100644
+--- a/lambda/lambda.mli
++++ b/lambda/lambda.mli
+@@ -527,6 +527,8 @@ val make_atomic_loc : loc:scoped_location -> lambda -> lambda -> lambda
+ (* Get a new static failure ident *)
+ val next_raise_count : unit -> int
+ 
++val reset_raise_count : unit -> unit
++
+ val staticfail : lambda (* Anticipated static failure *)
+ 
+ (* Check anticipated failure, substitute its final value *)
+diff --git a/ocamltest/ocaml_actions.ml b/ocamltest/ocaml_actions.ml
+index 8e13c030f56c..0108f5647db4 100644
+--- a/ocamltest/ocaml_actions.ml
++++ b/ocamltest/ocaml_actions.ml
+@@ -808,17 +808,15 @@ let cc =
+   Actions.make ~name:"cc" ~description:"Run C compiler to build the program"
+     run_cc
+ 
+-let run_expect_once input_file ~principal log env =
++let run_expect_once input_file log env =
+   let expect_flags = Sys.safe_getenv "EXPECT_FLAGS" in
+   let repo_root = "-repo-root " ^ Ocaml_directories.srcdir in
+-  let principal_flag = if principal then "-principal" else "" in
+   let commandline =
+   [
+     Ocaml_commands.ocamlrun_expect;
+     expect_flags;
+     flags env;
+     repo_root;
+-    principal_flag;
+     input_file
+   ] in
+   let exit_status =
+@@ -831,23 +829,21 @@ let run_expect_once input_file ~principal log env =
+     (Test_result.fail_with_reason reason, env)
+   end
+ 
+-let run_expect_twice input_file log env =
++let run_expect_variants input_file log env =
+   let corrected filename = Filename.make_filename filename "corrected" in
+-  let (result1, env1) = run_expect_once input_file ~principal:false log env in
+-  if Test_result.is_pass result1 then begin
+-    let intermediate_file = corrected input_file in
+-    let (result2, env2) =
+-      run_expect_once intermediate_file ~principal:true log env1 in
+-    if Test_result.is_pass result2 then begin
+-      let output_file = corrected intermediate_file in
+-      let output_env = Environments.add_bindings
+-      [
+-        Builtin_variables.reference, input_file;
+-        Builtin_variables.output, output_file
+-      ] env2 in
+-      (Test_result.pass, output_env)
+-    end else (result2, env2)
+-  end else (result1, env1)
++  let (result, env') =
++    run_expect_once input_file log env in
++  if Test_result.is_pass result
++  then begin
++    let output_file = corrected input_file in
++    let output_env = Environments.add_bindings
++        [
++          Builtin_variables.reference, input_file;
++          Builtin_variables.output, output_file
++        ] env in
++    (Test_result.pass, output_env)
++  end
++  else (result, env')
+ 
+ let run_expect log env =
+   if Environments.is_variable_defined Ocaml_variables.libraries env then
+@@ -855,7 +851,7 @@ let run_expect log env =
+     (Test_result.fail_with_reason reason, env)
+   else
+     let input_file = Actions_helpers.testfile env in
+-    run_expect_twice input_file log env
++    run_expect_variants input_file log env
+ 
+ let run_expect =
+   Actions.make ~name:"run-expect" ~description:"Run expect test" run_expect
+diff --git a/testsuite/tests/typing-external/pr11392.ml b/testsuite/tests/typing-external/pr11392.ml
+index ef2043e532d2..ce48226ef9c9 100644
+--- a/testsuite/tests/typing-external/pr11392.ml
++++ b/testsuite/tests/typing-external/pr11392.ml
+@@ -13,6 +13,7 @@ type 'self nat = Z | S of 'self
+ 
+ 
+ (* without rectypes: rejected *)
++(* with rectypes: accepted (used to crash) *)
+ external cast : int -> 'self nat as 'self = "%identity"
+ ;;
+ [%%expect{|
+@@ -22,13 +23,6 @@ Line 1, characters 36-41:
+ Error: This alias is bound to type "int -> 'a nat"
+        but is used as an instance of type "'a"
+        The type variable "'a" occurs inside "int -> 'a nat"
+-|}]
+-
+-#rectypes;;
+-
+-(* with rectypes: accepted (used to crash) *)
+-external cast : int -> 'self nat as 'self = "%identity"
+-;;
+-[%%expect{|
++|}, Rectypes{|
+ external cast : int -> 'a nat as 'a = "%identity"
+ |}]
+diff --git a/testsuite/tests/typing-gadts/pr6174.ml b/testsuite/tests/typing-gadts/pr6174.ml
+index f013c4faca3a..76eac13908eb 100644
+--- a/testsuite/tests/typing-gadts/pr6174.ml
++++ b/testsuite/tests/typing-gadts/pr6174.ml
+@@ -13,4 +13,15 @@ Line 3, characters 24-25:
+ Error: The value "x" has type "$0" but an expression was expected of type "$1" = "o"
+        Hint: "$0" and "$1" are type variables introduced in the equation
+          "a" = "$0 -> $1"
++|}, Rectypes{|
++type _ t = C : ((('a -> 'o) -> 'o) -> ('b -> 'o) -> 'o) t
++Line 3, characters 24-25:
++3 |  fun C k -> k (fun x -> x);;
++                            ^
++Error: The value "x" has type "$0" but an expression was expected of type
++         "$1" = "($2 -> $1) -> $1"
++       Hint: "$0" and "$1" are type variables introduced in the equation
++         "a" = "$0 -> $1"
++       Hint: "$2" is a type variable introduced in the equation
++         "o" = "($2 -> $1) -> $1"
+ |}];;
+diff --git a/testsuite/tests/typing-gadts/pr7016.ml b/testsuite/tests/typing-gadts/pr7016.ml
+index 89c57aa82471..0de63ae0d631 100644
+--- a/testsuite/tests/typing-gadts/pr7016.ml
++++ b/testsuite/tests/typing-gadts/pr7016.ml
+@@ -31,4 +31,6 @@ Error: This pattern matches values of type "('b * 'a, 'b * 'a) t"
+        but a pattern was expected which matches values of type
+          "('b * 'a, 'a) t"
+        The type variable "'a" occurs inside "'b * 'a"
++|}, Rectypes{|
++val get1' : ('b * 'a as 'a, 'a) t -> 'b = <fun>
+ |}];;
+diff --git a/testsuite/tests/typing-gadts/pr7432.ml b/testsuite/tests/typing-gadts/pr7432.ml
+index 7baba73694c6..8c7b43ff2d74 100644
+--- a/testsuite/tests/typing-gadts/pr7432.ml
++++ b/testsuite/tests/typing-gadts/pr7432.ml
+@@ -8,7 +8,7 @@ type s = x:int -> y:float -> unit
+ type t = y:int -> x:float -> unit
+ type silly = {silly: 'a.'a};;
+ let eql : (s, t) eql = Refl;;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ type (_, _) eql = Refl : ('a, 'a) eql
+ type s = x:int -> y:float -> unit
+ type t = y:int -> x:float -> unit
+diff --git a/testsuite/tests/typing-gadts/pr7902.ml b/testsuite/tests/typing-gadts/pr7902.ml
+index 676164a85f05..bf312d3f4970 100644
+--- a/testsuite/tests/typing-gadts/pr7902.ml
++++ b/testsuite/tests/typing-gadts/pr7902.ml
+@@ -30,4 +30,6 @@ Error: This pattern matches values of type "('a * 'a, 'a * 'a) segment"
+        but a pattern was expected which matches values of type
+          "('a * 'a, 'a) segment"
+        The type variable "'a" occurs inside "'a * 'a"
++|}, Rectypes{|
++val color : ('a * 'a as 'a, 'a) segment -> int = <fun>
+ |}]
+diff --git a/testsuite/tests/typing-labeled-tuples/labeled_tuples.ml b/testsuite/tests/typing-labeled-tuples/labeled_tuples.ml
+index 38f5b484004f..64f98d8b657b 100644
+--- a/testsuite/tests/typing-labeled-tuples/labeled_tuples.ml
++++ b/testsuite/tests/typing-labeled-tuples/labeled_tuples.ml
+@@ -177,6 +177,9 @@ Line 2, characters 16-17:
+ Error: The value "a" has type "int * lbl:(int * lbl:'a)"
+        but an expression was expected of type "'a"
+        The type variable "'a" occurs inside "int * lbl:(int * lbl:'a)"
++|}, Rectypes{|
++val a : int * lbl:(int * lbl:'a) as 'a = (1, ~lbl:(2, ~lbl:<cycle>))
++val b : int * lbl:(int * lbl:'a) as 'a = (2, ~lbl:(1, ~lbl:<cycle>))
+ |}]
+ 
+ let rec l = ~lbl: 5, ~lbl2: 10 :: l
+diff --git a/testsuite/tests/typing-labels/pr13658.ml b/testsuite/tests/typing-labels/pr13658.ml
+index 2be6184b3f77..88d83a300129 100644
+--- a/testsuite/tests/typing-labels/pr13658.ml
++++ b/testsuite/tests/typing-labels/pr13658.ml
+@@ -8,7 +8,7 @@
+ let x =
+   fun (f : (?opt:int -> 'a) as 'a) -> f 3;;
+ 
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ Line 2, characters 40-41:
+ 2 |   fun (f : (?opt:int -> 'a) as 'a) -> f 3;;
+                                             ^
+@@ -21,7 +21,7 @@ This argument cannot be applied without label
+ let x =
+   fun (f : (x:string -> y:int -> 'a) as 'a) -> f 3;;
+ 
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ Line 2, characters 49-50:
+ 2 |   fun (f : (x:string -> y:int -> 'a) as 'a) -> f 3;;
+                                                      ^
+@@ -41,16 +41,16 @@ let u () =
+   Format.printf "!@.";
+   ignore f
+ 
+-[%%expect{|
+-val f : x:string -> y:string -> 'a as 'a = <fun>
+-val u : unit -> unit = <fun>
+-|}, Principal{|
++[%%expect{||}, Principal.Rectypes{|
+ val f : x:string -> y:string -> (x:string -> y:string -> 'a as 'a) = <fun>
+ val u : unit -> unit = <fun>
++|}, Rectypes{|
++val f : x:string -> y:string -> 'a as 'a = <fun>
++val u : unit -> unit = <fun>
+ |}]
+ 
+ let f g = g ?x:(g ?x:(Some g)) 0
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ Line 1, characters 15-30:
+ 1 | let f g = g ?x:(g ?x:(Some g)) 0
+                    ^^^^^^^^^^^^^^^
+@@ -61,41 +61,41 @@ Hint: This function application is partial, maybe some arguments are missing.
+ |}]
+ 
+ let f g = g ?x:(Some (g ?x:(Some g))) ?x:(Some g)
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ val f : (?x:'a -> 'a as 'a) -> 'a = <fun>
+ |}]
+ 
+ let rec f ?x = f
+ let () = Clflags.classic := true;;
+-[%%expect {|
++[%%expect {||}, Principal.Rectypes.Nolabel{|
+ Line 1, characters 11-12:
+ 1 | let rec f ?x = f
+                ^
+ Warning 16 [unerasable-optional-argument]: this optional argument cannot be erased.
+ 
+-val f : ?x:'b -> 'a as 'a = <fun>
+-|}, Principal{|
++val f : ?x:'a -> (?x:'a -> 'b as 'b) = <fun>
++|}, Rectypes.Nolabel{|
+ Line 1, characters 11-12:
+ 1 | let rec f ?x = f
+                ^
+ Warning 16 [unerasable-optional-argument]: this optional argument cannot be erased.
+ 
+-val f : ?x:'a -> (?x:'a -> 'b as 'b) = <fun>
++val f : ?x:'b -> 'a as 'a = <fun>
+ |}]
+ 
+ let () = f 3
+-[%%expect{|
++[%%expect{||}, Principal.Rectypes.Nolabel{|
+ Line 1, characters 11-12:
+ 1 | let () = f 3
+                ^
+ Error: The function applied to this argument has type
+-         ?x:'a -> ?x:'a -> (?x:'a -> 'b as 'b)
++         ?x:'a -> ?x:'a -> ?x:'a -> (?x:'a -> 'b as 'b)
+ This argument cannot be applied without label
+-|}, Principal{|
++|}, Rectypes.Nolabel{|
+ Line 1, characters 11-12:
+ 1 | let () = f 3
+                ^
+ Error: The function applied to this argument has type
+-         ?x:'a -> ?x:'a -> ?x:'a -> (?x:'a -> 'b as 'b)
++         ?x:'a -> ?x:'a -> (?x:'a -> 'b as 'b)
+ This argument cannot be applied without label
+ |}]
+diff --git a/testsuite/tests/typing-misc/occur_check.ml b/testsuite/tests/typing-misc/occur_check.ml
+index 8d9441978cbf..e13f4fe07779 100644
+--- a/testsuite/tests/typing-misc/occur_check.ml
++++ b/testsuite/tests/typing-misc/occur_check.ml
+@@ -14,6 +14,9 @@ Line 2, characters 42-43:
+ Error: The value "s" has type "'a list" but an expression was expected of type
+          "'a t" = "'a"
+        The type variable "'a" occurs inside "'a list"
++|}, Rectypes{|
++type 'a t = 'a
++val f : (('a list as 'a) list -> 'a t -> 'a) -> 'a -> 'a = <fun>
+ |}];;
+ 
+ let f (g : 'a * 'b -> 'a t -> 'a) s = g s s;;
+@@ -24,6 +27,8 @@ Line 1, characters 42-43:
+ Error: The value "s" has type "'a * 'b" but an expression was expected of type
+          "'a t" = "'a"
+        The type variable "'a" occurs inside "'a * 'b"
++|}, Rectypes{|
++val f : (('a * 'b as 'a) * 'b -> 'a t -> 'a) -> 'a -> 'a = <fun>
+ |}];;
+ 
+ (* #12971 *)
+@@ -70,6 +75,9 @@ Error: This expression has type "'a Seq.t Seq.t" = "unit -> 'a Seq.t Seq.node"
+        Type "'a Seq.t" = "unit -> 'a Seq.node" is not compatible with type
+          "'a Seq.t Seq.t" = "unit -> 'a Seq.t Seq.node"
+ Hint: This function application is partial, maybe some arguments are missing.
++|}, Rectypes{|
++type 'a t = T of 'a
++val wrong_to_seq : (unit -> 'a Seq.node as 'a) t -> 'a Seq.t = <fun>
+ |}];;
+ 
+ let strange x = Seq.[cons x empty; cons empty x];;
+@@ -83,4 +91,6 @@ Error: This expression has type "'a Seq.t Seq.t" = "unit -> 'a Seq.t Seq.node"
+        Type "'a Seq.t" = "unit -> 'a Seq.node" is not compatible with type
+          "'a Seq.t Seq.t" = "unit -> 'a Seq.t Seq.node"
+ Hint: This function application is partial, maybe some arguments are missing.
++|}, Rectypes{|
++val strange : (unit -> 'a Seq.node as 'a) -> 'a Seq.t list = <fun>
+ |}];;
+diff --git a/testsuite/tests/typing-misc/typecore_nolabel_errors.ml b/testsuite/tests/typing-misc/typecore_nolabel_errors.ml
+index e41ef302ad9f..168fcef07881 100644
+--- a/testsuite/tests/typing-misc/typecore_nolabel_errors.ml
++++ b/testsuite/tests/typing-misc/typecore_nolabel_errors.ml
+@@ -13,13 +13,13 @@ let check f = f ()
+ 
+ let f ~x = ()
+ let () = check f;;
+-[%%expect {|
++[%%expect {||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ val check : (unit -> 'a) -> 'a = <fun>
+ val f : x:'a -> unit = <fun>
+ |}]
+ 
+ let () = f ~y:1
+-[%%expect {|
++[%%expect {||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ Line 1, characters 14-15:
+ 1 | let () = f ~y:1
+                   ^
+@@ -29,7 +29,7 @@ This argument cannot be applied with label "~y"
+ 
+ let f ?x ~a ?y ~z () = ()
+ let g = f ?y:None ?x:None ~a:()
+-[%%expect {|
++[%%expect {||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ val f : ?x:'a -> a:'b -> ?y:'c -> z:'d -> unit -> unit = <fun>
+ Line 2, characters 13-17:
+ 2 | let g = f ?y:None ?x:None ~a:()
+@@ -42,7 +42,7 @@ Since OCaml 4.11, optional arguments do not commute when -nolabels is given
+ 
+ let f (g: ?x:_ -> _) = g ~y:None ?x:None; g ?x:None ()
+ 
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ Line 1, characters 28-32:
+ 1 | let f (g: ?x:_ -> _) = g ~y:None ?x:None; g ?x:None ()
+                                 ^^^^
+@@ -56,7 +56,7 @@ Since OCaml 4.11, optional arguments do not commute when -nolabels is given
+ let f i ?(a=0) ?(b=0) ?(c=0) ~x j =
+   i + a + b + c + x + j
+ ;;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ val f : int -> ?a:int -> ?b:int -> ?c:int -> x:int -> int -> int = <fun>
+ |}]
+ ;;
+@@ -64,7 +64,7 @@ val f : int -> ?a:int -> ?b:int -> ?c:int -> x:int -> int -> int = <fun>
+ (* [a], [b] and [c] can be commuted without issues *)
+ 
+ f 3 ~c:2 ~a:1 ~b:0 ~x:4 5;;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ Line 1, characters 7-8:
+ 1 | f 3 ~c:2 ~a:1 ~b:0 ~x:4 5;;
+            ^
+@@ -79,7 +79,7 @@ Since OCaml 4.11, optional arguments do not commute when -nolabels is given
+    argument, but compare the reported function types: *)
+ 
+ f 3 ~a:1 ~b:2 5 ~c:0 ~x:4;;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ Line 1, characters 14-15:
+ 1 | f 3 ~a:1 ~b:2 5 ~c:0 ~x:4;;
+                   ^
+@@ -91,7 +91,7 @@ Since OCaml 4.11, optional arguments do not commute when -nolabels is given
+ ;;
+ 
+ f 3 ~a:1 ~c:2 5 ~b:0 ~x:4;;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ Line 1, characters 12-13:
+ 1 | f 3 ~a:1 ~c:2 5 ~b:0 ~x:4;;
+                 ^
+@@ -103,7 +103,7 @@ Since OCaml 4.11, optional arguments do not commute when -nolabels is given
+ ;;
+ 
+ f 3 ~b:1 ~c:2 5 ~a:0 ~x:4;;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ Line 1, characters 7-8:
+ 1 | f 3 ~b:1 ~c:2 5 ~a:0 ~x:4;;
+            ^
+@@ -118,13 +118,13 @@ Since OCaml 4.11, optional arguments do not commute when -nolabels is given
+    https://github.com/ocaml/ocaml/pull/9411 *)
+ 
+ let f ?x ?y () = ();;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ val f : ?x:'a -> ?y:'b -> unit -> unit = <fun>
+ |}]
+ ;;
+ 
+ f ~y:3;;
+-[%%expect{|
++[%%expect{||}, (Principal.Nolabel, Rectypes.Nolabel, Nolabel){|
+ Line 1, characters 5-6:
+ 1 | f ~y:3;;
+          ^
+diff --git a/testsuite/tests/typing-misc/wellfounded.ml b/testsuite/tests/typing-misc/wellfounded.ml
+index a36cb4c7a5fd..718345bf5553 100644
+--- a/testsuite/tests/typing-misc/wellfounded.ml
++++ b/testsuite/tests/typing-misc/wellfounded.ml
+@@ -21,6 +21,9 @@ Line 6, characters 6-20:
+ Error: The definition of "d" contains a cycle:
+          "d" = "d * d",
+          "d * d" contains "d"
++|}, Rectypes{|
++type _ prod = Prod : ('a * 'y) prod
++val f : 't prod -> unit = <fun>
+ |}];;
+ 
+ (* #9314 by ccasin/alpha-convert: *)
+@@ -112,6 +115,9 @@ Line 2, characters 0-11:
+ Error: The definition of "u" contains a cycle:
+          "u" = "u t",
+          "u t" contains "u"
++|}, Rectypes{|
++type 'a t = Foo of 'a
++and u = u t
+ |}];;
+ 
+ (* well-founded *)
+@@ -129,6 +135,8 @@ Line 1, characters 23-25:
+ Error: This alias is bound to type "int * 'a"
+        but is used as an instance of type "'a"
+        The type variable "'a" occurs inside "int * 'a"
++|}, Rectypes{|
++type t = int * 'a as 'a
+ |}];;
+ 
+ (* well-founded *)
+@@ -146,6 +154,8 @@ Line 1, characters 0-18:
+ Error: The definition of "t" contains a cycle:
+          "t" = "int * t",
+          "int * t" contains "t"
++|}, Rectypes{|
++type t = int * t
+ |}];;
+ 
+ (* well-founded *)
+@@ -163,6 +173,8 @@ Line 1, characters 0-45:
+ Error: The definition of "M.t" contains a cycle:
+          "M.t" = "int * M.t",
+          "int * M.t" contains "M.t"
++|}, Rectypes{|
++module rec M : sig type t = int * M.t end
+ |}];;
+ 
+ module type T = sig type t end
+@@ -192,4 +204,6 @@ Error: In the signature of this functor application:
+          "Fixed.t" = "F(Fixed).t",
+          "F(Fixed).t" = "int * Fixed.t",
+          "int * Fixed.t" contains "Fixed.t"
++|}, Rectypes{|
++module M : sig module rec Fixed : sig type t = int * Fixed.t end end
+ |}];;
+diff --git a/testsuite/tests/typing-modular-explicits/rectypes.ml b/testsuite/tests/typing-modular-explicits/rectypes.ml
+index 916e5d14be19..06f286023fd6 100644
+--- a/testsuite/tests/typing-modular-explicits/rectypes.ml
++++ b/testsuite/tests/typing-modular-explicits/rectypes.ml
+@@ -8,48 +8,48 @@ module type T = sig
+   type t
+ end
+ 
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ module type T = sig type t end
+ |}]
+ 
+ let f (x : (module M : T) -> (module M : T) -> 'a as 'a) =
+   (x : ((module N : T) -> 'b) as 'b)
+ 
+-[%%expect{|
+-val f : ((module N : T) -> 'a as 'a) -> 'a = <fun>
+-|}, Principal{|
++[%%expect{||}, Principal.Rectypes{|
+ val f :
+   ((module M : T) -> (module M : T) -> 'a as 'a) ->
+   ((module N : T) -> 'b as 'b) = <fun>
++|}, Rectypes{|
++val f : ((module N : T) -> 'a as 'a) -> 'a = <fun>
+ |}]
+ 
+ 
+ let f (x : (module M : T) -> ((module M : T) -> 'a as 'a)) =
+   (x : ((module N : T) -> 'b) as 'b)
+ 
+-[%%expect{|
+-val f : ((module M : T) -> ((module N : T) -> 'a as 'a)) -> 'a = <fun>
+-|}, Principal{|
++[%%expect{||}, Principal.Rectypes{|
+ val f :
+   ((module M : T) -> ((module M : T) -> 'a as 'a)) ->
+   ((module N : T) -> 'b as 'b) = <fun>
++|}, Rectypes{|
++val f : ((module M : T) -> ((module N : T) -> 'a as 'a)) -> 'a = <fun>
+ |}]
+ 
+ let f (module M : T) (x : (module M : T) -> 'a as 'a) =
+   x (module M) (module M) (module M) (module M) (module M)
+ 
+-[%%expect{|
+-val f : (module T) -> ((module M : T) -> 'a as 'a) -> 'a = <fun>
+-|}, Principal{|
++[%%expect{||}, Principal.Rectypes{|
+ val f :
+   (module T) -> ((module M : T) -> 'a as 'a) -> ((module M : T) -> 'b as 'b) =
+   <fun>
++|}, Rectypes{|
++val f : (module T) -> ((module M : T) -> 'a as 'a) -> 'a = <fun>
+ |}]
+ 
+ let f (x : (module M : T) -> ((M.t * ((module N : T) -> 'a)) as 'a)) =
+   (x : ((module O : T) -> O.t * 'b) as 'b)
+ 
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ Line 2, characters 3-4:
+ 2 |   (x : ((module O : T) -> O.t * 'b) as 'b)
+        ^
+@@ -64,26 +64,26 @@ let f (x : (module M : T with type t = int) ->
+               (M.t * ((module N : T with type t = int) -> 'a) as 'a)) =
+   (x : ((module O : T with type t = int) -> O.t * 'b) as 'b)
+ 
+-[%%expect{|
++[%%expect{||}, Principal.Rectypes{|
+ val f :
+   ((module M : T with type t = int) ->
+    (M.t * ((module N : T with type t = int) -> 'a) as 'a)) ->
+-  ((module O : T with type t = int) -> int * 'b as 'b) = <fun>
+-|}, Principal{|
++  ((module O : T with type t = int) -> O.t * 'b as 'b) = <fun>
++|}, Rectypes{|
+ val f :
+   ((module M : T with type t = int) ->
+    (M.t * ((module N : T with type t = int) -> 'a) as 'a)) ->
+-  ((module O : T with type t = int) -> O.t * 'b as 'b) = <fun>
++  ((module O : T with type t = int) -> int * 'b as 'b) = <fun>
+ |}]
+ 
+ let f (x : (module M : T) -> (M.t * ((module N : T) -> (N.t * 'a) as 'a))) =
+   (x : ((module O : T) -> O.t * 'b) as 'b)
+ 
+-[%%expect{|
+-val f : ((module M : T) -> M.t * ((module O : T) -> O.t * 'a as 'a)) -> 'a =
+-  <fun>
+-|}, Principal{|
++[%%expect{||}, Principal.Rectypes{|
+ val f :
+   ((module M : T) -> M.t * ((module N : T) -> N.t * 'a as 'a)) ->
+   ((module O : T) -> O.t * 'b as 'b) = <fun>
++|}, Rectypes{|
++val f : ((module M : T) -> M.t * ((module O : T) -> O.t * 'a as 'a)) -> 'a =
++  <fun>
+ |}]
+diff --git a/testsuite/tests/typing-modules/pr7726.ml b/testsuite/tests/typing-modules/pr7726.ml
+index 95d5c76cef18..78edbfbd28b9 100644
+--- a/testsuite/tests/typing-modules/pr7726.ml
++++ b/testsuite/tests/typing-modules/pr7726.ml
+@@ -22,6 +22,8 @@ Error: In the signature of this functor application:
+          "Fixed.t" = "F(Fixed).t",
+          "F(Fixed).t" = "Fixed.t option",
+          "Fixed.t option" contains "Fixed.t"
++|}, Rectypes{|
++module T1 : sig module rec Fixed : sig type t = Fixed.t option end end
+ |}]
+ module T2 = Fix(functor (X:sig type t end) -> struct type t = X.t end);;
+ [%%expect{|
+diff --git a/testsuite/tests/typing-objects/Tests.ml b/testsuite/tests/typing-objects/Tests.ml
+index e61acf3aa07a..1ea63c379475 100644
+--- a/testsuite/tests/typing-objects/Tests.ml
++++ b/testsuite/tests/typing-objects/Tests.ml
+@@ -250,6 +250,8 @@ Error: The definition of "t" contains a cycle:
+          "t" = "t u * t u",
+          "t u * t u" contains "t u",
+          "t u" = "t"
++|}, Rectypes{|
++type t = t u * t u
+ |}];;
+ 
+ type t = <x : 'a> as 'a;;
+diff --git a/testsuite/tests/typing-poly/poly.ml b/testsuite/tests/typing-poly/poly.ml
+index 1b77daa8d893..3f151e65ae30 100644
+--- a/testsuite/tests/typing-poly/poly.ml
++++ b/testsuite/tests/typing-poly/poly.ml
+@@ -651,6 +651,10 @@ Line 9, characters 0-25:
+ Error: The definition of "foo" contains a cycle:
+          "'a foo" = "'a foo list",
+          "'a foo list" contains "'a foo"
++|}, Rectypes{|
++class id2 : object method id : 'a -> 'a method mono : int -> int end
++val app : int * bool = (1, true)
++type 'a foo = 'a foo list
+ |}];;
+ 
+ class ['a] bar (x : 'a) = object end
+diff --git a/testsuite/tests/typing-rectypes-bugs/module_alias_wrapper.ml b/testsuite/tests/typing-rectypes-bugs/module_alias_wrapper.ml
+index 0a66bf540965..364db5cd7775 100644
+--- a/testsuite/tests/typing-rectypes-bugs/module_alias_wrapper.ml
++++ b/testsuite/tests/typing-rectypes-bugs/module_alias_wrapper.ml
+@@ -28,7 +28,7 @@ type any = Any : 'a t -> any
+ let hang (f : any -> bool) (v : any) : bool =
+   match v with
+   | Any A a -> f (Any a)
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ module Empty : sig end
+ module Empty_wrapper : sig module Empty = Empty end
+ module Make :
+diff --git a/testsuite/tests/typing-short-paths/cycles.ml b/testsuite/tests/typing-short-paths/cycles.ml
+index 44bdf137930e..5e017072b41f 100644
+--- a/testsuite/tests/typing-short-paths/cycles.ml
++++ b/testsuite/tests/typing-short-paths/cycles.ml
+@@ -126,6 +126,9 @@ Error: The definition of "A.t" contains a cycle:
+          "A.t" = "B.t -> int",
+          "B.t -> int" contains "B.t",
+          "B.t" = "A.t"
++|}, Rectypes{|
++module rec A : sig type t = B.t -> int end
++and B : sig type t = A.t end
+ |}]
+ 
+ (* Short paths are actually short *)
+@@ -156,6 +159,20 @@ Error: In the signature of this functor application:
+          "Fixed.t" = "Fixed.t",
+          "Fixed.t" = "Atlas.t -> Fixed.t",
+          "Atlas.t -> Fixed.t" contains "Fixed.t"
++|}, Rectypes{|
++type a__name__that__shall__not__be__printed
++module type T = sig type t end
++module Fix :
++  (F : T -> T) ->
++    sig
++      module Atlas : sig type t = a__name__that__shall__not__be__printed end
++      module rec Fixed : sig type t = F(Fixed).t end
++    end
++module Err :
++  sig
++    module Atlas : sig type t = a__name__that__shall__not__be__printed end
++    module rec Fixed : sig type t = Atlas.t -> Fixed.t end
++  end
+ |}]
+ 
+ module Constraint(F:sig type 'a t end-> sig type 'a t end) = struct
+diff --git a/testsuite/tests/typing-short-paths/errors.ml b/testsuite/tests/typing-short-paths/errors.ml
+index 473fdbfd68ac..6a4a486a5646 100644
+--- a/testsuite/tests/typing-short-paths/errors.ml
++++ b/testsuite/tests/typing-short-paths/errors.ml
+@@ -104,6 +104,23 @@ Error: The definition of "t" contains a cycle:
+          "'a w list" contains "'a w",
+          "'a w" = "'a option z",
+          "'a option z" = "'a option t"
++|}, Rectypes{|
++Line 1, characters 0-16:
++1 | type 'a t = 'a u
++    ^^^^^^^^^^^^^^^^
++Error: This recursive type is not regular.
++       The type constructor "t" is defined as
++         type "'a t"
++       but it is used as
++         "'a option t"
++       after the following expansion(s):
++         "'a u" = "'a v * 'a",
++         "'a v * 'a" contains "'a v",
++         "'a v" = "'a w list",
++         "'a w list" contains "'a w",
++         "'a w" = "'a option z",
++         "'a option z" = "'a option t"
++       All uses need to match the definition for the recursive type to be regular.
+ |}]
+ 
+ 
+@@ -125,4 +142,7 @@ Error: The definition of "A.t" contains a cycle:
+          "A.t" = "B.t -> int",
+          "B.t -> int" contains "B.t",
+          "B.t" = "A.t"
++|}, Rectypes{|
++module rec A : sig type t = B.t -> int end
++and B : sig type t = A.t end
+ |}]
+diff --git a/testsuite/tests/typing-unboxed-types/test_flat.ml b/testsuite/tests/typing-unboxed-types/test_flat.ml
+index 0501fd5ee273..35ca5d2fe7e4 100644
+--- a/testsuite/tests/typing-unboxed-types/test_flat.ml
++++ b/testsuite/tests/typing-unboxed-types/test_flat.ml
+@@ -314,4 +314,7 @@ Line 2, characters 0-21:
+ Error: The definition of "cycle" contains a cycle:
+          "cycle" = "cycle id",
+          "cycle id" contains "cycle"
++|}, Rectypes{|
++type 'a id = Id of 'a [@@unboxed]
++type cycle = cycle id
+ |}];;
+diff --git a/testsuite/tests/typing-warnings/warning16.ml b/testsuite/tests/typing-warnings/warning16.ml
+index 73b9598e5c6c..acc7ac84253e 100644
+--- a/testsuite/tests/typing-warnings/warning16.ml
++++ b/testsuite/tests/typing-warnings/warning16.ml
+@@ -77,24 +77,24 @@ val baz : unit -> ?x:'a -> unit = <fun>
+ #rectypes
+ 
+ let rec baz ?x = baz
+-[%%expect{|
++[%%expect{||}, Principal.Rectypes{|
+ Line 1, characters 13-14:
+ 1 | let rec baz ?x = baz
+                  ^
+ Warning 16 [unerasable-optional-argument]: this optional argument cannot be erased.
+ 
+-val baz : ?x:'b -> 'a as 'a = <fun>
+-|}, Principal{|
++val baz : ?x:'a -> (?x:'a -> 'b as 'b) = <fun>
++|}, Rectypes{|
+ Line 1, characters 13-14:
+ 1 | let rec baz ?x = baz
+                  ^
+ Warning 16 [unerasable-optional-argument]: this optional argument cannot be erased.
+ 
+-val baz : ?x:'a -> (?x:'a -> 'b as 'b) = <fun>
++val baz : ?x:'b -> 'a as 'a = <fun>
+ |}]
+ 
+ let rec baz (type a) ?x = baz
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ Line 1, characters 22-23:
+ 1 | let rec baz (type a) ?x = baz
+                           ^
+@@ -108,7 +108,7 @@ val baz : ?x:'b -> 'a as 'a = <fun>
+ let _ =
+   let warn_me ?arg = () in
+   warn_me + 0
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ Line 2, characters 15-18:
+ 2 |   let warn_me ?arg = () in
+                    ^^^
+@@ -137,7 +137,7 @@ type 'a t =
+ 
+ let test (type a) ?x (module M : Show with type t = a) =
+   A { x; show = M.show }
+-[%%expect{|
++[%%expect{||}, (Principal.Rectypes, Rectypes){|
+ module type Show = sig type t val show : t -> string end
+ type 'a t = A : { x : string option; show : 'a -> string; } -> 'a t
+ val test : ?x:string -> (module M : Show with type t = 'a) -> M.t t = <fun>
+diff --git a/testsuite/tools/expect.ml b/testsuite/tools/expect.ml
+index 706a07ed9593..c3f65e2b4259 100644
+--- a/testsuite/tools/expect.ml
++++ b/testsuite/tools/expect.ml
+@@ -18,16 +18,46 @@
+    successful if there is no differences between the two files.
+ 
+    An [%%expect] node always contains both the expected outcome with and
+-   without -principal. When the two differ the expectation is written as
+-   follows:
++   without -principal or -rectypes. When they differ the expectation
++   is written as follows:
+ 
+    {[
+      [%%expect {|
+-     output without -principal
++     output without flags
+      |}, Principal{|
+      output with -principal
+      |}]
+    ]}
++
++   {[
++     [%%expect {|
++     output without flags
++     |}, Rectypesl{|
++     output with -rectypes
++     |}]
++   ]}
++
++   In case addional flags are used, for example when manually enabled,
++   any flag combinations are combined with a dot (".") as separator.
++
++   {[
++     [%%expect {|
++     output without flags
++     |}, Principal.Rectypes{|
++     output with -principal and -rectypes
++     |}]
++   ]}
++
++   If multiple such combinations result in the same output, then they
++   are displayed as a tuple.
++
++   {[
++     [%%expect {|
++     output without flags
++     |}, (Principal, Rectypes){|
++     output with -principal or -rectypes
++     |}
++   ]}
+ *)
+ 
+ [@@@ocaml.warning "-40"]
+@@ -40,63 +70,256 @@ type string_constant =
+   ; tag : string
+   }
+ 
++let empty_str = { str = ""; tag = "" }
++
++module Parameter = struct
++  type t =
++    | Principal
++    | Rectypes
++    | Nolabel
++
++  let to_string = function
++    | Principal -> "Principal"
++    | Rectypes -> "Rectypes"
++    | Nolabel -> "Nolabel"
++
++  module Set = struct
++    module T = Set.Make(struct
++        type nonrec t = t
++        let compare = compare
++      end)
++    include T
++
++    module Map = Map.Make(T)
++
++    let original = ref empty
++
++    let get_current () =
++      List.fold_left ~f:union
++        [ if !Clflags.principal then singleton Principal else empty
++        ; if !Clflags.recursive_types then singleton Rectypes else empty
++        ; if !Clflags.classic then singleton Nolabel else empty
++        ]
++        ~init:empty
++
++    let set_current t =
++      Clflags.principal := mem Principal t;
++      Clflags.recursive_types := mem Rectypes t;
++      Clflags.classic := mem Nolabel t;
++      ()
++
++    let to_string c =
++      fold (fun cl acc ->
++          (if acc = "" then "" else acc ^ ".") ^ to_string cl
++        ) c ""
++
++    let rec of_longident ~loc lid =
++      let of_string ~loc = function
++        | "Principal" -> singleton Principal
++        | "Rectypes" -> singleton Rectypes
++        | "Nolabel" -> singleton Nolabel
++        | other -> Location.raise_errorf ~loc "unknown flag: %s" other
++      in
++      match (lid : Longident.t) with
++      | Lident s -> of_string ~loc s
++      | Ldot (lid, s) ->
++          union (of_longident ~loc:lid.loc lid.txt) (of_string ~loc:s.loc s.txt)
++      | Lapply _ ->
++          Location.raise_errorf ~loc "unexpected functor application"
++  end
++end
++
++
+ type expectation =
+   { extid_loc   : Location.t (* Location of "expect" in "[%%expect ...]" *)
+   ; payload_loc : Location.t (* Location of the whole payload *)
+-  ; normal      : string_constant (* expectation without -principal *)
+-  ; principal   : string_constant (* expectation with -principal *)
++  ; text        : string_constant Parameter.Set.Map.t
+   }
+ 
++let expectation_equal a b =
++  a.extid_loc = b.extid_loc &&
++  a.payload_loc = b.payload_loc &&
++  Parameter.Set.Map.equal
++    (fun a b -> a.str = b.str && a.tag = b.tag) a.text b.text
++
+ (* A list of phrases with the expected toplevel output *)
+ type chunk =
+   { phrases     : Parsetree.toplevel_phrase list
+   ; expectation : expectation
+   }
+ 
+-type correction =
+-  { corrected_expectations : expectation list
+-  ; trailing_output        : string
+-  }
++module Corrected = struct
++  type 'a t =
++    { original : 'a
++    ; corrected : 'a
++    }
++end
++
++module Correction = struct
++  type 'a t =
++    { corrected_expectations : 'a list
++    ; trailing_output        : string_constant Parameter.Set.Map.t
++    }
++
++  module LocationMap = Map.Make(struct
++      include Location
++
++      let compare = compare
++    end)
++
++  let merge_text ?(loc = Location.none) a b =
++    Parameter.Set.Map.merge
++      (fun key text1 text2 ->
++         match text1, text2 with
++         | None, None -> None
++         | text, None | None, text -> text
++         | Some text1 as text, Some text2 when text1 = text2 ->
++             text
++         | _ -> Location.raise_errorf
++                  ~loc
++                  "conflicting outputs for %s" (Parameter.Set.to_string key)
++      ) a b
++
++  let merge_corrected acc { Corrected.original; corrected } =
++    LocationMap.update
++      original.extid_loc
++      (function
++        | None ->
++            Some { Corrected.original; corrected }
++        | Some { Corrected.original; corrected = corrected' } ->
++            let text =
++              merge_text
++                ~loc:original.extid_loc
++                corrected.text
++                corrected'.text
++            in
++            Some
++              { Corrected.original
++              ; corrected =
++                  { original with
++                    text
++                  }
++              }
++      )
++      acc
++
++  (* merge expectations, filtering out any where the merged expectation
++     equals the uncorrected original *)
++  let merge clist =
++    let corrected_expectations, trailing_output =
++      List.fold_left
++        ~f:(fun (cmap, tmap) { corrected_expectations; trailing_output } ->
++            List.fold_left
++              ~f:merge_corrected
++              ~init:cmap
++              corrected_expectations
++          , merge_text
++              tmap
++              trailing_output
++        )
++      ~init:(LocationMap.empty, Parameter.Set.Map.empty)
++      clist
++    in
++    { corrected_expectations =
++        LocationMap.to_list corrected_expectations
++        |> List.filter_map
++             ~f:(fun (_, { Corrected.original; corrected }) ->
++              if expectation_equal original corrected
++              then None
++              else Some corrected
++            )
++    ; trailing_output
++    }
++
++end
++
++let invalid_payload ~loc msg =
++  Location.raise_errorf ~loc
++    "invalid [%%%%expect payload] (%s)" msg
++
++let parse_string_constant (e : Parsetree.expression) =
++  match e.pexp_desc with
++  | Pexp_constant {pconst_desc = Pconst_string (str, _, Some tag); _} ->
++      { str; tag }
++  | _ -> invalid_payload ~loc:e.pexp_loc "not a string"
++
++let parse_and_add_parameters acc =
++  function
++    None
++  , { Parsetree.
++      pexp_desc = Pexp_construct
++          ({ txt = clflags_s; _}, Some b) }
++  | None,
++    { Parsetree.
++      pexp_desc = Pexp_apply
++          ({ pexp_desc = Pexp_construct
++                 ({ txt = clflags_s; _}, None) }
++          , [ Nolabel, b ]) }
++    ->
++      Parameter.Set.Map.add
++        (Parameter.Set.of_longident ~loc:b.pexp_loc clflags_s)
++        (parse_string_constant b)
++        acc
++  | None,
++    { Parsetree.
++      pexp_desc = Pexp_apply
++          ({ pexp_desc = Pexp_tuple clflags_tuple; _ }
++          , [ Nolabel, b ]) }
++    ->
++      let str = parse_string_constant b in
++      List.fold_left
++        ~f:(fun acc ->
++            function
++            | None,
++              { Parsetree.
++                pexp_desc = Pexp_construct
++                    ({ txt = cl; _}, None) } ->
++                Parameter.Set.Map.add
++                  (Parameter.Set.of_longident ~loc:b.pexp_loc cl)
++                  str
++                  acc
++            | _ ->
++                invalid_payload
++                  ~loc:b.pexp_loc
++                  "expected Constructor"
++          )
++        ~init:acc clflags_tuple
++  | _, pe ->
++      invalid_payload
++        ~loc:pe.Parsetree.pexp_loc
++        "expected Constructor{|string|}"
+ 
+ let match_expect_extension (ext : Parsetree.extension) =
+   match ext with
+   | ({Asttypes.txt="expect"|"ocaml.expect"; loc = extid_loc}, payload) ->
+-    let invalid_payload () =
+-      Location.raise_errorf ~loc:extid_loc "invalid [%%%%expect payload]"
+-    in
+-    let string_constant (e : Parsetree.expression) =
+-      match e.pexp_desc with
+-      | Pexp_constant {pconst_desc = Pconst_string (str, _, Some tag); _} ->
+-        { str; tag }
+-      | _ -> invalid_payload ()
+-    in
+     let expectation =
+       match payload with
+       | PStr [{ pstr_desc = Pstr_eval (e, []) }] ->
+-        let normal, principal =
++        let text =
+           match e.pexp_desc with
+           | Pexp_tuple
+-              [ None, a
+-              ; None,
+-                { pexp_desc = Pexp_construct
+-                                ({ txt = Lident "Principal"; _ }, Some b) }
+-              ] ->
+-            (string_constant a, string_constant b)
+-          | _ -> let s = string_constant e in (s, s)
++              ((None, normal)
++               :: rest) ->
++              List.fold_left
++                ~f:parse_and_add_parameters
++                ~init:(Parameter.Set.Map.singleton
++                         Parameter.Set.empty (parse_string_constant normal))
++                rest
++          | _ ->
++              let s = parse_string_constant e in
++              Parameter.Set.Map.singleton Parameter.Set.empty s
+         in
+         { extid_loc
+         ; payload_loc = e.pexp_loc
+-        ; normal
+-        ; principal
++        ; text
+         }
+       | PStr [] ->
+         let s = { tag = ""; str = "" } in
+         { extid_loc
+         ; payload_loc  = { extid_loc with loc_start = extid_loc.loc_end }
+-        ; normal    = s
+-        ; principal = s
++        ; text = Parameter.Set.Map.singleton Parameter.Set.empty s
+         }
+-      | _ -> invalid_payload ()
++      | _ -> invalid_payload ~loc:extid_loc "not an expectation"
+     in
+     Some expectation
+   | _ ->
+@@ -178,21 +401,23 @@ let parse_contents ~fname contents =
+ 
+ let eval_expectation expectation ~output =
+   let s =
+-    if !Clflags.principal then
+-      expectation.principal
+-    else
+-      expectation.normal
++    try
++      Parameter.Set.Map.find (Parameter.Set.get_current ()) expectation.text
++    with
++    | Not_found ->
++        try
++          Parameter.Set.Map.find Parameter.Set.empty expectation.text
++        with
++        | Not_found -> empty_str
+   in
+-  if s.str = output then
+-    None
+-  else
+-    let s = { s with str = output } in
+-    Some (
+-      if !Clflags.principal then
+-        { expectation with principal = s }
+-      else
+-        { expectation with normal = s }
+-    )
++  let s = { s with str = output } in
++  { Corrected.original = expectation
++  ; corrected = { expectation with
++                  text =
++                    Parameter.Set.Map.singleton
++                      (Parameter.Set.get_current ()) s
++                }
++  }
+ 
+ let shift_lines delta phrases =
+   let position (pos : Lexing.position) =
+@@ -284,12 +509,10 @@ let eval_expect_file _fname ~file_contents =
+   in
+   let corrected_expectations =
+     capture_everything buf ppf ~f:(fun () ->
+-      List.fold_left chunks ~init:[] ~f:(fun acc chunk ->
+-        let output = exec_phrases chunk.phrases in
+-        match eval_expectation chunk.expectation ~output with
+-        | None -> acc
+-        | Some correction -> correction :: acc)
+-      |> List.rev)
++        List.fold_left chunks ~init:[] ~f:(fun acc chunk ->
++            let output = exec_phrases chunk.phrases in
++            eval_expectation chunk.expectation ~output :: acc)
++        |> List.rev)
+   in
+   let trailing_output =
+     match trailing_code with
+@@ -297,37 +520,111 @@ let eval_expect_file _fname ~file_contents =
+     | Some phrases ->
+       capture_everything buf ppf ~f:(fun () -> exec_phrases phrases)
+   in
+-  { corrected_expectations; trailing_output }
++  let trailing_output =
++    Parameter.Set.Map.singleton (Parameter.Set.get_current ())
++      { str = trailing_output; tag = "" }
++  in
++  { Correction.corrected_expectations; trailing_output }
+ 
+ let output_slice oc s a b =
+   output_string oc (String.sub s ~pos:a ~len:(b - a))
+ 
+-let output_corrected oc ~file_contents correction =
++module String_map = Misc.Stdlib.String.Map
++
++let coalesce_outputs_and_order_by_lowest_flag ~normal map =
++  let string_to_flags_and_tag =
++    Parameter.Set.Map.fold
++      (fun key body acc ->
++         if body = normal then acc
++         else String_map.add_to_list body.str (key, body.tag) acc
++      )
++      map
++      String_map.empty
++  in
++  String_map.fold
++    (fun str (clflagss_and_tag) acc ->
++       let clflagss =
++         List.sort_uniq ~cmp:Parameter.Set.compare
++           (List.map ~f:fst clflagss_and_tag)
++       in
++       let tag = snd (List.hd clflagss_and_tag) in
++       let low_flag = List.hd clflagss in
++       Parameter.Set.Map.add_to_list low_flag (clflagss, { str; tag }) acc
++    )
++    string_to_flags_and_tag
++    Parameter.Set.Map.empty
++
++let output_corrected oc ~file_contents (correction : _ Correction.t) =
+   let output_body oc { str; tag } =
+     Printf.fprintf oc "{%s|%s|%s}" tag str tag
+   in
++  let output_for_all_clflags ?(output_empty=true) map =
++    let normal =
++      Parameter.Set.Map.find_opt Parameter.Set.empty map
++      |> Option.value ~default:empty_str
++    in
++    let ordered_by_lowest_flag =
++      coalesce_outputs_and_order_by_lowest_flag ~normal map
++    in
++    (* don't output empty trailing output *)
++    if (not output_empty) && Parameter.Set.Map.is_empty ordered_by_lowest_flag
++       && normal.str = empty_str.str
++    then ()
++    else begin
++      output_body oc normal;
++      Parameter.Set.Map.iter
++        (fun _ list ->
++           List.iter ~f:(fun (clflagss, str) ->
++               output_string oc ", ";
++               let paren = List.length clflagss > 1 in
++               if paren then output_string oc "(";
++               List.iteri
++                 ~f:(fun i clflags ->
++                     if i > 0 then output_string oc ", ";
++                     output_string oc (Parameter.Set.to_string clflags))
++                 clflagss;
++               if paren then output_string oc ")";
++               output_body oc str;
++             )
++             list
++        )
++        ordered_by_lowest_flag;
++    end
++  in
+   let ofs =
+     List.fold_left correction.corrected_expectations ~init:0
+       ~f:(fun ofs c ->
+         output_slice oc file_contents ofs c.payload_loc.loc_start.pos_cnum;
+-        output_body oc c.normal;
+-        if c.normal.str <> c.principal.str then begin
+-          output_string oc ", Principal";
+-          output_body oc c.principal
+-        end;
++        output_for_all_clflags c.text;
+         c.payload_loc.loc_end.pos_cnum)
+   in
+   output_slice oc file_contents ofs (String.length file_contents);
+-  match correction.trailing_output with
+-  | "" -> ()
+-  | s  -> Printf.fprintf oc "\n[%%%%expect{|%s|}]\n" s
++  output_for_all_clflags correction.trailing_output ~output_empty:false
+ 
+ let write_corrected ~file ~file_contents correction =
+   let oc = open_out file in
+   output_corrected oc ~file_contents correction;
+   close_out oc
+ 
+-let process_expect_file fname =
++
++let with_fresh_compiler_state
++    ~warning_state
++    f
++  =
++  let store = Local_store.fresh () in
++  Env.reset_required_globals ();
++  Lambda.reset_raise_count ();
++  Out_type.reset ();
++  Out_type.reset_weak_names ();
++  Warnings.with_state warning_state
++    (fun () -> Local_store.with_store store
++        (fun () ->
++           Toploop.initialize_toplevel_env ();
++           f ()
++        )
++    )
++
++let process_expect_file ~startup_clflags fname =
+   let corrected_fname = fname ^ ".corrected" in
+   let file_contents =
+     let ic = open_in_bin fname in
+@@ -335,7 +632,26 @@ let process_expect_file fname =
+     | s           -> close_in ic; Misc.normalise_eol s
+     | exception e -> close_in ic; raise e
+   in
+-  let correction = eval_expect_file fname ~file_contents in
++  let clflags =
++    List.map ~f:Parameter.Set.of_list
++      [ []; [ Parameter.Rectypes]; [ Parameter.Principal ] ]
++  in
++  let warning_state = Warnings.backup () in
++  let correction =
++    let corrections =
++      List.map clflags ~f:(fun clflags ->
++          let local_clflags = Parameter.Set.union startup_clflags clflags in
++          Parameter.Set.set_current local_clflags;
++          Parameter.Set.original := local_clflags;
++          with_fresh_compiler_state
++            ~warning_state
++            (fun () ->
++               eval_expect_file fname ~file_contents;
++            )
++        )
++    in
++    Correction.merge corrections
++  in
+   write_corrected ~file:corrected_fname ~file_contents correction
+ 
+ let repo_root = ref None
+@@ -344,6 +660,7 @@ let keep_original_error_size = ref false
+ let main fname =
+   if not !keep_original_error_size then
+     Clflags.error_size := 0;
++  let startup_clflags = Parameter.Set.get_current () in
+   Toploop.override_sys_argv
+     (Array.sub Sys.argv ~pos:!Arg.current
+        ~len:(Array.length Sys.argv - !Arg.current));
+@@ -361,10 +678,9 @@ let main fname =
+         Compenv.last_include_dirs := [Filename.concat dir "stdlib"]
+   end;
+   Compmisc.init_path ~auto_include:Load_path.no_auto_include ();
+-  Toploop.initialize_toplevel_env ();
+   (* We are in interactive mode and should record directive error on stdout *)
+   Sys.interactive := true;
+-  process_expect_file fname;
++  process_expect_file ~startup_clflags fname;
+   exit 0
+ 
+ module Options = Main_args.Make_bytetop_options (struct
+diff --git a/testsuite/tools/expect.mli b/testsuite/tools/expect.mli
+index 06025618f8cd..a82ea661af04 100644
+--- a/testsuite/tools/expect.mli
++++ b/testsuite/tools/expect.mli
+@@ -17,9 +17,21 @@ type string_constant =
+   ; tag : string
+   }
+ 
++module Parameter : sig
++  type t =
++    | Principal
++    | Rectypes
++    | Nolabel
++
++  module Set : sig
++    include Set.S with type elt = t
++
++    module Map : Map.S with type key = t
++  end
++end
++
+ type expectation =
+   { extid_loc   : Location.t (* Location of "expect" in "[%%expect ...]" *)
+-  ; payload_loc : Location.t  (* Location of the whole payload *)
+-  ; normal      : string_constant  (* expectation without -principal *)
+-  ; principal   : string_constant  (* expectation with -principal *)
++  ; payload_loc : Location.t (* Location of the whole payload *)
++  ; text        : string_constant Parameter.Set.Map.t
+   }
+diff --git a/typing/out_type.ml b/typing/out_type.ml
+index e63d9a26dc42..018049d9ab8d 100644
+--- a/typing/out_type.ml
++++ b/typing/out_type.ml
+@@ -808,6 +808,7 @@ end
+ 
+ module Variable_names : sig
+   val reset_names : unit -> unit
++  val reset_weak_names : unit -> unit
+ 
+   val add_subst : (type_expr * type_expr) list -> unit
+ 
+@@ -849,6 +850,11 @@ end = struct
+     named_vars := [];
+     visited_for_named_vars := []
+ 
++  let reset_weak_names () =
++    named_weak_vars := String.Set.empty;
++    weak_var_map := TypeMap.empty;
++    weak_counter := 1
++
+   let add_named_var tty =
+     match tty.desc with
+       Tvar (Some name) | Tunivar (Some name) ->
+@@ -1069,6 +1075,8 @@ let reset () =
+   Ident_conflicts.reset ();
+   reset_except_conflicts ()
+ 
++let reset_weak_names () = Variable_names.reset_weak_names ()
++
+ let prepare_for_printing tyl =
+   reset_except_conflicts ();
+   List.iter prepare_type tyl
+diff --git a/typing/out_type.mli b/typing/out_type.mli
+index 98cea5b9cb47..e8971f1b3974 100644
+--- a/typing/out_type.mli
++++ b/typing/out_type.mli
+@@ -257,8 +257,10 @@ module Internal_names: sig
+   val explain : Env.t -> (Path.t list * explanation) list
+ end
+ 
+-(** Reset all contexts *)
++(** Reset all contexts, except for weak names *)
+ val reset: unit -> unit
+ 
++val reset_weak_names: unit -> unit
++
+ (** Reset all contexts except for conflicts *)
+ val reset_except_conflicts: unit -> unit

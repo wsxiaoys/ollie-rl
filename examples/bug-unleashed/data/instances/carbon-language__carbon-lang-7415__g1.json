@@ -1,0 +1,25 @@
+{
+  "case_id": "carbon-language__carbon-lang-7415",
+  "repo": "carbon-language/carbon-lang",
+  "pr": 7415,
+  "title": "Allow derived->base conversions with compatible qualifiers",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "carbon-language__carbon-lang-7415__g1",
+  "target": {
+    "gid": "carbon-language__carbon-lang-7415#g1",
+    "summary": "Performing the derived-to-base conversion after the qualification conversion causes AsCompatible to convert the derived object directly to the target base type before accessing the base subobject. This produces malformed SemIR and causes a compiler crash during lowering.",
+    "paths": [
+      "toolchain/check/convert.cpp"
+    ],
+    "notes": [
+      "faulty statement: derived-to-base conversion is performed after qualifier conversion instead of before"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "15e584be985c97ea7b9457ccbdcad663d33343c2",
+  "base_sha": "039b4e9b17d000635ff496ce109533e8e5f49aa4",
+  "snapshot": "repos/carbon-language__carbon-lang/15e584be985c97ea7b9457ccbdcad663d33343c2",
+  "diff": "diffs/carbon-language__carbon-lang-7415.diff"
+}

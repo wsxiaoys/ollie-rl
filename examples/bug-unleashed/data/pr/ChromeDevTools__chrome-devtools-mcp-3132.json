@@ -1,0 +1,6 @@
+{
+  "title": "fix(pages): report the actual page size after resize_page (#2998)",
+  "body": "After `resize_page` resizes the page, the tool reads the CSS layout viewport of the page (`Page.getLayoutMetrics`). If the actual page size is different from the requested size, the tool adds this line to the response:\n\n`Requested <width>x<height>, page is <actualWidth>x<actualHeight>`\n\nChanges:\n\n- Move the resize logic from the `resize_page` handler to `McpPage.resize()`.\n- `McpPage.resize()` returns the actual page size from `cssLayoutViewport`.\n- When a dialog is open, `McpPage.resize()` does not read the layout metrics and returns `undefined`. The tool then adds no size line.\n- Update the `resize_page` tool description.\n\nFixes #2998\n",
+  "head_sha": "465f521c109ce449d800cf1dcbb7d38560b02ff7",
+  "base_sha": "bf8c6d9bc70d24523c353f43775a6542a45e8c56"
+}

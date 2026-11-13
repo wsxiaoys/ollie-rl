@@ -1,0 +1,25 @@
+{
+  "case_id": "apostrophecms__apostrophe-5337",
+  "repo": "apostrophecms/apostrophe",
+  "pr": 5337,
+  "title": "Port/sanitize html community contrib",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apostrophecms__apostrophe-5337__g1",
+  "target": {
+    "gid": "apostrophecms__apostrophe-5337#g1",
+    "summary": "Passing text through unescaped for all elements in nonTextTagsArray creates an XSS vulnerability when tags like option are allowed under discard or completelyDiscard mode. Unlike textarea, htmlparser2 decodes entities inside tags such as option, allowing entity-encoded scripts to pass through unescaped.",
+    "paths": [
+      "packages/sanitize-html/index.js"
+    ],
+    "notes": [
+      "faulty condition allowing all nonTextTagsArray elements to bypass entity escaping in discard mode"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "f61fcd701aecf156cb85aad682d324ff1ab4cbbe",
+  "base_sha": "519dd10bbb2d95dc636fd16ab7dad6f715196ef7",
+  "snapshot": "repos/apostrophecms__apostrophe/f61fcd701aecf156cb85aad682d324ff1ab4cbbe",
+  "diff": "diffs/apostrophecms__apostrophe-5337.diff"
+}

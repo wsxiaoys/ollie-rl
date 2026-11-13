@@ -1,0 +1,345 @@
+diff --git a/src/bin/cargo/commands/clean.rs b/src/bin/cargo/commands/clean.rs
+index d801ee6607d..e9ee35fdf20 100644
+--- a/src/bin/cargo/commands/clean.rs
++++ b/src/bin/cargo/commands/clean.rs
+@@ -163,6 +163,7 @@ pub fn exec(gctx: &mut GlobalContext, args: &ArgMatches) -> CliResult {
+         profile_specified: args.contains_id("profile") || args.flag("release"),
+         doc: args.flag("doc"),
+         dry_run: args.dry_run(),
++        explicit_target_dir_arg: args.contains_id("target-dir"),
+     };
+     ops::clean(&ws, &opts)?;
+     Ok(())
+diff --git a/src/cargo/ops/cargo_clean.rs b/src/cargo/ops/cargo_clean.rs
+index 71526a36069..afa4d39263b 100644
+--- a/src/cargo/ops/cargo_clean.rs
++++ b/src/cargo/ops/cargo_clean.rs
+@@ -13,9 +13,10 @@ use cargo_util::paths;
+ use indexmap::{IndexMap, IndexSet};
+ 
+ use std::ffi::OsString;
+-use std::fs;
++use std::io::Read;
+ use std::path::{Path, PathBuf};
+ use std::rc::Rc;
++use std::{fs, io};
+ 
+ pub struct CleanOptions<'gctx> {
+     pub gctx: &'gctx GlobalContext,
+@@ -31,6 +32,8 @@ pub struct CleanOptions<'gctx> {
+     pub doc: bool,
+     /// If set, doesn't delete anything.
+     pub dry_run: bool,
++    /// true if target-dir was was explicitly specified via --target-dir
++    pub explicit_target_dir_arg: bool,
+ }
+ 
+ pub struct CleanContext<'gctx> {
+@@ -66,6 +69,22 @@ pub fn clean(ws: &Workspace<'_>, opts: &CleanOptions<'_>) -> CargoResult<()> {
+         }
+     }
+ 
++    // do some validation on target_dir if it was specified via --target-dir
++    if opts.explicit_target_dir_arg {
++        let target_dir_path = target_dir.as_path_unlocked();
++
++        // check if the target directory has a valid CACHEDIR.TAG
++        if let Err(err) = validate_target_dir_tag(target_dir_path) {
++            // if target_dir was passed explicitly via --target-dir, then hard error if validation fails
++            let title = format!("cannot clean `{}`: {err}", target_dir_path.display());
++            let report = [Level::ERROR
++                .primary_title(title)
++                .element(Level::NOTE.message(CLEAN_ABORT_NOTE))];
++            gctx.shell().print_report(&report, false)?;
++            return Err(crate::AlreadyPrintedError::new(anyhow::anyhow!("")).into());
++        }
++    }
++
+     if opts.doc {
+         if !opts.spec.is_empty() {
+             // FIXME: https://github.com/rust-lang/cargo/issues/8790
+@@ -122,6 +141,37 @@ pub fn clean(ws: &Workspace<'_>, opts: &CleanOptions<'_>) -> CargoResult<()> {
+     Ok(())
+ }
+ 
++fn validate_target_dir_tag(target_dir_path: &Path) -> CargoResult<()> {
++    const TAG_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
++
++    let tag_path = target_dir_path.join("CACHEDIR.TAG");
++
++    // per https://bford.info/cachedir the tag file must not be a symlink
++    if tag_path.is_symlink() {
++        bail!("expect `CACHEDIR.TAG` to be a regular file, got a symlink");
++    }
++
++    if !tag_path.is_file() {
++        bail!("missing or invalid `CACHEDIR.TAG` file");
++    }
++
++    let mut file = fs::File::open(&tag_path)
++        .map_err(|err| anyhow::anyhow!("failed to open `{}`: {}", tag_path.display(), err))?;
++
++    let mut buf = [0u8; TAG_SIGNATURE.len()];
++    match file.read_exact(&mut buf) {
++        Ok(()) if &buf[..] == TAG_SIGNATURE => {}
++        Err(e) if e.kind() != io::ErrorKind::UnexpectedEof => {
++            bail!("failed to read `{}`: {e}", tag_path.display());
++        }
++        _ => {
++            bail!("invalid signature in `CACHEDIR.TAG` file");
++        }
++    }
++
++    Ok(())
++}
++
+ fn clean_specs(
+     clean_ctx: &mut CleanContext<'_>,
+     ws: &Workspace<'_>,
+diff --git a/tests/testsuite/clean.rs b/tests/testsuite/clean.rs
+index 8bbe18c9dff..cd598626e63 100644
+--- a/tests/testsuite/clean.rs
++++ b/tests/testsuite/clean.rs
+@@ -1208,3 +1208,242 @@ fn target_dir_is_symlink_file() {
+     // make sure cargo has not deleted the file of the symlinked target dir
+     assert!(p.root().join("bar-dest").exists());
+ }
++
++#[cargo_test]
++fn explicit_target_dir_tag_not_present() {
++    // invalid target dir explicitly specified via --target-dir cli arg
++
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file("bar/.keep", "")
++        .build();
++
++    p.cargo("clean --target-dir bar")
++        .with_stdout_data("")
++        .with_stderr_data(str![[r#"
++[ERROR] cannot clean `[ROOT]/foo/bar`: missing or invalid `CACHEDIR.TAG` file
++  |
++  = [NOTE] cleaning has been aborted to prevent accidental deletion of unrelated files
++
++"#]])
++        .with_status(101)
++        .run();
++}
++
++#[cargo_test]
++fn explicit_target_dir_tag_invalid_signature() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file("bar/CACHEDIR.TAG", "Signature: 1234")
++        .build();
++
++    p.cargo("clean --target-dir bar")
++        .with_stdout_data("")
++        .with_stderr_data(str![[r#"
++[ERROR] cannot clean `[ROOT]/foo/bar`: invalid signature in `CACHEDIR.TAG` file
++  |
++  = [NOTE] cleaning has been aborted to prevent accidental deletion of unrelated files
++
++"#]])
++        .with_status(101)
++        .run();
++}
++
++#[cargo_test]
++fn explicit_target_dir_tag_symlink() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file(
++            "src/CACHEDIR.TAG",
++            "Signature: 8a477f597d28d172789f06886806bc55",
++        )
++        .symlink("src/CACHEDIR.TAG", "bar/CACHEDIR.TAG")
++        .build();
++
++    p.cargo("clean --target-dir bar")
++        .with_stdout_data("")
++        .with_stderr_data(str![[r#"
++[ERROR] cannot clean `[ROOT]/foo/bar`: expect `CACHEDIR.TAG` to be a regular file, got a symlink
++  |
++  = [NOTE] cleaning has been aborted to prevent accidental deletion of unrelated files
++
++"#]])
++        .with_status(101)
++        .run();
++}
++
++#[cargo_test]
++fn explicit_target_dir_tag_valid() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file(
++            "bar/CACHEDIR.TAG",
++            "Signature: 8a477f597d28d172789f06886806bc55",
++        )
++        .build();
++
++    p.cargo("clean --target-dir bar").run();
++}
++
++#[cargo_test]
++fn env_target_dir_tag_not_present() {
++    // invalid target dir specified via env var
++
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("bar/.keep", "")
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .build();
++
++    p.cargo("clean")
++        .env("CARGO_TARGET_DIR", "bar")
++        .with_stderr_data(str![[r#"
++[REMOVED] [FILE_NUM] files, [FILE_SIZE]B total
++
++"#]])
++        .run();
++}
++
++#[cargo_test]
++fn env_target_dir_tag_invalid_signature() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file("bar/CACHEDIR.TAG", "Signature: 1234")
++        .build();
++
++    p.cargo("clean")
++        .env("CARGO_TARGET_DIR", "bar")
++        .with_stderr_data(str![[r#"
++[REMOVED] [FILE_NUM] files, [FILE_SIZE]B total
++
++"#]])
++        .run();
++}
++
++#[cargo_test]
++fn env_target_dir_tag_symlink() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file(
++            "src/CACHEDIR.TAG",
++            "Signature: 8a477f597d28d172789f06886806bc55",
++        )
++        .symlink("src/CACHEDIR.TAG", "bar/CACHEDIR.TAG")
++        .build();
++
++    p.cargo("clean")
++        .env("CARGO_TARGET_DIR", "bar")
++        .with_stderr_data(str![[r#"
++[REMOVED] [FILE_NUM] files, [FILE_SIZE]B total
++
++"#]])
++        .run();
++}
++
++#[cargo_test]
++fn env_target_dir_tag_valid() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file(
++            "bar/CACHEDIR.TAG",
++            "Signature: 8a477f597d28d172789f06886806bc55",
++        )
++        .build();
++
++    p.cargo("clean").env("CARGO_TARGET_DIR", "bar").run();
++}
++
++#[cargo_test]
++fn config_target_dir_tag_not_present() {
++    // invalid target dir specified via build config
++
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("bar/.keep", "")
++        .file("src/foo.rs", "")
++        .file(
++            ".cargo/config.toml",
++            "[build]
++        target-dir = 'bar'",
++        )
++        .build();
++
++    p.cargo("clean")
++        .with_stderr_data(str![[r#"
++[REMOVED] [FILE_NUM] files, [FILE_SIZE]B total
++
++"#]])
++        .run();
++}
++
++#[cargo_test]
++fn config_target_dir_tag_invalid_signature() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file("bar/CACHEDIR.TAG", "Signature: 1234")
++        .file(
++            ".cargo/config.toml",
++            "[build]
++        target-dir = 'bar'",
++        )
++        .build();
++
++    p.cargo("clean")
++        .with_stderr_data(str![[r#"
++[REMOVED] [FILE_NUM] files, [FILE_SIZE]B total
++
++"#]])
++        .run();
++}
++
++#[cargo_test]
++fn config_target_dir_tag_symlink() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file(
++            "src/CACHEDIR.TAG",
++            "Signature: 8a477f597d28d172789f06886806bc55",
++        )
++        .symlink("src/CACHEDIR.TAG", "bar/CACHEDIR.TAG")
++        .file(
++            ".cargo/config.toml",
++            "[build]
++        target-dir = 'bar'",
++        )
++        .build();
++
++    p.cargo("clean")
++        .with_stderr_data(str![[r#"
++[REMOVED] [FILE_NUM] files, [FILE_SIZE]B total
++
++"#]])
++        .run();
++}
++
++#[cargo_test]
++fn config_target_dir_tag_valid() {
++    let p = project()
++        .file("Cargo.toml", &basic_bin_manifest("foo"))
++        .file("src/foo.rs", &main_file(r#""i am foo""#, &[]))
++        .file(
++            "bar/CACHEDIR.TAG",
++            "Signature: 8a477f597d28d172789f06886806bc55",
++        )
++        .file(
++            ".cargo/config.toml",
++            "[build]
++        target-dir = 'bar'",
++        )
++        .build();
++
++    p.cargo("clean").run();
++}

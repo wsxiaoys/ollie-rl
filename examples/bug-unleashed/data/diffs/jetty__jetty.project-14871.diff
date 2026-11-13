@@ -1,0 +1,375 @@
+diff --git a/jetty-core/jetty-client/src/main/java/org/eclipse/jetty/client/transport/HttpConnection.java b/jetty-core/jetty-client/src/main/java/org/eclipse/jetty/client/transport/HttpConnection.java
+index 416cf6bd412f..54f696c30676 100644
+--- a/jetty-core/jetty-client/src/main/java/org/eclipse/jetty/client/transport/HttpConnection.java
++++ b/jetty-core/jetty-client/src/main/java/org/eclipse/jetty/client/transport/HttpConnection.java
+@@ -31,6 +31,7 @@
+ import org.eclipse.jetty.http.HttpField;
+ import org.eclipse.jetty.http.HttpFields;
+ import org.eclipse.jetty.http.HttpHeader;
++import org.eclipse.jetty.http.HttpMethod;
+ import org.eclipse.jetty.http.HttpVersion;
+ import org.eclipse.jetty.io.CyclicTimeouts;
+ import org.eclipse.jetty.util.Attachable;
+@@ -185,7 +186,9 @@ protected void normalizeRequest(HttpRequest request)
+             if (!headers.contains(HttpHeader.HOST.asString()))
+             {
+                 URI uri = request.getURI();
+-                if (uri != null)
++                if (HttpMethod.CONNECT.is(request.getMethod()))
++                    request.addHeader(new HttpField(HttpHeader.HOST, path));
++                else if (uri != null)
+                     request.addHeader(new HttpField(HttpHeader.HOST, uri.getAuthority()));
+                 else
+                     request.addHeader(getHttpDestination().getHostField());
+diff --git a/jetty-core/jetty-client/src/test/java/org/eclipse/jetty/client/RedirectCacheTest.java b/jetty-core/jetty-client/src/test/java/org/eclipse/jetty/client/RedirectCacheTest.java
+index f709bd811d9d..55b2dbcbc744 100644
+--- a/jetty-core/jetty-client/src/test/java/org/eclipse/jetty/client/RedirectCacheTest.java
++++ b/jetty-core/jetty-client/src/test/java/org/eclipse/jetty/client/RedirectCacheTest.java
+@@ -17,9 +17,9 @@
+ import java.nio.ByteBuffer;
+ import java.nio.charset.StandardCharsets;
+ import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicInteger;
+ 
+-import org.eclipse.jetty.http.HttpHeader;
+ import org.eclipse.jetty.http.HttpMethod;
+ import org.eclipse.jetty.http.HttpStatus;
+ import org.eclipse.jetty.io.Content;
+@@ -643,6 +643,8 @@ public void testConnectRedirectWithPath(Scenario scenario) throws Exception
+         AtomicInteger redirectCount = new AtomicInteger();
+         startServer(scenario, new Handler.Abstract()
+         {
++            private final AtomicBoolean redirected = new AtomicBoolean();
++
+             @Override
+             public boolean handle(Request request, org.eclipse.jetty.server.Response response, Callback callback)
+             {
+@@ -652,8 +654,7 @@ public boolean handle(Request request, org.eclipse.jetty.server.Response respons
+                     String authority = request.getHttpURI().getAuthority();
+                     if ("localhost:8080".equals(authority))
+                     {
+-                        String host = request.getHeaders().get(HttpHeader.HOST);
+-                        if (host.startsWith("localhost"))
++                        if (redirected.compareAndSet(false, true))
+                         {
+                             redirectCount.incrementAndGet();
+                             String location = scenario.getScheme() + "://127.0.0.1:" + connector.getLocalPort() + "/path";
+diff --git a/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpChannelState.java b/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpChannelState.java
+index e897fd9f6f2d..408b1cc176fe 100644
+--- a/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpChannelState.java
++++ b/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpChannelState.java
+@@ -30,6 +30,7 @@
+ 
+ import org.eclipse.jetty.http.ComplianceUtils;
+ import org.eclipse.jetty.http.ComplianceViolation;
++import org.eclipse.jetty.http.HttpCompliance;
+ import org.eclipse.jetty.http.HttpException;
+ import org.eclipse.jetty.http.HttpField;
+ import org.eclipse.jetty.http.HttpFields;
+@@ -63,8 +64,10 @@
+ import org.eclipse.jetty.util.BufferUtil;
+ import org.eclipse.jetty.util.Callback;
+ import org.eclipse.jetty.util.ExceptionUtil;
++import org.eclipse.jetty.util.HostPort;
+ import org.eclipse.jetty.util.NanoTime;
+ import org.eclipse.jetty.util.TypeUtil;
++import org.eclipse.jetty.util.URIUtil;
+ import org.eclipse.jetty.util.VirtualThreads;
+ import org.eclipse.jetty.util.thread.AutoLock;
+ import org.eclipse.jetty.util.thread.Invocable;
+@@ -321,6 +324,13 @@ public Runnable onRequest(MetaData.Request request)
+         if (LOG.isDebugEnabled())
+             LOG.debug("onRequest {} {}", request, this);
+ 
++        if (!authorityMatches(request.getHttpURI(), request.getHttpFields().get(HttpHeader.HOST)))
++        {
++            HttpCompliance httpCompliance = getHttpConfiguration().getHttpCompliance();
++            if (!ComplianceUtils.allows(httpCompliance, HttpCompliance.Violation.MISMATCHED_AUTHORITY, "Authority!=Host", getComplianceViolationListener()))
++                throw new HttpException.RuntimeException(HttpStatus.BAD_REQUEST_400, "Authority!=Host");
++        }
++
+         try (AutoLock ignored = _lock.lock())
+         {
+             if (_stream == null)
+@@ -351,6 +361,34 @@ public Runnable onRequest(MetaData.Request request)
+         }
+     }
+ 
++    private boolean authorityMatches(HttpURI httpURI, String host)
++    {
++        String authority = httpURI.getAuthority();
++        // Either both are null or only one is present.
++        if (authority == null || host == null)
++            return true;
++
++        // Both are present, must match.
++
++        // Direct hit, hosts must be compared ignoring case.
++        if (authority.equalsIgnoreCase(host))
++            return true;
++
++        // Handle default ports: example.com matches example.com:80.
++        String scheme = httpURI.getScheme();
++        int defaultPort = URIUtil.getDefaultPortForScheme(scheme);
++        int uriPort = httpURI.getPort();
++        int effectiveURIPort = uriPort <= 0 ? defaultPort : uriPort;
++        HostPort hostPort = new HostPort(host);
++        int port = hostPort.getPort();
++        int effectiveHostPort = port <= 0 ? defaultPort : port;
++        if (effectiveURIPort != effectiveHostPort)
++            return false;
++
++        // Same effective port, compare hosts ignoring case.
++        return hostPort.getHost().equalsIgnoreCase(httpURI.getHost());
++    }
++
+     public Request getRequest()
+     {
+         try (AutoLock ignored = _lock.lock())
+diff --git a/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpConnection.java b/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpConnection.java
+index 5515b2cd757c..568090067d83 100644
+--- a/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpConnection.java
++++ b/jetty-core/jetty-server/src/main/java/org/eclipse/jetty/server/internal/HttpConnection.java
+@@ -75,7 +75,6 @@
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+-import static org.eclipse.jetty.http.HttpCompliance.Violation.MISMATCHED_AUTHORITY;
+ import static org.eclipse.jetty.http.HttpStatus.INTERNAL_SERVER_ERROR_500;
+ 
+ /**
+@@ -1338,33 +1337,14 @@ public void parsedHeader(HttpField field)
+ 
+         public Runnable headerComplete()
+         {
+-            // Check host field matches the authority in the absolute URI or is not blank
+-            if (_hostField != null)
+-            {
+-                if (_uri.isAbsolute())
+-                {
+-                    if (!_hostField.getValue().equals(_uri.getAuthority()))
+-                    {
+-                        HttpCompliance httpCompliance = getHttpChannel().getConnectionMetaData().getHttpConfiguration().getHttpCompliance();
+-                        ComplianceViolation.Listener complianceListener = getHttpChannel().getComplianceViolationListener();
+-                        if (!ComplianceUtils.allows(httpCompliance, MISMATCHED_AUTHORITY, "Authority!=Host", complianceListener))
+-                        {
+-                            throw new HttpException.RuntimeException(HttpStatus.BAD_REQUEST_400, "Authority!=Host");
+-                        }
+-                    }
+-                }
+-                else
+-                {
+-                    if (StringUtil.isBlank(_hostField.getHostPort().getHost()))
+-                        throw new HttpException.RuntimeException(HttpStatus.BAD_REQUEST_400, "Blank Host");
+-                }
+-            }
++            if (_hostField != null && !_uri.isAbsolute() && StringUtil.isBlank(_hostField.getHostPort().getHost()))
++                throw new HttpException.RuntimeException(HttpStatus.BAD_REQUEST_400, "Blank Host");
+ 
+-            // Set the scheme in the URI
++            // Set the scheme in the URI.
+             if (!_uri.isAbsolute())
+                 _uri.scheme(getEndPoint().getSslSessionData() != null ? HttpScheme.HTTPS : HttpScheme.HTTP);
+ 
+-            // Set the authority (if not already set) in the URI
++            // Set the authority (if not already set) in the URI.
+             if (_uri.getAuthority() == null && !HttpMethod.CONNECT.is(_method))
+             {
+                 HostPort hostPort = _hostField == null ? getServerAuthority() : _hostField.getHostPort();
+diff --git a/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/HttpConnectionTest.java b/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/HttpConnectionTest.java
+index 1c9e12d35163..d653b0fcc276 100644
+--- a/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/HttpConnectionTest.java
++++ b/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/HttpConnectionTest.java
+@@ -1322,7 +1322,7 @@ public void testCONNECT() throws Exception
+             int offset = 0;
+ 
+             response = _connector.getResponse("CONNECT www.webtide.com:8080 HTTP/1.1\r\n" +
+-                "Host: myproxy:8888\r\n" +
++                "Host: www.webtide.com:8080\r\n" +
+                 "\r\n", 200, TimeUnit.MILLISECONDS);
+             checkContains(response, offset, "HTTP/1.1 200");
+         }
+diff --git a/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/RequestTest.java b/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/RequestTest.java
+index 76b1281ad18a..cf3e37dbe51a 100644
+--- a/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/RequestTest.java
++++ b/jetty-core/jetty-server/src/test/java/org/eclipse/jetty/server/RequestTest.java
+@@ -286,7 +286,6 @@ public void testConnectRequestURLSameAsHost() throws Exception
+     @Test
+     public void testConnectRequestURLDifferentThanHost() throws Exception
+     {
+-        // per spec, "Host" is ignored if request-target is authority-form
+         String request = """
+                 CONNECT myhost:9999 HTTP/1.1\r
+                 Host: otherhost:8888\r
+@@ -294,11 +293,7 @@ public void testConnectRequestURLDifferentThanHost() throws Exception
+                 \r
+                 """;
+         HttpTester.Response response = HttpTester.parseResponse(connector.getResponse(request));
+-        assertEquals(HttpStatus.OK_200, response.getStatus());
+-        String responseBody = response.getContent();
+-        assertThat(responseBody, containsString("httpURI=http://myhost:9999/"));
+-        assertThat(responseBody, containsString("httpURI.path=/"));
+-        assertThat(responseBody, containsString("servername=myhost"));
++        assertEquals(HttpStatus.BAD_REQUEST_400, response.getStatus());
+     }
+ 
+     /**
+diff --git a/jetty-core/jetty-tests/jetty-test-client-transports/src/test/java/org/eclipse/jetty/test/client/transport/HttpClientTest.java b/jetty-core/jetty-tests/jetty-test-client-transports/src/test/java/org/eclipse/jetty/test/client/transport/HttpClientTest.java
+index 50bd0dc5811f..aa838008bf44 100644
+--- a/jetty-core/jetty-tests/jetty-test-client-transports/src/test/java/org/eclipse/jetty/test/client/transport/HttpClientTest.java
++++ b/jetty-core/jetty-tests/jetty-test-client-transports/src/test/java/org/eclipse/jetty/test/client/transport/HttpClientTest.java
+@@ -69,7 +69,6 @@
+ import org.eclipse.jetty.util.IteratingNestedCallback;
+ import org.eclipse.jetty.util.ssl.SslContextFactory;
+ import org.hamcrest.Matchers;
+-import org.junit.jupiter.api.Assertions;
+ import org.junit.jupiter.api.Tag;
+ import org.junit.jupiter.params.ParameterizedTest;
+ import org.junit.jupiter.params.provider.Arguments;
+@@ -390,9 +389,9 @@ public boolean handle(Request request, org.eclipse.jetty.server.Response respons
+                 InputStream input = Request.asInputStream(request);
+                 for (byte b : bytes)
+                 {
+-                    Assertions.assertEquals(b & 0xFF, input.read());
++                    assertEquals(b & 0xFF, input.read());
+                 }
+-                Assertions.assertEquals(-1, input.read());
++                assertEquals(-1, input.read());
+                 callback.succeeded();
+                 return true;
+             }
+@@ -893,7 +892,27 @@ public boolean handle(Request request, org.eclipse.jetty.server.Response respons
+         assertEquals(200, response.getStatus());
+         assertThat(new String(response.getContent(), StandardCharsets.ISO_8859_1), Matchers.startsWith("[::1]:"));
+ 
+-        Assertions.assertEquals(1, client.getDestinations().size());
++        assertEquals(1, client.getDestinations().size());
++    }
++
++    @ParameterizedTest
++    @MethodSource("transportsNoFCGI")
++    public void testAuthorityHostMismatch(TransportType transportType) throws Exception
++    {
++        start(transportType, new EmptyServerHandler());
++
++        URI uri = newURI(transportType);
++        String path = "/";
++        // For HTTP/1.1, use the absolute-form, otherwise the authority
++        // is derived from the Host header and the test will fail.
++        if (transportType == TransportType.HTTP || transportType == TransportType.HTTPS)
++            path = uri.toString();
++        ContentResponse response = client.newRequest(uri)
++            .path(path)
++            .headers(h -> h.put(HttpHeader.HOST, "127.0.0.1:" + uri.getPort()))
++            .send();
++
++        assertEquals(HttpStatus.BAD_REQUEST_400, response.getStatus());
+     }
+ 
+     @ParameterizedTest
+diff --git a/jetty-ee10/jetty-ee10-servlet/src/test/java/org/eclipse/jetty/ee10/servlet/RequestTest.java b/jetty-ee10/jetty-ee10-servlet/src/test/java/org/eclipse/jetty/ee10/servlet/RequestTest.java
+index 2b50467d0263..78d45f2f0981 100644
+--- a/jetty-ee10/jetty-ee10-servlet/src/test/java/org/eclipse/jetty/ee10/servlet/RequestTest.java
++++ b/jetty-ee10/jetty-ee10-servlet/src/test/java/org/eclipse/jetty/ee10/servlet/RequestTest.java
+@@ -235,20 +235,14 @@ protected void service(HttpServletRequest request, HttpServletResponse resp)
+     @Test
+     public void testConnectRequestURLDifferentThanHost() throws Exception
+     {
+-        final AtomicReference<String> resultRequestURL = new AtomicReference<>();
+-        final AtomicReference<String> resultRequestURI = new AtomicReference<>();
+-
+         startServer(new HttpServlet()
+         {
+             @Override
+             protected void service(HttpServletRequest request, HttpServletResponse resp)
+             {
+-                resultRequestURL.set(request.getRequestURL().toString());
+-                resultRequestURI.set(request.getRequestURI());
+             }
+         });
+ 
+-        // per spec, "Host" is ignored if request-target is authority-form
+         String rawResponse = _connector.getResponse(
+             """
+                 CONNECT myhost:9999 HTTP/1.1\r
+@@ -257,9 +251,7 @@ protected void service(HttpServletRequest request, HttpServletResponse resp)
+                 \r
+                 """);
+         HttpTester.Response response = HttpTester.parseResponse(rawResponse);
+-        assertThat(response.getStatus(), is(HttpStatus.OK_200));
+-        assertThat("request.getRequestURL", resultRequestURL.get(), is("http://myhost:9999/"));
+-        assertThat("request.getRequestURI", resultRequestURI.get(), is("/"));
++        assertThat(response.getStatus(), is(HttpStatus.BAD_REQUEST_400));
+     }
+ 
+     @Test
+diff --git a/jetty-ee11/jetty-ee11-servlet/src/test/java/org/eclipse/jetty/ee11/servlet/RequestTest.java b/jetty-ee11/jetty-ee11-servlet/src/test/java/org/eclipse/jetty/ee11/servlet/RequestTest.java
+index 964e98331897..aa20630a4d3e 100644
+--- a/jetty-ee11/jetty-ee11-servlet/src/test/java/org/eclipse/jetty/ee11/servlet/RequestTest.java
++++ b/jetty-ee11/jetty-ee11-servlet/src/test/java/org/eclipse/jetty/ee11/servlet/RequestTest.java
+@@ -236,20 +236,14 @@ protected void service(HttpServletRequest request, HttpServletResponse resp)
+     @Test
+     public void testConnectRequestURLDifferentThanHost() throws Exception
+     {
+-        final AtomicReference<String> resultRequestURL = new AtomicReference<>();
+-        final AtomicReference<String> resultRequestURI = new AtomicReference<>();
+-
+         startServer(new HttpServlet()
+         {
+             @Override
+             protected void service(HttpServletRequest request, HttpServletResponse resp)
+             {
+-                resultRequestURL.set(request.getRequestURL().toString());
+-                resultRequestURI.set(request.getRequestURI());
+             }
+         });
+ 
+-        // per spec, "Host" is ignored if request-target is authority-form
+         String rawResponse = _connector.getResponse(
+             """
+                 CONNECT myhost:9999 HTTP/1.1\r
+@@ -258,9 +252,7 @@ protected void service(HttpServletRequest request, HttpServletResponse resp)
+                 \r
+                 """);
+         HttpTester.Response response = HttpTester.parseResponse(rawResponse);
+-        assertThat(response.getStatus(), is(HttpStatus.OK_200));
+-        assertThat("request.getRequestURL", resultRequestURL.get(), is("http://myhost:9999/"));
+-        assertThat("request.getRequestURI", resultRequestURI.get(), is("/"));
++        assertThat(response.getStatus(), is(HttpStatus.BAD_REQUEST_400));
+     }
+ 
+     @Test
+diff --git a/jetty-ee9/jetty-ee9-nested/src/test/java/org/eclipse/jetty/ee9/nested/RequestTest.java b/jetty-ee9/jetty-ee9-nested/src/test/java/org/eclipse/jetty/ee9/nested/RequestTest.java
+index b706388e163b..280343149cad 100644
+--- a/jetty-ee9/jetty-ee9-nested/src/test/java/org/eclipse/jetty/ee9/nested/RequestTest.java
++++ b/jetty-ee9/jetty-ee9-nested/src/test/java/org/eclipse/jetty/ee9/nested/RequestTest.java
+@@ -818,16 +818,8 @@ public void testConnectRequestURLSameAsHost() throws Exception
+     @Test
+     public void testConnectRequestURLDifferentThanHost() throws Exception
+     {
+-        final AtomicReference<String> resultRequestURL = new AtomicReference<>();
+-        final AtomicReference<String> resultRequestURI = new AtomicReference<>();
+-        _handler._checker = (request, response) ->
+-        {
+-            resultRequestURL.set(request.getRequestURL().toString());
+-            resultRequestURI.set(request.getRequestURI());
+-            return true;
+-        };
++        _handler._checker = (request, response) -> true;
+ 
+-        // per spec, "Host" is ignored if request-target is authority-form
+         String rawResponse = _connector.getResponse(
+             """
+                 CONNECT myhost:9999 HTTP/1.1\r
+@@ -836,9 +828,7 @@ public void testConnectRequestURLDifferentThanHost() throws Exception
+                 \r
+                 """);
+         HttpTester.Response response = HttpTester.parseResponse(rawResponse);
+-        assertThat(response.getStatus(), is(HttpStatus.OK_200));
+-        assertThat("request.getRequestURL", resultRequestURL.get(), is("http://myhost:9999/"));
+-        assertThat("request.getRequestURI", resultRequestURI.get(), is("/"));
++        assertThat(response.getStatus(), is(HttpStatus.BAD_REQUEST_400));
+     }
+ 
+     @Test

@@ -1,0 +1,16 @@
+{
+  "case_id": "microsoft__terminal-20213",
+  "repo": "microsoft/terminal",
+  "pr": 20213,
+  "title": "sixel: prevent allocating an absurd amount of memory or writing OOB",
+  "language": "C++",
+  "split": "val",
+  "kind": "clean",
+  "example_id": "microsoft__terminal-20213",
+  "target": null,
+  "siblings": [],
+  "head_sha": "06824c0ae4b3ac63845d51db91dfaaa5905fa4f7",
+  "base_sha": "3e3b3ad883d134bdab26850d42e2a8308da40086",
+  "snapshot": "repos/microsoft__terminal/06824c0ae4b3ac63845d51db91dfaaa5905fa4f7",
+  "diff": "diffs/microsoft__terminal-20213.diff"
+}

@@ -1,0 +1,28 @@
+{
+  "case_id": "open-telemetry__opentelemetry-collector-15943",
+  "repo": "open-telemetry/opentelemetry-collector",
+  "pr": 15943,
+  "title": "[pdata/xpdata]: move MapHash/ValueHash from contrib's pdatautil into xhash",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "open-telemetry__opentelemetry-collector-15943__g1",
+  "target": {
+    "gid": "open-telemetry__opentelemetry-collector-15943#g1",
+    "summary": "Variable-length fields (strings, byte slices, and map keys) are appended to the hash buffer without length prefixes. This leaves field boundaries ambiguous and causes distinct inputs to collide and produce identical hashes.",
+    "paths": [
+      "pdata/xpdata/xhash/hash.go"
+    ],
+    "notes": [
+      "appending string in WithString without length prefix",
+      "appending map key in writeMapHash without length prefix",
+      "appending byte slice in writeValueHash without length prefix",
+      "appending string in writeString without length prefix"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "0c33d3a2b1714b0d7b2dc649488d6ad3d42ae58e",
+  "base_sha": "a35b7a8db49df923c5add3dc34872b6e0b3af683",
+  "snapshot": "repos/open-telemetry__opentelemetry-collector/0c33d3a2b1714b0d7b2dc649488d6ad3d42ae58e",
+  "diff": "diffs/open-telemetry__opentelemetry-collector-15943.diff"
+}

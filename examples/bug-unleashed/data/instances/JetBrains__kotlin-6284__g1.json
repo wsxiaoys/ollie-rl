@@ -1,0 +1,25 @@
+{
+  "case_id": "JetBrains__kotlin-6284",
+  "repo": "JetBrains/kotlin",
+  "pr": 6284,
+  "title": "JVM, Reflection: Support @JvmExposeBoxed in reflection",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "JetBrains__kotlin-6284__g1",
+  "target": {
+    "gid": "JetBrains__kotlin-6284#g1",
+    "summary": "Transferring metadata to the synthetic replacement constructor and setting constructor.metadata to null strips metadata from the original constructor. This breaks binary compatibility and causes reflection resolution and downstream lowerings to fail for ordinary classes with inline class parameters across modules.",
+    "paths": [
+      "compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/MemoizedInlineClassReplacements.kt"
+    ],
+    "notes": [
+      "transferring metadata to the synthetic replacement constructor and setting constructor.metadata to null strips metadata from the original constructor"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a2e8475dedca1f9b6691e8a03aec2dcbd8d7273d",
+  "base_sha": "ac5d4c0a7ed2920ba9fe3be8cbf931c0d4b08b4e",
+  "snapshot": "repos/JetBrains__kotlin/a2e8475dedca1f9b6691e8a03aec2dcbd8d7273d",
+  "diff": "diffs/JetBrains__kotlin-6284.diff"
+}

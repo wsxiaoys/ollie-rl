@@ -1,0 +1,27 @@
+{
+  "case_id": "electron__electron-53664",
+  "repo": "electron/electron",
+  "pr": 53664,
+  "title": "fix: attribute pointer lock, keyboard lock and paste checks to the requesting frame",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "electron__electron-53664__g1",
+  "target": {
+    "gid": "electron__electron-53664#g1",
+    "summary": "FrameForLockWidget resolves the requesting frame by matching RenderWidgetHost, but in-process child frames share their parent local-root's RenderWidgetHost. Consequently, pointer lock permission requests initiated from an in-process iframe are misattributed to the parent frame rather than the requesting frame.",
+    "paths": [
+      "shell/browser/web_contents_permission_helper.cc"
+    ],
+    "notes": [
+      "faulty helper function that attempts to identify the requesting frame by matching RenderWidgetHost, which in-process child frames share with their parent",
+      "call site relying on FrameForLockWidget to attribute pointer lock permission requests",
+      "call site relying on FrameForLockWidget to attribute keyboard lock permission requests"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "6fdab9325f867e7785f1b0d73edda74b7af03401",
+  "base_sha": "c4755b50b4122fc6b096ca4440bbfd5f48d5b84b",
+  "snapshot": "repos/electron__electron/6fdab9325f867e7785f1b0d73edda74b7af03401",
+  "diff": "diffs/electron__electron-53664.diff"
+}

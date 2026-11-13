@@ -1,0 +1,25 @@
+{
+  "case_id": "elastic__eui-9879",
+  "repo": "elastic/eui",
+  "pr": 9879,
+  "title": "[EuiFilePicker] Migrate from class to function component",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "elastic__eui-9879__g1",
+  "target": {
+    "gid": "elastic__eui-9879#g1",
+    "summary": "Migrating EuiFilePicker to a standard function component removes ref support, preventing consumers from programmatically invoking removeFiles() to clear the picker.",
+    "paths": [
+      "packages/eui/src/components/form/file_picker/file_picker.tsx"
+    ],
+    "notes": [
+      "component definition lacks forwardRef to expose removeFiles via imperative handle"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ccc16fbebc19612a3f22d9971bae666cf08e5a78",
+  "base_sha": "30cd23d9e787820ddd3f1e825b49245a740c2c09",
+  "snapshot": "repos/elastic__eui/ccc16fbebc19612a3f22d9971bae666cf08e5a78",
+  "diff": "diffs/elastic__eui-9879.diff"
+}

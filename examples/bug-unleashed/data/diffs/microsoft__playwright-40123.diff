@@ -1,0 +1,652 @@
+diff --git a/packages/playwright/src/cli/testActions.ts b/packages/playwright/src/cli/testActions.ts
+index eb1c8e75dbdf6..a1b710a863444 100644
+--- a/packages/playwright/src/cli/testActions.ts
++++ b/packages/playwright/src/cli/testActions.ts
+@@ -28,25 +28,28 @@ import { runWatchModeLoop } from '../runner/watchMode';
+ import { runAllTestsWithConfig, TestRunner } from '../runner/testRunner';
+ import { createErrorCollectingReporter } from '../runner/reporters';
+ import type { ReporterDescription } from '../../types/test';
++import type { TestRunOptions } from '../runner/tasks';
+ 
+ export async function runTests(args: string[], opts: { [key: string]: any }) {
+   await startProfiling();
+   const cliOverrides = overridesFromOptions(opts);
+ 
+   const config = await configLoader.loadConfigFromFile(opts.config, cliOverrides, opts.deps === false);
+-  config.cliArgs = args;
+-  config.cliGrep = opts.grep as string | undefined;
+-  config.cliOnlyChanged = opts.onlyChanged === true ? 'HEAD' : opts.onlyChanged;
+-  config.cliGrepInvert = opts.grepInvert as string | undefined;
+-  config.cliListOnly = !!opts.list;
+-  config.cliProjectFilter = opts.project || undefined;
+-  config.cliPassWithNoTests = !!opts.passWithNoTests;
+-  config.cliLastFailed = !!opts.lastFailed;
+-  config.cliTestList = opts.testList ? path.resolve(process.cwd(), opts.testList) : undefined;
+-  config.cliTestListInvert = opts.testListInvert ? path.resolve(process.cwd(), opts.testListInvert) : undefined;
++  const options: TestRunOptions = {
++    locations: args.length ? args : undefined,
++    grep: opts.grep,
++    grepInvert: opts.grepInvert,
++    onlyChanged: opts.onlyChanged === true ? 'HEAD' : opts.onlyChanged,
++    listMode: !!opts.list,
++    projectFilter: opts.project || undefined,
++    passWithNoTests: !!opts.passWithNoTests,
++    lastFailed: !!opts.lastFailed,
++    testList: opts.testList ? path.resolve(process.cwd(), opts.testList) : undefined,
++    testListInvert: opts.testListInvert ? path.resolve(process.cwd(), opts.testListInvert) : undefined,
++  };
+ 
+   // Evaluate project filters against config before starting execution. This enables a consistent error message across run modes
+-  filterProjects(config.projects, config.cliProjectFilter);
++  filterProjects(config.projects, options.projectFilter);
+ 
+   if (opts.ui || opts.uiHost || opts.uiPort) {
+     if (opts.onlyChanged)
+@@ -85,7 +88,7 @@ export async function runTests(args: string[], opts: { [key: string]: any }) {
+     return;
+   }
+ 
+-  const status = await runAllTestsWithConfig(config);
++  const status = await runAllTestsWithConfig(config, options);
+   await stopProfiling('runner');
+   const exitCode = status === 'interrupted' ? 130 : (status === 'passed' ? 0 : 1);
+   gracefullyProcessExitDoNotHang(exitCode);
+diff --git a/packages/playwright/src/common/config.ts b/packages/playwright/src/common/config.ts
+index e871504fcce18..45259df4c52be 100644
+--- a/packages/playwright/src/common/config.ts
++++ b/packages/playwright/src/common/config.ts
+@@ -23,7 +23,6 @@ import { getPackageJsonPath, mergeObjects, takeFirst } from '../util';
+ 
+ import type { Config, Fixtures, Metadata, Project, ReporterDescription } from '../../types/test';
+ import type { TestRunnerPluginRegistration } from '../plugins';
+-import type { Matcher, TestCaseFilter } from '../util';
+ import type { ConfigCLIOverrides } from './ipc';
+ import type { Location } from '../../types/testReporter';
+ import type { FullConfig, FullProject } from '../../types/testReporter';
+@@ -50,19 +49,6 @@ export class FullConfigInternal {
+   readonly singleTSConfigPath?: string;
+   readonly captureGitInfo: Config['captureGitInfo'];
+   readonly failOnFlakyTests: boolean;
+-  cliArgs: string[] = [];
+-  cliGrep: string | undefined;
+-  cliGrepInvert: string | undefined;
+-  cliOnlyChanged: string | undefined;
+-  cliProjectFilter?: string[];
+-  cliListOnly = false;
+-  cliPassWithNoTests?: boolean;
+-  cliLastFailed?: boolean;
+-  cliTestList?: string;
+-  cliTestListInvert?: string;
+-  loadFileFilters: Matcher[] = [];
+-  preOnlyTestFilters: TestCaseFilter[] = [];
+-  postShardTestFilters: TestCaseFilter[] = [];
+   defineConfigWasUsed = false;
+ 
+   globalSetups: string[] = [];
+diff --git a/packages/playwright/src/runner/lastRun.ts b/packages/playwright/src/runner/lastRun.ts
+index 4fa8a38df129a..62ddf75b21858 100644
+--- a/packages/playwright/src/runner/lastRun.ts
++++ b/packages/playwright/src/runner/lastRun.ts
+@@ -17,10 +17,8 @@
+ import fs from 'fs';
+ import path from 'path';
+ 
+-import { filterProjects } from './projectUtils';
+-
+ import type { FullResult, Suite } from '../../types/testReporter';
+-import type { FullConfigInternal } from '../common';
++import type { config as commonConfig } from '../common';
+ import type { ReporterV2 } from '../reporters/reporterV2';
+ 
+ type LastRunInfo = {
+@@ -29,26 +27,25 @@ type LastRunInfo = {
+ };
+ 
+ export class LastRunReporter implements ReporterV2 {
+-  private _config: FullConfigInternal;
+   private _lastRunFile: string | undefined;
+   private _suite: Suite | undefined;
++  private _listMode: boolean;
+ 
+-  constructor(config: FullConfigInternal) {
+-    this._config = config;
+-    const [project] = filterProjects(config.projects, config.cliProjectFilter);
++  constructor(filteredProjects: commonConfig.FullProjectInternal[], listMode?: boolean) {
++    this._listMode = !!listMode;
++    const [project] = filteredProjects;
+     if (project)
+       this._lastRunFile = path.join(project.project.outputDir, '.last-run.json');
+   }
+ 
+-  async filterLastFailed() {
++  async filterLastFailed(): Promise<string[]> {
+     if (!this._lastRunFile)
+-      return;
++      return [];
+     try {
+       const lastRunInfo = JSON.parse(await fs.promises.readFile(this._lastRunFile, 'utf8')) as LastRunInfo;
+-      const failedTestIds = new Set(lastRunInfo.failedTests);
+-      // Explicitly apply --last-failed filter after sharding.
+-      this._config.postShardTestFilters.push(test => failedTestIds.has(test.id));
++      return lastRunInfo.failedTests;
+     } catch {
++      return [];
+     }
+   }
+ 
+@@ -65,7 +62,7 @@ export class LastRunReporter implements ReporterV2 {
+   }
+ 
+   async onEnd(result: FullResult) {
+-    if (!this._lastRunFile || this._config.cliListOnly)
++    if (!this._lastRunFile || this._listMode)
+       return;
+     const lastRunInfo: LastRunInfo = {
+       status: result.status,
+diff --git a/packages/playwright/src/runner/loadUtils.ts b/packages/playwright/src/runner/loadUtils.ts
+index b7587107d118a..540432d795e66 100644
+--- a/packages/playwright/src/runner/loadUtils.ts
++++ b/packages/playwright/src/runner/loadUtils.ts
+@@ -22,7 +22,7 @@ import { toPosixPath } from '@utils/fileUtils';
+ 
+ import { InProcessLoaderHost, OutOfProcessLoaderHost } from './loaderHost';
+ import { createTitleMatcher, errorWithFile, parseLocationArg } from '../util';
+-import { buildProjectsClosure, collectFilesForProject, filterProjects } from './projectUtils';
++import { buildProjectsClosure, collectFilesForProject } from './projectUtils';
+ import {  createTestGroups, filterForShard } from './testGroups';
+ import { cc, config as commonConfig, FullConfigInternal, suiteUtils, test as testNs, transform } from '../common';
+ 
+@@ -34,14 +34,12 @@ import type { Matcher, TestCaseFilter } from '../util';
+ 
+ 
+ export async function collectProjectsAndTestFiles(testRun: TestRun, doNotRunTestsOutsideProjectFilter: boolean) {
+-  const config = testRun.config;
+   const fsCache = new Map();
+   const sourceMapCache = new Map();
+ 
+   // First collect all files for the projects in the command line, don't apply any file filters.
+   const allFilesForProject = new Map<commonConfig.FullProjectInternal, string[]>();
+-  const filteredProjects = filterProjects(config.projects, config.cliProjectFilter);
+-  for (const project of filteredProjects) {
++  for (const project of testRun.filteredProjects) {
+     const files = await collectFilesForProject(project, fsCache);
+     allFilesForProject.set(project, files);
+   }
+@@ -50,12 +48,12 @@ export async function collectProjectsAndTestFiles(testRun: TestRun, doNotRunTest
+   const filesToRunByProject = new Map<commonConfig.FullProjectInternal, string[]>();
+   for (const [project, files] of allFilesForProject) {
+     const matchedFiles = files.filter(file => {
+-      if (!config.loadFileFilters.length) {
++      if (!testRun.loadFileFilters.length) {
+         // Avoid loading source maps.
+         return true;
+       }
+       const hasMatchingSources = sourceMapSources(file, sourceMapCache).some(source => {
+-        const matchesAllFileFilters = config.loadFileFilters.every(filter => filter(source));
++        const matchesAllFileFilters = testRun.loadFileFilters.every(filter => filter(source));
+         return matchesAllFileFilters;
+       });
+       return hasMatchingSources;
+@@ -68,7 +66,7 @@ export async function collectProjectsAndTestFiles(testRun: TestRun, doNotRunTest
+   const projectClosure = buildProjectsClosure([...filesToRunByProject.keys()]);
+   for (const [project, type] of projectClosure) {
+     if (type === 'dependency') {
+-      const treatProjectAsEmpty = doNotRunTestsOutsideProjectFilter && !filteredProjects.includes(project);
++      const treatProjectAsEmpty = doNotRunTestsOutsideProjectFilter && !testRun.filteredProjects.includes(project);
+       const files = treatProjectAsEmpty ? [] : allFilesForProject.get(project) || await collectFilesForProject(project, fsCache);
+       filesToRunByProject.set(project, files);
+     }
+@@ -132,7 +130,7 @@ export async function createRootSuite(testRun: TestRun, errors: TestError[], sho
+       const projectSuite = createProjectSuite(project, fileSuites);
+       projectSuites.set(project, projectSuite);
+ 
+-      const filteredProjectSuite = filterProjectSuite(projectSuite, config.preOnlyTestFilters);
++      const filteredProjectSuite = filterProjectSuite(projectSuite, testRun.preOnlyTestFilters);
+       filteredProjectSuites.set(project, filteredProjectSuite);
+     }
+   }
+@@ -190,8 +188,8 @@ export async function createRootSuite(testRun: TestRun, errors: TestError[], sho
+     suiteUtils.filterTestsRemoveEmptySuites(rootSuite, test => testsInThisShard.has(test));
+   }
+ 
+-  if (config.postShardTestFilters.length)
+-    suiteUtils.filterTestsRemoveEmptySuites(rootSuite, test => config.postShardTestFilters.every(filter => filter(test)));
++  if (testRun.postShardTestFilters.length)
++    suiteUtils.filterTestsRemoveEmptySuites(rootSuite, test => testRun.postShardTestFilters.every(filter => filter(test)));
+ 
+   const topLevelProjects = [];
+   // Now prepend dependency projects without filtration.
+diff --git a/packages/playwright/src/runner/rebase.ts b/packages/playwright/src/runner/rebase.ts
+index e423d2ccbf799..d20bc6be899b9 100644
+--- a/packages/playwright/src/runner/rebase.ts
++++ b/packages/playwright/src/runner/rebase.ts
+@@ -21,8 +21,7 @@ import colors from 'colors/safe';
+ import * as diff from 'diff';
+ import { MultiMap } from '@isomorphic/multimap';
+ 
+-import { filterProjects } from './projectUtils';
+-import { babel, FullConfigInternal } from '../common';
++import { babel, config as commonConfig, FullConfigInternal } from '../common';
+ 
+ import type { InternalReporter } from '../reporters/internalReporter';
+ import type { T } from '../transform/babelBundle';
+@@ -50,12 +49,12 @@ export function clearSuggestedRebaselines() {
+   suggestedRebaselines.clear();
+ }
+ 
+-export async function applySuggestedRebaselines(config: FullConfigInternal, reporter: InternalReporter) {
++export async function applySuggestedRebaselines(config: FullConfigInternal, reporter: InternalReporter, filteredProjects: commonConfig.FullProjectInternal[]) {
+   if (config.config.updateSnapshots === 'none')
+     return;
+   if (!suggestedRebaselines.size)
+     return;
+-  const [project] = filterProjects(config.projects, config.cliProjectFilter);
++  const [project] = filteredProjects;
+   if (!project)
+     return;
+ 
+diff --git a/packages/playwright/src/runner/reporters.ts b/packages/playwright/src/runner/reporters.ts
+index a9ac787f8cfe9..7c68f86da9d33 100644
+--- a/packages/playwright/src/runner/reporters.ts
++++ b/packages/playwright/src/runner/reporters.ts
+@@ -35,8 +35,9 @@ import type { TestError } from '../../types/testReporter';
+ import type { config as commonConfig, FullConfigInternal } from '../common';
+ import type { CommonReporterOptions, Screen } from '../reporters/base';
+ import type { ReporterV2 } from '../reporters/reporterV2';
++import type { TestRunOptions } from './tasks';
+ 
+-export async function createReporters(config: FullConfigInternal, mode: 'list' | 'test' | 'merge', descriptions?: ReporterDescription[]): Promise<ReporterV2[]> {
++export async function createReporters(config: FullConfigInternal, mode: 'list' | 'test' | 'merge', descriptions?: ReporterDescription[], runOptions?: TestRunOptions): Promise<ReporterV2[]> {
+   const defaultReporters: { [key in commonConfig.BuiltInReporter]: new(arg: any) => ReporterV2 } = {
+     blob: BlobReporter,
+     dot: mode === 'list' ? ListModeReporter : DotReporter,
+@@ -52,10 +53,10 @@ export async function createReporters(config: FullConfigInternal, mode: 'list' |
+   descriptions ??= config.config.reporter;
+   if (config.configCLIOverrides.additionalReporters)
+     descriptions = [...descriptions, ...config.configCLIOverrides.additionalReporters];
+-  const runOptions = reporterOptions(config, mode);
++  const reportOptions = reporterCommandOptions(config, mode, runOptions);
+   for (const r of descriptions) {
+     const [name, arg] = r;
+-    const options = { ...runOptions, ...arg };
++    const options = { ...reportOptions, ...arg };
+     if (name in defaultReporters) {
+       reporters.push(new defaultReporters[name as keyof typeof defaultReporters](options));
+     } else {
+@@ -65,7 +66,7 @@ export async function createReporters(config: FullConfigInternal, mode: 'list' |
+   }
+   if (process.env.PW_TEST_REPORTER) {
+     const reporterConstructor = await loadReporter(config, process.env.PW_TEST_REPORTER);
+-    reporters.push(wrapReporterAsV2(new reporterConstructor(runOptions)));
++    reporters.push(wrapReporterAsV2(new reporterConstructor(reportOptions)));
+   }
+ 
+   const someReporterPrintsToStdio = reporters.some(r => r.printsToStdio ? r.printsToStdio() : true);
+@@ -103,34 +104,34 @@ export function createErrorCollectingReporter(screen: Screen): ErrorCollectingRe
+   };
+ }
+ 
+-function reporterOptions(config: FullConfigInternal, mode: 'list' | 'test' | 'merge'): CommonReporterOptions {
++function reporterCommandOptions(config: FullConfigInternal, mode: 'list' | 'test' | 'merge', runOptions?: TestRunOptions): CommonReporterOptions {
+   return {
+     configDir: config.configDir,
+     _mode: mode,
+-    _commandHash: computeCommandHash(config),
++    _commandHash: computeCommandHash(config, runOptions),
+   };
+ }
+ 
+-function computeCommandHash(config: FullConfigInternal) {
++function computeCommandHash(config: FullConfigInternal, runOptions?: TestRunOptions) {
+   const parts = [];
+   // Include project names for readability.
+-  if (config.cliProjectFilter)
+-    parts.push(...config.cliProjectFilter);
++  if (runOptions?.projectFilter)
++    parts.push(...runOptions.projectFilter);
+   const command = {} as any;
+-  if (config.cliArgs.length)
+-    command.cliArgs = config.cliArgs;
+-  if (config.cliGrep)
+-    command.cliGrep = config.cliGrep;
+-  if (config.cliGrepInvert)
+-    command.cliGrepInvert = config.cliGrepInvert;
+-  if (config.cliOnlyChanged)
+-    command.cliOnlyChanged = config.cliOnlyChanged;
++  if (runOptions?.locations?.length)
++    command.locations = runOptions.locations;
++  if (runOptions?.grep)
++    command.grep = runOptions.grep;
++  if (runOptions?.grepInvert)
++    command.grepInvert = runOptions.grepInvert;
++  if (runOptions?.onlyChanged)
++    command.onlyChanged = runOptions.onlyChanged;
+   if (config.config.tags.length)
+     command.tags = config.config.tags.join(' ');
+-  if (config.cliTestList)
+-    command.cliTestList = calculateSha1(fs.readFileSync(config.cliTestList));
+-  if (config.cliTestListInvert)
+-    command.cliTestListInvert = calculateSha1(fs.readFileSync(config.cliTestListInvert));
++  if (runOptions?.testList)
++    command.testList = calculateSha1(fs.readFileSync(runOptions.testList));
++  if (runOptions?.testListInvert)
++    command.testListInvert = calculateSha1(fs.readFileSync(runOptions.testListInvert));
+   if (Object.keys(command).length)
+     parts.push(calculateSha1(JSON.stringify(command)).substring(0, 7));
+   return parts.join('-');
+diff --git a/packages/playwright/src/runner/tasks.ts b/packages/playwright/src/runner/tasks.ts
+index 240bbdd9d8fd2..a26162ae883f0 100644
+--- a/packages/playwright/src/runner/tasks.ts
++++ b/packages/playwright/src/runner/tasks.ts
+@@ -39,6 +39,7 @@ import type { EnvByProjectId } from './dispatcher';
+ import type { TestRunnerPluginRegistration } from '../plugins';
+ import type { Task } from './taskRunner';
+ import type { FullResult } from '../../types/testReporter';
++import type { Matcher, TestCaseFilter } from '../util';
+ import type { InternalReporter } from '../reporters/internalReporter';
+ 
+ const readDirAsync = promisify(fs.readdir);
+@@ -54,20 +55,43 @@ type Phase = {
+   projects: ProjectWithTestGroups[]
+ };
+ 
++export type TestRunOptions = {
++  locations?: string[];
++  grep?: string;
++  grepInvert?: string;
++  onlyChanged?: string;
++  projectFilter?: string[];
++  listMode?: boolean;
++  passWithNoTests?: boolean;
++  lastFailed?: boolean;
++  testList?: string;
++  testListInvert?: string;
++  lastFailedTestIds?: string[];
++  pauseOnError?: boolean;
++  pauseAtEnd?: boolean;
++};
++
+ export class TestRun {
+   readonly config: FullConfigInternal;
++  readonly options: TestRunOptions;
+   readonly reporter: InternalReporter;
+   readonly failureTracker: FailureTracker;
+   rootSuite: testNs.Suite | undefined = undefined;
+   readonly phases: Phase[] = [];
++  readonly filteredProjects: commonConfig.FullProjectInternal[];
+   projectFiles: Map<commonConfig.FullProjectInternal, string[]> = new Map();
+   projectSuites: Map<commonConfig.FullProjectInternal, testNs.Suite[]> = new Map();
+   topLevelProjects: commonConfig.FullProjectInternal[] = [];
++  readonly loadFileFilters: Matcher[] = [];
++  readonly preOnlyTestFilters: TestCaseFilter[] = [];
++  readonly postShardTestFilters: TestCaseFilter[] = [];
+ 
+-  constructor(config: FullConfigInternal, reporter: InternalReporter, options?: { pauseOnError?: boolean, pauseAtEnd?: boolean }) {
++  constructor(config: FullConfigInternal, reporter: InternalReporter, options?: TestRunOptions) {
+     this.config = config;
++    this.options = options ?? {};
+     this.reporter = reporter;
+     this.failureTracker = new FailureTracker(config, options);
++    this.filteredProjects = filterProjects(config.projects, this.options.projectFilter);
+   }
+ }
+ 
+@@ -206,10 +230,9 @@ function createGlobalTeardownTask(file: string, config: FullConfigInternal): Tas
+ function createRemoveOutputDirsTask(): Task<TestRun> {
+   return {
+     title: 'clear output',
+-    setup: async ({ config }) => {
++    setup: async testRun => {
+       const outputDirs = new Set<string>();
+-      const projects = filterProjects(config.projects, config.cliProjectFilter);
+-      projects.forEach(p => outputDirs.add(p.project.outputDir));
++      testRun.filteredProjects.forEach(p => outputDirs.add(p.project.outputDir));
+ 
+       await Promise.all(Array.from(outputDirs).map(outputDir => removeFolders([outputDir]).then(async ([error]) => {
+         if (!error)
+@@ -257,47 +280,52 @@ export function createLoadTask(mode: 'out-of-process' | 'in-process', options: {
+   return {
+     title: 'load tests',
+     setup: async (testRun, errors, softErrors) => {
+-      if (testRun.config.cliArgs.length) {
+-        const { testFilter, fileFilter } = suiteUtils.createFiltersFromArguments(testRun.config.cliArgs);
+-        testRun.config.loadFileFilters.push(fileFilter);
+-        testRun.config.preOnlyTestFilters.push(testFilter);
++      if (testRun.options.locations?.length) {
++        const { testFilter, fileFilter } = suiteUtils.createFiltersFromArguments(testRun.options.locations);
++        testRun.loadFileFilters.push(fileFilter);
++        testRun.preOnlyTestFilters.push(testFilter);
+       }
+ 
+-      if (testRun.config.cliTestList) {
+-        const { testFilter, fileFilter } = await loadTestList(testRun.config, testRun.config.cliTestList);
+-        testRun.config.preOnlyTestFilters.push(testFilter);
+-        testRun.config.loadFileFilters.push(fileFilter);
++      if (testRun.options.testList) {
++        const { testFilter, fileFilter } = await loadTestList(testRun.config, testRun.options.testList);
++        testRun.preOnlyTestFilters.push(testFilter);
++        testRun.loadFileFilters.push(fileFilter);
+       }
+ 
+-      if (testRun.config.cliTestListInvert) {
++      if (testRun.options.testListInvert) {
+         // Note: invert list does not mean we can filter files. For example, the following invert list
+         // can still run tests from foo.spec.ts:
+         //
+         // foo.spec.ts > some test
+-        const { testFilter } = await loadTestList(testRun.config, testRun.config.cliTestListInvert);
+-        testRun.config.preOnlyTestFilters.push(test => !testFilter(test));
++        const { testFilter } = await loadTestList(testRun.config, testRun.options.testListInvert);
++        testRun.preOnlyTestFilters.push(test => !testFilter(test));
+       }
+ 
+-      if (testRun.config.cliGrep || testRun.config.cliGrepInvert) {
+-        const grepMatcher = testRun.config.cliGrep ? createTitleMatcher(forceRegExp(testRun.config.cliGrep)) : () => true;
+-        const grepInvertMatcher = testRun.config.cliGrepInvert ? createTitleMatcher(forceRegExp(testRun.config.cliGrepInvert)) : () => false;
+-        testRun.config.preOnlyTestFilters.push(test => {
++      if (testRun.options.grep || testRun.options.grepInvert) {
++        const grepMatcher = testRun.options.grep ? createTitleMatcher(forceRegExp(testRun.options.grep)) : () => true;
++        const grepInvertMatcher = testRun.options.grepInvert ? createTitleMatcher(forceRegExp(testRun.options.grepInvert)) : () => false;
++        testRun.preOnlyTestFilters.push(test => {
+           const grepTitle = test._grepTitleWithTags();
+           return !grepInvertMatcher(grepTitle) && grepMatcher(grepTitle);
+         });
+       }
+ 
++      if (testRun.options.lastFailedTestIds?.length) {
++        const failedTestIds = new Set(testRun.options.lastFailedTestIds);
++        testRun.postShardTestFilters.push(test => failedTestIds.has(test.id));
++      }
++
+       await collectProjectsAndTestFiles(testRun, !!options.doNotRunDepsOutsideProjectFilter);
+       await loadFileSuites(testRun, mode, options.failOnLoadErrors ? errors : softErrors);
+ 
+-      if (testRun.config.cliOnlyChanged || options.populateDependencies) {
++      if (testRun.options.onlyChanged || options.populateDependencies) {
+         for (const plugin of testRun.config.plugins)
+           await plugin.instance?.populateDependencies?.();
+       }
+ 
+-      if (testRun.config.cliOnlyChanged) {
+-        const changedFiles = await detectChangedTestFiles(testRun.config.cliOnlyChanged, testRun.config.configDir);
+-        testRun.config.preOnlyTestFilters.push(test => changedFiles.has(test.location.file));
++      if (testRun.options.onlyChanged) {
++        const changedFiles = await detectChangedTestFiles(testRun.options.onlyChanged, testRun.config.configDir);
++        testRun.preOnlyTestFilters.push(test => changedFiles.has(test.location.file));
+       }
+ 
+       const { rootSuite, topLevelProjects } = await createRootSuite(testRun, options.failOnLoadErrors ? errors : softErrors, !!options.filterOnly);
+@@ -305,10 +333,10 @@ export function createLoadTask(mode: 'out-of-process' | 'in-process', options: {
+       testRun.failureTracker.onRootSuite(rootSuite, topLevelProjects);
+       // Fail when no tests.
+       if (options.failOnLoadErrors && !testRun.rootSuite.allTests().length
+-          && !testRun.config.cliPassWithNoTests
+-          && !testRun.config.config.shard && !testRun.config.cliOnlyChanged
+-          && !testRun.config.cliTestList && !testRun.config.cliTestListInvert) {
+-        if (testRun.config.cliArgs.length) {
++          && !testRun.options.passWithNoTests
++          && !testRun.config.config.shard && !testRun.options.onlyChanged
++          && !testRun.options.testList && !testRun.options.testListInvert) {
++        if (testRun.options.locations?.length) {
+           throw new Error([
+             `No tests found.`,
+             `Make sure that arguments are regular expressions matching test files.`,
+@@ -327,8 +355,8 @@ export function createApplyRebaselinesTask(): Task<TestRun> {
+     setup: async () => {
+       clearSuggestedRebaselines();
+     },
+-    teardown: async ({ config, reporter }) => {
+-      await applySuggestedRebaselines(config, reporter);
++    teardown: async testRun => {
++      await applySuggestedRebaselines(testRun.config, testRun.reporter, testRun.filteredProjects);
+     },
+   };
+ }
+diff --git a/packages/playwright/src/runner/testRunner.ts b/packages/playwright/src/runner/testRunner.ts
+index 668243492db96..429b17638b034 100644
+--- a/packages/playwright/src/runner/testRunner.ts
++++ b/packages/playwright/src/runner/testRunner.ts
+@@ -35,7 +35,9 @@ import { serializeError } from '../util';
+ import { createErrorCollectingReporter, createReporters } from './reporters';
+ import { TestRun, createApplyRebaselinesTask, createClearCacheTask, createGlobalSetupTasks, createListFilesTask, createLoadTask, createPluginSetupTasks, createReportBeginTask, createRunTestsTasks, runTasks, runTasksDeferCleanup } from './tasks';
+ import { LastRunReporter } from './lastRun';
++import { filterProjects } from './projectUtils';
+ 
++import type { TestRunOptions } from './tasks';
+ import type * as reporterTypes from '../../types/testReporter';
+ import type { ConfigLocation } from '../common';
+ import type { TestRunnerPluginRegistration } from '../plugins';
+@@ -206,8 +208,8 @@ export class TestRunner extends EventEmitter<TestRunnerEventMap> {
+     if (!config)
+       return { status: 'failed' };
+ 
+-    config.cliProjectFilter = projects?.length ? projects : undefined;
+-    const status = await runTasks(new TestRun(config, reporter), [
++    const options: TestRunOptions = { projectFilter: projects?.length ? projects : undefined };
++    const status = await runTasks(new TestRun(config, reporter, options), [
+       createListFilesTask(),
+       createReportBeginTask(),
+     ]);
+@@ -240,14 +242,16 @@ export class TestRunner extends EventEmitter<TestRunnerEventMap> {
+     if (!config)
+       return { status: 'failed' };
+ 
+-    config.cliArgs = params.locations || [];
+-    config.cliGrep = params.grep;
+-    config.cliGrepInvert = params.grepInvert;
+-    config.cliProjectFilter = params.projects?.length ? params.projects : undefined;
+-    config.cliOnlyChanged = params.onlyChanged;
+-    config.cliListOnly = true;
++    const options: TestRunOptions = {
++      locations: params.locations?.length ? params.locations : undefined,
++      grep: params.grep,
++      grepInvert: params.grepInvert,
++      projectFilter: params.projects?.length ? params.projects : undefined,
++      onlyChanged: params.onlyChanged,
++      listMode: true,
++    };
+ 
+-    const status = await runTasks(new TestRun(config, reporter), [
++    const status = await runTasks(new TestRun(config, reporter, options), [
+       createLoadTask('out-of-process', { failOnLoadErrors: false, filterOnly: false, populateDependencies: this._populateDependenciesOnList }),
+       createReportBeginTask(),
+     ]);
+@@ -313,27 +317,29 @@ export class TestRunner extends EventEmitter<TestRunnerEventMap> {
+     if (!config)
+       return { status: 'failed' };
+ 
+-    config.cliListOnly = false;
+-    config.cliPassWithNoTests = true;
+-    config.cliArgs = params.locations;
+-    config.cliGrep = params.grep;
+-    config.cliGrepInvert = params.grepInvert;
+-    config.cliProjectFilter = params.projects?.length ? params.projects : undefined;
+-    config.preOnlyTestFilters = [];
+-    if (params.testIds) {
+-      const testIdSet = new Set<string>(params.testIds);
+-      config.preOnlyTestFilters.push(test => testIdSet.has(test.id));
+-    }
++    const options: TestRunOptions = {
++      passWithNoTests: true,
++      locations: params.locations?.length ? params.locations : undefined,
++      grep: params.grep,
++      grepInvert: params.grepInvert,
++      projectFilter: params.projects?.length ? params.projects : undefined,
++      pauseOnError: params.pauseOnError,
++      pauseAtEnd: params.pauseAtEnd,
++    };
+ 
+-    const configReporters = params.disableConfigReporters ? [] : await createReporters(config, 'test');
++    const configReporters = params.disableConfigReporters ? [] : await createReporters(config, 'test', undefined, options);
+     const reporter = new InternalReporter([...configReporters, userReporter]);
+     const stop = new ManualPromise();
++    const testRun = new TestRun(config, reporter, options);
++    if (params.testIds) {
++      const testIdSet = new Set<string>(params.testIds);
++      testRun.preOnlyTestFilters.push(test => testIdSet.has(test.id));
++    }
+     const tasks = [
+       createApplyRebaselinesTask(),
+       createLoadTask('out-of-process', { filterOnly: true, failOnLoadErrors: !!params.failOnLoadErrors, doNotRunDepsOutsideProjectFilter: params.doNotRunDepsOutsideProjectFilter }),
+       ...createRunTestsTasks(config),
+     ];
+-    const testRun = new TestRun(config, reporter, { pauseOnError: params.pauseOnError, pauseAtEnd: params.pauseAtEnd });
+     testRun.failureTracker.onTestPaused = params => this.emit(TestRunnerEvent.TestPaused, params);
+     const run = runTasks(testRun, tasks, 0, stop).then(async status => {
+       this._testRun = undefined;
+@@ -429,23 +435,25 @@ async function resolveCtDirs(config: FullConfigInternal) {
+   };
+ }
+ 
+-export async function runAllTestsWithConfig(config: FullConfigInternal): Promise<FullResultStatus> {
++export async function runAllTestsWithConfig(config: FullConfigInternal, options: TestRunOptions): Promise<FullResultStatus> {
+   setPlaywrightTestProcessEnv();
+ 
+-  const listOnly = config.cliListOnly;
+-
+   addGitCommitInfoPlugin(config);
+ 
+   // Legacy webServer support.
+   webServerPluginsForConfig(config).forEach(p => config.plugins.push({ factory: p }));
+ 
+-  const reporters = await createReporters(config, listOnly ? 'list' : 'test');
+-  const lastRun = new LastRunReporter(config);
+-  if (config.cliLastFailed)
+-    await lastRun.filterLastFailed();
++  const filteredProjects = filterProjects(config.projects, options.projectFilter);
++  const reporters = await createReporters(config, options.listMode ? 'list' : 'test', undefined, options);
++  const lastRun = new LastRunReporter(filteredProjects, options.listMode);
++  if (options.lastFailed) {
++    const lastFailedTestIds = await lastRun.filterLastFailed();
++    if (lastFailedTestIds.length)
++      options = { ...options, lastFailedTestIds };
++  }
+ 
+   const reporter = new InternalReporter([...reporters, lastRun]);
+-  const tasks = listOnly ? [
++  const tasks = options.listMode ? [
+     createLoadTask('in-process', { failOnLoadErrors: true, filterOnly: false }),
+     createReportBeginTask(),
+   ] : [
+@@ -455,7 +463,7 @@ export async function runAllTestsWithConfig(config: FullConfigInternal): Promise
+     ...createRunTestsTasks(config),
+   ];
+ 
+-  const testRun = new TestRun(config, reporter, { pauseAtEnd: config.configCLIOverrides.pause, pauseOnError: config.configCLIOverrides.pause });
++  const testRun = new TestRun(config, reporter, { ...options, pauseAtEnd: config.configCLIOverrides.pause, pauseOnError: config.configCLIOverrides.pause });
+   const status = await runTasks(testRun, tasks, config.config.globalTimeout);
+ 
+   // Calling process.exit() might truncate large stdout/stderr output.
+diff --git a/tests/playwright-test/reporter-blob.spec.ts b/tests/playwright-test/reporter-blob.spec.ts
+index a4714907470f4..9360d496699ca 100644
+--- a/tests/playwright-test/reporter-blob.spec.ts
++++ b/tests/playwright-test/reporter-blob.spec.ts
+@@ -2196,7 +2196,7 @@ test('project filter in report name', async ({ runInlineTest }) => {
+     const result = await runInlineTest(files, { shard: `1/2`, project: ['foo', 'b*r'], grep: 'smoke' });
+     expect(result.exitCode).toBe(0);
+     const reportFiles = await fs.promises.readdir(reportDir);
+-    expect(reportFiles.sort()).toEqual(['report-foo-b-r-6d9d49e-1.zip']);
++    expect(reportFiles.sort()).toEqual(['report-foo-b-r-c29b5fa-1.zip']);
+   }
+ 
+   {

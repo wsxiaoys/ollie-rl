@@ -1,0 +1,128 @@
+diff --git a/packages/next/src/server/async-storage/request-store.ts b/packages/next/src/server/async-storage/request-store.ts
+index 4d904ce30b5f..9a9d2dde4df7 100644
+--- a/packages/next/src/server/async-storage/request-store.ts
++++ b/packages/next/src/server/async-storage/request-store.ts
+@@ -31,17 +31,24 @@ import type { ImplicitTags } from '../lib/implicit-tags'
+ import type { OpaqueFallbackRouteParams } from '../request/fallback-params'
+ 
+ function getHeaders(headers: Headers | IncomingHttpHeaders): ReadonlyHeaders {
+-  const cleaned = HeadersAdapter.from(headers)
++  // `HeadersAdapter.from` wraps `IncomingHttpHeaders` (and returns a `Headers`
++  // instance unchanged) without copying, so the `delete` calls below would
++  // otherwise mutate the caller's underlying request headers. We copy first so
++  // that stripping internal headers only affects the sealed userland view, not
++  // the shared `req.headers`. The latter matters because the dev server reads
++  // the request-id headers from the raw request again (e.g. when rendering a
++  // redirect target after a server action), and mutating them there would break
++  // the dev debug channel routing.
++  const cleaned = HeadersAdapter.from(
++    headers instanceof Headers ? new Headers(headers) : { ...headers }
++  )
+   for (const header of FLIGHT_HEADERS) {
+     cleaned.delete(header)
+   }
+ 
+   // The client sends these dev-only request IDs so the server can route debug
+   // information back to the originating request. Like the flight headers, they
+-  // are internal plumbing and must not be exposed to userland `headers()`. The
+-  // server reads them from the raw request headers, not from here, so removing
+-  // them from this copy doesn't affect the debug channel for which they are
+-  // used.
++  // are internal plumbing and must not be exposed to userland `headers()`.
+   cleaned.delete(NEXT_REQUEST_ID_HEADER)
+   cleaned.delete(NEXT_HTML_REQUEST_ID_HEADER)
+ 
+diff --git a/test/e2e/app-dir/server-action-headers-redirect/app/actions.ts b/test/e2e/app-dir/server-action-headers-redirect/app/actions.ts
+new file mode 100644
+index 000000000000..575db643c1b6
+--- /dev/null
++++ b/test/e2e/app-dir/server-action-headers-redirect/app/actions.ts
+@@ -0,0 +1,9 @@
++'use server'
++
++import { headers } from 'next/headers'
++import { redirect } from 'next/navigation'
++
++export async function action() {
++  await headers()
++  redirect('/destination')
++}
+diff --git a/test/e2e/app-dir/server-action-headers-redirect/app/destination/page.tsx b/test/e2e/app-dir/server-action-headers-redirect/app/destination/page.tsx
+new file mode 100644
+index 000000000000..1428dd5fc3fb
+--- /dev/null
++++ b/test/e2e/app-dir/server-action-headers-redirect/app/destination/page.tsx
+@@ -0,0 +1,3 @@
++export default function DestinationPage() {
++  return <p id="destination">Success!</p>
++}
+diff --git a/test/e2e/app-dir/server-action-headers-redirect/app/layout.tsx b/test/e2e/app-dir/server-action-headers-redirect/app/layout.tsx
+new file mode 100644
+index 000000000000..888614deda3b
+--- /dev/null
++++ b/test/e2e/app-dir/server-action-headers-redirect/app/layout.tsx
+@@ -0,0 +1,8 @@
++import { ReactNode } from 'react'
++export default function Root({ children }: { children: ReactNode }) {
++  return (
++    <html>
++      <body>{children}</body>
++    </html>
++  )
++}
+diff --git a/test/e2e/app-dir/server-action-headers-redirect/app/page.tsx b/test/e2e/app-dir/server-action-headers-redirect/app/page.tsx
+new file mode 100644
+index 000000000000..a9cf32300dd5
+--- /dev/null
++++ b/test/e2e/app-dir/server-action-headers-redirect/app/page.tsx
+@@ -0,0 +1,11 @@
++import { action } from './actions'
++
++export default function Page() {
++  return (
++    <form action={action}>
++      <button type="submit" id="submit">
++        Submit
++      </button>
++    </form>
++  )
++}
+diff --git a/test/e2e/app-dir/server-action-headers-redirect/next.config.js b/test/e2e/app-dir/server-action-headers-redirect/next.config.js
+new file mode 100644
+index 000000000000..e64bae22d658
+--- /dev/null
++++ b/test/e2e/app-dir/server-action-headers-redirect/next.config.js
+@@ -0,0 +1,8 @@
++/**
++ * @type {import('next').NextConfig}
++ */
++const nextConfig = {
++  cacheComponents: true,
++}
++
++module.exports = nextConfig
+diff --git a/test/e2e/app-dir/server-action-headers-redirect/server-action-headers-redirect.test.ts b/test/e2e/app-dir/server-action-headers-redirect/server-action-headers-redirect.test.ts
+new file mode 100644
+index 000000000000..239067c332e4
+--- /dev/null
++++ b/test/e2e/app-dir/server-action-headers-redirect/server-action-headers-redirect.test.ts
+@@ -0,0 +1,19 @@
++import { nextTestSetup } from 'e2e-utils'
++import { retry } from 'next-test-utils'
++
++describe('server-action-headers-redirect', () => {
++  const { next } = nextTestSetup({
++    files: __dirname,
++  })
++
++  it('redirects after a server action that reads headers()', async () => {
++    const browser = await next.browser('/')
++
++    await browser.elementByCss('#submit').click()
++
++    await retry(async () => {
++      expect(await browser.url()).toEndWith('/destination')
++      expect(await browser.elementByCss('#destination').text()).toBe('Success!')
++    })
++  })
++})

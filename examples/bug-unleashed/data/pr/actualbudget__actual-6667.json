@@ -1,0 +1,6 @@
+{
+  "title": "lint: re-enable some react rules",
+  "body": "Re-enable some react rules",
+  "head_sha": "b6addf0abc54f53e2227cfcba2903167b4cdad8f",
+  "base_sha": "d01d0eacb89a6adfa677974a636682a8c8714a76"
+}

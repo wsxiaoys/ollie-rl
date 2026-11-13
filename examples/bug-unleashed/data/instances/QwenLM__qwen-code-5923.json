@@ -1,0 +1,16 @@
+{
+  "case_id": "QwenLM__qwen-code-5923",
+  "repo": "QwenLM/qwen-code",
+  "pr": 5923,
+  "title": "fix(core): preserve rewind parents after resume",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "QwenLM__qwen-code-5923",
+  "target": null,
+  "siblings": [],
+  "head_sha": "6b2e62816069bd7de27029aaa2bc2124b7618af2",
+  "base_sha": "cf03af5d31ec17e4a6dec0efd9123c7c203df484",
+  "snapshot": "repos/QwenLM__qwen-code/6b2e62816069bd7de27029aaa2bc2124b7618af2",
+  "diff": "diffs/QwenLM__qwen-code-5923.diff"
+}

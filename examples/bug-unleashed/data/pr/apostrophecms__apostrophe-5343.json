@@ -1,0 +1,6 @@
+{
+  "title": "Fix styles sanitization and duplicates",
+  "body": "<!-- Please don't delete this template -->\n\n<!-- PULL REQUEST TEMPLATE -->\n<!-- (Update \"[ ]\" to \"[x]\" to check a box) -->\n\n## Summary\n\nFixes styles being sanitized as html (breaks quotes) and resolves duplicate styles on the page.\n\n## What are the specific steps to test this change?\n\n- if styles contain quotes, they will be broken (not shown properly on the page)\n- no duplicates definition in public mode\n\n## What kind of change does this PR introduce?\n*(Check at least one)*\n\n- [x] Bug fix\n- [ ] New feature\n- [ ] Refactor\n- [ ] Documentation\n- [ ] Build-related changes\n- [ ] Other\n\n## Make sure the PR fulfills these requirements:\n\n- [x] It includes a) the existing issue ID being resolved, b) a convincing reason for adding this feature, or c) a clear description of the bug it resolves\n- [x] The changelog is updated\n- [ ] Related documentation has been updated\n- [ ] Related tests have been updated\n\nIf adding a new feature without an already open issue, it's best to open a **feature request issue** first and wait for approval before working on it.\n\n**Other information:**\n",
+  "head_sha": "49be3be74ff282bc6eb771179e1f40b084c74bb2",
+  "base_sha": "47d9f7c423aca259613551d22e57bc2ce1adbc63"
+}

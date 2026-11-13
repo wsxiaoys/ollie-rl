@@ -1,0 +1,27 @@
+{
+  "case_id": "mozilla-mobile__firefox-ios-32716",
+  "repo": "mozilla-mobile/firefox-ios",
+  "pr": 32716,
+  "title": "Refactor SYNC-4917 Migrate to use app-services FxA state machine",
+  "language": "Swift",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mozilla-mobile__firefox-ios-32716__g1",
+  "target": {
+    "gid": "mozilla-mobile__firefox-ios-32716#g1",
+    "summary": "Calling accountManager.getCurrentDeviceId() synchronously on the main thread during scheduled sync blocks on the Rust FxA client's internal mutex, freezing the UI whenever another thread is performing an account operation.",
+    "paths": [
+      "MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountManager.swift",
+      "firefox-ios/Providers/RustSyncManager.swift"
+    ],
+    "notes": [
+      "synchronous call to getCurrentDeviceId() on the main thread",
+      "definition of getCurrentDeviceId(), which performs a blocking FFI call synchronously instead of dispatching off the caller's thread"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "414385187dd1f04c3152509fe03f1f464530eb88",
+  "base_sha": "ccda7f3a63e9b1e3e1248f4db73f439bc52d96aa",
+  "snapshot": "repos/mozilla-mobile__firefox-ios/414385187dd1f04c3152509fe03f1f464530eb88",
+  "diff": "diffs/mozilla-mobile__firefox-ios-32716.diff"
+}

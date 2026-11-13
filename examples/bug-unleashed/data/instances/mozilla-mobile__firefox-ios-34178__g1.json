@@ -1,0 +1,29 @@
+{
+  "case_id": "mozilla-mobile__firefox-ios-34178",
+  "repo": "mozilla-mobile/firefox-ios",
+  "pr": 34178,
+  "title": "Add FXIOS-15939 [Homepage] Add tracker blocker module UI scaffolding",
+  "language": "Swift",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mozilla-mobile__firefox-ios-34178__g1",
+  "target": {
+    "gid": "mozilla-mobile__firefox-ios-34178#g1",
+    "summary": "The tracker blocker module layout sets a fixed absolute height of 50pt instead of sizing dynamically. When Dynamic Type accessibility text sizes are enabled, the pill content exceeds 50pt and gets clipped or overlaps adjacent sections.",
+    "paths": [
+      "firefox-ios/Client/Frontend/Home/Homepage/Layout/HomepageSectionLayoutProvider.swift"
+    ],
+    "notes": [
+      "hardcoded absolute height for collection layout item",
+      "hardcoded height used in section height calculation",
+      "definition of constant fixed height of 50 for tracker blocker module",
+      "definition of createTrackerBlockerModuleSectionLayout",
+      "definition of getTrackerBlockerModuleSectionHeight"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "938710356673afae55ed9eaff94aab19a1d008bb",
+  "base_sha": "31ea8dd57e563ad0bdf0df815df3d05d757c693c",
+  "snapshot": "repos/mozilla-mobile__firefox-ios/938710356673afae55ed9eaff94aab19a1d008bb",
+  "diff": "diffs/mozilla-mobile__firefox-ios-34178.diff"
+}

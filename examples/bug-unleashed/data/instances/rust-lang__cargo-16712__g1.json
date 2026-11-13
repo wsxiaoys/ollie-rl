@@ -1,0 +1,25 @@
+{
+  "case_id": "rust-lang__cargo-16712",
+  "repo": "rust-lang/cargo",
+  "pr": 16712,
+  "title": "cargo clean: Add target directory validation",
+  "language": "Rust",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "rust-lang__cargo-16712__g1",
+  "target": {
+    "gid": "rust-lang__cargo-16712#g1",
+    "summary": "Validation for CACHEDIR.TAG is performed even if the target directory does not exist. Consequently, running `cargo clean` with an explicitly specified `--target-dir` that does not exist fails with an error instead of succeeding as a no-op.",
+    "paths": [
+      "src/cargo/ops/cargo_clean.rs"
+    ],
+    "notes": [
+      "CACHEDIR.TAG validation is performed without checking if the target directory exists"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ac8856a2969e132c2434f2cce28d5d5330c15529",
+  "base_sha": "ddb37b06aba4dcf791fde56dd9fcf73ae7d05f7f",
+  "snapshot": "repos/rust-lang__cargo/ac8856a2969e132c2434f2cce28d5d5330c15529",
+  "diff": "diffs/rust-lang__cargo-16712.diff"
+}

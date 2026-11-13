@@ -1,0 +1,26 @@
+{
+  "case_id": "ChromeDevTools__chrome-devtools-mcp-2437",
+  "repo": "ChromeDevTools/chrome-devtools-mcp",
+  "pr": 2437,
+  "title": "fix: don't throw if Dialog was handled",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ChromeDevTools__chrome-devtools-mcp-2437__g1",
+  "target": {
+    "gid": "ChromeDevTools__chrome-devtools-mcp-2437#g1",
+    "summary": "Checking dialog.handled only within throwIfDialogOpen leaves handled dialog instances stored in this.#dialog. Consequently, getDialog() continues to return handled dialogs, causing tools to falsely report open dialogs and misattribute errors.",
+    "paths": [
+      "src/McpPage.ts"
+    ],
+    "notes": [
+      "faulty statement checking handled status only in throwIfDialogOpen instead of clearing it",
+      "definition of throwIfDialogOpen"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a5bd7cc4adc12b05af10eaf755a6f353f5b8d552",
+  "base_sha": "d5d91ee787ab3645ee062fa579749e5f17196740",
+  "snapshot": "repos/ChromeDevTools__chrome-devtools-mcp/a5bd7cc4adc12b05af10eaf755a6f353f5b8d552",
+  "diff": "diffs/ChromeDevTools__chrome-devtools-mcp-2437.diff"
+}

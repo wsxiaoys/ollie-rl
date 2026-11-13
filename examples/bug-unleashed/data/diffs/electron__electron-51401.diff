@@ -1,0 +1,129 @@
+diff --git a/shell/browser/api/electron_api_web_contents.cc b/shell/browser/api/electron_api_web_contents.cc
+index 27cc711f17f47..219658752d751 100644
+--- a/shell/browser/api/electron_api_web_contents.cc
++++ b/shell/browser/api/electron_api_web_contents.cc
+@@ -88,6 +88,8 @@
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "mojo/public/cpp/system/platform_handle.h"
+ #include "printing/buildflags/buildflags.h"
++#include "services/network/public/cpp/web_sandbox_flags.h"
++#include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
+ #include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
+ #include "services/service_manager/public/cpp/interface_provider.h"
+ #include "shell/browser/api/electron_api_browser_window.h"
+@@ -156,6 +158,7 @@
+ #include "third_party/blink/public/common/page/page_zoom.h"
+ #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
+ #include "third_party/blink/public/common/tokens/tokens.h"
++#include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
+ #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
+ #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
+ #include "third_party/blink/public/mojom/messaging/transferable_message.mojom.h"
+@@ -1397,6 +1400,26 @@ content::WebContents* WebContents::OpenURLFromTab(
+         navigation_handle_callback) {
+   auto weak_this = GetWeakPtr();
+   if (params.disposition != WindowOpenDisposition::CURRENT_TAB) {
++    content::FrameTreeNode* initiator =
++        params.frame_tree_node_id ? content::FrameTreeNode::GloballyFindByID(
++                                        params.frame_tree_node_id)
++                                  : nullptr;
++    if (initiator && !initiator->IsMainFrame()) {
++      using SandboxFlags = network::mojom::WebSandboxFlags;
++      const SandboxFlags flags = initiator->active_sandbox_flags();
++      auto allow = [flags](SandboxFlags flag) {
++        return (flags & flag) == SandboxFlags::kNone;
++      };
++      if (!allow(SandboxFlags::kPopups)) {
++        if (auto* rfh = initiator->current_frame_host()) {
++          rfh->AddMessageToConsole(
++              blink::mojom::ConsoleMessageLevel::kError,
++              "Blocked opening a new window because the iframe is sandboxed "
++              "and the 'allow-popups' keyword is not set.");
++        }
++        return nullptr;
++      }
++    }
+     Emit("-new-window", params.url, "", params.disposition, "", params.referrer,
+          params.post_data);
+     return nullptr;
+diff --git a/spec/chromium-spec.ts b/spec/chromium-spec.ts
+index 22ba16ef90157..5cfc6e3675f82 100644
+--- a/spec/chromium-spec.ts
++++ b/spec/chromium-spec.ts
+@@ -4971,3 +4971,76 @@ describe('iframe sandbox external protocols', () => {
+     expect(openExternalRequests).to.deep.equal(['magnet:sandbox-test']);
+   });
+ });
++
++describe('iframe sandbox popups', () => {
++  let server: http.Server;
++  let serverUrl: string;
++  let w: BrowserWindow;
++
++  const childHtml = `
++    <script>
++      addEventListener('DOMContentLoaded', () => {
++        const a = document.createElement('a');
++        a.href = 'https://example.com/sandbox-bypassed';
++        document.body.appendChild(a);
++        a.dispatchEvent(new MouseEvent('click', {
++          ctrlKey: true, metaKey: true, bubbles: true, cancelable: true, view: window
++        }));
++      });
++    </script>`;
++
++  before(async () => {
++    server = http.createServer((req, res) => {
++      res.setHeader('Content-Type', 'text/html');
++      if (req.url === '/child') {
++        res.end(childHtml);
++      } else {
++        const sandbox = new URL(req.url!, serverUrl).searchParams.get('sandbox') ?? '';
++        res.end(`<iframe sandbox="${sandbox}" src="/child"></iframe>`);
++      }
++    });
++    serverUrl = (await listen(server)).url;
++  });
++
++  after(() => {
++    server.close();
++  });
++
++  beforeEach(() => {
++    w = new BrowserWindow({ show: false });
++  });
++
++  afterEach(() => closeAllWindows());
++
++  it('does not invoke setWindowOpenHandler from a sandboxed iframe without allow-popups', async () => {
++    let handlerCalls = 0;
++    w.webContents.setWindowOpenHandler(() => {
++      handlerCalls++;
++      return { action: 'deny' };
++    });
++    await w.loadURL(`${serverUrl}/?sandbox=${encodeURIComponent('allow-scripts')}`);
++    await setTimeout(200);
++    expect(handlerCalls).to.equal(0);
++  });
++
++  it('does not create a BrowserWindow from a sandboxed iframe without allow-popups (no handler installed)', async () => {
++    let created = false;
++    w.webContents.on('did-create-window', () => {
++      created = true;
++    });
++    await w.loadURL(`${serverUrl}/?sandbox=${encodeURIComponent('allow-scripts')}`);
++    await setTimeout(200);
++    expect(created).to.be.false();
++  });
++
++  it('invokes setWindowOpenHandler when allow-popups is set', async () => {
++    let handlerCalls = 0;
++    w.webContents.setWindowOpenHandler(() => {
++      handlerCalls++;
++      return { action: 'deny' };
++    });
++    await w.loadURL(`${serverUrl}/?sandbox=${encodeURIComponent('allow-scripts allow-popups')}`);
++    await setTimeout(200);
++    expect(handlerCalls).to.equal(1);
++  });
++});

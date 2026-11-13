@@ -1,0 +1,6 @@
+{
+  "title": "Round scaled values inside theme files",
+  "body": "This PR creates the new `EDSCALE_RND()` define, which is a shortcut for `Math::round(value * EDSCALE)` and uses it for all values inside the theme files that are multiplied by `EDSCALE`.\r\n\r\nFixes #114976, and probably some other issues too.",
+  "head_sha": "c6b7af431d9b4a9a165d84a6faa314aadef9e61a",
+  "base_sha": "db01b4f730819cb39bce1922a7ec377b18239c0f"
+}

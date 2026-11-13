@@ -1,0 +1,16 @@
+{
+  "case_id": "django__django-21344",
+  "repo": "django/django",
+  "pr": 21344,
+  "title": "Fixed #37117 -- Used ModelAdmin.get_queryset() for change form actions.",
+  "language": "Python",
+  "split": "val",
+  "kind": "clean",
+  "example_id": "django__django-21344",
+  "target": null,
+  "siblings": [],
+  "head_sha": "9f82b61ef21712bfc94af302d094fedbbea413f0",
+  "base_sha": "53645750412efa1e9013004040db328bd515e0f1",
+  "snapshot": "repos/django__django/9f82b61ef21712bfc94af302d094fedbbea413f0",
+  "diff": "diffs/django__django-21344.diff"
+}

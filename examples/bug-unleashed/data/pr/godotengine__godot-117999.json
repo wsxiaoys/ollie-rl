@@ -1,0 +1,6 @@
+{
+  "title": "DDS: Fix loading 3D textures with mipmaps",
+  "body": "3D textures with mipmaps used to be read in the same way as array textures, which caused them to be loaded incorrectly.\r\n\r\nSample textures for testing:\r\n[3dtexture_test.zip](https://github.com/user-attachments/files/26349271/3dtexture_test.zip)\r\n",
+  "head_sha": "4f907cc7a0e69b7a4e2d71256e311f60d237e99b",
+  "base_sha": "2af785641ae249573f45eb61852d22e0b1a8a03c"
+}

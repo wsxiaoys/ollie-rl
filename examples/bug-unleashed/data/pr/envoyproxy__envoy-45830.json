@@ -1,0 +1,6 @@
+{
+  "title": "tracing: make otel tracer respect envoy tracing decision",
+  "body": "Previously this was ignored and the parent sampling status was taken no matter the internal decision.\r\n\r\nFixes https://github.com/envoyproxy/envoy/issues/35721\r\n",
+  "head_sha": "39607638c8940d0a4345c2e7f5a558393e690158",
+  "base_sha": "4355bd5611b5f2758da2a6bc3b76159017019ecd"
+}

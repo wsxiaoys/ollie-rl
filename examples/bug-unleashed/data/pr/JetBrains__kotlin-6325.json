@@ -1,0 +1,6 @@
+{
+  "title": "[Swift Export] Add support for re-exporting Objective-C protocols",
+  "body": "Objective-C import adds Protocol suffix to imported protocols, because Obj-c allows Classes and Protocols to have the same name, and kotlin does not. Objective-C export when sees a Type representing a protocol imported from Objective-C module would try and remove this `Protocol` suffix from the resulted header. This way the resulted header preserves correctness.\r\n\r\nThis commit introduces the same approach for Swift Export.\r\n\r\n^KT-87088 fixed",
+  "head_sha": "0ab0007b0521767a9572294d978d8d9f9bb5faa5",
+  "base_sha": "1d41d6555ab6d8dc38ecd2c33e4aa54fbfb9db02"
+}

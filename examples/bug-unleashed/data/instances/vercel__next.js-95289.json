@@ -1,0 +1,16 @@
+{
+  "case_id": "vercel__next.js-95289",
+  "repo": "vercel/next.js",
+  "pr": 95289,
+  "title": "fix: params/searchParams in client page crashing dev instant validation",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "vercel__next.js-95289",
+  "target": null,
+  "siblings": [],
+  "head_sha": "516d95920373d34b4e6c141c0b61853415bafa14",
+  "base_sha": "dff50cc7367ea68bed28c968412bd78f88a62839",
+  "snapshot": "repos/vercel__next.js/516d95920373d34b4e6c141c0b61853415bafa14",
+  "diff": "diffs/vercel__next.js-95289.diff"
+}

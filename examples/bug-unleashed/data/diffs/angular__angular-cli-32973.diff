@@ -1,0 +1,769 @@
+diff --git a/BUILD.bazel b/BUILD.bazel
+index 99bc6eb0355f..15200e8e228f 100644
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -15,6 +15,7 @@ exports_files([
+     "tsconfig-build-ng.json",
+     "tsconfig-build.json",
+     "package.json",
++    "node_modules/@angular/core/resources/best-practices.md",
+ ])
+ 
+ npm_link_all_packages()
+diff --git a/packages/schematics/angular/BUILD.bazel b/packages/schematics/angular/BUILD.bazel
+index 55d40efae377..b4fc4e885c30 100644
+--- a/packages/schematics/angular/BUILD.bazel
++++ b/packages/schematics/angular/BUILD.bazel
+@@ -3,6 +3,7 @@
+ # Use of this source code is governed by an MIT-style license that can be
+ # found in the LICENSE file at https://angular.dev/license
+ 
++load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+ load("@npm//:defs.bzl", "npm_link_all_packages")
+ load("//tools:defaults.bzl", "copy_to_bin", "jasmine_test", "npm_package", "ts_project")
+ load("//tools:ts_json_schema.bzl", "ts_json_schema")
+@@ -45,16 +46,10 @@ copy_to_bin(
+     srcs = glob(["**/schema.json"]),
+ )
+ 
+-genrule(
++copy_file(
+     name = "angular_best_practices",
+-    srcs = [
+-        "//:node_modules/@angular/core/dir",
+-    ],
+-    outs = ["ai-config/files/__rulesName__.template"],
+-    cmd = """
+-        echo -e "<% if (frontmatter) { %><%= frontmatter %>\\n<% } %>" > $@
+-        cat "$(location //:node_modules/@angular/core/dir)/resources/best-practices.md" >> $@
+-    """,
++    src = "//:node_modules/@angular/core/resources/best-practices.md",
++    out = "ai-config/files/__bestPracticesName__.template",
+ )
+ 
+ RUNTIME_ASSETS = [
+diff --git a/packages/schematics/angular/ai-config/file_utils.ts b/packages/schematics/angular/ai-config/file_utils.ts
+new file mode 100644
+index 000000000000..ac47d59ad513
+--- /dev/null
++++ b/packages/schematics/angular/ai-config/file_utils.ts
+@@ -0,0 +1,156 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import {
++  Rule,
++  apply,
++  applyTemplates,
++  filter,
++  forEach,
++  mergeWith,
++  move,
++  noop,
++  strings,
++  url,
++} from '@angular-devkit/schematics';
++import { parse } from 'jsonc-parser';
++import { JSONFile } from '../utility/json-file';
++import { FileConfigurationHandlerOptions } from './types';
++
++const TOML_MCP_SERVERS_PROP = '[mcp_servers.angular-cli]';
++
++/**
++ * Create or update a JSON MCP configuration file to include the Angular MCP server.
++ */
++export function addJsonMcpConfig(
++  { tree, fileInfo }: FileConfigurationHandlerOptions,
++  mcpServersProperty: string,
++): Rule {
++  const { name, directory } = fileInfo;
++
++  return mergeWith(
++    apply(url('./files'), [
++      filter((path) => path.includes('__jsonConfigName__')),
++      applyTemplates({
++        ...strings,
++        jsonConfigName: name,
++        mcpServersProperty,
++      }),
++      move(directory),
++      forEach((file) => {
++        if (!tree.exists(file.path)) {
++          return file;
++        }
++
++        // If we have an existing file, update the server property with
++        // Angular MCP server configuration.
++        const existingConfig = new JSONFile(tree, file.path);
++        const existingMcpServers = existingConfig.get([mcpServersProperty]) ?? {};
++        const templateServersProp = parse(file.content.toString())[mcpServersProperty];
++
++        existingConfig.modify([mcpServersProperty], {
++          ...existingMcpServers,
++          ...templateServersProp,
++        });
++
++        return null;
++      }),
++    ]),
++  );
++}
++
++/**
++ * Create or update a TOML MCP configuration file to include the Angular MCP server.
++ */
++export function addTomlMcpConfig({
++  tree,
++  context,
++  fileInfo,
++  tool,
++}: FileConfigurationHandlerOptions): Rule {
++  const { name, directory } = fileInfo;
++
++  return mergeWith(
++    apply(url('./files'), [
++      filter((path) => path.includes('__tomlConfigName__')),
++      applyTemplates({
++        ...strings,
++        tomlConfigName: name,
++      }),
++      move(directory),
++      forEach((file) => {
++        if (!tree.exists(file.path)) {
++          return file;
++        }
++
++        const existingFileBuffer = tree.read(file.path);
++
++        if (existingFileBuffer) {
++          let existing = existingFileBuffer.toString();
++          if (existing.includes(TOML_MCP_SERVERS_PROP)) {
++            const path = `${directory}/${name}`;
++            const toolName = strings.classify(tool);
++            context.logger.warn(
++              `Skipping Angular MCP server configuration for '${toolName}'.\n` +
++                `Configuration already exists in '${path}'.\n`,
++            );
++
++            return null;
++          }
++
++          // Add the configuration at the end of the file.
++          const template = file.content.toString();
++          existing = existing.length ? existing + '\n\n' + template : template;
++
++          tree.overwrite(file.path, existing);
++
++          return null;
++        }
++
++        return file;
++      }),
++    ]),
++  );
++}
++
++/**
++ * Create an Angular best practices Markdown.
++ * If the file exists, the configuration is skipped.
++ */
++export function addBestPracticesMarkdown({
++  tree,
++  context,
++  fileInfo,
++  tool,
++}: FileConfigurationHandlerOptions): Rule {
++  const { name, directory } = fileInfo;
++  const path = `${directory}/${name}`;
++
++  if (tree.exists(path)) {
++    const toolName = strings.classify(tool);
++    context.logger.warn(
++      `Skipping configuration file for '${toolName}' at '${path}' because it already exists.\n` +
++        'This is to prevent overwriting a potentially customized file. ' +
++        'If you want to regenerate it with Angular recommended defaults, please delete the existing file and re-run the command.\n' +
++        'You can review the latest recommendations at https://angular.dev/ai/develop-with-ai.\n',
++    );
++
++    return noop();
++  }
++
++  return mergeWith(
++    apply(url('./files'), [
++      filter((path) => path.includes('__bestPracticesName__')),
++      applyTemplates({
++        ...strings,
++        bestPracticesName: name,
++      }),
++      move(directory),
++    ]),
++  );
++}
+diff --git a/packages/schematics/angular/ai-config/files/__jsonConfigName__.template b/packages/schematics/angular/ai-config/files/__jsonConfigName__.template
+new file mode 100644
+index 000000000000..4da7c6e12f7b
+--- /dev/null
++++ b/packages/schematics/angular/ai-config/files/__jsonConfigName__.template
+@@ -0,0 +1,8 @@
++{
++  "<%= mcpServersProperty %>": {
++    "angular-cli": {
++      "command": "npx",
++      "args": ["-y", "@angular/cli", "mcp"]
++    }
++  }
++}
+diff --git a/packages/schematics/angular/ai-config/files/__tomlConfigName__.template b/packages/schematics/angular/ai-config/files/__tomlConfigName__.template
+new file mode 100644
+index 000000000000..74e6b49b22ae
+--- /dev/null
++++ b/packages/schematics/angular/ai-config/files/__tomlConfigName__.template
+@@ -0,0 +1,3 @@
++[mcp_servers.angular-cli]
++command = "npx"
++args = ["-y", "@angular/cli", "mcp"]
+diff --git a/packages/schematics/angular/ai-config/index.ts b/packages/schematics/angular/ai-config/index.ts
+index f332fd8b7e39..7dab2fccbdef 100644
+--- a/packages/schematics/angular/ai-config/index.ts
++++ b/packages/schematics/angular/ai-config/index.ts
+@@ -6,57 +6,63 @@
+  * found in the LICENSE file at https://angular.dev/license
+  */
+ 
+-import {
+-  Rule,
+-  apply,
+-  applyTemplates,
+-  chain,
+-  mergeWith,
+-  move,
+-  noop,
+-  strings,
+-  url,
+-} from '@angular-devkit/schematics';
++import { Rule, chain, noop, strings } from '@angular-devkit/schematics';
++import { addBestPracticesMarkdown, addJsonMcpConfig, addTomlMcpConfig } from './file_utils';
+ import { Schema as ConfigOptions, Tool } from './schema';
++import { ContextFileInfo, ContextFileType, FileConfigurationHandlerOptions } from './types';
+ 
+-const AI_TOOLS: { [key in Exclude<Tool, Tool.None>]: ContextFileInfo } = {
+-  agents: {
+-    rulesName: 'AGENTS.md',
+-    directory: '.',
+-  },
+-  gemini: {
+-    rulesName: 'GEMINI.md',
+-    directory: '.gemini',
+-  },
+-  claude: {
+-    rulesName: 'CLAUDE.md',
+-    directory: '.claude',
+-  },
+-  copilot: {
+-    rulesName: 'copilot-instructions.md',
+-    directory: '.github',
+-  },
+-  windsurf: {
+-    rulesName: 'guidelines.md',
+-    directory: '.windsurf/rules',
+-  },
+-  jetbrains: {
+-    rulesName: 'guidelines.md',
+-    directory: '.junie',
+-  },
+-  // Cursor file has a front matter section.
+-  cursor: {
+-    rulesName: 'cursor.mdc',
+-    directory: '.cursor/rules',
+-    frontmatter: `---\ncontext: true\npriority: high\nscope: project\n---`,
+-  },
++const AGENTS_MD_CFG: ContextFileInfo = {
++  type: ContextFileType.BestPracticesMd,
++  name: 'AGENTS.md',
++  directory: '.',
+ };
+ 
+-interface ContextFileInfo {
+-  rulesName: string;
+-  directory: string;
+-  frontmatter?: string;
+-}
++const AI_TOOLS: { [key in Exclude<Tool, Tool.None>]: ContextFileInfo[] } = {
++  ['claude-code']: [
++    AGENTS_MD_CFG,
++    {
++      type: ContextFileType.McpConfig,
++      name: '.mcp.json',
++      directory: '.',
++    },
++  ],
++  cursor: [
++    AGENTS_MD_CFG,
++    {
++      type: ContextFileType.McpConfig,
++      name: 'mcp.json',
++      directory: '.cursor',
++    },
++  ],
++  ['gemini-cli']: [
++    {
++      type: ContextFileType.BestPracticesMd,
++      name: 'GEMINI.md',
++      directory: '.gemini',
++    },
++    {
++      type: ContextFileType.McpConfig,
++      name: 'settings.json',
++      directory: '.gemini',
++    },
++  ],
++  ['open-ai-codex']: [
++    AGENTS_MD_CFG,
++    {
++      type: ContextFileType.McpConfig,
++      name: 'config.toml',
++      directory: '.codex',
++    },
++  ],
++  vscode: [
++    AGENTS_MD_CFG,
++    {
++      type: ContextFileType.McpConfig,
++      name: 'mcp.json',
++      directory: '.vscode',
++    },
++  ],
++};
+ 
+ export default function ({ tool }: ConfigOptions): Rule {
+   return (tree, context) => {
+@@ -66,33 +72,36 @@ export default function ({ tool }: ConfigOptions): Rule {
+ 
+     const rules = tool
+       .filter((tool) => tool !== Tool.None)
+-      .map((selectedTool) => {
+-        const { rulesName, directory, frontmatter } = AI_TOOLS[selectedTool];
+-        const path = `${directory}/${rulesName}`;
+-
+-        if (tree.exists(path)) {
+-          const toolName = strings.classify(selectedTool);
+-          context.logger.warn(
+-            `Skipping configuration file for '${toolName}' at '${path}' because it already exists.\n` +
+-              'This is to prevent overwriting a potentially customized file. ' +
+-              'If you want to regenerate it with Angular recommended defaults, please delete the existing file and re-run the command.\n' +
+-              'You can review the latest recommendations at https://angular.dev/ai/develop-with-ai.',
+-          );
+-
+-          return noop();
+-        }
++      .flatMap((selectedTool) =>
++        AI_TOOLS[selectedTool].map((fileInfo) => {
++          const fileCfgOpts: FileConfigurationHandlerOptions = {
++            tree,
++            context,
++            fileInfo,
++            tool: selectedTool,
++          };
+ 
+-        return mergeWith(
+-          apply(url('./files'), [
+-            applyTemplates({
+-              ...strings,
+-              rulesName,
+-              frontmatter,
+-            }),
+-            move(directory),
+-          ]),
+-        );
+-      });
++          switch (fileInfo.type) {
++            case ContextFileType.BestPracticesMd:
++              return addBestPracticesMarkdown(fileCfgOpts);
++            case ContextFileType.McpConfig:
++              switch (selectedTool) {
++                case Tool.ClaudeCode:
++                case Tool.Cursor:
++                case Tool.GeminiCli:
++                  return addJsonMcpConfig(fileCfgOpts, 'mcpServers');
++                case Tool.OpenAiCodex:
++                  return addTomlMcpConfig(fileCfgOpts);
++                case Tool.Vscode:
++                  return addJsonMcpConfig(fileCfgOpts, 'servers');
++                default:
++                  throw new Error(
++                    `Unsupported '${strings.classify(selectedTool)}' MCP server configuraiton.`,
++                  );
++              }
++          }
++        }),
++      );
+ 
+     return chain(rules);
+   };
+diff --git a/packages/schematics/angular/ai-config/index_spec.ts b/packages/schematics/angular/ai-config/index_spec.ts
+index 63b1bb205963..f4408e96444c 100644
+--- a/packages/schematics/angular/ai-config/index_spec.ts
++++ b/packages/schematics/angular/ai-config/index_spec.ts
+@@ -7,10 +7,11 @@
+  */
+ 
+ import { SchematicTestRunner, UnitTestTree } from '@angular-devkit/schematics/testing';
++import { parse } from 'jsonc-parser';
+ import { Schema as WorkspaceOptions } from '../workspace/schema';
+ import { Schema as ConfigOptions, Tool as ConfigTool } from './schema';
+ 
+-describe('Ai Config Schematic', () => {
++describe('AI Config Schematic', () => {
+   const schematicRunner = new SchematicTestRunner(
+     '@schematics/angular',
+     require.resolve('../collection.json'),
+@@ -23,7 +24,7 @@ describe('Ai Config Schematic', () => {
+   };
+ 
+   let workspaceTree: UnitTestTree;
+-  function runConfigSchematic(tool: ConfigTool[]): Promise<UnitTestTree> {
++  function runAiConfigSchematic(tool: ConfigTool[]): Promise<UnitTestTree> {
+     return schematicRunner.runSchematic<ConfigOptions>('ai-config', { tool }, workspaceTree);
+   }
+ 
+@@ -31,82 +32,141 @@ describe('Ai Config Schematic', () => {
+     workspaceTree = await schematicRunner.runSchematic('workspace', workspaceOptions);
+   });
+ 
+-  it('should create an AGENTS.md file', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Agents]);
++  it('should create Angular MCP server config and AGENTS.md for Claude Code', async () => {
++    const tree = await runAiConfigSchematic([ConfigTool.ClaudeCode]);
+     expect(tree.exists('AGENTS.md')).toBeTruthy();
++    expect(tree.exists('.mcp.json')).toBeTruthy();
+   });
+ 
+-  it('should create a GEMINI.MD file', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Gemini]);
+-    expect(tree.exists('.gemini/GEMINI.md')).toBeTruthy();
+-  });
+-
+-  it('should create a copilot-instructions.md file', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Copilot]);
+-    expect(tree.exists('.github/copilot-instructions.md')).toBeTruthy();
+-  });
+-
+-  it('should create a cursor file', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Cursor]);
+-    expect(tree.exists('.cursor/rules/cursor.mdc')).toBeTruthy();
++  it('should create Angular MCP server config and AGENTS.md for Cursor', async () => {
++    const tree = await runAiConfigSchematic([ConfigTool.Cursor]);
++    expect(tree.exists('AGENTS.md')).toBeTruthy();
++    expect(tree.exists('.cursor/mcp.json')).toBeTruthy();
+   });
+ 
+-  it('should create a windsurf file', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Windsurf]);
+-    expect(tree.exists('.windsurf/rules/guidelines.md')).toBeTruthy();
++  it('should create Angular MCP server config and GEMINI.md for Gemini CLI', async () => {
++    const tree = await runAiConfigSchematic([ConfigTool.GeminiCli]);
++    expect(tree.exists('.gemini/GEMINI.md')).toBeTruthy();
++    expect(tree.exists('.gemini/settings.json')).toBeTruthy();
+   });
+ 
+-  it('should create a claude file', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Claude]);
+-    expect(tree.exists('.claude/CLAUDE.md')).toBeTruthy();
++  it('should create Angular MCP server config and AGENTS.md for Open AI Codex', async () => {
++    const tree = await runAiConfigSchematic([ConfigTool.OpenAiCodex]);
++    expect(tree.exists('AGENTS.md')).toBeTruthy();
++    expect(tree.exists('.codex/config.toml')).toBeTruthy();
+   });
+ 
+-  it('should create a jetbrains file', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Jetbrains]);
+-    expect(tree.exists('.junie/guidelines.md')).toBeTruthy();
++  it('should create Angular MCP server config and AGENTS.md for VS Code', async () => {
++    const tree = await runAiConfigSchematic([ConfigTool.Vscode]);
++    expect(tree.exists('AGENTS.md')).toBeTruthy();
++    expect(tree.exists('.vscode/mcp.json')).toBeTruthy();
+   });
+ 
+   it('should create multiple files when multiple tools are selected', async () => {
+-    const tree = await runConfigSchematic([
+-      ConfigTool.Gemini,
+-      ConfigTool.Copilot,
++    const tree = await runAiConfigSchematic([
++      ConfigTool.GeminiCli,
++      ConfigTool.Vscode,
+       ConfigTool.Cursor,
+     ]);
++    expect(tree.exists('AGENTS.md')).toBeTruthy();
+     expect(tree.exists('.gemini/GEMINI.md')).toBeTruthy();
+-    expect(tree.exists('.github/copilot-instructions.md')).toBeTruthy();
+-    expect(tree.exists('.cursor/rules/cursor.mdc')).toBeTruthy();
++    expect(tree.exists('.gemini/settings.json')).toBeTruthy();
++    expect(tree.exists('.vscode/mcp.json')).toBeTruthy();
++    expect(tree.exists('.cursor/mcp.json')).toBeTruthy();
+   });
+ 
+   it('should not create any files if None is selected', async () => {
+     const filesCount = workspaceTree.files.length;
+-    const tree = await runConfigSchematic([ConfigTool.None]);
++    const tree = await runAiConfigSchematic([ConfigTool.None]);
+     expect(tree.files.length).toBe(filesCount);
+   });
+ 
+-  it('should not overwrite an existing file', async () => {
++  it('should create for tool if None and an AI host are selected', async () => {
++    const tree = await runAiConfigSchematic([ConfigTool.GeminiCli, ConfigTool.None]);
++    expect(tree.exists('.gemini/GEMINI.md')).toBeTruthy();
++    expect(tree.exists('.gemini/settings.json')).toBeTruthy();
++  });
++
++  it('should omit best practices creation, if the file already exists', async () => {
+     const customContent = 'custom user content';
+-    workspaceTree.create('.gemini/GEMINI.md', customContent);
++    workspaceTree.create('AGENTS.md', customContent);
+ 
+     const messages: string[] = [];
+     const loggerSubscription = schematicRunner.logger.subscribe((x) => messages.push(x.message));
+ 
+     try {
+-      const tree = await runConfigSchematic([ConfigTool.Gemini]);
++      const tree = await runAiConfigSchematic([ConfigTool.ClaudeCode]);
+ 
+-      expect(tree.readContent('.gemini/GEMINI.md')).toBe(customContent);
++      expect(tree.readContent('AGENTS.md')).toBe(customContent);
+       expect(messages).toContain(
+-        `Skipping configuration file for 'Gemini' at '.gemini/GEMINI.md' because it already exists.\n` +
++        `Skipping configuration file for 'ClaudeCode' at './AGENTS.md' because it already exists.\n` +
+           'This is to prevent overwriting a potentially customized file. ' +
+           'If you want to regenerate it with Angular recommended defaults, please delete the existing file and re-run the command.\n' +
+-          'You can review the latest recommendations at https://angular.dev/ai/develop-with-ai.',
++          'You can review the latest recommendations at https://angular.dev/ai/develop-with-ai.\n',
+       );
+     } finally {
+       loggerSubscription.unsubscribe();
+     }
+   });
+ 
+-  it('should create for tool if None and Gemini are selected', async () => {
+-    const tree = await runConfigSchematic([ConfigTool.Gemini, ConfigTool.None]);
+-    expect(tree.exists('.gemini/GEMINI.md')).toBeTruthy();
++  it('should update JSON MCP server config, if the file exists', async () => {
++    // eslint-disable-next-line @typescript-eslint/no-explicit-any
++    const jsonConfig: Record<string, any> = {
++      foo: 'bar',
++      mcpServers: {
++        'baz': {},
++      },
++    };
++    workspaceTree.create('.mcp.json', JSON.stringify(jsonConfig));
++
++    const tree = await runAiConfigSchematic([ConfigTool.ClaudeCode]);
++
++    const modifiedConfig = structuredClone(jsonConfig);
++    modifiedConfig.mcpServers = {
++      ...modifiedConfig.mcpServers,
++      ['angular-cli']: {
++        command: 'npx',
++        args: ['-y', '@angular/cli', 'mcp'],
++      },
++    };
++
++    const actualConfig = parse(tree.readContent('.mcp.json'));
++
++    expect(JSON.stringify(actualConfig, null, 2)).toBe(JSON.stringify(modifiedConfig, null, 2));
++  });
++
++  it('should update TOML MCP server config, if the file exists', async () => {
++    const tomlConfig = '[foo]';
++    workspaceTree.create('.codex/config.toml', tomlConfig);
++
++    const tree = await runAiConfigSchematic([ConfigTool.OpenAiCodex]);
++
++    let modifiedConfig = tomlConfig;
++    modifiedConfig +=
++      '\n\n[mcp_servers.angular-cli]\n' +
++      'command = "npx"\n' +
++      'args = ["-y", "@angular/cli", "mcp"]\n';
++
++    expect(tree.readContent('.codex/config.toml')).toBe(modifiedConfig);
++  });
++
++  it('should omit TOML MCP server config update, if the config already exists', async () => {
++    const tomlConfig = '[mcp_servers.angular-cli]';
++    workspaceTree.create('.codex/config.toml', tomlConfig);
++
++    const messages: string[] = [];
++    const loggerSubscription = schematicRunner.logger.subscribe((x) => messages.push(x.message));
++
++    try {
++      const tree = await runAiConfigSchematic([ConfigTool.OpenAiCodex]);
++
++      expect(tree.readContent('.codex/config.toml')).toBe(tomlConfig);
++      expect(messages).toContain(
++        `Skipping Angular MCP server configuration for 'OpenAiCodex'.\n` +
++          `Configuration already exists in '.codex/config.toml'.\n`,
++      );
++    } finally {
++      loggerSubscription.unsubscribe();
++    }
+   });
+ });
+diff --git a/packages/schematics/angular/ai-config/schema.json b/packages/schematics/angular/ai-config/schema.json
+index bbfc21028c9f..4cb63468ae53 100644
+--- a/packages/schematics/angular/ai-config/schema.json
++++ b/packages/schematics/angular/ai-config/schema.json
+@@ -4,14 +4,14 @@
+   "title": "Angular AI Config File Options Schema",
+   "type": "object",
+   "additionalProperties": false,
+-  "description": "Generates AI configuration files for Angular projects. This schematic creates configuration files that help AI tools follow Angular best practices, improving the quality of AI-generated code and suggestions.",
++  "description": "Generates AI configuration files for Angular projects. This schematic creates AGENTS.md file and Angular MCP server configuration, improving the quality of AI-generated code and suggestions.",
+   "properties": {
+     "tool": {
+       "type": "array",
+       "uniqueItems": true,
+       "default": ["none"],
+       "x-prompt": {
+-        "message": "Which AI tools do you want to configure with Angular best practices? https://angular.dev/ai/develop-with-ai",
++        "message": "Which AI tools should Angular integrate with? https://angular.dev/ai/develop-with-ai",
+         "type": "list",
+         "items": [
+           {
+@@ -19,39 +19,31 @@
+             "label": "None"
+           },
+           {
+-            "value": "agents",
+-            "label": "Agents.md      [ https://agents.md/                                               ]"
+-          },
+-          {
+-            "value": "claude",
+-            "label": "Claude         [ https://docs.anthropic.com/en/docs/claude-code/memory            ]"
++            "value": "claude-code",
++            "label": "Claude Code   [ `AGENTS.md` + Angular MCP server config ]"
+           },
+           {
+             "value": "cursor",
+-            "label": "Cursor         [ https://docs.cursor.com/en/context/rules                         ]"
+-          },
+-          {
+-            "value": "gemini",
+-            "label": "Gemini         [ https://ai.google.dev/gemini-api/docs                            ]"
++            "label": "Cursor        [ `AGENTS.md` + Angular MCP server config ]"
+           },
+           {
+-            "value": "copilot",
+-            "label": "GitHub Copilot [ https://code.visualstudio.com/docs/copilot/copilot-customization ]"
++            "value": "gemini-cli",
++            "label": "Gemini CLI    [ `GEMINI.md` + Angular MCP server config ]"
+           },
+           {
+-            "value": "jetbrains",
+-            "label": "JetBrains AI   [ https://www.jetbrains.com/help/junie/customize-guidelines.html   ]"
++            "value": "open-ai-codex",
++            "label": "Open AI Codex [ `AGENTS.md` + Angular MCP server config ]"
+           },
+           {
+-            "value": "windsurf",
+-            "label": "Windsurf       [ https://docs.windsurf.com/windsurf/cascade/memories#rules        ]"
++            "value": "vscode",
++            "label": "VSCode        [ `AGENTS.md` + Angular MCP server config ]"
+           }
+         ]
+       },
+-      "description": "Specifies which AI tools to generate configuration files for. These file are used to improve the outputs of AI tools by following the best practices.",
++      "description": "Specifies which AI tools to generate configuration files (AGENTS.md, MCP server config) for.",
+       "items": {
+         "type": "string",
+-        "enum": ["none", "gemini", "copilot", "claude", "cursor", "jetbrains", "windsurf", "agents"]
++        "enum": ["none", "claude-code", "cursor", "gemini-cli", "open-ai-codex", "vscode"]
+       }
+     }
+   }
+diff --git a/packages/schematics/angular/ai-config/types.ts b/packages/schematics/angular/ai-config/types.ts
+new file mode 100644
+index 000000000000..1d4fe78a7b2a
+--- /dev/null
++++ b/packages/schematics/angular/ai-config/types.ts
+@@ -0,0 +1,41 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import { SchematicContext, Tree } from '@angular-devkit/schematics';
++import { Tool } from './schema';
++
++/**
++ * Types of supported AI configuration files.
++ */
++export enum ContextFileType {
++  /** Represents a Markdown AI instructions file (e.g. AGENTS.md). */
++  BestPracticesMd = 0,
++
++  /** Represents an MCP server configuration (e.g. Angular MCP).  */
++  McpConfig = 1,
++}
++
++/**
++ * AI configuration file metadata.
++ */
++export interface ContextFileInfo {
++  type: ContextFileType;
++  name: string;
++  directory: string;
++}
++
++/**
++ * Represents the file configuration handler options
++ * that are normally passed to the handler functions.
++ */
++export type FileConfigurationHandlerOptions = {
++  tree: Tree;
++  context: SchematicContext;
++  fileInfo: ContextFileInfo;
++  tool: Tool;
++};
+diff --git a/packages/schematics/angular/ng-new/index_spec.ts b/packages/schematics/angular/ng-new/index_spec.ts
+index ad97df398fba..a9a6b4a1b6b2 100644
+--- a/packages/schematics/angular/ng-new/index_spec.ts
++++ b/packages/schematics/angular/ng-new/index_spec.ts
+@@ -104,13 +104,15 @@ describe('Ng New Schematic', () => {
+     expect(cli.packageManager).toBe('npm');
+   });
+ 
+-  it('should add ai config file when aiConfig is set', async () => {
+-    const options = { ...defaultOptions, aiConfig: ['gemini', 'claude'] };
++  it('should add AI config file when aiConfig is set', async () => {
++    const options = { ...defaultOptions, aiConfig: ['gemini-cli', 'claude-code'] };
+ 
+     const tree = await schematicRunner.runSchematic('ng-new', options);
+     const files = tree.files;
++    expect(files).toContain('/bar/AGENTS.md');
++    expect(files).toContain('/bar/.mcp.json');
+     expect(files).toContain('/bar/.gemini/GEMINI.md');
+-    expect(files).toContain('/bar/.claude/CLAUDE.md');
++    expect(files).toContain('/bar/.gemini/settings.json');
+   });
+ 
+   it('should create a tailwind project when style is tailwind', async () => {
+diff --git a/packages/schematics/angular/ng-new/schema.json b/packages/schematics/angular/ng-new/schema.json
+index 30957b9342c1..257628fcda9e 100644
+--- a/packages/schematics/angular/ng-new/schema.json
++++ b/packages/schematics/angular/ng-new/schema.json
+@@ -155,7 +155,7 @@
+       "description": "Specifies which AI tools to generate configuration files for. These file are used to improve the outputs of AI tools by following the best practices.",
+       "items": {
+         "type": "string",
+-        "enum": ["none", "gemini", "copilot", "claude", "cursor", "jetbrains", "windsurf", "agents"]
++        "enum": ["none", "claude-code", "cursor", "gemini-cli", "open-ai-codex", "vscode"]
+       }
+     },
+     "fileNameStyleGuide": {

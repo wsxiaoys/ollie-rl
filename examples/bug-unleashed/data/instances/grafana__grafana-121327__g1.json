@@ -1,0 +1,28 @@
+{
+  "case_id": "grafana__grafana-121327",
+  "repo": "grafana/grafana",
+  "pr": 121327,
+  "title": "SQL: Guard fill resampling in MSSQL, PostgreSQL and MySQL",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "grafana__grafana-121327__g1",
+  "target": {
+    "gid": "grafana__grafana-121327#g1",
+    "summary": "`stripSQLComments` strips `#` comments using the naive regex `#[^\\n]*` (`reHashComment`), which matches `#` characters inside quoted strings and JSON paths, truncating queries and causing SQL syntax errors.",
+    "paths": [
+      "pkg/tsdb/mysql/macros.go"
+    ],
+    "notes": [
+      "faulty regex replacement stripping # comments regardless of quotes",
+      "definition of naive reHashComment regex",
+      "definition of stripSQLComments function whose behavior is wrong",
+      "call site of stripSQLComments in Interpolate"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "b3b10c2f7c05d359a835b55e0e21c89ac0bf70f4",
+  "base_sha": "437f6706fba7d3439b0460c07520bf8ce8ef5fa7",
+  "snapshot": "repos/grafana__grafana/b3b10c2f7c05d359a835b55e0e21c89ac0bf70f4",
+  "diff": "diffs/grafana__grafana-121327.diff"
+}

@@ -1,0 +1,78 @@
+diff --git a/lib/dispatcher/dispatcher.js b/lib/dispatcher/dispatcher.js
+index ecff2a9b168..0eae084bac1 100644
+--- a/lib/dispatcher/dispatcher.js
++++ b/lib/dispatcher/dispatcher.js
+@@ -1,5 +1,6 @@
+ 'use strict'
+ const EventEmitter = require('node:events')
++const { kUrl } = require('../core/symbols')
+ 
+ class Dispatcher extends EventEmitter {
+   dispatch () {
+@@ -35,6 +36,15 @@ class Dispatcher extends EventEmitter {
+       }
+     }
+ 
++    const originalDispatch = dispatch
++    const self = this
++    dispatch = function (opts, handler) {
++      if (opts && typeof opts === 'object' && !opts.origin && self[kUrl]) {
++        opts = Object.assign({}, opts, { origin: self[kUrl].origin })
++      }
++      return originalDispatch(opts, handler)
++    }
++
+     return new Proxy(this, {
+       get: (target, key) => key === 'dispatch' ? dispatch : target[key]
+     })
+diff --git a/test/interceptors/dns.js b/test/interceptors/dns.js
+index 5dada0fb2e0..c74a2995854 100644
+--- a/test/interceptors/dns.js
++++ b/test/interceptors/dns.js
+@@ -2284,7 +2284,7 @@ test('#4234 - Should pass Client requests without origin through', async t => {
+   const client = new Client(`http://localhost:${server.address().port}`).compose(dns({
+     lookup: (_origin, _opts, cb) => {
+       lookupCount++
+-      cb(new Error('lookup should not run'))
++      cb(null, [{ address: '127.0.0.1', family: 4 }])
+     }
+   }))
+ 
+@@ -2301,7 +2301,7 @@ test('#4234 - Should pass Client requests without origin through', async t => {
+ 
+   t.equal(response.statusCode, 200)
+   t.equal(await response.body.text(), 'hello world!')
+-  t.equal(lookupCount, 0)
++  t.equal(lookupCount, 1)
+ })
+ 
+ test('#4234 - Should pass Pool requests without origin through', async t => {
+@@ -2320,7 +2320,7 @@ test('#4234 - Should pass Pool requests without origin through', async t => {
+   const pool = new Pool(`http://localhost:${server.address().port}`).compose(dns({
+     lookup: (_origin, _opts, cb) => {
+       lookupCount++
+-      cb(new Error('lookup should not run'))
++      cb(null, [{ address: '127.0.0.1', family: 4 }])
+     }
+   }))
+ 
+@@ -2337,5 +2337,5 @@ test('#4234 - Should pass Pool requests without origin through', async t => {
+ 
+   t.equal(response.statusCode, 200)
+   t.equal(await response.body.text(), 'hello world!')
+-  t.equal(lookupCount, 0)
++  t.equal(lookupCount, 1)
+ })
+diff --git a/test/interceptors/retry.js b/test/interceptors/retry.js
+index 433f628f0e0..2baf7a4b0ba 100644
+--- a/test/interceptors/retry.js
++++ b/test/interceptors/retry.js
+@@ -319,7 +319,7 @@ test('Should pass context from other interceptors', async t => {
+   const response = await client.request(requestOptions)
+ 
+   t.equal(response.statusCode, 200)
+-  t.deepStrictEqual(response.context, { history: [] })
++  t.deepStrictEqual(response.context, { history: [new URL(requestOptions.path, `http://localhost:${server.address().port}`)] })
+ })
+ 
+ test('Should handle 206 partial content', async t => {

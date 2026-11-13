@@ -1,0 +1,196 @@
+diff --git a/crates/bevy_remote/src/http.rs b/crates/bevy_remote/src/http.rs
+index 4e36e4a0bfe94..24edd3d11ec94 100644
+--- a/crates/bevy_remote/src/http.rs
++++ b/crates/bevy_remote/src/http.rs
+@@ -367,17 +367,6 @@ async fn process_single_request(
+         }
+     };
+ 
+-    if request.jsonrpc != "2.0" {
+-        return Ok(BrpHttpResponse::Complete(BrpResponse::new(
+-            id,
+-            Err(BrpError {
+-                code: error_codes::INVALID_REQUEST,
+-                message: String::from("JSON-RPC request requires `\"jsonrpc\": \"2.0\"`"),
+-                data: None,
+-            }),
+-        )));
+-    }
+-
+     let watch = request.method.contains("+watch");
+     let size = if watch { 8 } else { 1 };
+     let (result_sender, result_receiver) = async_channel::bounded(size);
+diff --git a/crates/bevy_remote/src/lib.rs b/crates/bevy_remote/src/lib.rs
+index 921ab1ff148dd..3ee0c53c5e443 100644
+--- a/crates/bevy_remote/src/lib.rs
++++ b/crates/bevy_remote/src/lib.rs
+@@ -546,7 +546,7 @@ use bevy_ecs::{
+ };
+ use bevy_platform::collections::HashMap;
+ use bevy_utils::prelude::default;
+-use serde::{Deserialize, Serialize};
++use serde::{ser::SerializeMap, Deserialize, Serialize};
+ use serde_json::Value;
+ use std::sync::RwLock;
+ 
+@@ -860,27 +860,126 @@ pub struct RemoteWatchingRequests(Vec<(BrpMessage, RemoteWatchingMethodSystemId)
+ ///         params: None,
+ ///     };
+ /// ```
+-#[derive(Debug, Serialize, Deserialize, Clone)]
++#[derive(Debug, Clone)]
+ pub struct BrpRequest {
+-    /// This field is mandatory and must be set to `"2.0"` for the request to be accepted.
+-    pub jsonrpc: String,
+-
+     /// The action to be performed.
+     pub method: String,
+ 
+     /// Arbitrary data that will be returned verbatim to the client as part of
+     /// the response.
+-    #[serde(skip_serializing_if = "Option::is_none")]
+     pub id: Option<Value>,
+ 
+     /// The parameters, specific to each method.
+     ///
+     /// These are passed as the first argument to the method handler.
+     /// Sometimes params can be omitted.
+-    #[serde(skip_serializing_if = "Option::is_none")]
+     pub params: Option<Value>,
+ }
+ 
++// BRP uses json-rpc 2.0, so we need to include `"jsonrpc":"2.0"` in the json output
++// and check for it's presence in the input.
++// This is similar to the inverse of `#[serde(skip)]`, but serde doesn't provide
++// an attribute for this behavior so we need a manual ser/de implementation.
++impl Serialize for BrpRequest {
++    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
++    where
++        S: serde::Serializer,
++    {
++        let mut map = serializer.serialize_map(None)?;
++        map.serialize_entry("jsonrpc", "2.0")?;
++        map.serialize_entry("method", &self.method)?;
++        if self.id.is_some() {
++            map.serialize_entry("id", &self.id)?;
++        }
++        if self.params.is_some() {
++            map.serialize_entry("params", &self.params)?;
++        }
++        map.end()
++    }
++}
++
++impl<'de> Deserialize<'de> for BrpRequest {
++    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
++    where
++        D: serde::de::Deserializer<'de>,
++    {
++        use serde::de;
++
++        #[derive(Deserialize)]
++        #[serde(field_identifier, rename_all = "lowercase")]
++        enum Field {
++            JsonRpc,
++            Method,
++            Id,
++            Params,
++        }
++
++        struct Visitor;
++
++        impl<'de> de::Visitor<'de> for Visitor {
++            type Value = BrpRequest;
++
++            fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
++                formatter.write_str("struct BrpRequest")
++            }
++
++            fn visit_map<V>(self, mut map: V) -> Result<Self::Value, V::Error>
++            where
++                V: de::MapAccess<'de>,
++            {
++                let mut jsonrpc = false;
++                let mut method = None;
++                let mut id = None;
++                let mut params = None;
++                while let Some(key) = map.next_key()? {
++                    match key {
++                        Field::JsonRpc => {
++                            let value = map.next_value::<String>()?;
++                            if value != "2.0" {
++                                return Err(de::Error::invalid_value(
++                                    de::Unexpected::Str(&value),
++                                    &"2.0",
++                                ));
++                            }
++                            if jsonrpc {
++                                return Err(de::Error::duplicate_field("jsonrpc"));
++                            }
++                            jsonrpc = true;
++                        }
++                        Field::Method => {
++                            if method.is_some() {
++                                return Err(de::Error::duplicate_field("method"));
++                            }
++                            method = Some(map.next_value()?);
++                        }
++                        Field::Id => {
++                            if id.is_some() {
++                                return Err(de::Error::duplicate_field("id"));
++                            }
++                            id = Some(map.next_value()?);
++                        }
++                        Field::Params => {
++                            if params.is_some() {
++                                return Err(de::Error::duplicate_field("params"));
++                            }
++                            params = Some(map.next_value()?);
++                        }
++                    }
++                }
++                if !jsonrpc {
++                    return Err(de::Error::missing_field("jsonrpc"));
++                }
++                let method = method.ok_or_else(|| de::Error::missing_field("method"))?;
++                let id = id.ok_or_else(|| de::Error::missing_field("id"))?;
++                let params = params.ok_or_else(|| de::Error::missing_field("params"))?;
++                Ok(BrpRequest { method, id, params })
++            }
++        }
++
++        deserializer.deserialize_map(Visitor)
++    }
++}
++
+ /// A response according to BRP.
+ #[derive(Debug, Serialize, Deserialize, Clone)]
+ pub struct BrpResponse {
+diff --git a/examples/remote/client.rs b/examples/remote/client.rs
+index a1398631990ae..e72d919367ace 100644
+--- a/examples/remote/client.rs
++++ b/examples/remote/client.rs
+@@ -46,7 +46,6 @@ fn main() -> AnyhowResult<()> {
+ 
+ fn run_query_all_components_and_entities(url: &str) -> Result<(), anyhow::Error> {
+     let query_all_req = BrpRequest {
+-        jsonrpc: String::from("2.0"),
+         method: String::from(BRP_QUERY_METHOD),
+         id: Some(serde_json::to_value(1)?),
+         params: Some(
+@@ -73,7 +72,6 @@ fn run_query_all_components_and_entities(url: &str) -> Result<(), anyhow::Error>
+ 
+ fn run_transform_only_query(url: &str) -> Result<(), anyhow::Error> {
+     let get_transform_request = BrpRequest {
+-        jsonrpc: String::from("2.0"),
+         method: String::from(BRP_QUERY_METHOD),
+         id: Some(serde_json::to_value(1)?),
+         params: Some(
+@@ -99,7 +97,6 @@ fn run_transform_only_query(url: &str) -> Result<(), anyhow::Error> {
+ 
+ fn run_query_root_entities(url: &str) -> Result<(), anyhow::Error> {
+     let get_transform_request = BrpRequest {
+-        jsonrpc: String::from("2.0"),
+         method: String::from(BRP_QUERY_METHOD),
+         id: Some(serde_json::to_value(1)?),
+         params: Some(

@@ -1,0 +1,6 @@
+{
+  "title": "Check every LinkAnnotation when testing if inferred links overlap (issue 21458)",
+  "body": "Currently we only check LinkAnnotations with URLs, but completely ignore e.g. internal destinations, named actions, attachments, SetOCGState actions, JS actions, and ResetForm actions when testing if inferred links overlap any existing annotation.\r\nThis seems conceptually wrong, since it may easily break intended functionality by overlaying the *correct* DOM element with an inferred link (as was the case in issue 21458).",
+  "head_sha": "cbefb334fdaac75d0aaaf09d7c81674668bca31b",
+  "base_sha": "f0dc2166ab60a1c115de5a12d43aa7f5fcd92f45"
+}

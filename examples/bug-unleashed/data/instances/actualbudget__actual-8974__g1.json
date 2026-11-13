@@ -1,0 +1,29 @@
+{
+  "case_id": "actualbudget__actual-8974",
+  "repo": "actualbudget/actual",
+  "pr": 8974,
+  "title": "sidebar pt. 7: group-aware account drag and drop",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "actualbudget__actual-8974__g1",
+  "target": {
+    "gid": "actualbudget__actual-8974#g1",
+    "summary": "The Tree component defaults to arrow keyboard navigation behavior, which intercepts Left and Right arrow keys during the capture phase. When renaming an account or group inline, pressing arrow keys moves focus out of the text input and triggers blur, prematurely closing edit mode.",
+    "paths": [
+      "packages/desktop-client/src/components/sidebar/redesign/AccountGroupHeader.tsx",
+      "packages/desktop-client/src/components/sidebar/redesign/AccountRow.tsx",
+      "packages/desktop-client/src/components/sidebar/redesign/AccountTree.tsx"
+    ],
+    "notes": [
+      "faulty Tree component defaulting to arrow keyboard navigation behavior",
+      "rename input where arrow keys trigger blur due to Tree capture-phase navigation",
+      "group rename input where arrow keys trigger blur due to Tree capture-phase navigation"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "6f0813b18bcaf40f5e1b600b66b0e04474aee6d9",
+  "base_sha": "f95e66b85ed89a2bf3d58d43084a893e30a1990a",
+  "snapshot": "repos/actualbudget__actual/6f0813b18bcaf40f5e1b600b66b0e04474aee6d9",
+  "diff": "diffs/actualbudget__actual-8974.diff"
+}

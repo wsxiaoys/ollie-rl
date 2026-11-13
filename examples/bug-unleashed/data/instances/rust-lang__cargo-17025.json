@@ -1,0 +1,16 @@
+{
+  "case_id": "rust-lang__cargo-17025",
+  "repo": "rust-lang/cargo",
+  "pr": 17025,
+  "title": "feat: Add --output-format=json to cargo doc as an unstable option",
+  "language": "Rust",
+  "split": "val",
+  "kind": "clean",
+  "example_id": "rust-lang__cargo-17025",
+  "target": null,
+  "siblings": [],
+  "head_sha": "13c59498ce3faaaa82b9cccaca8cfd2f8954895a",
+  "base_sha": "2da24c9172cd638f63713aa191c9aff51c16f476",
+  "snapshot": "repos/rust-lang__cargo/13c59498ce3faaaa82b9cccaca8cfd2f8954895a",
+  "diff": "diffs/rust-lang__cargo-17025.diff"
+}

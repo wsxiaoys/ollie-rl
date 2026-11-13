@@ -1,0 +1,25 @@
+{
+  "case_id": "carbon-language__carbon-lang-7805",
+  "repo": "carbon-language/carbon-lang",
+  "pr": 7805,
+  "title": "Add a `jj push` wrapper that runs prek before pushing.",
+  "language": "Shell",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "carbon-language__carbon-lang-7805__g1",
+  "target": {
+    "gid": "carbon-language__carbon-lang-7805#g1",
+    "summary": "Parsing target commits relies on GNU sed alternation syntax and omits the stdin operand for paste, causing the pipeline to fail on macOS and BSD systems.",
+    "paths": [
+      "scripts/jj_push.sh"
+    ],
+    "notes": [
+      "sed uses non-standard GNU alternation \\| in basic regex, and paste omits - for standard input on BSD/macOS"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "e6c5f439df9a2da3fbdfa49974a5c40a67bd3e84",
+  "base_sha": "094742740a34e645e4039e9d8829d57303834c26",
+  "snapshot": "repos/carbon-language__carbon-lang/e6c5f439df9a2da3fbdfa49974a5c40a67bd3e84",
+  "diff": "diffs/carbon-language__carbon-lang-7805.diff"
+}

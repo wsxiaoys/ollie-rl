@@ -1,0 +1,26 @@
+{
+  "case_id": "nodejs__undici-5829",
+  "repo": "nodejs/undici",
+  "pr": 5829,
+  "title": "fix: honor backpressure in decompression interceptor",
+  "language": "JavaScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "nodejs__undici-5829__g1",
+  "target": {
+    "gid": "nodejs__undici-5829#g1",
+    "summary": "The call to super.onResponseData in DecompressHandler.#drainOutput is not guarded with a try-catch block. If a downstream handler throws an error, the exception escapes instead of being caught and converted into a per-request error.",
+    "paths": [
+      "lib/interceptor/decompress.js"
+    ],
+    "notes": [
+      "faulty statement: super.onResponseData is called without a try-catch block to handle downstream errors",
+      "copy of the same faulty pattern: super.onResponseEnd is called without a try-catch block"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "409b1f499307725175ef7b32e8936fde3e44a0df",
+  "base_sha": "485c85c289150a40c26eaa7c133b65e9b868f0eb",
+  "snapshot": "repos/nodejs__undici/409b1f499307725175ef7b32e8936fde3e44a0df",
+  "diff": "diffs/nodejs__undici-5829.diff"
+}

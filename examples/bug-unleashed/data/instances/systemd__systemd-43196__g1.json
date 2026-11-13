@@ -1,0 +1,29 @@
+{
+  "case_id": "systemd__systemd-43196",
+  "repo": "systemd/systemd",
+  "pr": 43196,
+  "title": "nsresourced: harden the transient UID/GID write restriction",
+  "language": "C",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "systemd__systemd-43196__g1",
+  "target": {
+    "gid": "systemd__systemd-43196#g1",
+    "summary": "manager_attach_bpf() returns an error when userns_restrict_attach() fails, which manager_startup() treats as a fatal error. On kernels where BPF-LSM programs can be loaded but not attached (such as arm64 prior to kernel 7.2), systemd-nsresourced fails to start instead of disabling user namespace interfaces and continuing.",
+    "paths": [
+      "src/nsresourced/nsresourced-manager.c",
+      "src/nsresourced/userns-restrict.c"
+    ],
+    "notes": [
+      "faulty statement returning an error on attach failure instead of disabling userns interfaces and continuing",
+      "definition of the function whose behavior is wrong",
+      "call site in manager_startup that treats attach failure as fatal",
+      "implementation of the helper the call depends on"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "7eb016d60b7c6ee19c3420f27428ea4758a34f87",
+  "base_sha": "628e8304cc25f1995d069e6e3dfed8f574fef988",
+  "snapshot": "repos/systemd__systemd/7eb016d60b7c6ee19c3420f27428ea4758a34f87",
+  "diff": "diffs/systemd__systemd-43196.diff"
+}

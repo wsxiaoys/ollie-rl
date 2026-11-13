@@ -1,0 +1,6 @@
+{
+  "title": "[exporter/otlp_http] Prevent retries when body parsing fails on successful HTTP exports",
+  "body": "### Description\r\nFixes an issue in the `otlp_http` exporter where successful (2xx) HTTP response bodies exceeding the 64kB limit (`maxHTTPResponseReadBytes`) triggered retry loops.\r\n\r\nTo resolve this, any error encountered while reading or parsing a successful (2xx) response body is now wrapped and returned as a permanent error (`consumererror.NewPermanent(err)`). This ensures the exporter drops the batch and does not attempt to retry.\r\n\r\n### Link to tracking issue\r\nFixes #15386\r\n\r\n\r\n### Testing\r\n- Added a new unit test `TestPartialSuccess_responseBodyTooLarge` in `exporter/otlphttpexporter/otlp_test.go` verifying that a partial success response exceeding 64kB returns a permanent error.\r\n- Ran all package tests successfully using `go test -v ./...` and `make test`.\r\n- Ran linter validation successfully using `make lint`.\r\n\r\n\r\n### Documentation\r\nNo documentation changes are required.\r\n\r\n### Authorship\r\n- [x] I, a human, wrote this pull request description myself.",
+  "head_sha": "25a3b752e72e371f6e6aa18cc04957694e3b77b7",
+  "base_sha": "767b013e0d4c1b5f0013826524e88ef6b2d986ee"
+}

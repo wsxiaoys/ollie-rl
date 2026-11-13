@@ -1,0 +1,25 @@
+{
+  "case_id": "apostrophecms__apostrophe-5356",
+  "repo": "apostrophecms/apostrophe",
+  "pr": 5356,
+  "title": "PRO-9314: Add support for files pretty URLs in static builds",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apostrophecms__apostrophe-5356__g1",
+  "target": {
+    "gid": "apostrophecms__apostrophe-5356#g1",
+    "summary": "Resolving relative attachment URLs using req.get('host') relies on the untrusted Host header. An attacker supplying a crafted Host header can redirect the server-side streamProxy request to an arbitrary host (SSRF).",
+    "paths": [
+      "packages/apostrophe/modules/@apostrophecms/file/index.js"
+    ],
+    "notes": [
+      "faulty proxyUrl construction using untrusted Host header passed to streamProxy"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9d4e2ed347bfe6f7d425de4b6da7a05711c7c06e",
+  "base_sha": "2bdfd01f21b49819259ad088ef7934f02ed11507",
+  "snapshot": "repos/apostrophecms__apostrophe/9d4e2ed347bfe6f7d425de4b6da7a05711c7c06e",
+  "diff": "diffs/apostrophecms__apostrophe-5356.diff"
+}

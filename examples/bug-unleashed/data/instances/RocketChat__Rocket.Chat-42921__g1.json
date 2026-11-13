@@ -1,0 +1,28 @@
+{
+  "case_id": "RocketChat__Rocket.Chat-42921",
+  "repo": "RocketChat/Rocket.Chat",
+  "pr": 42921,
+  "title": "chore: log in and out through SAML without Meteor's accounts runtime",
+  "language": "TypeScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "RocketChat__Rocket.Chat-42921__g1",
+  "target": {
+    "gid": "RocketChat__Rocket.Chat-42921#g1",
+    "summary": "logoutFromSamlIdp only catches errors from the sdk.call invocation, leaving exceptions during SDK client import or redirect creation unhandled. When SAML single logout fails to start, the unhandled rejection prevents UserProvider from falling back to local logout, leaving the user logged in.",
+    "paths": [
+      "apps/meteor/client/meteor/login/saml.ts",
+      "apps/meteor/client/providers/UserProvider/UserProvider.tsx"
+    ],
+    "notes": [
+      "faulty statement: only catches errors from sdk.call, leaving SDK import and redirect creation unhandled",
+      "definition of the function whose behavior is wrong",
+      "call site relying on logoutFromSamlIdp to fall back to local logout"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "6bdf69821c54e7cb925a4fdbcfe112032b620a35",
+  "base_sha": "d747322969a80dadad917ad09ccb07afcfb24b79",
+  "snapshot": "repos/RocketChat__Rocket.Chat/6bdf69821c54e7cb925a4fdbcfe112032b620a35",
+  "diff": "diffs/RocketChat__Rocket.Chat-42921.diff"
+}

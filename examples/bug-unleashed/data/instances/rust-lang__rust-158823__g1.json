@@ -1,0 +1,28 @@
+{
+  "case_id": "rust-lang__rust-158823",
+  "repo": "rust-lang/rust",
+  "pr": 158823,
+  "title": "Flatten all -L search paths into a single list of files",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rust-lang__rust-158823__g1",
+  "target": {
+    "gid": "rust-lang__rust-158823#g1",
+    "summary": "`get_object_file_path` searches for object files using `get_file_candidates`, but `FileSearch` only pre-filters and indexes files starting with library prefixes (`lib`, `staticlib_prefix`, `dll_prefix`). Object files without these prefixes (such as CRT objects like `crt*.o`) will never be found in search paths, causing linker failures.",
+    "paths": [
+      "compiler/rustc_codegen_ssa/src/back/link.rs",
+      "compiler/rustc_session/src/filesearch.rs"
+    ],
+    "notes": [
+      "faulty call to get_file_candidates for object file lookup",
+      "definition of get_file_candidates called by get_object_file_path",
+      "pre-filtering in FileSearch::new that discards non-library files like crt*.o"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "55500ae2e74aad5bf377c91052703eed5cf62db6",
+  "base_sha": "922325bb13bfea5b41454318563f2a65e83c2336",
+  "snapshot": "repos/rust-lang__rust/55500ae2e74aad5bf377c91052703eed5cf62db6",
+  "diff": "diffs/rust-lang__rust-158823.diff"
+}

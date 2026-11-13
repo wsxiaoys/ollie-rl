@@ -1,0 +1,16 @@
+{
+  "case_id": "mui__mui-x-22827",
+  "repo": "mui/mui-x",
+  "pr": 22827,
+  "title": "[charts] Fix bug when `min` is in axis domain",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "mui__mui-x-22827",
+  "target": null,
+  "siblings": [],
+  "head_sha": "c04b637c5c2578e6fc75b4d26c22b980b25da268",
+  "base_sha": "97bca3e51fa5bcdc690da8c2ff48a9e88f534b68",
+  "snapshot": "repos/mui__mui-x/c04b637c5c2578e6fc75b4d26c22b980b25da268",
+  "diff": "diffs/mui__mui-x-22827.diff"
+}

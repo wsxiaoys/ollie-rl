@@ -1,0 +1,71 @@
+diff --git a/src/node/txdownloadman_impl.cpp b/src/node/txdownloadman_impl.cpp
+index 3198fb17e64b..00d69fb11a52 100644
+--- a/src/node/txdownloadman_impl.cpp
++++ b/src/node/txdownloadman_impl.cpp
+@@ -100,6 +100,9 @@ void TxDownloadManagerImpl::BlockConnected(const std::shared_ptr<const CBlock>&
+     m_orphanage->EraseForBlock(*pblock);
+ 
+     for (const auto& ptx : pblock->vtx) {
++        // Reconsider potential child transactions.
++        m_orphanage->AddChildrenToWorkSet(*ptx, m_opts.m_rng);
++
+         RecentConfirmedTransactionsFilter().insert(ptx->GetHash().ToUint256());
+         if (ptx->HasWitness()) {
+             RecentConfirmedTransactionsFilter().insert(ptx->GetWitnessHash().ToUint256());
+diff --git a/src/node/txorphanage.cpp b/src/node/txorphanage.cpp
+index 009379c9cd41..9843f81f9b0b 100644
+--- a/src/node/txorphanage.cpp
++++ b/src/node/txorphanage.cpp
+@@ -531,6 +531,8 @@ void TxOrphanageImpl::LimitOrphans()
+ 
+ std::vector<std::pair<Wtxid, NodeId>> TxOrphanageImpl::AddChildrenToWorkSet(const CTransaction& tx, FastRandomContext& rng)
+ {
++    if (m_orphans.empty()) return {};
++
+     std::vector<std::pair<Wtxid, NodeId>> ret;
+     auto& index_by_wtxid = m_orphans.get<ByWtxid>();
+     for (unsigned int i = 0; i < tx.vout.size(); i++) {
+diff --git a/test/functional/p2p_orphan_handling.py b/test/functional/p2p_orphan_handling.py
+index 3d94f0338a23..a25c93cd1fdb 100755
+--- a/test/functional/p2p_orphan_handling.py
++++ b/test/functional/p2p_orphan_handling.py
+@@ -383,6 +383,31 @@ def test_orphan_of_orphan(self):
+         assert tx_in_orphanage(node, orphan["tx"])
+         peer.wait_for_parent_requests([int(missing_parent["txid"], 16)])
+ 
++    @cleanup
++    def test_orphan_parent_confirmed(self):
++        node = self.nodes[0]
++        peer = node.add_p2p_connection(PeerTxRelayer())
++
++        parent = self.wallet.create_self_transfer(fee_rate=0)
++        child = self.wallet.create_self_transfer(utxo_to_spend=parent["new_utxo"])
++
++        self.log.info("Test orphan reconsideration when its missing parent is confirmed")
++        self.relay_transaction(peer, child["tx"])
++        assert tx_in_orphanage(node, child["tx"])
++
++        # Withhold the requested parent so it can only become available through the block.
++        node.bumpmocktime(TXREQUEST_TIME_SKIP)
++        peer.wait_for_parent_requests([parent["tx"].txid_int])
++        assert_equal(node.getrawmempool(), [])
++
++        self.generateblock(
++            node,
++            output=self.wallet.get_address(),
++            transactions=[parent["hex"]],
++        )
++        self.wait_until(lambda: child["txid"] in node.getrawmempool())
++        assert not tx_in_orphanage(node, child["tx"])
++
+     @cleanup
+     def test_orphan_inherit_rejection(self):
+         node = self.nodes[0]
+@@ -826,6 +851,7 @@ def run_test(self):
+         self.test_orphan_multiple_parents()
+         self.test_orphans_overlapping_parents()
+         self.test_orphan_of_orphan()
++        self.test_orphan_parent_confirmed()
+         self.test_orphan_inherit_rejection()
+         self.test_same_txid_orphan()
+         self.test_same_txid_orphan_of_orphan()

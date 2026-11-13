@@ -1,0 +1,218 @@
+diff --git a/providers/yandex/docs/secrets-backends/yandex-cloud-lockbox-secret-backend.rst b/providers/yandex/docs/secrets-backends/yandex-cloud-lockbox-secret-backend.rst
+index f0baea493f1ac..fc23db1dbed9e 100644
+--- a/providers/yandex/docs/secrets-backends/yandex-cloud-lockbox-secret-backend.rst
++++ b/providers/yandex/docs/secrets-backends/yandex-cloud-lockbox-secret-backend.rst
+@@ -251,6 +251,48 @@ To check the variable is correctly read from the Lockbox Secret Backend, you can
+     $ airflow variables get my_variable
+     some_secret_data
+ 
++Multi-team lookup
++-----------------
++
++In multi-team mode, this backend looks for team-scoped secret names first and falls back to the
++global secret name when a team-scoped secret is not found.
++
++To use this mode, keep the backend configured as usual and create team-scoped secrets by inserting
++the team name between the configured prefix and the secret identifier, separated from the secret
++identifier by a doubled separator.
++
++For example, with this configuration:
++
++.. code-block:: ini
++
++    [secrets]
++    backend = airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend
++    backend_kwargs = {"connections_prefix": "airflow/connections", "variables_prefix": "airflow/variables"}
++
++the backend expects team-scoped secrets to be stored under paths such as
++``airflow/connections/<team_name>//<conn_id>`` or ``airflow/variables/<team_name>//<key>``.
++
++For connections:
++
++* Team-scoped: ``{connections_prefix}/{team_name}//{conn_id}``
++* Global fallback: ``{connections_prefix}/{conn_id}``
++
++For variables:
++
++* Team-scoped: ``{variables_prefix}/{team_name}//{key}``
++* Global fallback: ``{variables_prefix}/{key}``
++
++For example, with ``connections_prefix="airflow/connections"``, ``team_name="team_a"``, and
++``conn_id="my_db"``, the backend looks up ``airflow/connections/team_a//my_db`` before falling back
++to ``airflow/connections/my_db``.
++
++This means you can provide both:
++
++* a team-specific secret such as ``airflow/connections/team_a//my_db``
++* an optional global default secret such as ``airflow/connections/my_db``
++
++If no ``team_name`` is provided, only the global secret path is used.
++
+ Storing and retrieving configs
+ ------------------------------
+ 
+diff --git a/providers/yandex/src/airflow/providers/yandex/secrets/lockbox.py b/providers/yandex/src/airflow/providers/yandex/secrets/lockbox.py
+index 47717f1876fa3..94ef4c90d184f 100644
+--- a/providers/yandex/src/airflow/providers/yandex/secrets/lockbox.py
++++ b/providers/yandex/src/airflow/providers/yandex/secrets/lockbox.py
+@@ -18,6 +18,7 @@
+ 
+ from __future__ import annotations
+ 
++import re
+ from functools import cached_property
+ from typing import Any
+ 
+@@ -37,6 +38,8 @@
+ from airflow.secrets import BaseSecretsBackend
+ from airflow.utils.log.logging_mixin import LoggingMixin
+ 
++TEAM_SEP_MULTIPLIER = 2
++
+ 
+ class LockboxSecretBackend(BaseSecretsBackend, LoggingMixin):
+     """
+@@ -159,7 +162,10 @@ def get_conn_value(self, conn_id: str, team_name: str | None = None) -> str | No
+         if conn_id == self.yc_connection_id:
+             return None
+ 
+-        return self._get_secret_value(self.connections_prefix, conn_id)
++        if self._is_team_specific_accessed_as_global(conn_id, team_name):
++            return None
++
++        return self._get_secret_value(self.connections_prefix, conn_id, team_name=team_name)
+ 
+     def get_variable(self, key: str, team_name: str | None = None) -> str | None:
+         """
+@@ -172,7 +178,10 @@ def get_variable(self, key: str, team_name: str | None = None) -> str | None:
+         if self.variables_prefix is None:
+             return None
+ 
+-        return self._get_secret_value(self.variables_prefix, key)
++        if self._is_team_specific_accessed_as_global(key, team_name):
++            return None
++
++        return self._get_secret_value(self.variables_prefix, key, team_name=team_name)
+ 
+     def get_config(self, key: str) -> str | None:
+         """
+@@ -243,12 +252,23 @@ def _build_secret_name(self, prefix: str, key: str):
+             return key
+         return f"{prefix}{self.sep}{key}"
+ 
+-    def _get_secret_value(self, prefix: str, key: str) -> str | None:
++    def _build_team_secret_name(self, prefix: str, team_name: str, key: str) -> str:
++        team_prefix = self._build_secret_name(prefix, team_name)
++        return f"{team_prefix}{self.sep * TEAM_SEP_MULTIPLIER}{key}"
++
++    def _is_team_specific_accessed_as_global(self, secret_id: str, team_name: str | None = None) -> bool:
++        team_sep = re.escape(self.sep * TEAM_SEP_MULTIPLIER)
++        return team_name is None and bool(re.fullmatch(rf"[^{re.escape(self.sep)}]+{team_sep}.+", secret_id))
++
++    def _get_secret_value(self, prefix: str, key: str, team_name: str | None = None) -> str | None:
++        secrets = self._get_secrets()
+         secret: secret_pb.Secret | None = None
+-        for s in self._get_secrets():
+-            if s.name == self._build_secret_name(prefix=prefix, key=key):
+-                secret = s
+-                break
++        if team_name:
++            secret = self._find_secret(secrets, prefix, self._build_team_secret_name("", team_name, key))
++
++        if not secret:
++            secret = self._find_secret(secrets, prefix, key)
++
+         if not secret:
+             return None
+ 
+@@ -259,6 +279,12 @@ def _get_secret_value(self, prefix: str, key: str) -> str | None:
+             return None
+         return sorted(entries.values())[0]
+ 
++    def _find_secret(self, secrets: list[secret_pb.Secret], prefix: str, key: str) -> secret_pb.Secret | None:
++        for s in secrets:
++            if s.name == self._build_secret_name(prefix=prefix, key=key):
++                return s
++        return None
++
+     def _get_secrets(self) -> list[secret_pb.Secret]:
+         # generate client if not exists, to load folder_id from connections
+         _ = self._client
+diff --git a/providers/yandex/tests/unit/yandex/secrets/test_lockbox.py b/providers/yandex/tests/unit/yandex/secrets/test_lockbox.py
+index 7b9ab19d3e87a..f8c45db4a1a7b 100644
+--- a/providers/yandex/tests/unit/yandex/secrets/test_lockbox.py
++++ b/providers/yandex/tests/unit/yandex/secrets/test_lockbox.py
+@@ -17,7 +17,7 @@
+ from __future__ import annotations
+ 
+ import json
+-from unittest.mock import MagicMock, Mock, patch
++from unittest.mock import ANY, MagicMock, Mock, patch
+ 
+ import pytest
+ 
+@@ -261,6 +261,64 @@ def test_yandex_lockbox_secret_backend__build_secret_name_custom_sep(self):
+ 
+         assert res == expected
+ 
++    @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_secrets")
++    @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_payload")
++    def test_get_conn_value_uses_team_specific_secret_first(self, mock_get_payload, mock_get_secrets):
++        mock_get_secrets.return_value = [
++            secret_pb.Secret(
++                id="123",
++                name="airflow/connections/team_a//my_db",
++            ),
++            secret_pb.Secret(
++                id="456",
++                name="airflow/connections/my_db",
++            ),
++        ]
++        mock_get_payload.return_value = payload_pb.Payload(
++            entries=[payload_pb.Payload.Entry(text_value="team-conn")]
++        )
++
++        backend = LockboxSecretBackend()
++        result = backend.get_conn_value("my_db", team_name="team_a")
++
++        assert result == "team-conn"
++        mock_get_payload.assert_called_once_with("123", ANY)
++
++    @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_secrets")
++    @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_payload")
++    def test_get_variable_falls_back_to_global_secret_when_team_secret_is_missing(
++        self, mock_get_payload, mock_get_secrets
++    ):
++        mock_get_secrets.return_value = [
++            secret_pb.Secret(
++                id="456",
++                name="airflow/variables/hello",
++            ),
++        ]
++        mock_get_payload.return_value = payload_pb.Payload(
++            entries=[payload_pb.Payload.Entry(text_value="global-value")]
++        )
++
++        backend = LockboxSecretBackend()
++        result = backend.get_variable("hello", team_name="team_a")
++
++        assert result == "global-value"
++        mock_get_payload.assert_called_once_with("456", ANY)
++
++    @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_secrets")
++    def test_get_variable_returns_none_for_team_scoped_key_without_team_name(self, mock_get_secrets):
++        backend = LockboxSecretBackend()
++
++        assert backend.get_variable("teama//hello") is None
++        mock_get_secrets.assert_not_called()
++
++    @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_secrets")
++    def test_get_conn_value_returns_none_for_team_scoped_id_without_team_name(self, mock_get_secrets):
++        backend = LockboxSecretBackend()
++
++        assert backend.get_conn_value("teama//my_db") is None
++        mock_get_secrets.assert_not_called()
++
+     @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_secrets")
+     @patch("airflow.providers.yandex.secrets.lockbox.LockboxSecretBackend._get_payload")
+     def test_yandex_lockbox_secret_backend__get_secret_value(self, mock_get_payload, mock_get_secrets):

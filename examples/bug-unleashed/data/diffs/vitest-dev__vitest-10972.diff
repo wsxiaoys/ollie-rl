@@ -1,0 +1,182 @@
+diff --git a/packages/browser/src/node/index.ts b/packages/browser/src/node/index.ts
+index 619f22c5f973..4d9b65514164 100644
+--- a/packages/browser/src/node/index.ts
++++ b/packages/browser/src/node/index.ts
+@@ -366,8 +366,7 @@ body {
+ 
+   contribution.plugins = [
+     ...BrowserPlugin(contribution),
+-    // this plugin's `configureServer` is ignored since it's added through `applyToEnvironment`
+-    interceptorPlugin({ registry: mockerRegistry }),
++    interceptorPlugin({ registry: mockerRegistry, registerWebSocketEvents: false }),
+     {
+       name: 'vitest:browser:framework-sourcemaps',
+       enforce: 'post',
+diff --git a/packages/browser/src/node/rpc.ts b/packages/browser/src/node/rpc.ts
+index 03fe96109767..68242e23bf57 100644
+--- a/packages/browser/src/node/rpc.ts
++++ b/packages/browser/src/node/rpc.ts
+@@ -466,6 +466,7 @@ export function setupBrowserRpc(globalServer: ParentBrowserProject, defaultMocke
+               if (module.type === 'redirect') {
+                 const redirectUrl = new URL(module.redirect)
+                 module.redirect = join(vite.config.root, redirectUrl.pathname)
++                checkFileAccess(module.redirect)
+               }
+               defaultMockerRegistry.register(module)
+             }
+diff --git a/packages/mocker/src/node/interceptorPlugin.ts b/packages/mocker/src/node/interceptorPlugin.ts
+index 0a58b03d5511..13054dc9a8f8 100644
+--- a/packages/mocker/src/node/interceptorPlugin.ts
++++ b/packages/mocker/src/node/interceptorPlugin.ts
+@@ -2,6 +2,7 @@ import type { Plugin } from 'vite'
+ import type { MockedModuleSerialized } from '../registry'
+ import { readFile } from 'node:fs/promises'
+ import { join } from 'node:path/posix'
++import { isFileLoadingAllowed } from 'vite'
+ import { ManualMockedModule, MockerRegistry } from '../registry'
+ import { cleanUrl, createManualModuleSource } from '../utils'
+ import { automockModule } from './automock'
+@@ -12,6 +13,13 @@ export interface InterceptorPluginOptions {
+    */
+   globalThisAccessor?: string
+   registry?: MockerRegistry
++  /**
++   * Register the `vitest:interceptor:*` WebSocket events in `configureServer`.
++   * Disable this when mocks are registered through another authenticated
++   * channel and the raw dev-server socket should not accept them.
++   * @default true
++   */
++  registerWebSocketEvents?: boolean
+ }
+ 
+ export function interceptorPlugin(options: InterceptorPluginOptions = {}): Plugin {
+@@ -56,6 +64,9 @@ export function interceptorPlugin(options: InterceptorPluginOptions = {}): Plugi
+       },
+     },
+     configureServer(server) {
++      if (options.registerWebSocketEvents === false) {
++        return
++      }
+       server.ws.on('vitest:interceptor:register', (event: MockedModuleSerialized) => {
+         if (event.type === 'manual') {
+           const module = ManualMockedModule.fromJSON(event, async () => {
+@@ -67,7 +78,14 @@ export function interceptorPlugin(options: InterceptorPluginOptions = {}): Plugi
+         else {
+           if (event.type === 'redirect') {
+             const redirectUrl = new URL(event.redirect)
+-            event.redirect = join(server.config.root, redirectUrl.pathname)
++            const redirect = join(server.config.root, redirectUrl.pathname)
++            // the redirect is served through the `load` hook below, so it must
++            // stay inside the file-serving allowlist and never escape the root
++            if (!isFileLoadingAllowed(server.config, redirect)) {
++              server.ws.send('vitest:interceptor:register:result')
++              return
++            }
++            event.redirect = redirect
+           }
+           registry.register(event)
+         }
+diff --git a/test/e2e/fixtures/mocker/redirect-security/root/inroot.js b/test/e2e/fixtures/mocker/redirect-security/root/inroot.js
+new file mode 100644
+index 000000000000..a8501f97516a
+--- /dev/null
++++ b/test/e2e/fixtures/mocker/redirect-security/root/inroot.js
+@@ -0,0 +1 @@
++export const marker = 'in-root-redirect-ok'
+diff --git a/test/e2e/fixtures/mocker/redirect-security/secret.txt b/test/e2e/fixtures/mocker/redirect-security/secret.txt
+new file mode 100644
+index 000000000000..585564948246
+--- /dev/null
++++ b/test/e2e/fixtures/mocker/redirect-security/secret.txt
+@@ -0,0 +1 @@
++should-never-be-served-as-a-module
+diff --git a/test/e2e/test/mocker-redirect-traversal.test.ts b/test/e2e/test/mocker-redirect-traversal.test.ts
+new file mode 100644
+index 000000000000..837a51567075
+--- /dev/null
++++ b/test/e2e/test/mocker-redirect-traversal.test.ts
+@@ -0,0 +1,84 @@
++import { fileURLToPath } from 'node:url'
++import { interceptorPlugin } from '@vitest/mocker/node'
++import { createServer } from 'vite'
++import { expect, it, onTestFinished } from 'vitest'
++import { WebSocket } from 'ws'
++
++const root = fileURLToPath(
++  new URL('../fixtures/mocker/redirect-security/root', import.meta.url),
++)
++
++async function createMockerServer() {
++  const server = await createServer({
++    root,
++    configFile: false,
++    logLevel: 'silent',
++    server: {
++      fs: { allow: [root] },
++    },
++    plugins: [
++      {
++        name: 'test:virtual-mock',
++        enforce: 'pre',
++        resolveId(id) {
++          if (id === '/mock') {
++            return id
++          }
++        },
++      },
++      interceptorPlugin(),
++    ],
++  })
++  await server.listen()
++  onTestFinished(() => server.close())
++  const port = new URL(server.resolvedUrls!.local[0]).port
++  return { server, port }
++}
++
++function registerRedirect(port: string, redirect: string) {
++  return new Promise<void>((resolve, reject) => {
++    const ws = new WebSocket(`ws://localhost:${port}`, 'vite-hmr')
++    const timeout = setTimeout(() => {
++      ws.close()
++      reject(new Error('timed out waiting for the register result'))
++    }, 5000)
++    ws.on('message', (raw) => {
++      let message: any
++      try {
++        message = JSON.parse(raw.toString())
++      }
++      catch {
++        return
++      }
++      if (message.type === 'custom' && message.event === 'vitest:interceptor:register:result') {
++        clearTimeout(timeout)
++        ws.close()
++        resolve()
++      }
++    })
++    ws.on('open', () => {
++      ws.send(JSON.stringify({
++        type: 'custom',
++        event: 'vitest:interceptor:register',
++        data: { type: 'redirect', raw: '', id: '/mock', url: '/mock', redirect },
++      }))
++    })
++    ws.on('error', reject)
++  })
++}
++
++it('rejects a redirect mock whose target escapes the project root', async () => {
++  const { server, port } = await createMockerServer()
++  // an opaque URL scheme keeps the `..` segments, so join(root, pathname)
++  // resolves outside the root; the mock must not be registered
++  await registerRedirect(port, 'traversal:../secret.txt')
++  const result = await server.transformRequest('/mock').catch(() => null)
++  expect(result).toBe(null)
++})
++
++it('serves a redirect mock whose target stays inside the project root', async () => {
++  const { server, port } = await createMockerServer()
++  await registerRedirect(port, 'traversal:inroot.js')
++  const result = await server.transformRequest('/mock').catch(() => null)
++  expect(result?.code).toContain('in-root-redirect-ok')
++})

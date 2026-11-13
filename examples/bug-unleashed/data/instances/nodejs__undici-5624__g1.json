@@ -1,0 +1,26 @@
+{
+  "case_id": "nodejs__undici-5624",
+  "repo": "nodejs/undici",
+  "pr": 5624,
+  "title": "fix: propagate dispatcher origin to composed interceptors",
+  "language": "JavaScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "nodejs__undici-5624__g1",
+  "target": {
+    "gid": "nodejs__undici-5624#g1",
+    "summary": "The dispatch wrapper only populates the origin from self[kUrl] when opts.origin is absent, preserving any caller-provided origin. This allows caller-controlled origin metadata to reach origin-dependent interceptors such as cache and deduplication, enabling cross-origin cache poisoning and state leakage.",
+    "paths": [
+      "lib/dispatcher/dispatcher.js"
+    ],
+    "notes": [
+      "faulty condition only populating origin when opts.origin is absent, preserving caller-provided origin",
+      "definition of the dispatch wrapper function"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "b571c7269e78a2d36c49e2b169f07d1d8a6a9ff8",
+  "base_sha": "f59b0f239ca2390481f0028536b2dcd50cb789da",
+  "snapshot": "repos/nodejs__undici/b571c7269e78a2d36c49e2b169f07d1d8a6a9ff8",
+  "diff": "diffs/nodejs__undici-5624.diff"
+}

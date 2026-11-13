@@ -1,0 +1,31 @@
+{
+  "case_id": "cure53__DOMPurify-1336",
+  "repo": "cure53/DOMPurify",
+  "pr": 1336,
+  "title": "Cure53 shadowdom fix",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "cure53__DOMPurify-1336__g1",
+  "target": {
+    "gid": "cure53__DOMPurify-1336#g1",
+    "summary": "_sanitizeAttachedShadowRoots accesses nodeType, shadowRoot, and childNodes directly on root rather than through cached prototype getters. If root is or contains an HTMLFormElement, descendant elements can DOM-clobber these properties, causing the walk to skip shadow hosts and leave attached shadow roots unsanitized.",
+    "paths": [
+      "dist/purify.cjs.js",
+      "dist/purify.es.mjs",
+      "dist/purify.js",
+      "src/purify.ts"
+    ],
+    "notes": [
+      "faulty property accesses vulnerable to DOM clobbering",
+      "source file containing the faulty property accesses",
+      "ES module bundle containing the faulty property accesses",
+      "UMD bundle containing the faulty property accesses"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "2946d954bcb8285e779f402fe02291c045c4273b",
+  "base_sha": "7a66b86287e178ef213ebcd5ff1843baf274138f",
+  "snapshot": "repos/cure53__DOMPurify/2946d954bcb8285e779f402fe02291c045c4273b",
+  "diff": "diffs/cure53__DOMPurify-1336.diff"
+}

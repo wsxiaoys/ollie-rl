@@ -1,0 +1,6 @@
+{
+  "title": "[Build] Publish new artifact for compiler plugin API",
+  "body": "Create a new artifact which represents the recommended compiler plugin\r\nAPI surface. This artifact should replace the dependency on the\r\nkotlin-compiler artifact that exists in most third-party compiler\r\nplugins. This will help the Kotlin compiler developers to better control\r\nwhat is and is not considered part of the compiler plugin API.\r\n\r\n^[KT-90147](https://youtrack.jetbrains.com/issue/KT-90147) Fixed",
+  "head_sha": "17ac9665873ae73b7419aa4959f3545733be89a8",
+  "base_sha": "08c5170f653feae4c39465868bfcad4df85c91dc"
+}

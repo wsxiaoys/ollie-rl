@@ -1,0 +1,46 @@
+diff --git a/.changeset/nine-planets-tan.md b/.changeset/nine-planets-tan.md
+new file mode 100644
+index 0000000000..3b3d7cf30e
+--- /dev/null
++++ b/.changeset/nine-planets-tan.md
+@@ -0,0 +1,5 @@
++---
++"apostrophe": patch
++---
++
++Fixes styles being sanitized as html (breaks quotes) and resolves duplicate styles on the page.
+diff --git a/packages/apostrophe/modules/@apostrophecms/styles/lib/methods.js b/packages/apostrophe/modules/@apostrophecms/styles/lib/methods.js
+index 977031703a..0c60e26671 100644
+--- a/packages/apostrophe/modules/@apostrophecms/styles/lib/methods.js
++++ b/packages/apostrophe/modules/@apostrophecms/styles/lib/methods.js
+@@ -103,17 +103,19 @@ module.exports = (self, options) => {
+           }
+         });
+       }
+-      nodes.push({
+-        name: 'style',
+-        attrs: {
+-          id: 'apos-styles-stylesheet'
+-        },
+-        body: [
+-          {
+-            text: req.data.global.stylesStylesheet || ''
+-          }
+-        ]
+-      });
++      if (!hasLink) {
++        nodes.push({
++          name: 'style',
++          attrs: {
++            id: 'apos-styles-stylesheet'
++          },
++          body: [
++            {
++              raw: req.data.global.stylesStylesheet || ''
++            }
++          ]
++        });
++      }
+       return nodes;
+     },
+     ui(req) {

@@ -1,0 +1,29 @@
+{
+  "case_id": "huggingface__transformers-48865",
+  "repo": "huggingface/transformers",
+  "pr": 48865,
+  "title": "[`distributed`] Add expert-parallel token dispatch, default for Qwen3 MoE",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "huggingface__transformers-48865__g1",
+  "target": {
+    "gid": "huggingface__transformers-48865#g1",
+    "summary": "`all_to_all_single` from `torch.distributed._functional_collectives` has no autograd support in PyTorch versions prior to 2.11. During training on PyTorch 2.7 to 2.10 with `ep_dispatch_experts`, expert weights and input hidden states receive no gradients through the token dispatch layers.",
+    "paths": [
+      "src/transformers/distributed/tensor_parallel.py"
+    ],
+    "notes": [
+      "faulty statement: call to all_to_all_single which lacks autograd kernel in PyTorch 2.7 to 2.10",
+      "copy of the same faulty pattern: second call to all_to_all_single",
+      "definition of the method whose behavior is wrong",
+      "definition of the type whose behavior is wrong",
+      "call sites in ep_forward that pass and produce values through the faulty token dispatch methods"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ea3a7d551ce1558a161269b4d8463a5b69ae9dcb",
+  "base_sha": "2033cf02f0badd0f85944fbcc7643cce52e1b119",
+  "snapshot": "repos/huggingface__transformers/ea3a7d551ce1558a161269b4d8463a5b69ae9dcb",
+  "diff": "diffs/huggingface__transformers-48865.diff"
+}

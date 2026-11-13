@@ -1,0 +1,6 @@
+{
+  "title": "feat(@angular/build): migrate Angular Linker to oxc-parser and magic-string",
+  "body": "This refactors the Angular linker processing in the ESBuild pipeline to use `oxc-parser` and `magic-string` instead of `@babel/core`.\r\n\r\nBy using the lightweight AST and precise token spans provided by OXC, the linker is able to process partial declarations via targeted `magic-string` overwrites in-place. This removes the dependency on `@babel/core` and the linker Babel plugin, yielding faster build startup times and improved compilation performance.",
+  "head_sha": "49dd007a9468631bfc275eb1f4a710d0f3d06723",
+  "base_sha": "5c8a055178aaa184c44242fa8736af9e1a496e75"
+}

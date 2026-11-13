@@ -1,0 +1,6 @@
+{
+  "title": "JVM, Reflection: Support @JvmExposeBoxed in reflection",
+  "body": "The only thing needed to be supported is constructors of ordinary classes. In their case, we generate `BoxingConstructorMarker`, which is required to distinguish from private constructor and exposed one if the inline class is boxed (i.e. nullable over primitive or nullable).\r\n\r\nThe generated Kotlin code calls the newly-generated non-exposed constructor, so, the reflection should return it on `primaryConstructor`. To do so, move metadata to the constructor, instead of relying on default resolution in reflection, which picks exposed constructors instead.\r\n\r\n #KT-86525 Fixed",
+  "head_sha": "a2e8475dedca1f9b6691e8a03aec2dcbd8d7273d",
+  "base_sha": "ac5d4c0a7ed2920ba9fe3be8cbf931c0d4b08b4e"
+}

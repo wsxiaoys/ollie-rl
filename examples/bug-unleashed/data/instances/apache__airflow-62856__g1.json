@@ -1,0 +1,25 @@
+{
+  "case_id": "apache__airflow-62856",
+  "repo": "apache/airflow",
+  "pr": 62856,
+  "title": "Fix backfill permissions",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apache__airflow-62856__g1",
+  "target": {
+    "gid": "apache__airflow-62856#g1",
+    "summary": "Parsing backfill_id_raw with int() instead of the route's declared schema causes valid decimal-formatted integer strings like '42.0' to be rejected and backfill_id set to None. This leaves dag_id unpopulated during dependency evaluation while the endpoint handler accepts the coerced integer, leading to a cross-DAG authorization bypass.",
+    "paths": [
+      "airflow-core/src/airflow/api_fastapi/core_api/security.py"
+    ],
+    "notes": [
+      "faulty int() parsing and ValueError handling that diverges from route schema"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "b4e4ecab09a0864a8ae0d09b562e1148655aac39",
+  "base_sha": "4461a2168b40ddb50c46883c48b7162e4bd6dc13",
+  "snapshot": "repos/apache__airflow/b4e4ecab09a0864a8ae0d09b562e1148655aac39",
+  "diff": "diffs/apache__airflow-62856.diff"
+}

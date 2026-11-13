@@ -1,0 +1,37 @@
+diff --git a/src/panels/lovelace/cards/hui-entities-card.ts b/src/panels/lovelace/cards/hui-entities-card.ts
+index 9aa1964e55cb..ab8b90b1706c 100644
+--- a/src/panels/lovelace/cards/hui-entities-card.ts
++++ b/src/panels/lovelace/cards/hui-entities-card.ts
+@@ -310,6 +310,14 @@ class HuiEntitiesCard extends LitElement implements LovelaceCard {
+         position: relative;
+       }
+ 
++      #states > div:first-child > hui-section-row::part(divider) {
++        display: none;
++      }
++
++      #states > div:first-child > hui-section-row::part(label) {
++        margin-top: 0;
++      }
++
+       .icon {
+         padding: 0px 18px 0px 8px;
+       }
+diff --git a/src/panels/lovelace/special-rows/hui-section-row.ts b/src/panels/lovelace/special-rows/hui-section-row.ts
+index 91e82904e6af..bc2db4686523 100644
+--- a/src/panels/lovelace/special-rows/hui-section-row.ts
++++ b/src/panels/lovelace/special-rows/hui-section-row.ts
+@@ -23,11 +23,11 @@ class HuiSectionRow extends LitElement implements LovelaceRow {
+     }
+ 
+     return html`
+-      <div class="divider"></div>
++      <div class="divider" part="divider"></div>
+       ${
+         this._config.label
+           ? html`
+-              <div class="label" .title=${this._config.label}>
++              <div class="label" part="label" .title=${this._config.label}>
+                 ${this._config.label}
+               </div>
+             `

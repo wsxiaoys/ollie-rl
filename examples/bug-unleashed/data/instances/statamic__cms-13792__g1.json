@@ -1,0 +1,27 @@
+{
+  "case_id": "statamic__cms-13792",
+  "repo": "statamic/cms",
+  "pr": 13792,
+  "title": "[6.x] Avoid searching server results with fuzzysort",
+  "language": "Vue",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "statamic__cms-13792__g1",
+  "target": {
+    "gid": "statamic__cms-13792#g1",
+    "summary": "Content search results populate the html property using raw item.text (via fuzzysort.single() or the fallback) without HTML escaping. If search results contain HTML markup, it will be rendered unescaped in the command palette, creating an XSS vulnerability.",
+    "paths": [
+      "resources/js/components/command-palette/CommandPalette.vue"
+    ],
+    "notes": [
+      "faulty statement assigning unescaped html to content search results",
+      "definition of the computed property whose results contain unescaped html",
+      "copy of the same faulty pattern generating highlighted html without escaping"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "bc7b6e8a1b0d9367ed02408c4a30c6912992e7f1",
+  "base_sha": "b826489294c76a4fdcfaaa9ef28dbecf5a54b5de",
+  "snapshot": "repos/statamic__cms/bc7b6e8a1b0d9367ed02408c4a30c6912992e7f1",
+  "diff": "diffs/statamic__cms-13792.diff"
+}

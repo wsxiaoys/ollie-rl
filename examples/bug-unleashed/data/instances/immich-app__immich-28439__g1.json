@@ -1,0 +1,25 @@
+{
+  "case_id": "immich-app__immich-28439",
+  "repo": "immich-app/immich",
+  "pr": 28439,
+  "title": "fix(mobile): cronet buffer overflow on compressed thumbnails",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "immich-app__immich-28439__g1",
+  "target": {
+    "gid": "immich-app__immich-28439#g1",
+    "summary": "Reusing byteBuffer across read iterations causes its position to accumulate across reads rather than reflect only the latest read chunk. As a result, b.advance(byteBuffer.position()) double-counts prior bytes on subsequent iterations, corrupting the native buffer offset and causing request.read() to fail with an IllegalArgumentException.",
+    "paths": [
+      "mobile/android/app/src/main/kotlin/app/alextran/immich/images/RemoteImagesImpl.kt"
+    ],
+    "notes": [
+      "faulty buffer reuse logic that double-counts position and passes a full ByteBuffer"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "d01efc31987dd173591d298930c73f23accd8b2f",
+  "base_sha": "21d6755f3975ac319ef3ae2578bde5082fd6857f",
+  "snapshot": "repos/immich-app__immich/d01efc31987dd173591d298930c73f23accd8b2f",
+  "diff": "diffs/immich-app__immich-28439.diff"
+}

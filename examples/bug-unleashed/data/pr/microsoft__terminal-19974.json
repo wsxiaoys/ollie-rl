@@ -1,0 +1,6 @@
+{
+  "title": "Fix selection markers disappearing after scrolling out of view",
+  "body": "## Summary of the Pull Request\r\nPretty straightforward\r\n\r\n## Validation Steps Performed\r\n✅ Selection markers are present after scrolling them out of view and scrolling back\r\n\r\nCloses #17135 ",
+  "head_sha": "62a4d48a1e126221fa3b051faca5545e18de1471",
+  "base_sha": "040c730a444aaf0c2ee5d6e8c2bedf184f700cac"
+}

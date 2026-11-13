@@ -1,0 +1,27 @@
+{
+  "case_id": "QwenLM__qwen-code-3450",
+  "repo": "QwenLM/qwen-code",
+  "pr": 3450,
+  "title": "fix(vscode-ide-companion): preserve split stream message ordering",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "QwenLM__qwen-code-3450__g1",
+  "target": {
+    "gid": "QwenLM__qwen-code-3450#g1",
+    "summary": "Reusing the initial stream timestamp (currentStreamTimestampRef.current) for subsequent assistant segments gives them a timestamp earlier than intermediate tool calls. Consequently, timeline sorting places tool calls at the end of the turn instead of interleaving them between assistant segments.",
+    "paths": [
+      "packages/vscode-ide-companion/src/webview/hooks/message/useMessageHandling.ts"
+    ],
+    "notes": [
+      "reusing initial stream timestamp for split assistant segments sorts them before intermediate tool calls",
+      "reusing initial stream timestamp for thinking segments (copy of the same pattern)",
+      "records the initial turn timestamp that is later reused for split segments"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "0b9fce1cf41bd6ab579d6dbd388a5342c7ce38e4",
+  "base_sha": "60a6dfc14c146a2d6279cef9d50ea3c209f61925",
+  "snapshot": "repos/QwenLM__qwen-code/0b9fce1cf41bd6ab579d6dbd388a5342c7ce38e4",
+  "diff": "diffs/QwenLM__qwen-code-3450.diff"
+}

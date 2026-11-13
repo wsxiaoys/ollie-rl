@@ -1,0 +1,6 @@
+{
+  "title": "Emit `synchronized` methods explicitly on the JVM",
+  "body": "Fixes #5933 \r\nFixes #14308\r\n\r\nNote that the `Synchronized` flag already existed, as did JVM backend support, it just wasn't used.\r\n\r\n## Have you relied on LLM-based tools in this contribution?\r\n\r\nNo\r\n\r\n## How was the solution tested?\r\n\r\nNew automated tests (including the issue's reproducer, if applicable)\r\n",
+  "head_sha": "54670ffe89bc73ee762ced3a9ee4d6b0c2f09073",
+  "base_sha": "7e87811fc448c22c6ed091d0e7eaf337889a6888"
+}

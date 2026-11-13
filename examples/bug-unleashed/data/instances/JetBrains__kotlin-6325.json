@@ -1,0 +1,16 @@
+{
+  "case_id": "JetBrains__kotlin-6325",
+  "repo": "JetBrains/kotlin",
+  "pr": 6325,
+  "title": "[Swift Export] Add support for re-exporting Objective-C protocols",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "JetBrains__kotlin-6325",
+  "target": null,
+  "siblings": [],
+  "head_sha": "0ab0007b0521767a9572294d978d8d9f9bb5faa5",
+  "base_sha": "1d41d6555ab6d8dc38ecd2c33e4aa54fbfb9db02",
+  "snapshot": "repos/JetBrains__kotlin/0ab0007b0521767a9572294d978d8d9f9bb5faa5",
+  "diff": "diffs/JetBrains__kotlin-6325.diff"
+}

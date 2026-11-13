@@ -1,0 +1,6 @@
+{
+  "title": "improve author and book support on itemDetails page",
+  "body": "**Changes**\r\n\r\n1. Show authors on book details page and vice versa\r\n2. Migrate the relevant code to a React component\r\n\r\nNot super familiar with React so feel free to suggest any changes. The logic felt bespoke enough to require a unique component so I went that route.\r\n\r\n**Issues**\r\n\r\nNone",
+  "head_sha": "6e98fd21194d935ee6f7da5844e3205e056095e0",
+  "base_sha": "3702133f92cb395886651c9738b66f5741a4dcca"
+}

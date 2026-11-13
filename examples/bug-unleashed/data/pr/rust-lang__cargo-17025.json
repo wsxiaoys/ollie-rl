@@ -1,0 +1,6 @@
+{
+  "title": "feat: Add --output-format=json to cargo doc as an unstable option",
+  "body": "### What does this PR try to resolve?\r\n\r\nIn https://github.com/rust-lang/cargo/issues/13283, the issue of naming conflict between doc artefacts was raised as a reason to wait before adding `--output-format` support to `cargo doc`.\r\nGiven the changes in https://github.com/rust-lang/cargo/pull/16773, I argue we shouldn't treat that oustanding design question as a blocker: since JSON doc output is now locked in to use the new build directory layout, we get benefits from first-class support in `cargo doc` even if the conflicts in the target directory remain unresolved.\r\nNamely, it becomes possible to compute the JSON docs for the whole workspace at once and then retrieve the artefacts directly from the build directory. This would significantly speed up tools like [cheadergen](github.com/LukeMathWalker/cheadergen) when launched on workspaces that inevitably have multiple versions of the same crate in their dependency tree.\r\n\r\n### How to test and review this PR?\r\n\r\nI followed the same testing approach used in https://github.com/rust-lang/cargo/pull/16773 to ease review. Happy to add more test cases if we deem they are necessary.\r\n",
+  "head_sha": "13c59498ce3faaaa82b9cccaca8cfd2f8954895a",
+  "base_sha": "2da24c9172cd638f63713aa191c9aff51c16f476"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "fix(security): harden access checks and migration validation",
+  "body": "Harden access checks for issue dependencies, team repository membership, notifications, stars, tracked times and repository migrations.\r\n",
+  "head_sha": "ca3a1b61df0e1f9843c0de1592ed6383235bfd2d",
+  "base_sha": "f452c369acc9f1bd05ec6ef9c2e4399062dd6da1"
+}

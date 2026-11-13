@@ -1,0 +1,99 @@
+diff --git a/.chloggen/fix-otlphttp-large-response-retry.yaml b/.chloggen/fix-otlphttp-large-response-retry.yaml
+new file mode 100644
+index 000000000000..b377585a6ab4
+--- /dev/null
++++ b/.chloggen/fix-otlphttp-large-response-retry.yaml
+@@ -0,0 +1,29 @@
++# Use this changelog template to create an entry for release notes.
++
++# One of 'breaking', 'deprecation', 'new_component', 'enhancement', 'bug_fix'
++change_type: bug_fix
++
++# The name of the component, or a single word describing the area of concern, (e.g. receiver/otlp)
++component: exporter/otlp_http
++
++# A brief description of the change.  Surround your text with quotes ("") if it needs to start with a backtick (`).
++note: Treat errors parsing successful (2xx) HTTP response bodies as permanent errors to prevent retrying already-accepted data.
++
++# One or more tracking issues or pull requests related to the change
++issues: [15386]
++
++# (Optional) One or more lines of additional information to render under the primary note.
++# These lines will be padded with 2 spaces and then inserted directly into the document.
++# Use pipe (|) for multiline entries.
++subtext: |
++  When a server returns a 2xx status but the response body exceeds the 64kB read limit,
++  the body is truncated and proto unmarshaling fails. Previously this was treated as a
++  retryable error, causing duplicate data to be exported. Now it is marked as a permanent
++  error so the retry logic will not re-send data that was already accepted by the server.
++
++# Optional: The change log or logs in which this entry should be included.
++# e.g. '[user]' or '[user, api]'
++# Include 'user' if the change is relevant to end users.
++# Include 'api' if there is a change to a library API.
++# Default: '[user]'
++change_logs: [user]
+diff --git a/exporter/otlphttpexporter/otlp.go b/exporter/otlphttpexporter/otlp.go
+index 1993dd19b74d..dc2998932ed6 100644
+--- a/exporter/otlphttpexporter/otlp.go
++++ b/exporter/otlphttpexporter/otlp.go
+@@ -207,7 +207,10 @@ func (e *baseExporter) export(ctx context.Context, requestURL string, request []
+ 	}()
+ 
+ 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+-		return handlePartialSuccessResponse(resp, partialSuccessHandler)
++		if err := handlePartialSuccessResponse(resp, partialSuccessHandler); err != nil {
++			return consumererror.NewPermanent(err)
++		}
++		return nil
+ 	}
+ 
+ 	respStatus := readResponseStatus(resp)
+diff --git a/exporter/otlphttpexporter/otlp_test.go b/exporter/otlphttpexporter/otlp_test.go
+index 25e85d6c265e..5401bc26243b 100644
+--- a/exporter/otlphttpexporter/otlp_test.go
++++ b/exporter/otlphttpexporter/otlp_test.go
+@@ -12,6 +12,7 @@ import (
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"net/url"
++	"strconv"
+ 	"strings"
+ 	"testing"
+ 	"time"
+@@ -1215,3 +1216,35 @@ func TestExport_ErrorShowsModifiedURL(t *testing.T) {
+ 	assert.Contains(t, err.Error(), modifiedURL, "Error message should contain the modified destination URL")
+ 	assert.NotContains(t, err.Error(), originalURL, "Error message should NOT contain the original placeholder URL")
+ }
++
++func TestPartialSuccess_responseBodyTooLarge(t *testing.T) {
++	srv := createBackend("/v1/metrics", func(writer http.ResponseWriter, _ *http.Request) {
++		response := pmetricotlp.NewExportResponse()
++		response.PartialSuccess().SetErrorMessage(strings.Repeat("x", 70000))
++		response.PartialSuccess().SetRejectedDataPoints(1)
++		b, _ := response.MarshalProto()
++
++		writer.Header().Set("Content-Type", "application/x-protobuf")
++		writer.Header().Set("Content-Length", strconv.Itoa(len(b)))
++		_, err := writer.Write(b)
++		assert.NoError(t, err)
++	})
++	defer srv.Close()
++
++	cfg := &Config{
++		Encoding:        EncodingProto,
++		MetricsEndpoint: srv.URL + "/v1/metrics",
++	}
++	exp, err := createMetrics(context.Background(), exportertest.NewNopSettings(metadata.Type), cfg)
++	require.NoError(t, err)
++	err = exp.Start(context.Background(), componenttest.NewNopHost())
++	require.NoError(t, err)
++	defer func() {
++		require.NoError(t, exp.Shutdown(context.Background()))
++	}()
++
++	err = exp.ConsumeMetrics(context.Background(), pmetric.NewMetrics())
++	require.Error(t, err)
++	assert.True(t, consumererror.IsPermanent(err))
++	assert.Contains(t, err.Error(), "error parsing protobuf response:")
++}

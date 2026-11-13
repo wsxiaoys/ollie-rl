@@ -1,0 +1,39 @@
+diff --git a/Tests/test_file_tar.py b/Tests/test_file_tar.py
+index 78ca0c2787a..39a424c938f 100644
+--- a/Tests/test_file_tar.py
++++ b/Tests/test_file_tar.py
+@@ -65,3 +65,17 @@ def test_contextmanager() -> None:
+     with warnings.catch_warnings(action="error"):
+         with TarIO.TarIO(TEST_TAR_FILE, "hopper.jpg"):
+             pass
++
++
++@pytest.mark.parametrize("size", (b"-1", b"0"))
++def test_odd(tmp_path: Path, size: bytes) -> None:
++    with open(TEST_TAR_FILE, "rb") as f:
++        data = bytearray(f.read())
++
++    data[124:135] = size.rjust(11)
++
++    tmpfile = tmp_path / "temp.tar"
++    tmpfile.write_bytes(data)
++
++    with pytest.raises(ValueError, match="offset must be positive"):
++        TarIO.TarIO(str(tmpfile), "test")
+diff --git a/src/PIL/TarIO.py b/src/PIL/TarIO.py
+index 68daf6616a0..487467da422 100644
+--- a/src/PIL/TarIO.py
++++ b/src/PIL/TarIO.py
+@@ -57,7 +57,11 @@ def __init__(self, tarfile: str, file: str) -> None:
+             if file == name:
+                 break
+ 
+-            self.fh.seek((size + 511) & (~511), io.SEEK_CUR)
++            offset = (size + 511) & ~511
++            if offset <= 0:
++                msg = "offset must be positive"
++                raise ValueError(msg)
++            self.fh.seek(offset, io.SEEK_CUR)
+ 
+         # Open region
+         super().__init__(self.fh, self.fh.tell(), size)

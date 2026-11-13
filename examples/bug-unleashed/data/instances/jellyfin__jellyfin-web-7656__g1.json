@@ -1,0 +1,27 @@
+{
+  "case_id": "jellyfin__jellyfin-web-7656",
+  "repo": "jellyfin/jellyfin-web",
+  "pr": 7656,
+  "title": "improve author and book support on itemDetails page",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "jellyfin__jellyfin-web-7656__g1",
+  "target": {
+    "gid": "jellyfin__jellyfin-web-7656#g1",
+    "summary": "The check for BoxSet and Playlist types in getMetadataItems returns early for all metadata types instead of only studios, preventing genres and other metadata from being displayed for collections and playlists.",
+    "paths": [
+      "src/components/itemDetails/ItemDetailsMetadataList.tsx"
+    ],
+    "notes": [
+      "faulty statement returning null for BoxSet and Playlist regardless of metadata type",
+      "definition of getMetadataItems whose behavior is wrong",
+      "call site relying on the return value of getMetadataItems"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "6e98fd21194d935ee6f7da5844e3205e056095e0",
+  "base_sha": "3702133f92cb395886651c9738b66f5741a4dcca",
+  "snapshot": "repos/jellyfin__jellyfin-web/6e98fd21194d935ee6f7da5844e3205e056095e0",
+  "diff": "diffs/jellyfin__jellyfin-web-7656.diff"
+}

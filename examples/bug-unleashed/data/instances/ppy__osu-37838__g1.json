@@ -1,0 +1,26 @@
+{
+  "case_id": "ppy__osu-37838",
+  "repo": "ppy/osu",
+  "pr": 37838,
+  "title": "Fix popup dialogs not appearing if pushed when `OverlayActivationMode` is wrong",
+  "language": "C#",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ppy__osu-37838__g1",
+  "target": {
+    "gid": "ppy__osu-37838#g1",
+    "summary": "Checking `OverlayActivationMode.Value == OverlayActivation.All` prevents dialogs from appearing when the activation mode is `UserTriggered`. This causes user-initiated dialogs (such as resetting skin settings or deleting a skin while paused) to fail to display.",
+    "paths": [
+      "osu.Game/Overlays/DialogOverlay.cs"
+    ],
+    "notes": [
+      "faulty check requiring OverlayActivation.All instead of allowing UserTriggered",
+      "definition of the IsPresent property whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "7bf51f73404832e3be3dc1e2637d0a6c10155154",
+  "base_sha": "cd27c935d6c15c3c6f2f5b561cc3340130f27407",
+  "snapshot": "repos/ppy__osu/7bf51f73404832e3be3dc1e2637d0a6c10155154",
+  "diff": "diffs/ppy__osu-37838.diff"
+}

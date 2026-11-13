@@ -1,0 +1,74 @@
+diff --git a/src/formatters/NetworkFormatter.ts b/src/formatters/NetworkFormatter.ts
+index 10e2069d1..ff64cc7a4 100644
+--- a/src/formatters/NetworkFormatter.ts
++++ b/src/formatters/NetworkFormatter.ts
+@@ -314,7 +314,9 @@ function converNetworkRequestDetailedToStringDetailed(
+   if (redirectChain?.length) {
+     response.push(`### Redirect chain`);
+     let indent = 0;
+-    for (const request of redirectChain.reverse()) {
++    // `redirectChain` is already ordered by toJSONDetailed(); don't reverse it
++    // again here or the text output contradicts structuredContent (the JSON).
++    for (const request of redirectChain) {
+       response.push(
+         `${'  '.repeat(indent)}${convertNetworkRequestConciseToString(request)}`,
+       );
+diff --git a/tests/formatters/NetworkFormatter.test.ts b/tests/formatters/NetworkFormatter.test.ts
+index e37e5ba2c..ba8833086 100644
+--- a/tests/formatters/NetworkFormatter.test.ts
++++ b/tests/formatters/NetworkFormatter.test.ts
+@@ -307,6 +307,38 @@ describe('NetworkFormatter', () => {
+       const result = formatter.toStringDetailed();
+       t.assert.snapshot(result);
+     });
++    it('renders the redirect chain in the same order in text and JSON', async () => {
++      // A >=2 element chain makes ordering observable (a single redirect hides
++      // the bug). toStringDetailed() and toJSONDetailed() are emitted from the
++      // same get_network_request call, so they must agree on the order.
++      const first = getMockRequest({url: 'http://example.com/first'});
++      const second = getMockRequest({url: 'http://example.com/second'});
++      const request = getMockRequest({
++        url: 'http://example.com/final',
++        redirectChain: [first, second],
++      });
++      const formatter = await NetworkFormatter.from(request, {
++        requestId: 1,
++        requestIdResolver: () => 2,
++        saveFile: async () => ({filename: ''}),
++        redactNetworkHeaders: false,
++      });
++
++      const text = formatter.toStringDetailed();
++      const json = formatter.toJSONDetailed();
++
++      const textOrder = [
++        ...text.matchAll(/http:\/\/example\.com\/(first|second)/g),
++      ].map(m => m[0]);
++      const jsonOrder = (json.redirectChain ?? []).map(entry => entry.url);
++
++      assert.deepStrictEqual(
++        textOrder,
++        jsonOrder,
++        `redirect chain order differs between text (${JSON.stringify(textOrder)}) ` +
++          `and JSON (${JSON.stringify(jsonOrder)})`,
++      );
++    });
+     it('shows saved to file message in toStringDetailed', async () => {
+       const request = {
+         method: () => 'POST',
+diff --git a/tests/utils.ts b/tests/utils.ts
+index a1863521f..98e20512d 100644
+--- a/tests/utils.ts
++++ b/tests/utils.ts
+@@ -200,7 +200,10 @@ export function getMockRequest(
+       );
+     },
+     redirectChain(): HTTPRequest[] {
+-      return options.redirectChain ?? [];
++      // Puppeteer returns a fresh copy on every call (HTTPRequest returns
++      // `this._redirectChain.slice()`); mirror that so formatters can't share
++      // and accidentally mutate the same array across calls.
++      return [...(options.redirectChain ?? [])];
+     },
+     isNavigationRequest() {
+       return options.navigationRequest ?? false;

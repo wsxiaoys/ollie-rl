@@ -1,0 +1,28 @@
+{
+  "case_id": "elastic__eui-9644",
+  "repo": "elastic/eui",
+  "pr": 9644,
+  "title": "Add `EuiComboBoxObject` Playwright helper to `@elastic/eui-test-helpers`",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "elastic__eui-9644__g1",
+  "target": {
+    "gid": "elastic__eui-9644#g1",
+    "summary": "When clearing a selection, clear() invokes clickPillClearButtons() whenever pills are present. On combo boxes configured with singleSelection, pills are rendered without close buttons, causing the locator to hang and time out.",
+    "paths": [
+      "packages/test-helpers/src/playwright/components/combo_box/object.ts"
+    ],
+    "notes": [
+      "faulty statement unconditionally calling clickPillClearButtons when pills are present",
+      "definition of the method whose behavior is wrong",
+      "call site relying on faulty clear() method",
+      "definition of helper that assumes pills have close buttons"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "1cc4ea22b22b66e68562c587947a18013db44869",
+  "base_sha": "000bd691c662e806d6b8bb12e4fd403b289d934d",
+  "snapshot": "repos/elastic__eui/1cc4ea22b22b66e68562c587947a18013db44869",
+  "diff": "diffs/elastic__eui-9644.diff"
+}

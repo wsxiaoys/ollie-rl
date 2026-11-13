@@ -1,0 +1,16 @@
+{
+  "case_id": "scala__scala3-26343",
+  "repo": "scala/scala3",
+  "pr": 26343,
+  "title": "Synthetic cast must not break tailrec",
+  "language": "Scala",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "scala__scala3-26343",
+  "target": null,
+  "siblings": [],
+  "head_sha": "5be0d6ea70c43a3afb05d2c25b8d67bf5c89214b",
+  "base_sha": "9521ae1b0bcf757e3bc426d08f5c61792bd187d7",
+  "snapshot": "repos/scala__scala3/5be0d6ea70c43a3afb05d2c25b8d67bf5c89214b",
+  "diff": "diffs/scala__scala3-26343.diff"
+}

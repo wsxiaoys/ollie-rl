@@ -1,0 +1,25 @@
+{
+  "case_id": "FreeCAD__FreeCAD-27531",
+  "repo": "FreeCAD/FreeCAD",
+  "pr": 27531,
+  "title": "Assembly: Command: Got to linked assembly ",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "FreeCAD__FreeCAD-27531__g1",
+  "target": {
+    "gid": "FreeCAD__FreeCAD-27531#g1",
+    "summary": "`cmd->getAction()` can return `nullptr` if the command's action has not been initialized, leading to a null pointer dereference and crash when right-clicking an assembly link.",
+    "paths": [
+      "src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp"
+    ],
+    "notes": [
+      "faulty check and null pointer dereference if cmd->getAction() returns null"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "500c2be808deec96e4f72373235d44802627b89a",
+  "base_sha": "7912f84136fa7f64facfe3894248741778286fea",
+  "snapshot": "repos/FreeCAD__FreeCAD/500c2be808deec96e4f72373235d44802627b89a",
+  "diff": "diffs/FreeCAD__FreeCAD-27531.diff"
+}

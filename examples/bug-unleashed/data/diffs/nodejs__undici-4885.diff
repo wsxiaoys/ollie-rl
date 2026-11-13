@@ -1,0 +1,105 @@
+diff --git a/lib/dispatcher/balanced-pool.js b/lib/dispatcher/balanced-pool.js
+index d53a26966ad..fa0fa97288e 100644
+--- a/lib/dispatcher/balanced-pool.js
++++ b/lib/dispatcher/balanced-pool.js
+@@ -14,7 +14,7 @@ const {
+ } = require('./pool-base')
+ const Pool = require('./pool')
+ const { kUrl } = require('../core/symbols')
+-const { parseOrigin } = require('../core/util')
++const util = require('../core/util')
+ const kFactory = Symbol('factory')
+ 
+ const kOptions = Symbol('options')
+@@ -56,7 +56,10 @@ class BalancedPool extends PoolBase {
+ 
+     super()
+ 
+-    this[kOptions] = opts
++    this[kOptions] = { ...util.deepClone(opts) }
++    this[kOptions].interceptors = opts.interceptors
++      ? { ...opts.interceptors }
++      : undefined
+     this[kIndex] = -1
+     this[kCurrentWeight] = 0
+ 
+@@ -76,7 +79,7 @@ class BalancedPool extends PoolBase {
+   }
+ 
+   addUpstream (upstream) {
+-    const upstreamOrigin = parseOrigin(upstream).origin
++    const upstreamOrigin = util.parseOrigin(upstream).origin
+ 
+     if (this[kClients].find((pool) => (
+       pool[kUrl].origin === upstreamOrigin &&
+@@ -85,7 +88,7 @@ class BalancedPool extends PoolBase {
+     ))) {
+       return this
+     }
+-    const pool = this[kFactory](upstreamOrigin, Object.assign({}, this[kOptions]))
++    const pool = this[kFactory](upstreamOrigin, this[kOptions])
+ 
+     this[kAddClient](pool)
+     pool.on('connect', () => {
+@@ -125,7 +128,7 @@ class BalancedPool extends PoolBase {
+   }
+ 
+   removeUpstream (upstream) {
+-    const upstreamOrigin = parseOrigin(upstream).origin
++    const upstreamOrigin = util.parseOrigin(upstream).origin
+ 
+     const pool = this[kClients].find((pool) => (
+       pool[kUrl].origin === upstreamOrigin &&
+@@ -141,7 +144,7 @@ class BalancedPool extends PoolBase {
+   }
+ 
+   getUpstream (upstream) {
+-    const upstreamOrigin = parseOrigin(upstream).origin
++    const upstreamOrigin = util.parseOrigin(upstream).origin
+ 
+     return this[kClients].find((pool) => (
+       pool[kUrl].origin === upstreamOrigin &&
+diff --git a/test/node-test/balanced-pool.js b/test/node-test/balanced-pool.js
+index 6f4f24743aa..055c6f909b3 100644
+--- a/test/node-test/balanced-pool.js
++++ b/test/node-test/balanced-pool.js
+@@ -601,3 +601,39 @@ describe('weighted round robin', () => {
+     })
+   }
+ })
++
++test('should not be vulnerable to __proto__ pollution via options', async (t) => {
++  const { EventEmitter } = require('node:events')
++
++  let capturedOpts
++
++  // Simulate attacker-controlled options with __proto__ property
++  const attackerOptions = JSON.parse(`
++    {
++      "__proto__": {
++        "polluted": "YES",
++        "connections": 1
++      }
++    }
++  `)
++
++  attackerOptions.factory = (origin, opts) => {
++    capturedOpts = opts
++
++    const stub = new EventEmitter()
++    stub.dispatch = () => true
++    stub.close = () => Promise.resolve()
++    stub.destroy = () => Promise.resolve()
++    stub.destroyed = false
++    stub.closed = false
++
++    return stub
++  }
++
++  new BalancedPool(['http://localhost/'], attackerOptions) // eslint-disable-line no-new
++
++  // Verify that the captured options do not have polluted prototype
++  assert.strictEqual(capturedOpts.polluted, undefined, 'polluted property should not exist on options')
++  assert.strictEqual(Object.getPrototypeOf(capturedOpts).polluted, undefined, 'prototype should not be polluted')
++  assert.strictEqual({}.polluted, undefined, 'global Object.prototype should not be polluted')
++})

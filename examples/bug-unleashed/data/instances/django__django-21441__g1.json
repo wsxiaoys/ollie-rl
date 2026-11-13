@@ -1,0 +1,26 @@
+{
+  "case_id": "django__django-21441",
+  "repo": "django/django",
+  "pr": 21441,
+  "title": "Refs #36560, CVE-2026-35193 -- Replaced substring check on Cache-control directives in UpdateCacheMiddleware.",
+  "language": "Python",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "django__django-21441__g1",
+  "target": {
+    "gid": "django__django-21441#g1",
+    "summary": "Checking for exact directive equality in `cache_control_parts` fails to recognize qualified Cache-Control directives such as `private=\"Set-Cookie\"`. Responses with qualified directives will not be excluded from caching and may be improperly stored in a shared cache.",
+    "paths": [
+      "django/middleware/cache.py"
+    ],
+    "notes": [
+      "faulty check using exact token membership on split Cache-Control header",
+      "directive check relying on cache_control_parts"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "bb2ea095f0707a59b13f3b629ced1973d1a7c68c",
+  "base_sha": "71af23d1f4678c4bf052e051d72e8928e1697de3",
+  "snapshot": "repos/django__django/bb2ea095f0707a59b13f3b629ced1973d1a7c68c",
+  "diff": "diffs/django__django-21441.diff"
+}

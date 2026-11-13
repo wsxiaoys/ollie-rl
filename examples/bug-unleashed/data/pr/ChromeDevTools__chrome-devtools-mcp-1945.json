@@ -1,0 +1,6 @@
+{
+  "title": "feat: support MCP client roots feature",
+  "body": "This PR implements https://modelcontextprotocol.io/specification/2025-11-25/client/roots If client specifies roots, all reads and writes to the file system originating in tool calls will denied (including tmp files). The client specified empty list of roots, all filesystem access will be restricted.\r\n\r\nCloses https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/1860",
+  "head_sha": "96501f455e26b85abfe5d6ed1aac51fbf0b29cea",
+  "base_sha": "c9c1683b67ac927a5cd5178692d1de7d8e06617b"
+}

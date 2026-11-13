@@ -1,0 +1,90 @@
+diff --git a/test/integration/autolinker_spec.mjs b/test/integration/autolinker_spec.mjs
+index 503f9aed8e247..596e57604f3b0 100644
+--- a/test/integration/autolinker_spec.mjs
++++ b/test/integration/autolinker_spec.mjs
+@@ -169,6 +169,43 @@ describe("autolinker", function () {
+     });
+   });
+ 
++  describe("issue21458.pdf", function () {
++    let pages;
++
++    beforeEach(async () => {
++      pages = await loadAndWait(
++        "issue21458.pdf",
++        ".page[data-page-number='1'] .annotationLayer",
++        null,
++        null,
++        { enableAutoLinking: true }
++      );
++    });
++
++    afterEach(async () => {
++      await closePages(pages);
++    });
++
++    it("must not add links that overlap internal destinations", async () => {
++      await Promise.all(
++        pages.map(async ([browserName, page]) => {
++          await waitForLinkAnnotations(page);
++          const linkIds = await page.$$eval(
++            ".page[data-page-number='1'] .annotationLayer > .linkAnnotation > a",
++            annotations =>
++              annotations.map(a => a.getAttribute("data-element-id"))
++          );
++          expect(linkIds.length).withContext(`In ${browserName}`).toEqual(42);
++          linkIds.forEach(id =>
++            expect(id)
++              .withContext(`In ${browserName}`)
++              .not.toContain("inferred_link_")
++          );
++        })
++      );
++    });
++  });
++
+   describe("PR 19470", function () {
+     let pages;
+ 
+diff --git a/test/pdfs/issue21458.pdf.link b/test/pdfs/issue21458.pdf.link
+new file mode 100644
+index 0000000000000..8af2c7e69d424
+--- /dev/null
++++ b/test/pdfs/issue21458.pdf.link
+@@ -0,0 +1 @@
++https://github.com/user-attachments/files/28985267/Gumbel.Distillation.pdf
+diff --git a/test/test_manifest.json b/test/test_manifest.json
+index 856bec3215bbf..faa58c969865d 100644
+--- a/test/test_manifest.json
++++ b/test/test_manifest.json
+@@ -31,6 +31,14 @@
+     "link": true,
+     "type": "other"
+   },
++  {
++    "id": "issue21458",
++    "file": "pdfs/issue21458.pdf",
++    "md5": "875754beca276ab63568e06fd49e8375",
++    "rounds": 1,
++    "link": true,
++    "type": "other"
++  },
+   {
+     "id": "filled-background-range",
+     "file": "pdfs/filled-background.pdf",
+diff --git a/web/annotation_layer_builder.js b/web/annotation_layer_builder.js
+index 4139210fabc7b..1d9c591330370 100644
+--- a/web/annotation_layer_builder.js
++++ b/web/annotation_layer_builder.js
+@@ -332,10 +332,7 @@ class AnnotationLayerBuilder {
+       let linkAreaRects;
+ 
+       for (const annotation of this.#annotations) {
+-        if (
+-          annotation.annotationType !== AnnotationType.LINK ||
+-          !annotation.url
+-        ) {
++        if (annotation.annotationType !== AnnotationType.LINK) {
+           continue;
+         }
+         // TODO: Add a test case to verify that we can find the intersection

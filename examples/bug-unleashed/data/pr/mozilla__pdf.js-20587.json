@@ -1,0 +1,6 @@
+{
+  "title": "Refactor a bit page mapping stuff in order to be able to support delete/copy pages",
+  "body": "",
+  "head_sha": "806133379eb4c20e34d19c5c4969e547f86e7f52",
+  "base_sha": "48df8a5ea2aa2762599c09966c311f2b55b910ce"
+}
