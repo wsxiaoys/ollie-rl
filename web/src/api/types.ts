@@ -39,6 +39,13 @@ export type ListInFlightChatCompletionsResponse =
 export type GenerationRewardStats = Schemas["GenerationRewardStats"];
 export type RewardDistributionData = Schemas["RewardDistributionResponse"];
 export type ChatCompletionItem = Schemas["ChatCompletionItem"];
+// A `ChatCompletionItem` whose request/response payloads are present. The run
+// endpoint omits them by default; the "load full transcript" request
+// (`include_payloads=true`) guarantees them.
+export type ChatCompletionPayload = ChatCompletionItem & {
+  request: NonNullable<ChatCompletionItem["request"]>;
+  response: NonNullable<ChatCompletionItem["response"]>;
+};
 export type RunDetailResponse = Schemas["RunDetailResponse"];
 export type ChatCompletionDetailResponse =
   Schemas["ChatCompletionDetailResponse"];

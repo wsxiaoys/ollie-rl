@@ -135,9 +135,12 @@ export async function getEvalProgress(
 export function getRun(
   tunerId: string,
   runId: string,
+  includePayloads = false,
 ): Promise<RunDetailResponse> {
   return get<RunDetailResponse>(
-    `/tuners/${encodeURIComponent(tunerId)}/runs/${encodeURIComponent(runId)}`,
+    `/tuners/${encodeURIComponent(tunerId)}/runs/${encodeURIComponent(
+      runId,
+    )}?include_payloads=${includePayloads}`,
   );
 }
 

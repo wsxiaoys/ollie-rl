@@ -173,8 +173,12 @@ export interface paths {
         };
         /**
          * Get Run
-         * @description Return a single run and its chat completions (oldest first) so the full
-         *     request/response transcript can be visualized.
+         * @description Return a single run and its chat completions (oldest first).
+         *
+         *     By default each completion carries only payload-free summary fields
+         *     (message count, finish reason, and token usage). Pass
+         *     `?include_payloads=true` to also attach the full request/response so the
+         *     transcript can be visualized.
          */
         get: operations["get_run_tuners__tuner_id__runs__run_id__get"];
         put?: never;
@@ -521,6 +525,13 @@ export interface components {
         /**
          * ChatCompletionItem
          * @description A single recorded LLM request/response inside a run.
+         *
+         *     `request` is the whole accumulated conversation at that turn, so it grows
+         *     with the trajectory and a run's full transcript payload grows ~quadratically
+         *     with turn count. The full payloads are therefore optional and omitted by
+         *     default; the run-detail endpoint returns the payload-free summary fields
+         *     below so a compact list needs no follow-up fetch, and a client fetches the
+         *     transcript explicitly. See `get_run_details(include_payloads=...)`.
          */
         ChatCompletionItem: {
             /** Id */
@@ -534,8 +545,18 @@ export interface components {
             created_at: string;
             /** Duration Ms */
             duration_ms?: number | null;
-            request: components["schemas"]["ChatCompletionRequest-Output"];
-            response: components["schemas"]["ChatCompletion"];
+            /** Message Count */
+            message_count?: number | null;
+            /** Finish Reason */
+            finish_reason?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens?: number | null;
+            /** Completion Tokens */
+            completion_tokens?: number | null;
+            /** Reasoning Tokens */
+            reasoning_tokens?: number | null;
+            request?: components["schemas"]["ChatCompletionRequest-Output"] | null;
+            response?: components["schemas"]["ChatCompletion"] | null;
         };
         /**
          * ChatCompletionMessage
@@ -1908,7 +1929,10 @@ export interface operations {
     };
     get_run_tuners__tuner_id__runs__run_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Attach each completion's full request/response payloads. Omitted by default: each request embeds the whole accumulated conversation at that turn, so a large run's full transcript grows ~quadratically with turn count. Leave false for the compact summary; set true to load the full transcript. */
+                include_payloads?: boolean;
+            };
             header?: never;
             path: {
                 tuner_id: string;

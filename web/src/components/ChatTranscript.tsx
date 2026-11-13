@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Fragment } from "react";
-import type { ChatCompletionItem } from "../api/types";
+import type { ChatCompletionItem, ChatCompletionPayload } from "../api/types";
 import { Badge, Mono } from "./ui";
 import { PrettyJson } from "./PrettyJson";
 
@@ -497,7 +497,7 @@ export function ChatTranscript({
   tunerId,
   runId,
 }: {
-  completions: ChatCompletionItem[];
+  completions: ChatCompletionPayload[];
   interestingOnly?: boolean;
   tunerId?: string;
   runId?: string;

@@ -516,6 +516,15 @@ td.num {
   padding: 16px;
 }
 
+/* Right-aligned control cluster in a panel header (e.g. the run-detail
+   completions/transcript toggles). */
+.panel__controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
 /* ---- Progress bar ---- */
 .progress {
   background: var(--bg-elev-2);
