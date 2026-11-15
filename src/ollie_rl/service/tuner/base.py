@@ -273,25 +273,44 @@ class TunerServiceBase:
     ) -> Optional[CheckpointModel]:
         """Newest checkpoint eligible for the tuner's eval cadence.
 
-        Checkpoints are numbered from 1 in ascending policy-generation order;
-        every ``every_n``-th row is eligible. Counting persisted checkpoints,
-        rather than applying modulo to backend generation numbers, keeps the
-        cadence stable when generations are sparse (for example, when sampler
-        promotion happens only every few train steps).
+        The untrained base policy is materialized as a generation-0 checkpoint
+        at tuner creation and is *always* eligible, so the baseline is scored
+        before promotion begins. Train-step checkpoints are numbered from 1 in
+        ascending policy-generation order and every ``every_n``-th is eligible.
+        Counting persisted train-step checkpoints, rather than applying modulo
+        to backend generation numbers, keeps the cadence stable when generations
+        are sparse (for example, when sampler promotion happens only every few
+        train steps).
         """
         count_result = await session.execute(
             select(func.count())
             .select_from(CheckpointModel)
-            .where(CheckpointModel.tuner_id == tuner_id)
+            .where(
+                CheckpointModel.tuner_id == tuner_id,
+                CheckpointModel.policy_generation > 0,
+            )
         )
         checkpoint_count = int(count_result.scalar_one())
         eligible_ordinal = checkpoint_count - checkpoint_count % every_n
         if eligible_ordinal == 0:
-            return None
+            # No train-step checkpoint is due yet; fall back to the base policy
+            # so generation 0 is scored before the first promotion.
+            base_result = await session.execute(
+                select(CheckpointModel)
+                .where(
+                    CheckpointModel.tuner_id == tuner_id,
+                    CheckpointModel.policy_generation == 0,
+                )
+                .limit(1)
+            )
+            return base_result.scalar_one_or_none()
 
         result = await session.execute(
             select(CheckpointModel)
-            .where(CheckpointModel.tuner_id == tuner_id)
+            .where(
+                CheckpointModel.tuner_id == tuner_id,
+                CheckpointModel.policy_generation > 0,
+            )
             .order_by(
                 CheckpointModel.policy_generation.asc(),
                 CheckpointModel.created_at.asc(),

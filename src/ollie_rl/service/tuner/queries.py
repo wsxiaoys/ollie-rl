@@ -3,7 +3,7 @@
 import json
 import logging
 import math
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from openai.types.chat import ChatCompletion
 from sqlalchemy import case, func, select
@@ -685,19 +685,20 @@ class QueryMixin(TunerServiceBase):
                 )
 
             # Checkpoint rows are newest-first; reverse them to apply the same
-            # 1-based persisted-checkpoint cadence as the dispenser. A disabled
+            # 1-based persisted-checkpoint cadence as the dispenser. The
+            # generation-0 base-policy checkpoint is always eligible; the
+            # remaining train-step checkpoints are numbered from 1. A disabled
             # or empty eval split has no scheduled checkpoint summaries.
-            eligible_checkpoint_ids = (
-                {
-                    checkpoint.id
-                    for ordinal, checkpoint in enumerate(
-                        reversed(checkpoint_rows), start=1
-                    )
-                    if ordinal % recipe.eval_every_n_checkpoints == 0
-                }
-                if eval_datums and recipe.eval_group_size > 0
-                else set()
-            )
+            eligible_checkpoint_ids: Set[str] = set()
+            if eval_datums and recipe.eval_group_size > 0:
+                train_ordinal = 0
+                for checkpoint in reversed(checkpoint_rows):
+                    if checkpoint.policy_generation == 0:
+                        eligible_checkpoint_ids.add(checkpoint.id)
+                        continue
+                    train_ordinal += 1
+                    if train_ordinal % recipe.eval_every_n_checkpoints == 0:
+                        eligible_checkpoint_ids.add(checkpoint.id)
             completed_eval_datums: Dict[str, int] = {
                 checkpoint_id: 0 for checkpoint_id in eligible_checkpoint_ids
             }

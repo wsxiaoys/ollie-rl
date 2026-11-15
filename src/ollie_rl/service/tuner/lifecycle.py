@@ -4,9 +4,10 @@ import logging
 from typing import List, Optional
 
 from ollie_rl.cookbook import Cookbook, RecipeSpec
-from ollie_rl.db import DatumRowModel, TunerModel
+from ollie_rl.db import CheckpointModel, DatumRowModel, TunerModel
 from ollie_rl.service.tuner.base import TunerServiceBase
 from ollie_rl.service.tuner.state_store import DbStateStore
+from ollie_rl.trainer import LIVE_POLICY_CHECKPOINT
 from ollie_rl.trainer import factory as trainer_factory
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,19 @@ class LifecycleMixin(TunerServiceBase):
                             kind="eval",
                         )
                     )
+
+                # Materialize the untrained policy as a generation-0 checkpoint
+                # so the eval tier can score the base model against the held-out
+                # val datums before any train step lands. The live-policy
+                # sentinel routes eval sampling to the live policy, which at
+                # generation 0 is the base model itself.
+                session.add(
+                    CheckpointModel(
+                        tuner_id=tuner_record.id,
+                        ref=LIVE_POLICY_CHECKPOINT,
+                        policy_generation=0,
+                    )
+                )
 
         tuner_id = tuner_record.id
         state_store = DbStateStore(tuner_id)
