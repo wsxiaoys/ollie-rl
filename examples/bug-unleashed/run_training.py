@@ -760,6 +760,29 @@ def order_datum_ids(available: Iterable[str], order: list[str] | None) -> list[s
     return ordered
 
 
+async def warm_ollie_cli() -> None:
+    """Install the pinned CLI once so concurrent `npx` launches cannot race.
+
+    `npx` extracts the package into a shared cache; several cold launches at
+    once race on the same directory and fail with ENOTEMPTY, which makes every
+    run exit before it can call the model. One sequential invocation fills the
+    cache first, after which concurrent launches reuse it.
+    """
+    command = ("npx", "--yes", f"@getollie/cli@{OLLIE_CLI_VERSION}", "--version")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        code = await process.wait()
+    except OSError as error:
+        print(f"[driver] WARNING: could not pre-warm Ollie CLI: {error}")
+        return
+    if code != 0:
+        print(f"[driver] WARNING: Ollie CLI pre-warm exited with status {code}")
+
+
 async def async_main(args: argparse.Namespace) -> int:
     data_dir = args.data_dir.resolve()
     examples = reward.load_examples(data_dir)
@@ -775,6 +798,9 @@ async def async_main(args: argparse.Namespace) -> int:
     )
     if not train_datum_ids:
         raise SystemExit("no train examples; re-run prepare_data.py")
+
+    # Fill the shared npx cache before concurrent rollouts launch the CLI.
+    await warm_ollie_cli()
 
     def count(ids: list[str], kind: str) -> int:
         return sum(1 for datum_id in ids if tasks[datum_id].kind == kind)
