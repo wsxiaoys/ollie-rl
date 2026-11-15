@@ -532,6 +532,11 @@ uv run python examples/bug-unleashed/run_training.py --runs 2000 \
   agent is told to stop exploring and answer at 90% of the budget, and the loop
   hard-stops at it. Set it just below the recipe's `max_context_window` so a
   run never trips the server's `length` penalty.
+- `--tool-output-max-bytes` / `--tool-output-max-lines` bound each CLI tool
+  result before it enters the transcript (defaults `12288` / `400`): command
+  output keeps its tail, `readFile` keeps its head plus a `sed -n` continuation
+  hint. This is what stops a single oversized file read from blowing the
+  context budget and tripping the `length` penalty.
 - `--judge-votes 3` for eval runs (see Matching → Judge).
 - `--base-model` sets `trainer_params.base_model` (MSRL only; the other
   trainers ignore it).
@@ -542,9 +547,8 @@ uv run python examples/bug-unleashed/run_training.py --runs 2000 \
 
 #### Smoke test against MSRL
 
-The smallest end-to-end run: `gemini-3.5-flash` (the only base model the
-multi-step RL tuning API accepts today) and the smallest batch MSRL can train
-on — 2 datums × 2 rollouts.
+The smallest end-to-end run: `gemini-3.5-flash` (or `gemini-3.1-flash-lite`)
+and the smallest batch MSRL can train on — 2 datums × 2 rollouts.
 
 ```bash
 uv run python examples/bug-unleashed/run_training.py \
@@ -584,24 +588,24 @@ exercise the eval tier.
 `group_size × num_groups_per_batch = 4`, so the driver paces itself against
 training instead of racing ahead. The cost of that: a failed rollout leaves its
 group incomplete until the 15-minute run lease expires, so watch the
-`failed:` lines and re-run if a group stalls. Pass `--run-timeout 900` so a
-hung CLI is killed instead of holding the slot for an hour.
+`failed:` lines and re-run if a group stalls. The idle watchdog
+(`--run-idle-timeout`, default 10 min) kills a hung CLI instead of holding the
+slot for an hour; `--run-timeout` stays `0` (off) so a slow-but-progressing run
+is never cut short.
 
-Neither Flash-Lite model works here yet: `gemini-3.5-flash-lite` and
-`gemini-3.1-flash-lite` are both rejected by `POST /tuners` with
-`Base model ... is not supported for multi-step reinforcement tuning.` The
-rejection comes from Vertex itself, not from the driver: posting
+Two base models are accepted by `POST /tuners` for this loop: `gemini-3.5-flash`
+and `gemini-3.1-flash-lite` (the current production base model, paired with
+`--adapter-size ADAPTER_SIZE_THIRTY_TWO`). `gemini-3.5-flash-lite` is still
+rejected with `Base model ... is not supported for multi-step reinforcement
+tuning.` The rejection comes from Vertex itself, not from the driver: posting
 `multiStepReinforcementTuningSpec` straight to
 `projects/{p}/locations/us-central1/tuningJobs` fails the same way for every
 adapter size (`FOUR`/`EIGHT`/`SIXTEEN`) and for the `@default` model form, and
 `v1alpha1` has no such endpoint. The published reinforcement-tuning model list
-does cover Gemini 3.1 Flash-Lite, but that is the dataset-based
-`reinforcementTuningSpec` API — the same model id is accepted there (Vertex
-only complains that `training_dataset` is missing) — not the scope-based
-multi-step API this trainer drives (`generateContentTuningScope` /
-`trainStep`). So `gemini-3.5-flash` is currently the only accepted base model
-for this loop; Flash-Lite would need a different trainer built around an
-offline prompt dataset and reward functions.
+covers Flash-Lite, but that is the dataset-based `reinforcementTuningSpec` API
+— the same model id is accepted there (Vertex only complains that
+`training_dataset` is missing) — not the scope-based multi-step API this
+trainer drives (`generateContentTuningScope` / `trainStep`).
 
 ## Sampling and splits
 

@@ -32,9 +32,10 @@ Splits are repo-disjoint: train 168 examples / val 33.
 ## 2. Smoke before spending money
 
 The cheapest thing that exercises the whole loop is the MSRL recipe in the
-README (2 datums × 2 rollouts). Always pass `--run-timeout 900` — a CLI that
-stops calling the model but never exits otherwise holds a worker slot forever
-and the group never completes.
+README (2 datums × 2 rollouts). Don't pass `--run-timeout` — leave it at the
+default `0` — the idle watchdog (`--run-idle-timeout`, default 10 min) kills a
+CLI that stops calling the model but never exits, so it doesn't hold a worker
+slot forever and the group can complete.
 
 ```bash
 KEY=$(python3 -c "import json;print(json.load(open('$HOME/.pi/agent/models.json'))['providers']['kumo-deepinfra']['apiKey'])")
@@ -45,7 +46,7 @@ uv run python examples/bug-unleashed/run_training.py \
              "max_off_policy_generation": 0, "sampler_promotion_every": 1,
              "eval_group_size": 1, "eval_every_n_checkpoints": 1,
              "reward_normalizer": "centering"}' \
-  --runs 6 --concurrency 2 --ollie-max-steps 12 --run-timeout 900 \
+  --runs 6 --concurrency 2 --ollie-max-steps 12 \
   --judge-base-url https://kumo.up.railway.app/v1 --judge-api-key "$KEY" \
   --judge-model deepseek-4.1-flash
 ```
@@ -67,16 +68,19 @@ The two recipe knobs are the shape of a GRPO step:
   larger batches give a smoother gradient and fewer steps per dollar.
 
 One step therefore needs `group_size × num_groups_per_batch` rewarded runs, and
-with `max_off_policy_generation: 0` that product is also the outstanding-run
-budget. `4 × 8 = 32` rollouts per step is the sane default; `2 × 2 = 4` is the
-smoke shape, whose 2-sample baseline is too noisy to learn from.
+with `max_off_policy_generation: 8` that product bounds how far the sampler can
+race ahead of training. `8 × 16 = 128` rollouts per step is the production
+shape; `2 × 2 = 4` is the smoke shape, whose 2-sample baseline is too noisy to
+learn from.
 
 ```bash
 uv run python examples/bug-unleashed/run_training.py \
   --base-url https://ollie-rl-production.up.railway.app \
-  --trainer gemini_msrl --base-model gemini-3.5-flash \
-  --recipe '{"group_size": 4, "num_groups_per_batch": 8, "reward_normalizer": "centering"}' \
-  --runs 2000 --concurrency 8 \
+  --trainer gemini_msrl --base-model gemini-3.1-flash-lite \
+  --adapter-size ADAPTER_SIZE_THIRTY_TWO \
+  --recipe '{"group_size": 8, "num_groups_per_batch": 16, "reward_normalizer": "centering"}' \
+  --runs 2000 --concurrency 36 \
+  --ollie-max-context-tokens 55000 \
   --judge-base-url https://kumo.up.railway.app/v1 --judge-api-key "$KEY" \
   --judge-model deepseek-4.1-flash
 ```
@@ -87,7 +91,7 @@ Local server instead: `uv run uvicorn ollie_rl.server.app:app --port 8000` and
 ## Rules that are easy to get wrong
 
 - **`reward_normalizer` must be `centering`.** The default `grpo` divides by
-  the group std and erases the `-5.0` clean-PR penalty.
+  the group std and erases the `-2.0` clean-PR penalty.
 - **The prompt's key list is what the model follows.** `severity` appeared in
   the prose but not in the "every finding needs …" sentence, so
   `gemini-3.5-flash` emitted exactly the four listed keys and every finding was
@@ -96,12 +100,12 @@ Local server instead: `uv run uvicorn ollie_rl.server.app:app --port 8000` and
 - **`parse_findings` scans line by line.** The `<review_findings>` element must
   sit inside one physical line (one NDJSON event); a pretty-printed element
   spread over several lines is invisible.
-- **Only `gemini-3.5-flash` backs the multi-step API.** `gemini-3.1-flash-lite`
-  and `gemini-3.5-flash-lite` are rejected by Vertex itself
+- **`gemini-3.5-flash` and `gemini-3.1-flash-lite` back the multi-step API.**
+  `gemini-3.5-flash-lite` is rejected by Vertex itself
   (`Base model … is not supported for multi-step reinforcement tuning`) for
   every adapter size and model-id form. The docs' RLFT model list covers the
-  dataset-based `reinforcementTuningSpec`, which does accept Flash-Lite — a
-  different trainer, not this one.
+  dataset-based `reinforcementTuningSpec`, which accepts more Flash-Lite
+  variants — a different trainer, not this one.
 - **`--base-model` is MSRL-only** and lands in `trainer_params.base_model`.
   `checkpoint_interval` is forced to `sampler_promotion_every` by the service.
 - **Judge calls must not go through the tuner run endpoint** — they would
@@ -146,7 +150,7 @@ uv run python examples/bug-unleashed/reward.py --make-pairs data/calibration-pai
 uv run python examples/bug-unleashed/reward.py --pairs data/calibration-pairs.jsonl --concurrency 8
 ```
 
-Reward: bug `+1.0` major match / `+0.25` minor match / `-1.0` miss; clean `-5.0`
+Reward: bug `+1.0` major match / `+0.25` minor match / `-1.0` miss; clean `-2.0`
 if any major, else `0`. Minors are never penalised. The judge is calibrated at
 ~0.94 on 44 hand-labelled adversarial pairs; `--make-pairs` rows score 1.000 by
 construction (synthetic, tautological) — only the hand-labelled file means
