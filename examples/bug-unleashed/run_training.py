@@ -15,6 +15,7 @@ import json
 import os
 import signal
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,11 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import reward
+
+
+# NDJSON lines can carry a whole model turn, so the default 64 KiB StreamReader
+# limit would raise instead of yielding the line.
+_STREAM_LIMIT = 16 * 1024 * 1024
 
 
 def _kill_process_group(process: asyncio.subprocess.Process) -> None:
@@ -48,13 +54,21 @@ DEFAULT_RECIPE = (
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-bug-unleashed-ollie"
 DEFAULT_AGENT_MODEL = "ollie"
-OLLIE_CLI_VERSION = "0.7.2"
+OLLIE_CLI_VERSION = "0.9.0"
 OLLIE_MAX_STEPS = 80
-# Backstop for a CLI that stops making model calls but never exits: it would
-# hold a worker slot forever and its group could never complete. The server's
-# 15-minute run lease already makes such a run unrewardable, so this only
-# decides when the driver stops waiting on it.
-DEFAULT_RUN_TIMEOUT = 60 * 60
+# `--ollie-max-steps` already bounds a rollout's work, so there is no
+# wall-clock timeout by default: a fixed deadline only truncates slow-but-
+# progressing runs and leaves them unrewardable (they lapse into the server's
+# `expired` state). What still needs catching is a run that stops progressing --
+# a wedged tool call, or a CLI orphaned by a crash that no longer calls the
+# model at all -- so the driver watches stdout and kills the group after
+# `DEFAULT_RUN_IDLE_TIMEOUT` seconds with no new event.
+DEFAULT_RUN_TIMEOUT = 0
+DEFAULT_RUN_IDLE_TIMEOUT = 10 * 60
+# A run younger than this might still be worked by a predecessor driver's
+# orphaned CLI, so the startup sweep leaves it alone (the server's run lease is
+# 15 minutes).
+DEFAULT_SALVAGE_MIN_AGE = 15 * 60
 # Prepared diffs: p50 ~10k characters, p90 ~49k. The tail is truncated with a
 # note; the agent can read the rest from the read-only checkout.
 DEFAULT_MAX_DIFF_CHARS = 60_000
@@ -378,6 +392,7 @@ async def run_ollie_agent(
     model: str,
     executor: str,
     max_steps: int,
+    idle_timeout: float,
     timeout: float | None = None,
 ) -> tuple[tuple[reward.Finding, ...], tuple[str, ...]]:
     """Run one Ollie CLI agent and parse its `<review_findings>` payload."""
@@ -417,10 +432,40 @@ async def run_ollie_agent(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
+        limit=_STREAM_LIMIT,
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
-    except TimeoutError:
+    assert process.stdout is not None and process.stderr is not None
+    stderr_task = asyncio.create_task(process.stderr.read())
+
+    # Stream stdout and reset a timer on every NDJSON event. A run that stops
+    # producing events is wedged (stuck tool, or a reparented CLI that no longer
+    # calls the model); kill its whole group. `--run-timeout`, when set, is an
+    # optional wall-clock backstop on top of the idle guard.
+    output = bytearray()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    kill_reason: str | None = None
+    while True:
+        budget = idle_timeout
+        if timeout:
+            remaining = timeout - (loop.time() - started)
+            if remaining <= 0:
+                kill_reason = f"Ollie agent timed out after {timeout:.0f}s"
+                break
+            budget = min(budget, remaining)
+        try:
+            line = await asyncio.wait_for(process.stdout.readline(), timeout=budget)
+        except TimeoutError:
+            if timeout and loop.time() - started >= timeout:
+                kill_reason = f"Ollie agent timed out after {timeout:.0f}s"
+            else:
+                kill_reason = f"Ollie agent made no progress for {idle_timeout:.0f}s"
+            break
+        if not line:
+            break
+        output.extend(line)
+
+    if kill_reason is not None:
         # npx spawns the real CLI as a grandchild; killing only the wrapper
         # leaves that process calling the run's endpoint forever. The child is a
         # group leader (start_new_session=True), so kill the whole group. A hung
@@ -428,10 +473,20 @@ async def run_ollie_agent(
         # complete, so the tuner stops dispensing; the server's run lease then
         # expires on its own.
         _kill_process_group(process)
+    try:
+        await asyncio.wait_for(process.wait(), timeout=30)
+    except TimeoutError:
+        _kill_process_group(process)
         await process.wait()
-        raise RuntimeError(f"Ollie agent timed out after {timeout:.0f}s") from None
+    try:
+        stderr = await asyncio.wait_for(stderr_task, timeout=5)
+    except TimeoutError:
+        stderr_task.cancel()
+        stderr = b""
+    if kill_reason is not None:
+        raise RuntimeError(kill_reason) from None
 
-    output = stdout.decode(errors="replace")
+    output = bytes(output).decode(errors="replace")
     findings, errors = reward.parse_findings(output)
     if process.returncode != 0:
         details = list(errors[-1:])
@@ -484,9 +539,10 @@ async def salvage_run_findings(
     """Recover the last `<review_findings>` from a run's recorded completions.
 
     The CLI's model turns are persisted server-side, so a run whose process
-    died can still be scored. Returns `((), (reason,))` instead of raising when
-    the transcript cannot be fetched or holds no completions; a malformed
-    `<review_findings>` is reported by `reward.parse_findings`.
+    died can still be scored. Raises when the transcript cannot be fetched (so
+    the caller can leave the run for a later retry); a transcript that holds no
+    completions yields empty findings, and a malformed `<review_findings>` is
+    reported by `reward.parse_findings`.
     """
     try:
         response = await client.get(
@@ -505,10 +561,10 @@ async def salvage_run_findings(
             if content:
                 lines.append(json.dumps({"content": content}))
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
-        return (), (f"could not read run completions: {error}",)
+        raise RuntimeError(f"could not read run completions: {error}") from error
 
     if not lines:
-        return (), ("run recorded no completions to salvage",)
+        return (), ()
     return reward.parse_findings("\n".join(lines))
 
 
@@ -523,11 +579,11 @@ async def salvage_run(
 
     The reward endpoint is write-once and the lease may have expired, so a
     rejected `PUT` (403) means this salvage is over, not that the driver should
-    stop. Raises when the transcript holds no scoreable `<review_findings>`.
+    stop. A readable transcript with no (or malformed) `<review_findings>` is
+    scored as produced, exactly like the normal path, so a killed or hung run
+    earns its miss instead of lapsing into `expired`.
     """
-    findings, parse_errors = await salvage_run_findings(client, tuner_id, run_id)
-    if not findings and parse_errors:
-        raise RuntimeError("; ".join(parse_errors))
+    findings, _errors = await salvage_run_findings(client, tuner_id, run_id)
     result = await reward.score_example(task.example, findings, judge)
     await submit_reward(client, tuner_id, run_id, result.total)
     return findings, result
@@ -557,6 +613,7 @@ async def execute_run(
             model=args.agent_model,
             executor=args.ollie_executor,
             max_steps=args.ollie_max_steps,
+            idle_timeout=args.run_idle_timeout,
             timeout=args.run_timeout or None,
         )
         result = await reward.score_example(task.example, findings, judge)
@@ -656,15 +713,58 @@ async def salvage_orphaned_runs(
     print(f"[driver] salvage sweep: {recovered} run(s) recovered")
 
 
+def load_example_order(data_dir: Path) -> dict[str, list[str]]:
+    """Prepared per-split example order from ``splits.json``, when present.
+
+    Datasets prepared before the order was recorded omit ``order``; callers
+    then fall back to sorted ids.
+    """
+    path = data_dir / "splits.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return {}
+    order = payload.get("order")
+    if not isinstance(order, dict):
+        return {}
+    return {
+        split: [str(example_id) for example_id in ids]
+        for split, ids in order.items()
+        if isinstance(ids, list)
+    }
+
+
+def order_datum_ids(available: Iterable[str], order: list[str] | None) -> list[str]:
+    """Apply a prepared order, appending any ids it does not mention.
+
+    The split's membership is authoritative; ``splits.json`` sets the sequence.
+    Ids missing from the prepared order (a stale or partial file) are appended
+    in sorted order so nothing is silently dropped.
+    """
+    remaining = set(available)
+    ordered: list[str] = []
+    for example_id in order or []:
+        if example_id in remaining:
+            ordered.append(example_id)
+            remaining.discard(example_id)
+    ordered.extend(sorted(remaining))
+    return ordered
+
+
 async def async_main(args: argparse.Namespace) -> int:
     data_dir = args.data_dir.resolve()
     examples = reward.load_examples(data_dir)
     tasks = load_tasks(data_dir, examples, args.max_diff_chars)
-    train_datum_ids = sorted(
-        example_id for example_id, task in tasks.items() if task.split == "train"
+    order = load_example_order(data_dir)
+    train_datum_ids = order_datum_ids(
+        (example_id for example_id, task in tasks.items() if task.split == "train"),
+        order.get("train"),
     )
-    eval_datum_ids = sorted(
-        example_id for example_id, task in tasks.items() if task.split == "val"
+    eval_datum_ids = order_datum_ids(
+        (example_id for example_id, task in tasks.items() if task.split == "val"),
+        order.get("val"),
     )
     if not train_datum_ids:
         raise SystemExit("no train examples; re-run prepare_data.py")
@@ -672,8 +772,9 @@ async def async_main(args: argparse.Namespace) -> int:
     def count(ids: list[str], kind: str) -> int:
         return sum(1 for datum_id in ids if tasks[datum_id].kind == kind)
 
+    source = "splits.json order" if order else "sorted ids"
     print(
-        f"[driver] examples: train {len(train_datum_ids)} "
+        f"[driver] examples ({source}): train {len(train_datum_ids)} "
         f"({count(train_datum_ids, 'bug')} bug / {count(train_datum_ids, 'clean')} clean), "
         f"val {len(eval_datum_ids)} "
         f"({count(eval_datum_ids, 'bug')} bug / {count(eval_datum_ids, 'clean')} clean)"
@@ -714,7 +815,9 @@ async def async_main(args: argparse.Namespace) -> int:
         await warn_unless_centering(client, tuner_id)
         # Clear runs a killed predecessor driver abandoned before this driver
         # starts competing with them for group slots.
-        await salvage_orphaned_runs(client, tuner_id, tasks, judge, args.run_timeout)
+        await salvage_orphaned_runs(
+            client, tuner_id, tasks, judge, args.salvage_min_age
+        )
 
         slots = asyncio.Semaphore(args.concurrency)
 
@@ -786,7 +889,28 @@ def parse_args() -> argparse.Namespace:
         "--run-timeout",
         type=float,
         default=DEFAULT_RUN_TIMEOUT,
-        help="Seconds before a rollout is killed; 0 disables the backstop.",
+        help=(
+            "Optional wall-clock backstop in seconds; 0 (default) disables it. "
+            "Prefer --run-idle-timeout: a fixed deadline truncates slow runs."
+        ),
+    )
+    parser.add_argument(
+        "--run-idle-timeout",
+        type=float,
+        default=DEFAULT_RUN_IDLE_TIMEOUT,
+        help=(
+            "Kill a rollout after this many seconds with no new agent event "
+            "(the hang guard); --ollie-max-steps bounds work."
+        ),
+    )
+    parser.add_argument(
+        "--salvage-min-age",
+        type=float,
+        default=DEFAULT_SALVAGE_MIN_AGE,
+        help=(
+            "Startup orphan sweep only touches in-flight runs older than this "
+            "many seconds, so a predecessor's still-running CLI can finish."
+        ),
     )
     parser.add_argument("--max-diff-chars", type=int, default=DEFAULT_MAX_DIFF_CHARS)
     parser.add_argument("--runs", type=int, default=2000)
@@ -818,6 +942,8 @@ def main() -> int:
         raise SystemExit("--concurrency must be at least 1")
     if args.ollie_max_steps < 1:
         raise SystemExit("--ollie-max-steps must be at least 1")
+    if args.run_idle_timeout <= 0:
+        raise SystemExit("--run-idle-timeout must be positive")
     if args.max_diff_chars < 1:
         raise SystemExit("--max-diff-chars must be at least 1")
     if args.judge_votes < 1:

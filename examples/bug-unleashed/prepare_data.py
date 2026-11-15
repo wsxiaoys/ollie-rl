@@ -8,7 +8,7 @@ The generated data has this layout::
 
     data/
       cases.json                         # stripped dataset snapshot
-      splits.json                        # repo-disjoint train/val assignment
+      splits.json                        # repo-disjoint train/val assignment + example order
       repos/<org>__<repo>/git/           # bare Git repository
       repos/<org>__<repo>/<head_sha>/    # clean snapshot, no .git
       diffs/<case_id>.diff               # PR diff used in the prompt
@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -48,6 +49,9 @@ GITHUB_DIFF_ACCEPT = "application/vnd.github.v3.diff"
 
 # Fixed split parameters (see README "Sampling and splits").
 SPLIT_SEED = 20261111
+# Example order within each split, i.e. the datum registration order training
+# sees. Independent of SPLIT_SEED so re-cutting the split does not reshuffle.
+ORDER_SEED = 20261112
 VAL_BUG_EXAMPLES = 28
 VAL_CLEAN_EXAMPLES = 5
 LANGUAGE_PENALTY = 3
@@ -549,6 +553,25 @@ def build_examples(
     return examples
 
 
+def build_order(examples: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Seeded per-split shuffle of example ids.
+
+    Training dispenses datums in registration order, so this order is part of
+    the recipe: without it the driver sorts example ids and consecutive runs
+    are grouped by repo. Ids are sorted before shuffling so the permutation
+    depends only on the id set and seed, and a re-prepare reproduces it.
+    """
+    rng = random.Random(ORDER_SEED)
+    order: dict[str, list[str]] = {}
+    for split in ("train", "val"):
+        ids = sorted(
+            example["example_id"] for example in examples if example["split"] == split
+        )
+        rng.shuffle(ids)
+        order[split] = ids
+    return order
+
+
 class Progress:
     """Thread-safe case counter and failure log."""
 
@@ -670,13 +693,14 @@ def main() -> int:
         validate_cases(cases)
 
         splits = assign_splits(cases)
-        write_json(data_dir / "splits.json", splits)
         log(
             f"split {len(cases)} cases into train/val: "
             f"{splits['counts']['train']} / {splits['counts']['val']}"
         )
 
         examples = build_examples(cases, splits["assignment"])
+        splits["order"] = build_order(examples)
+        write_json(data_dir / "splits.json", splits)
         examples_by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for example in examples:
             examples_by_case[example["case_id"]].append(example)

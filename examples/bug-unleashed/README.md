@@ -92,7 +92,7 @@ and re-strips the dataset snapshot.
 starts it in NDJSON mode and points `OPENAI_BASE_URL` at the run's endpoint:
 
 ```text
-npx --yes @getollie/cli@0.7.2 agent \
+npx --yes @getollie/cli@0.9.0 agent \
   --workspace-path /workspace -v <snapshot>:/workspace:ro \
   --mode sandbox --executor none --ndjson --no-color --model ollie \
   --max-steps 80 <prompt>
@@ -607,6 +607,13 @@ and has fewest of that repo's primary language). Repo-disjoint matters a lot
 here: 65 repos over 200 cases, most repos contributing 3–4 cases, and PRs
 from one repo share files and conventions.
 
+**Example order is a seeded shuffle recorded in `data/splits.json`**
+(`order`, seed `20261112`). Training dispenses datums in registration order,
+and without this the driver sorts example ids alphabetically, so early batches
+would be grouped by repo. The shuffle decorrelates consecutive examples; it
+lives in the dataset so a re-prepare reproduces the same schedule. It affects
+only newly created tuners — order is fixed when datums are registered.
+
 | Split | Repos | Bug examples | Clean examples | Cases |
 |---|---|---|---|---|
 | train | 53 | 139 | 29 | 168 |
@@ -670,5 +677,5 @@ Caveats, given the size:
       per-split strict/quiet logging).
 - [x] Calibrate the judge once on ~30–50 hand-labeled pairs (44 adversarial
       pairs, `0.955`, prompt revised — see Matching → Judge).
-- [x] Pin the Ollie CLI version (`0.7.2`) and `--max-steps` (`80`) for review
+- [x] Pin the Ollie CLI version (`0.9.0`) and `--max-steps` (`80`) for review
       runs.
