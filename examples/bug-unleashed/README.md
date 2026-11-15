@@ -92,7 +92,7 @@ and re-strips the dataset snapshot.
 starts it in NDJSON mode and points `OPENAI_BASE_URL` at the run's endpoint:
 
 ```text
-npx --yes @getollie/cli@0.9.1 agent \
+npx --yes @getollie/cli@0.9.2 agent \
   --workspace-path /workspace -v <snapshot>:/workspace:ro \
   --mode sandbox --executor none --ndjson --no-color --model ollie \
   --max-steps 80 <prompt>
@@ -682,6 +682,8 @@ Caveats, given the size:
       per-split strict/quiet logging).
 - [x] Calibrate the judge once on ~30–50 hand-labeled pairs (44 adversarial
       pairs, `0.955`, prompt revised — see Matching → Judge).
-- [x] Pin the Ollie CLI version (`0.9.1`), bound rollouts by
+- [x] Pin the Ollie CLI version (`0.9.2`), bound rollouts by
       `--ollie-max-context-tokens` (`55000`), and keep `--max-steps` (`128`) as a
-      backstop against runaway tool loops.
+      backstop against runaway tool loops. The CLI also bounds each tool result
+      (default `12288` bytes / `400` lines, tail for command output, head for
+      `readFile`) so one oversized result can no longer blow the context budget.

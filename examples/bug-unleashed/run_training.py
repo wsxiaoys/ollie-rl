@@ -54,7 +54,7 @@ DEFAULT_RECIPE = (
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-bug-unleashed-ollie"
 DEFAULT_AGENT_MODEL = "ollie"
-OLLIE_CLI_VERSION = "0.9.1"
+OLLIE_CLI_VERSION = "0.9.2"
 OLLIE_MAX_STEPS = 128
 # Context is the primary bound: the CLI wraps up and answers at 90% of the
 # `--ollie-max-context-tokens` budget, then hard-stops at it. `--ollie-max-steps`
