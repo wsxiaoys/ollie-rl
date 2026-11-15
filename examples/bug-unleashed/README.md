@@ -682,5 +682,6 @@ Caveats, given the size:
       per-split strict/quiet logging).
 - [x] Calibrate the judge once on ~30–50 hand-labeled pairs (44 adversarial
       pairs, `0.955`, prompt revised — see Matching → Judge).
-- [x] Pin the Ollie CLI version (`0.9.1`) and `--max-steps` (`80`) for review
-      runs.
+- [x] Pin the Ollie CLI version (`0.9.1`), bound rollouts by
+      `--ollie-max-context-tokens` (`55000`), and keep `--max-steps` (`128`) as a
+      backstop against runaway tool loops.

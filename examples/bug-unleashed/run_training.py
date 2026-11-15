@@ -55,14 +55,18 @@ DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-bug-unleashed-ollie"
 DEFAULT_AGENT_MODEL = "ollie"
 OLLIE_CLI_VERSION = "0.9.1"
-OLLIE_MAX_STEPS = 80
-# `--ollie-max-steps` already bounds a rollout's work, so there is no
-# wall-clock timeout by default: a fixed deadline only truncates slow-but-
-# progressing runs and leaves them unrewardable (they lapse into the server's
-# `expired` state). What still needs catching is a run that stops progressing --
-# a wedged tool call, or a CLI orphaned by a crash that no longer calls the
-# model at all -- so the driver watches stdout and kills the group after
-# `DEFAULT_RUN_IDLE_TIMEOUT` seconds with no new event.
+OLLIE_MAX_STEPS = 128
+# Context is the primary bound: the CLI wraps up and answers at 90% of the
+# `--ollie-max-context-tokens` budget, then hard-stops at it. `--ollie-max-steps`
+# is only a backstop against a pathological tool-call loop whose context grows
+# too slowly to ever reach that budget, so keep it high (a normal review ends on
+# the context limit long before this). There is still no wall-clock timeout by
+# default: a fixed deadline only truncates slow-but-progressing runs and leaves
+# them unrewardable (they lapse into the server's `expired` state). What still
+# needs catching is a run that stops progressing -- a wedged tool call, or a CLI
+# orphaned by a crash that no longer calls the model at all -- so the driver
+# watches stdout and kills the group after `DEFAULT_RUN_IDLE_TIMEOUT` seconds
+# with no new event.
 DEFAULT_RUN_TIMEOUT = 0
 DEFAULT_RUN_IDLE_TIMEOUT = 10 * 60
 # A run younger than this might still be worked by a predecessor driver's
@@ -917,7 +921,16 @@ def parse_args() -> argparse.Namespace:
         default="none",
         help="Sandbox executor; 'none' runs the sandbox locally.",
     )
-    parser.add_argument("--ollie-max-steps", type=int, default=OLLIE_MAX_STEPS)
+    parser.add_argument(
+        "--ollie-max-steps",
+        type=int,
+        default=OLLIE_MAX_STEPS,
+        help=(
+            "Backstop on agent steps. The context budget "
+            "(--ollie-max-context-tokens) is the primary bound; this only caps "
+            "a runaway tool loop whose context grows too slowly to reach it."
+        ),
+    )
     parser.add_argument(
         "--ollie-max-context-tokens",
         type=int,
@@ -943,7 +956,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RUN_IDLE_TIMEOUT,
         help=(
             "Kill a rollout after this many seconds with no new agent event "
-            "(the hang guard); --ollie-max-steps bounds work."
+            "(the hang guard); context (--ollie-max-context-tokens) bounds work."
         ),
     )
     parser.add_argument(
