@@ -17,7 +17,7 @@ reward is a scalar submitted per run to ollie-rl via
   findings labeled **major** / **minor**.
 - Reward catching the known defect **as a major finding** on bug PRs, and
   penalize major false alarms on clean PRs.
-- Fixed reward constants (`+1.0` major catch, `+0.25` minor catch, `-5.0`
+- Fixed reward constants (`+1.0` major catch, `+0.25` minor catch, `-2.0`
   major on a clean PR); the clean-PR penalty sets the recall/quiet trade-off.
 
 ## Dataset
@@ -92,7 +92,7 @@ and re-strips the dataset snapshot.
 starts it in NDJSON mode and points `OPENAI_BASE_URL` at the run's endpoint:
 
 ```text
-npx --yes @getollie/cli@0.9.0 agent \
+npx --yes @getollie/cli@0.9.1 agent \
   --workspace-path /workspace -v <snapshot>:/workspace:ro \
   --mode sandbox --executor none --ndjson --no-color --model ollie \
   --max-steps 80 <prompt>
@@ -247,7 +247,7 @@ Bug example (target gold g):
   -1.0    otherwise                      # missed the gold
 
 Clean example (no gold):
-  -5.0    if any MAJOR finding
+  -2.0    if any MAJOR finding
    0      otherwise                      # minor findings are never penalized
 ```
 
@@ -259,14 +259,15 @@ per se** — they earn the `0.25` partial credit on a gold match.
 What the `-1.0` miss changes (vs `0` on a miss):
 
 - It lands on the miss regardless of severity, so the **major-vs-minor bet
-  is unchanged** (`q > 6.67·c`, below) — the extra `0.75` for committing and
-  the `-5.0` for a clean-PR major are the same as before.
+  is unchanged** (`q > 2.67·c`, below) — the extra `0.75` for committing and
+  the `-2.0` for a clean-PR major set the odds (below).
 - It strengthens the **"find it at all"** signal: catch-vs-miss gap is `2.0`
   (was `1.0`), minor-catch-vs-miss gap is `1.25` (was `0.25`). Under
   centering this is equivalent to `{+2.0, +1.25, 0}`.
 - Bug groups get ~2× the gradient they had, so bug:clean gradient share is
-  roughly `166·2.0 : 35·5.0 ≈ 2 : 1` (recall-leaning). Raise the clean
-  penalty to `-10.0` if we want ~1:1 again.
+  roughly `166·2.0 : 35·2.0 ≈ 4.7 : 1` (strongly recall-leaning). Raise the
+  clean penalty back toward `-5.0` (≈2:1) or `-10.0` (≈1:1) if that is too
+  lopsided.
 - Extra **minor guesses** become much more valuable (each one that hits turns
   `-1.0` into `+0.25`), so expect the policy to fill all 3 slots with minor
   guesses. The 3-finding cap is the binding constraint there.
@@ -274,15 +275,15 @@ What the `-1.0` miss changes (vs `0` on a miss):
 - **`0.25` minor-match credit** — partial credit for catching the gold but not
   betting on it. Densifies the recall signal without making "label everything
   minor" a safe harbor.
-- **`-5.0` clean-PR penalty** — sized for the natural sampling ratio
-  (166 bug / 35 clean, `p_clean ≈ 0.17`) instead of re-sampling. It
-  **replaces** up-weighting clean examples — do not do both, or the
-  penalty compounds.
+- **`-2.0` clean-PR penalty** — a mild deterrent against major false alarms
+  (lowered from `-5.0`, which fired on ~half of clean examples and dominated
+  the negative reward mass). It stands in for re-sampling clean examples —
+  do not up-weight clean too, or the penalty compounds.
   **We use `reward_normalizer: "centering"`** in the tuner recipe (required). Under
   the default `"grpo"` normalizer each group is divided by its own std, so a
-  clean group's `{-5.0, 0}` yields the same advantages as `{-1.0, 0}` — the
+  clean group's `{-2.0, 0}` yields the same advantages as `{-1.0, 0}` — the
   magnitude is erased and clean PRs get only their ~17% sampling share of
-  the gradient. With `"centering"` (`advantage = r − mean`) the `5×`
+  the gradient. With `"centering"` (`advantage = r − mean`) the `2×`
   magnitude survives and acts as the up-weighting. Within bug groups the
   `1.0` vs `0.25` ratio is preserved under either normalizer.
 - **3-finding cap**, shared by majors and minors. Bounds judge cost and is
@@ -295,19 +296,17 @@ probability `q`, on a PR it believes is clean with probability `c`, labeling
 it major beats minor iff
 
 ```
-q · (1.0 − 0.25) > c · 5.0      ⇔      q > 6.67 · c
+q · (1.0 − 0.25) > c · 2.0      ⇔      q > 2.67 · c
 ```
 
-At the prior (`c ≈ 0.17`) this needs `q > 1.1`, i.e. **major never pays
-until the policy can tell bug PRs from clean ones**: it must get `c` below
-~0.15 (for a sure finding) or ~0.075 (for a coin-flip finding). That is the
-intended behavior — commit only on PRs you are confident are buggy — but it
-means the major channel can die early in training. Watch the major rate; if
-it collapses toward 0 while minor matches rise, the penalty is too strong
-for the current policy.
+At the prior (`c ≈ 0.17`) this needs `q > 0.45`: **major now pays for any
+finding the policy is more than ~45% sure is the gold**, a much lower bar
+than the old `-5.0` penalty required. It is a gentle nudge away from shotgun
+majors rather than a hard gate, so watch the clean-PR false-alarm rate and
+raise the penalty back toward `-5.0` if majors start firing broadly.
 
 Fixed: finding cap 3; tuner recipe `reward_normalizer: "centering"` (see the
-`-5.0` note above). Keep the strict `match ∧ major` as the reported metric;
+`-2.0` note above). Keep the strict `match ∧ major` as the reported metric;
 the `0.25` partial credit is **training shaping only**.
 
 ### Severity semantics (open decision)
@@ -524,9 +523,15 @@ uv run python examples/bug-unleashed/run_training.py --runs 2000 \
   examples, `quiet` = fraction of clean examples with no major.
 - A failed rollout (agent crash, judge error, expired lease) is logged and left
   unrewarded; the lease expires and the server re-dispenses the datum.
-  `--run-timeout` (default 1 hour, `0` disables) kills a CLI that stops making
-  model calls but never exits — without it that worker slot and its group are
-  stuck forever, because the tuner cannot complete a group it never sees.
+  `--run-idle-timeout` (default 10 min) kills a CLI that stops producing events
+  (a wedged tool call, or an orphan that no longer calls the model), while
+  `--run-timeout` (default `0`, disabled) is an optional wall-clock backstop.
+  A killed run is still salvaged from its transcript, so it gets a reward
+  before its lease lapses.
+- `--ollie-max-context-tokens` passes `--max-context-tokens` to the CLI: the
+  agent is told to stop exploring and answer at 90% of the budget, and the loop
+  hard-stops at it. Set it just below the recipe's `max_context_window` so a
+  run never trips the server's `length` penalty.
 - `--judge-votes 3` for eval runs (see Matching → Judge).
 - `--base-model` sets `trainer_params.base_model` (MSRL only; the other
   trainers ignore it).
@@ -643,7 +648,7 @@ Caveats, given the size:
   C/C++, Go, Rust). If per-language generalization matters, re-cut with a
   language-stratified constraint.
 - Both examples of `apache__airflow-61118` stay in train (same repo).
-- Sample **at the natural ratio** (139/29 in train). The `-5.0` clean-PR
+- Sample **at the natural ratio** (139/29 in train). The `-2.0` clean-PR
   penalty already compensates for the imbalance; do not up-weight clean too.
 - Difficulty curriculum from our own rollout pass-rate; drop near-0 and near-1
   cases once measured, but only from train — never from val.
@@ -657,7 +662,7 @@ Caveats, given the size:
   upstream model/eval data.
 - Matching: file-level path gate + LLM judge (system prompt frozen above).
 - Reward: `+1.0` major match, `+0.25` minor match, `-1.0` miss on bug
-  examples; `-5.0` major on clean examples; 3-finding cap; minors never
+  examples; `-2.0` major on clean examples; 3-finding cap; minors never
   penalized. Tuner recipe `reward_normalizer: "centering"`.
 - Severity: **trust the label** — `major` means "confident enough to bet".
 - Examples: one per gold bug (201 total).
@@ -677,5 +682,5 @@ Caveats, given the size:
       per-split strict/quiet logging).
 - [x] Calibrate the judge once on ~30–50 hand-labeled pairs (44 adversarial
       pairs, `0.955`, prompt revised — see Matching → Judge).
-- [x] Pin the Ollie CLI version (`0.9.0`) and `--max-steps` (`80`) for review
+- [x] Pin the Ollie CLI version (`0.9.1`) and `--max-steps` (`80`) for review
       runs.

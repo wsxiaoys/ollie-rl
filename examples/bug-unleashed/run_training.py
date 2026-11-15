@@ -46,7 +46,7 @@ DEFAULT_DATA_DIR = EXAMPLE_DIR / "data"
 DEFAULT_BASE_URL = "http://localhost:8000"
 # `RecipeInput` layers over `Recipe` defaults rather than over a named recipe,
 # so the grpo_4x8 shape is spelled out next to the required override. Without
-# `centering` the normalizer divides by the group std and the -5.0 clean-PR
+# `centering` the normalizer divides by the group std and the -2.0 clean-PR
 # penalty loses its magnitude.
 DEFAULT_RECIPE = (
     '{"group_size": 4, "num_groups_per_batch": 8, "reward_normalizer": "centering"}'
@@ -54,7 +54,7 @@ DEFAULT_RECIPE = (
 DEFAULT_TRAINER = "fake"
 DEFAULT_TUNER_NAME = "tuning-bug-unleashed-ollie"
 DEFAULT_AGENT_MODEL = "ollie"
-OLLIE_CLI_VERSION = "0.9.0"
+OLLIE_CLI_VERSION = "0.9.1"
 OLLIE_MAX_STEPS = 80
 # `--ollie-max-steps` already bounds a rollout's work, so there is no
 # wall-clock timeout by default: a fixed deadline only truncates slow-but-
@@ -352,7 +352,7 @@ async def warn_unless_centering(client: httpx.AsyncClient, tuner_id: str) -> Non
     normalizer = (response.json().get("recipe") or {}).get("reward_normalizer")
     if normalizer != "centering":
         print(
-            f"[driver] WARNING: reward_normalizer={normalizer!r}; the -5.0 clean-PR "
+            f"[driver] WARNING: reward_normalizer={normalizer!r}; the -2.0 clean-PR "
             "penalty is divided away unless it is 'centering'"
         )
     else:
@@ -393,6 +393,7 @@ async def run_ollie_agent(
     executor: str,
     max_steps: int,
     idle_timeout: float,
+    max_context_tokens: int | None = None,
     timeout: float | None = None,
 ) -> tuple[tuple[reward.Finding, ...], tuple[str, ...]]:
     """Run one Ollie CLI agent and parse its `<review_findings>` payload."""
@@ -424,6 +425,11 @@ async def run_ollie_agent(
         model,
         "--max-steps",
         str(max_steps),
+        *(
+            ("--max-context-tokens", str(max_context_tokens))
+            if max_context_tokens
+            else ()
+        ),
         build_prompt(task),
     )
     process = await asyncio.create_subprocess_exec(
@@ -614,6 +620,7 @@ async def execute_run(
             executor=args.ollie_executor,
             max_steps=args.ollie_max_steps,
             idle_timeout=args.run_idle_timeout,
+            max_context_tokens=args.ollie_max_context_tokens,
             timeout=args.run_timeout or None,
         )
         result = await reward.score_example(task.example, findings, judge)
@@ -885,6 +892,16 @@ def parse_args() -> argparse.Namespace:
         help="Sandbox executor; 'none' runs the sandbox locally.",
     )
     parser.add_argument("--ollie-max-steps", type=int, default=OLLIE_MAX_STEPS)
+    parser.add_argument(
+        "--ollie-max-context-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Pass --max-context-tokens to the CLI: the agent wraps up and "
+            "answers at 90%% of this budget, and the loop hard-stops at it. "
+            "Unset disables the limit."
+        ),
+    )
     parser.add_argument(
         "--run-timeout",
         type=float,
