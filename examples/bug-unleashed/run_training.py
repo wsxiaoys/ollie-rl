@@ -41,6 +41,46 @@ def _kill_process_group(process: asyncio.subprocess.Process) -> None:
     process.kill()  # best-effort fallback where killpg is unavailable
 
 
+# Control-plane requests must survive brief network blips: a single connect
+# timeout used to end a multi-hour run. `httpx.TransportError` covers connect /
+# read / write timeouts, connection resets, and DNS failures.
+CONTROL_PLANE_ATTEMPTS = 8
+CONTROL_PLANE_BASE_DELAY = 1.0
+CONTROL_PLANE_MAX_DELAY = 30.0
+
+
+async def request_with_retry(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    attempts: int = CONTROL_PLANE_ATTEMPTS,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Issue a control-plane request, retrying transient transport failures.
+
+    Retries ``httpx.TransportError`` (connect/read/write timeouts, connection
+    resets, DNS failures) with capped exponential backoff so a dropped
+    connection or a Railway redeploy does not abort the run. HTTP error
+    *responses* (4xx/5xx) are returned unretried; callers decide what they mean.
+    """
+    delay = CONTROL_PLANE_BASE_DELAY
+    for attempt in range(1, attempts + 1):
+        try:
+            return await client.request(method, url, **kwargs)
+        except httpx.TransportError as error:
+            if attempt == attempts:
+                raise
+            print(
+                f"[driver] {method} {url} failed ({type(error).__name__}); "
+                f"retrying in {delay:g}s ({attempt}/{attempts - 1})",
+                flush=True,
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, CONTROL_PLANE_MAX_DELAY)
+    raise AssertionError("unreachable")
+
+
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = EXAMPLE_DIR / "data"
 DEFAULT_BASE_URL = "http://localhost:8000"
@@ -314,13 +354,13 @@ async def resolve_tuner(
     trainer_params: dict[str, Any] | None = None,
 ) -> str:
     if tuner_id:
-        response = await client.get(f"/tuners/{tuner_id}")
+        response = await request_with_retry(client, "GET", f"/tuners/{tuner_id}")
         response.raise_for_status()
         print(f"[driver] resuming tuner {tuner_id}")
         return tuner_id
 
     try:
-        response = await client.get("/tuners")
+        response = await request_with_retry(client, "GET", "/tuners")
         response.raise_for_status()
         existing_id = next(
             (
@@ -350,7 +390,7 @@ async def resolve_tuner(
 
 async def warn_unless_centering(client: httpx.AsyncClient, tuner_id: str) -> None:
     """The reward table only works at absolute scale (see README → Reward)."""
-    response = await client.get(f"/tuners/{tuner_id}")
+    response = await request_with_retry(client, "GET", f"/tuners/{tuner_id}")
     response.raise_for_status()
     normalizer = (response.json().get("recipe") or {}).get("reward_normalizer")
     if normalizer != "centering":
@@ -365,7 +405,7 @@ async def warn_unless_centering(client: httpx.AsyncClient, tuner_id: str) -> Non
 async def dispense_run(client: httpx.AsyncClient, tuner_id: str) -> tuple[str, str]:
     waiting = False
     while True:
-        response = await client.post(f"/tuners/{tuner_id}/runs")
+        response = await request_with_retry(client, "POST", f"/tuners/{tuner_id}/runs")
         if response.status_code == 204:
             try:
                 delay = max(0.0, float(response.headers.get("Retry-After", "1")))
@@ -513,7 +553,9 @@ async def run_ollie_agent(
 async def submit_reward(
     client: httpx.AsyncClient, tuner_id: str, run_id: str, reward_value: float
 ) -> None:
-    response = await client.put(
+    response = await request_with_retry(
+        client,
+        "PUT",
         f"/tuners/{tuner_id}/runs/{run_id}/reward",
         json={"reward": reward_value},
     )
@@ -533,7 +575,9 @@ async def list_runs(client: httpx.AsyncClient, tuner_id: str) -> list[dict[str, 
         params: dict[str, Any] = {"limit": 500}
         if cursor:
             params["cursor"] = cursor
-        response = await client.get(f"/tuners/{tuner_id}/runs", params=params)
+        response = await request_with_retry(
+            client, "GET", f"/tuners/{tuner_id}/runs", params=params
+        )
         response.raise_for_status()
         body = response.json()
         runs.extend(body.get("runs") or [])
@@ -554,7 +598,9 @@ async def salvage_run_findings(
     reported by `reward.parse_findings`.
     """
     try:
-        response = await client.get(
+        response = await request_with_retry(
+            client,
+            "GET",
             f"/tuners/{tuner_id}/runs/{run_id}",
             params={"include_payloads": "true"},
         )
