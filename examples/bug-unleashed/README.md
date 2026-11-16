@@ -541,9 +541,9 @@ uv run python examples/bug-unleashed/run_training.py --runs 2000 \
 - `--base-model` sets `trainer_params.base_model` (MSRL only; the other
   trainers ignore it).
 - `--adapter-size` sets `trainer_params.adapter_size` (MSRL only). One of
-  `ADAPTER_SIZE_ONE/TWO/FOUR/EIGHT/SIXTEEN/THIRTY_TWO`; the server default is
-  `ADAPTER_SIZE_SIXTEEN` and `ADAPTER_SIZE_THIRTY_TWO` is the largest the API
-  accepts.
+  `ADAPTER_SIZE_ONE/TWO/FOUR/EIGHT/SIXTEEN`; the server default is
+  `ADAPTER_SIZE_SIXTEEN`, which is also the largest size the MSRL API supports
+  (rank 32 is not a valid adapter size and is no longer accepted).
 
 #### Smoke test against MSRL
 
@@ -595,7 +595,7 @@ is never cut short.
 
 Two base models are accepted by `POST /tuners` for this loop: `gemini-3.5-flash`
 and `gemini-3.1-flash-lite` (the current production base model, paired with
-`--adapter-size ADAPTER_SIZE_THIRTY_TWO`). `gemini-3.5-flash-lite` is still
+`--adapter-size ADAPTER_SIZE_SIXTEEN`). `gemini-3.5-flash-lite` is still
 rejected with `Base model ... is not supported for multi-step reinforcement
 tuning.` The rejection comes from Vertex itself, not from the driver: posting
 `multiStepReinforcementTuningSpec` straight to

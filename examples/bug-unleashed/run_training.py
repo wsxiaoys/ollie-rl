@@ -83,7 +83,6 @@ ADAPTER_SIZES = (
     "ADAPTER_SIZE_FOUR",
     "ADAPTER_SIZE_EIGHT",
     "ADAPTER_SIZE_SIXTEEN",
-    "ADAPTER_SIZE_THIRTY_TWO",
 )
 
 PROMPT_TEMPLATE = """You are reviewing a pull request for defects it introduces. The repository is
@@ -909,8 +908,8 @@ def parse_args() -> argparse.Namespace:
         choices=ADAPTER_SIZES,
         help=(
             "MSRL only: LoRA adapter size, sent as trainer_params.adapter_size. "
-            "Server default is ADAPTER_SIZE_SIXTEEN; ADAPTER_SIZE_THIRTY_TWO is "
-            "the largest the API accepts."
+            "Server default is ADAPTER_SIZE_SIXTEEN, which is also the largest "
+            "size the MSRL API supports."
         ),
     )
     parser.add_argument("--name", default=DEFAULT_TUNER_NAME)

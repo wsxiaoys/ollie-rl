@@ -77,7 +77,7 @@ learn from.
 uv run python examples/bug-unleashed/run_training.py \
   --base-url https://ollie-rl-production.up.railway.app \
   --trainer gemini_msrl --base-model gemini-3.1-flash-lite \
-  --adapter-size ADAPTER_SIZE_THIRTY_TWO \
+  --adapter-size ADAPTER_SIZE_SIXTEEN \
   --recipe '{"group_size": 8, "num_groups_per_batch": 16, "reward_normalizer": "centering"}' \
   --runs 2000 --concurrency 36 \
   --ollie-max-context-tokens 55000 \
