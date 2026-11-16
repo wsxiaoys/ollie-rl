@@ -1,0 +1,6 @@
+{
+  "title": "[dom-webview] add injectedJavaScript and injectedJavaScriptObject support",
+  "body": "# Why\n\nadd missing feature for dom-webview that to support new js injection for dom components\n\n# How\n\nadd `injectedJavaScript` and `injectedJavaScriptObject` support\n\n# Test Plan\n\ntested on upstack pr\n\n# Checklist\n\n- [x] I added a `changelog.md` entry and rebuilt the package sources according to [this short guide](https://github.com/expo/expo/blob/main/CONTRIBUTING.md#-before-submitting)\n- [x] This diff will work correctly for `npx expo prebuild` & EAS Build (eg: updated a module plugin).\n- [x] Conforms with the [Documentation Writing Style Guide](https://github.com/expo/expo/blob/main/guides/Expo%20Documentation%20Writing%20Style%20Guide.md)\n",
+  "head_sha": "2bd4e99d7fd0e8cce786c4bd5f5969d8f50f6da7",
+  "base_sha": "163ecdc0a4839fda3e471ba00e0c9b4a4f685df5"
+}

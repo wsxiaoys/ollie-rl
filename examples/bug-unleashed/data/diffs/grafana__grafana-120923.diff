@@ -1,0 +1,24 @@
+diff --git a/public/app/core/internationalization/loadTranslations.ts b/public/app/core/internationalization/loadTranslations.ts
+index 301261fca6daf..5701d330e455a 100644
+--- a/public/app/core/internationalization/loadTranslations.ts
++++ b/public/app/core/internationalization/loadTranslations.ts
+@@ -1,5 +1,7 @@
+ import { BackendModule } from 'i18next';
+ 
++import { DEFAULT_LANGUAGE } from '@grafana/i18n';
++
+ import { LANGUAGES } from './constants';
+ 
+ const getLanguagePartFromCode = (code: string) => code.split('-')[0].toLowerCase();
+@@ -17,6 +19,11 @@ export const loadTranslations: BackendModule = {
+       return callback(new Error(`No message loader available for ${language}`), null);
+     }
+ 
++    // don't load messages for DEFAULT_LANGUAGE as they are already embedded in the source code
++    if (localeDef.code === DEFAULT_LANGUAGE) {
++      return callback(null, {});
++    }
++
+     const namespaceLoader = localeDef.loader[namespace];
+     if (!namespaceLoader) {
+       return callback(new Error(`No message loader available for ${language} with namespace ${namespace}`), null);

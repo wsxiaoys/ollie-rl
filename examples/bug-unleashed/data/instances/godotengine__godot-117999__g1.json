@@ -1,0 +1,25 @@
+{
+  "case_id": "godotengine__godot-117999",
+  "repo": "godotengine/godot",
+  "pr": 117999,
+  "title": "DDS: Fix loading 3D textures with mipmaps",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "godotengine__godot-117999__g1",
+  "target": {
+    "gid": "godotengine__godot-117999#g1",
+    "summary": "`r_dds_type & DDST_3D` treats `r_dds_type` as a bitmask rather than checking `(r_dds_type & DDST_TYPE_MASK) == DDST_3D`. Consequently, non-3D textures (such as 2D textures) sharing that bit are mistakenly loaded as 3D textures, breaking their mipmaps.",
+    "paths": [
+      "modules/dds/texture_loader_dds.cpp"
+    ],
+    "notes": [
+      "faulty statement passing `r_dds_type & DDST_3D` instead of checking `(r_dds_type & DDST_TYPE_MASK) == DDST_3D`"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "4f907cc7a0e69b7a4e2d71256e311f60d237e99b",
+  "base_sha": "2af785641ae249573f45eb61852d22e0b1a8a03c",
+  "snapshot": "repos/godotengine__godot/4f907cc7a0e69b7a4e2d71256e311f60d237e99b",
+  "diff": "diffs/godotengine__godot-117999.diff"
+}

@@ -1,0 +1,27 @@
+{
+  "case_id": "mobile-dev-inc__Maestro-3462",
+  "repo": "mobile-dev-inc/Maestro",
+  "pr": 3462,
+  "title": "fix(android): don't block on the locale broadcast",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mobile-dev-inc__Maestro-3462__g1",
+  "target": {
+    "gid": "mobile-dev-inc__Maestro-3462#g1",
+    "summary": "Under heavy broadcast queue churn, the detached locale broadcast receiver can take longer to update persist.sys.locale than the polling budget in awaitLocaleApplied. setDeviceLocale exhausts its attempts and prematurely returns SET_LOCALE_RESULT_UPDATE_CONFIGURATION_FAILED for locale changes that actually succeed.",
+    "paths": [
+      "maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt"
+    ],
+    "notes": [
+      "faulty polling loop that exhausts its verification budget before late-running broadcast updates take effect",
+      "call site in setDeviceLocale that retries the broadcast and prematurely returns SET_LOCALE_RESULT_UPDATE_CONFIGURATION_FAILED",
+      "definition of LocaleRetryPolicy which defines the polling budget without an adequate grace period"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "551f11fb19060082d63b7a4c2f6c6c8e3d31d6c3",
+  "base_sha": "1b8564d514e4636ba106ddbebc651fdbf1b55297",
+  "snapshot": "repos/mobile-dev-inc__Maestro/551f11fb19060082d63b7a4c2f6c6c8e3d31d6c3",
+  "diff": "diffs/mobile-dev-inc__Maestro-3462.diff"
+}

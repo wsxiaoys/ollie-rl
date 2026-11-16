@@ -1,0 +1,6 @@
+{
+  "title": "np-legacy-state-callback",
+  "body": "Core: Add user state callback management and improve user login/logout handling",
+  "head_sha": "581a1ae6b759341942c8be2770a369c916e677e1",
+  "base_sha": "0c78ea9bbac9a3e48e6620e91b3f1fbac8dea71b"
+}

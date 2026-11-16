@@ -1,0 +1,26 @@
+{
+  "case_id": "vercel__next.js-98823",
+  "repo": "vercel/next.js",
+  "pr": 98823,
+  "title": "Turbopack: chain the Pages Router development client module graph",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "vercel__next.js-98823__g1",
+  "target": {
+    "gid": "vercel__next.js-98823#g1",
+    "summary": "Chaining /_app into the page's client module graph in development causes next/dynamic imports in pages/_app to be chunked with the page's availability instead of /_app's availability. Consequently, SSR HTML for pages will preload chunk filenames that do not match emitted chunks, resulting in 404 request errors in the browser.",
+    "paths": [
+      "crates/next-api/src/pages.rs"
+    ],
+    "notes": [
+      "faulty statement that chains /_app into the page's client module graph",
+      "definition of the method whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c3e642a58c934a2303acdf9ff478c281687caed4",
+  "base_sha": "5da8ef12bc6b4156dd490e58e3878e06fd7f4472",
+  "snapshot": "repos/vercel__next.js/c3e642a58c934a2303acdf9ff478c281687caed4",
+  "diff": "diffs/vercel__next.js-98823.diff"
+}

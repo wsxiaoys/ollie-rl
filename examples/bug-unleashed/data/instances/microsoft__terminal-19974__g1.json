@@ -1,0 +1,25 @@
+{
+  "case_id": "microsoft__terminal-19974",
+  "repo": "microsoft/terminal",
+  "pr": 19974,
+  "title": "Fix selection markers disappearing after scrolling out of view",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "microsoft__terminal-19974__g1",
+  "target": {
+    "gid": "microsoft__terminal-19974#g1",
+    "summary": "Checking only `_core.HasSelection()` triggers marker updates on scroll for all selections, causing selection markers to unexpectedly appear during mouse selections.",
+    "paths": [
+      "src/cascadia/TerminalControl/TermControl.cpp"
+    ],
+    "notes": [
+      "faulty condition checking only HasSelection instead of also verifying selection mode"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "62a4d48a1e126221fa3b051faca5545e18de1471",
+  "base_sha": "040c730a444aaf0c2ee5d6e8c2bedf184f700cac",
+  "snapshot": "repos/microsoft__terminal/62a4d48a1e126221fa3b051faca5545e18de1471",
+  "diff": "diffs/microsoft__terminal-19974.diff"
+}

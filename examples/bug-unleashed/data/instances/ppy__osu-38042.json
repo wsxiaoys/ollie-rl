@@ -1,0 +1,16 @@
+{
+  "case_id": "ppy__osu-38042",
+  "repo": "ppy/osu",
+  "pr": 38042,
+  "title": "Fix changing difficulty in editor potentially seeking incorrectly in presence of user/platform offsets",
+  "language": "C#",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "ppy__osu-38042",
+  "target": null,
+  "siblings": [],
+  "head_sha": "6fadfdd272d6d3e50efa05ad9087dfd6367f48d8",
+  "base_sha": "bbbd3f6b12a662ad00e66720e9253a724c983cf5",
+  "snapshot": "repos/ppy__osu/6fadfdd272d6d3e50efa05ad9087dfd6367f48d8",
+  "diff": "diffs/ppy__osu-38042.diff"
+}

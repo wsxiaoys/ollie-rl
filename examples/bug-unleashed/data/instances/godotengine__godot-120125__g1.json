@@ -1,0 +1,30 @@
+{
+  "case_id": "godotengine__godot-120125",
+  "repo": "godotengine/godot",
+  "pr": 120125,
+  "title": "Show favorited inspector properties in their original spot",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "godotengine__godot-120125__g1",
+  "target": {
+    "gid": "godotengine__godot-120125#g1",
+    "summary": "`_apply_property_editor_flags()` unconditionally calls `p_ep->set_deletable(deletable_properties)`, overriding the deletable status previously set for metadata properties. As a result, node and object metadata properties cannot be deleted in the inspector.",
+    "paths": [
+      "editor/inspector/editor_inspector.cpp",
+      "editor/inspector/editor_inspector.h"
+    ],
+    "notes": [
+      "faulty statement unconditionally overriding deletable flag",
+      "definition of _apply_property_editor_flags",
+      "call site overwriting previously computed deletable status for metadata properties",
+      "call site applying property editor flags to copy",
+      "declaration of _apply_property_editor_flags"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "e6c4bb88db0ffc9e4f3b6acefeaaca693e6dd926",
+  "base_sha": "5902d3f370db5905444a01139722a40cb29bb1c4",
+  "snapshot": "repos/godotengine__godot/e6c4bb88db0ffc9e4f3b6acefeaaca693e6dd926",
+  "diff": "diffs/godotengine__godot-120125.diff"
+}

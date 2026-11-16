@@ -1,0 +1,29 @@
+{
+  "case_id": "mobile-dev-inc__Maestro-3079",
+  "repo": "mobile-dev-inc/Maestro",
+  "pr": 3079,
+  "title": "Add cross-domain iframe support",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mobile-dev-inc__Maestro-3079__g1",
+  "target": {
+    "gid": "mobile-dev-inc__Maestro-3079#g1",
+    "summary": "The JavaScript snippet in withActiveElement lacks a return keyword, causing executeJS to evaluate to null. Consequently, the as String cast throws a NullPointerException and crashes pressKey, inputText, and eraseText whenever the focused element is not inside an iframe.",
+    "paths": [
+      "maestro-client/src/main/java/maestro/drivers/WebDriver.kt"
+    ],
+    "notes": [
+      "faulty executeJS statement missing return keyword",
+      "definition of withActiveElement",
+      "call site of withActiveElement in pressKey",
+      "call site of withActiveElement in inputText",
+      "call site of withActiveElement in eraseText"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "155445bdd426b6970a149855797d23ebe6913c07",
+  "base_sha": "43981c067754e60de596afb307d22699fc180fe9",
+  "snapshot": "repos/mobile-dev-inc__Maestro/155445bdd426b6970a149855797d23ebe6913c07",
+  "diff": "diffs/mobile-dev-inc__Maestro-3079.diff"
+}

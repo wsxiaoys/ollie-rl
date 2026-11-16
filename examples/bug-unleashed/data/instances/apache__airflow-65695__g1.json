@@ -1,0 +1,27 @@
+{
+  "case_id": "apache__airflow-65695",
+  "repo": "apache/airflow",
+  "pr": 65695,
+  "title": "Add multi-team lookup to Lockbox backend",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apache__airflow-65695__g1",
+  "target": {
+    "gid": "apache__airflow-65695#g1",
+    "summary": "_is_team_specific_accessed_as_global requires team_name to be None, bypassing the guard whenever a team scope is provided. Consequently, if a caller scoped to one team requests an identifier containing another team's namespace, the team-scoped lookup misses and falls through to the global secret lookup in _get_secret_value, exposing the other team's secret.",
+    "paths": [
+      "providers/yandex/src/airflow/providers/yandex/secrets/lockbox.py"
+    ],
+    "notes": [
+      "faulty guard condition requiring team_name to be None, bypassing protection for team-scoped lookups",
+      "call site guarding connection lookup against cross-team secret access",
+      "call site guarding variable lookup against cross-team secret access"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "46f7a0794fbdecb1192c3c30e61149c749632991",
+  "base_sha": "052d27f4179d7d35589f526a01b48aa50f7e2845",
+  "snapshot": "repos/apache__airflow/46f7a0794fbdecb1192c3c30e61149c749632991",
+  "diff": "diffs/apache__airflow-65695.diff"
+}

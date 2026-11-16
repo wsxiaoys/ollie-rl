@@ -1,0 +1,28 @@
+{
+  "case_id": "microsoft__playwright-40191",
+  "repo": "microsoft/playwright",
+  "pr": 40191,
+  "title": "feat(mcp): support both v1 and v2 extension protocol in cdpRelay",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "microsoft__playwright-40191__g1",
+  "target": {
+    "gid": "microsoft__playwright-40191#g1",
+    "summary": "forwardToExtension unconditionally throws an error when sessionId is not provided, rejecting browser-level CDP commands. As a result, browser-scoped operations such as cookie management and state saving fail.",
+    "paths": [
+      "packages/playwright-core/src/tools/mcp/cdpRelay.ts",
+      "packages/playwright-core/src/tools/mcp/cdpRelayV2.ts"
+    ],
+    "notes": [
+      "faulty check throwing on missing sessionId instead of routing browser-level commands",
+      "definition of the method whose behavior is wrong",
+      "call site forwarding CDP commands without sessionId to the handler"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "59b33261f706e5b6465377bcaffcf63ac91df37a",
+  "base_sha": "23817d24721db5189037a61e0b2f3576043dd517",
+  "snapshot": "repos/microsoft__playwright/59b33261f706e5b6465377bcaffcf63ac91df37a",
+  "diff": "diffs/microsoft__playwright-40191.diff"
+}

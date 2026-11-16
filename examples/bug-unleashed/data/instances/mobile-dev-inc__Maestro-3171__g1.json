@@ -1,0 +1,26 @@
+{
+  "case_id": "mobile-dev-inc__Maestro-3171",
+  "repo": "mobile-dev-inc/Maestro",
+  "pr": 3171,
+  "title": "feat: use direct ADB socket for gRPC instead of TCP port forwarding",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mobile-dev-inc__Maestro-3171__g1",
+  "target": {
+    "gid": "mobile-dev-inc__Maestro-3171#g1",
+    "summary": "DummyDns.lookup returns InetAddress.getLoopbackAddress(), which causes OkHttp to replace the target socket hostname with \"localhost\". As a result, AdbSocketFactory attempts to connect to localabstract:localhost instead of the target webview abstract socket, silently breaking Chrome DevTools webview hierarchy inspection.",
+    "paths": [
+      "maestro-client/src/main/java/maestro/android/chromedevtools/DadbChromeDevToolsClient.kt"
+    ],
+    "notes": [
+      "faulty DummyDns implementation returning loopback address which causes OkHttp to overwrite hostname with localhost",
+      "call site configuring DummyDns on the HTTP client"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "bc6219f431d6403e4553d4abfe7f88488571cedb",
+  "base_sha": "121b6ea1347fe22d81b4c469117da7b54aff3dc2",
+  "snapshot": "repos/mobile-dev-inc__Maestro/bc6219f431d6403e4553d4abfe7f88488571cedb",
+  "diff": "diffs/mobile-dev-inc__Maestro-3171.diff"
+}

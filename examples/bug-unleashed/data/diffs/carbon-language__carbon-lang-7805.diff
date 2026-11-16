@@ -1,0 +1,376 @@
+diff --git a/docs/project/contribution_tools.md b/docs/project/contribution_tools.md
+index a1aa6abc18db5..b183e87cb1042 100644
+--- a/docs/project/contribution_tools.md
++++ b/docs/project/contribution_tools.md
+@@ -333,6 +333,12 @@ jj config set --repo 'revset-aliases."trunk()"' 'trunk@upstream'
+ # Treat github.com/carbon-language/carbon-lang as immutable, but treat your fork
+ # as mutable.
+ jj config set --repo 'revset-aliases."immutable_heads()"' 'remote_bookmarks(*, upstream)'
++
++# Run `prek` over the commits a push would send, and push only if they pass.
++jj config set --repo aliases.push '["util", "exec", "--", "sh", "-c", "exec \"$(jj workspace root)/scripts/jj_push.sh\" \"$@\"", "jj push"]'
++
++# Run `prek` over the changes between `trunk()` and `@`.
++jj config set --repo aliases.prek '["util", "exec", "--", "sh", "-c", "exec \"$(jj workspace root)/scripts/jj_prek.sh\" \"$@\"", "jj prek"]'
+ ```
+ 
+ <!-- google-doc-style-resume -->
+@@ -341,6 +347,18 @@ The above assumes that you have configured the remote name `origin` to refer to
+ your fork and `upstream` to refer to `github.com/carbon-language/carbon-lang`,
+ and will need to be adjusted if you use different remote names.
+ 
++The `prek` alias runs [`scripts/jj_prek.sh`](/scripts/jj_prek.sh), which runs
++`prek` against `@` from anywhere in the workspace, including a non-colocated
++one. Arguments go to `prek run`, so `jj prek --all-files` checks everything.
++
++The `push` alias runs [`scripts/jj_push.sh`](/scripts/jj_push.sh), which checks
++the commits the push would send and leaves anything the hooks change in a commit
++for you to squash. It takes the same arguments as `jj git push`, and `--dry-run`
++still runs the checks. `jj` only knows the name of an alias, not what it expands
++to, so it completes file names after `jj push`.
++[`scripts/completions`](/scripts/completions/README.md) has Bash, Zsh, and Fish
++completions for the alias.
++
+ #### AI assistants
+ 
+ When using AI assistants and reviewing terminal commands, some commands which
+diff --git a/scripts/completions/README.md b/scripts/completions/README.md
+new file mode 100644
+index 0000000000000..581359ccb468f
+--- /dev/null
++++ b/scripts/completions/README.md
+@@ -0,0 +1,57 @@
++<!--
++Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++Exceptions. See /LICENSE for license information.
++SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++-->
++
++# Shell completions for `jj push`
++
++Completions for a `jj push` alias that runs
++[`scripts/jj_push.sh`](/scripts/jj_push.sh). See
++[the Jujutsu section of the contribution tools doc](/docs/project/contribution_tools.md#jujutsu-jj)
++to set up the alias.
++
++`jj` only knows the name of an alias, not what it expands to, so it completes
++file names after `jj push`. Each file here rewrites `push` to `git push` in the
++command line before passing it to `jj`, giving the alias the flags, bookmarks,
++revsets, and remotes of `jj git push`.
++
++Each file loads `jj`'s own completions itself, and needs `jj` on `PATH` when it
++runs. Remove any other setup that loads `jj`'s completions.
++
++Run the commands below from your Carbon checkout, so that
++`jj workspace root` fills in its path.
++
++## Bash
++
++```sh
++echo "source $(jj workspace root)/scripts/completions/jj_push.bash" >>~/.bashrc
++```
++
++If your distribution ships a `jj` file in
++`/usr/share/bash-completion/completions`, Bash loads it on demand and it
++overrides this. Symlink this file to
++`~/.local/share/bash-completion/completions/jj` instead of sourcing it.
++
++## Zsh
++
++```sh
++echo "source $(jj workspace root)/scripts/completions/jj_push.zsh" >>~/.zshrc
++```
++
++This has to come after `compinit` in `.zshrc`, so move the line if `compinit`
++runs later in the file.
++
++## Fish
++
++Fish loads completions on demand, after running `config.fish`, so sourcing this
++at startup doesn't work: what fish loads later is added on top. Install it as
++the file fish loads for `jj`:
++
++```sh
++ln -s "$(jj workspace root)/scripts/completions/jj_push.fish" \
++  ~/.config/fish/completions/jj.fish
++```
++
++`~/.config/fish/completions` is first in `$fish_complete_path`, so this
++overrides any `jj.fish` from your distribution.
+diff --git a/scripts/completions/jj_push.bash b/scripts/completions/jj_push.bash
+new file mode 100644
+index 0000000000000..aa8a2716cb638
+--- /dev/null
++++ b/scripts/completions/jj_push.bash
+@@ -0,0 +1,41 @@
++# Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++# Exceptions. See /LICENSE for license information.
++# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#
++# Bash completions for a `jj push` alias that runs `scripts/jj_push.sh`. See
++# `scripts/completions/README.md` for how to install this.
++#
++# `jj` only knows the name of an alias, not what it expands to, so it completes
++# file names after `jj push`. Rewriting `push` to `git push` in the command line
++# before passing it to `jj` gets the completions of `jj git push`.
++
++source <(COMPLETE=bash jj)
++
++_carbon_jj_complete() {
++  # Shadow the two variables `jj`'s completion function reads. Bash scopes them
++  # dynamically, so it sees the rewrite below.
++  local -a COMP_WORDS=("${COMP_WORDS[@]}")
++  local COMP_CWORD=$COMP_CWORD
++  local i
++
++  # Only look before the cursor. A `push` at the cursor is still being typed.
++  for ((i = 1; i < COMP_CWORD; i++)); do
++    case "${COMP_WORDS[i]}" in
++      -*) ;;
++      push)
++        COMP_WORDS=("${COMP_WORDS[@]:0:i}" git push "${COMP_WORDS[@]:i+1}")
++        ((COMP_CWORD++))
++        break
++        ;;
++      *) break ;;
++    esac
++  done
++
++  _clap_complete_jj "$@"
++}
++
++if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
++  complete -o nospace -o bashdefault -o nosort -F _carbon_jj_complete jj
++else
++  complete -o nospace -o bashdefault -F _carbon_jj_complete jj
++fi
+diff --git a/scripts/completions/jj_push.fish b/scripts/completions/jj_push.fish
+new file mode 100644
+index 0000000000000..ad0c2ef6f2933
+--- /dev/null
++++ b/scripts/completions/jj_push.fish
+@@ -0,0 +1,37 @@
++# Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++# Exceptions. See /LICENSE for license information.
++# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#
++# Fish completions for a `jj push` alias that runs `scripts/jj_push.sh`. See
++# `scripts/completions/README.md` for how to install this.
++#
++# `jj` only knows the name of an alias, not what it expands to, so it completes
++# file names after `jj push`. Rewriting `push` to `git push` in the command line
++# before passing it to `jj` gets the completions of `jj git push`.
++#
++# This replaces the completions fish loads for `jj`, so it has to be installed
++# with that file's name. Loading both leaves `jj`'s file-name completion
++# registered.
++
++function __jj_completion_tokens --description 'Command line tokens, with the `push` alias expanded'
++    # `--cut-at-cursor` drops the token being completed, so any `push` here is
++    # a complete word.
++    set -l tokens (commandline --current-process --tokenize --cut-at-cursor)
++    for i in (seq 2 (count $tokens))
++        switch $tokens[$i]
++            case '-*'
++                continue
++            case push
++                printf '%s\n' $tokens[1..(math $i - 1)] git push \
++                    $tokens[(math $i + 1)..-1]
++                return
++            case '*'
++                break
++        end
++    end
++    printf '%s\n' $tokens
++end
++
++complete -e -c jj
++complete --keep-order --exclusive --command jj \
++    --arguments "(COMPLETE=fish jj -- (__jj_completion_tokens) (commandline --current-token))"
+diff --git a/scripts/completions/jj_push.zsh b/scripts/completions/jj_push.zsh
+new file mode 100644
+index 0000000000000..efe343ed4103e
+--- /dev/null
++++ b/scripts/completions/jj_push.zsh
+@@ -0,0 +1,33 @@
++# Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++# Exceptions. See /LICENSE for license information.
++# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#
++# Zsh completions for a `jj push` alias that runs `scripts/jj_push.sh`. See
++# `scripts/completions/README.md` for how to install this.
++#
++# `jj` only knows the name of an alias, not what it expands to, so it completes
++# file names after `jj push`. Rewriting `push` to `git push` in the command line
++# before passing it to `jj` gets the completions of `jj git push`.
++
++source <(COMPLETE=zsh jj)
++
++_carbon_jj_complete() {
++  local i
++
++  # Only look before the cursor. A `push` at the cursor is still being typed.
++  for ((i = 2; i < CURRENT; i++)); do
++    case ${words[i]} in
++      -*) ;;
++      push)
++        words=(${words[1, i - 1]} git push ${words[i + 1, -1]})
++        ((CURRENT++))
++        break
++        ;;
++      *) break ;;
++    esac
++  done
++
++  _clap_dynamic_completer_jj "$@"
++}
++
++compdef _carbon_jj_complete jj
+diff --git a/scripts/jj_prek.sh b/scripts/jj_prek.sh
+index 285269b434f73..3d16a4292a53d 100755
+--- a/scripts/jj_prek.sh
++++ b/scripts/jj_prek.sh
+@@ -15,6 +15,12 @@ set -eu
+ # both check the wrong thing and fail to write back their fixes.
+ HEAD="$(jj show --no-patch -r @ --template 'commit_id')"
+ 
++# Run from the workspace root. Setting `GIT_DIR` makes git treat the current
++# directory as the work tree, and prek looks there for its configuration, so
++# running from a subdirectory would find neither. Hooks also expect paths
++# relative to the root.
++cd "$(jj workspace root --ignore-working-copy)"
++
+ # Find the .git directory. The working copy was snapshotted above, so this
+ # doesn't need to do so again.
+ export GIT_DIR="$(jj git root --ignore-working-copy)"
+@@ -24,5 +30,10 @@ export GIT_INDEX_FILE="$(mktemp)"
+ trap 'rm -f "$GIT_INDEX_FILE"' EXIT
+ git read-tree "$HEAD"
+ 
+-# Run prek with the `.git` directory and index we built earlier.
+-prek run --from-ref trunk --to-ref "$HEAD"
++# Run prek with the `.git` directory and index we built earlier. Arguments
++# select what gets checked; with none, check everything between `trunk` and `@`.
++if (($# > 0)); then
++  prek run "$@"
++else
++  prek run --from-ref trunk --to-ref "$HEAD"
++fi
+diff --git a/scripts/jj_push.sh b/scripts/jj_push.sh
+new file mode 100755
+index 0000000000000..2a46704066419
+--- /dev/null
++++ b/scripts/jj_push.sh
+@@ -0,0 +1,112 @@
++#!/usr/bin/env bash
++#
++# Part of the Carbon Language project, under the Apache License v2.0 with LLVM
++# Exceptions. See /LICENSE for license information.
++# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++#
++# Runs prek over the commits `jj git push` would send, and pushes only if they
++# pass. Takes the same arguments as `jj git push`.
++
++set -eu
++
++JJ_PREK="$(dirname "${BASH_SOURCE[0]}")/jj_prek.sh"
++
++# Succeeds if the working-copy commit is in the given revset. This snapshots the
++# working copy, so it sees anything the hooks rewrote.
++working_copy_is() {
++  [[ -n "$(jj log --no-graph -r "@ & ($1)" --template 'commit_id')" ]]
++}
++
++# Succeeds if the working copy is an empty, undescribed child of the target,
++# which hooks can run in and write their fixes into.
++working_copy_sits_on() {
++  working_copy_is "empty() & description(exact:\"\") & children($1)"
++}
++
++# Returns the working copy to where it started. jj discards an empty,
++# undescribed commit when the working copy moves off it, so the original may be
++# gone. Build a new one on the same parents in that case.
++restore_working_copy() {
++  if [[ -n "$(jj log --no-graph --ignore-working-copy \
++    -r "present($ORIG_CHANGE)" --template 'commit_id')" ]]; then
++    jj edit --quiet "$ORIG_CHANGE"
++  else
++    jj new --quiet $ORIG_PARENTS
++  fi
++}
++
++# `--help` describes `jj git push`, and has nothing to check.
++for arg in "$@"; do
++  case "$arg" in
++    -h | --help)
++      exec jj git push "$@"
++      ;;
++  esac
++done
++
++# Ask jj what the push would do. This checks the arguments and lists the commits
++# being sent, without contacting the remote. A `--dry-run` already in `$@` is
++# harmless here, and still suppresses the push at the end.
++if ! PLAN="$(jj git push --dry-run "$@" 2>&1)"; then
++  echo "$PLAN" >&2
++  exit 1
++fi
++
++REMOTE="$(sed -n 's/^Changes to push to \(.*\):$/\1/p' <<<"$PLAN")"
++
++# Each updated bookmark or tag reports the commit it moves to. Deletions have no
++# such commit, and send nothing to check.
++TARGETS="$(sed -n 's/^  \(bookmark\|tag\): .* to \([0-9a-f]\{8,\}\)\]$/\2/p' <<<"$PLAN" |
++  paste -sd '|')"
++
++# Nothing to check, so just push.
++if [[ -z "$REMOTE" || -z "$TARGETS" ]]; then
++  exec jj git push "$@"
++fi
++
++# Only the heads need checking; a head's range covers everything below it.
++HEADS="$(jj log --no-graph --ignore-working-copy -r "heads($TARGETS)" \
++  --template 'commit_id ++ "\n"')"
++
++ORIG_CHANGE="$(jj log --no-graph -r @ --template 'change_id')"
++ORIG_PARENTS="$(jj log --no-graph -r 'parents(@)' --template 'commit_id ++ " "')"
++
++for target in $HEADS; do
++  # Check with the working copy on top of the target.
++  made_scratch=0
++  if ! working_copy_sits_on "$target"; then
++    jj new --quiet "$target"
++    made_scratch=1
++  fi
++
++  # Check from the newest ancestor already on the remote. When there is none,
++  # there is no range to diff, so check every file.
++  base="$(jj log --no-graph --ignore-working-copy \
++    -r "heads(::$target & ::remote_bookmarks(remote=exact:$REMOTE))" \
++    --template 'commit_id ++ "\n"' | head -n 1)"
++  if [[ -n "$base" ]]; then
++    check=(--from-ref "$base" --to-ref "$target")
++  else
++    check=(--all-files)
++  fi
++
++  result=0
++  "$JJ_PREK" "${check[@]}" || result=$?
++
++  # Discard the scratch commit unless the hooks wrote something into it.
++  if ((made_scratch)) && working_copy_is 'empty()'; then
++    restore_working_copy
++  fi
++
++  if ((result)); then
++    echo >&2
++    if ! working_copy_is 'empty()'; then
++      change="$(jj log --no-graph -r @ --template 'change_id.shortest()')"
++      echo "Hooks changed files. They are in $change." >&2
++    fi
++    echo "Error: checks failed, nothing pushed." >&2
++    exit 1
++  fi
++done
++
++exec jj git push "$@"

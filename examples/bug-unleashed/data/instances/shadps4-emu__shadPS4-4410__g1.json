@@ -1,0 +1,27 @@
+{
+  "case_id": "shadps4-emu__shadPS4-4410",
+  "repo": "shadps4-emu/shadPS4",
+  "pr": 4410,
+  "title": "np-legacy-state-callback",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "shadps4-emu__shadPS4-4410__g1",
+  "target": {
+    "gid": "shadps4-emu__shadPS4-4410#g1",
+    "summary": "Pad handle lookups via `FindHandleKeyByHandle` in `scePadGetControllerInformation` mismanage controller handle resolution and leave `deviceClass` set to `Invalid`. This causes controller detection and input to break in games such as Unity titles.",
+    "paths": [
+      "src/core/libraries/pad/pad.cpp"
+    ],
+    "notes": [
+      "definition of FindHandleKeyByHandle helper function",
+      "sets deviceClass to Invalid when handle lookup fails or device class is not matched",
+      "call site of FindHandleKeyByHandle in scePadGetControllerInformation"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "581a1ae6b759341942c8be2770a369c916e677e1",
+  "base_sha": "0c78ea9bbac9a3e48e6620e91b3f1fbac8dea71b",
+  "snapshot": "repos/shadps4-emu__shadPS4/581a1ae6b759341942c8be2770a369c916e677e1",
+  "diff": "diffs/shadps4-emu__shadPS4-4410.diff"
+}

@@ -1,0 +1,261 @@
+diff --git a/authlib/oauth2/rfc7523/client.py b/authlib/oauth2/rfc7523/client.py
+index 9767866e7..35d767551 100644
+--- a/authlib/oauth2/rfc7523/client.py
++++ b/authlib/oauth2/rfc7523/client.py
+@@ -28,7 +28,12 @@ class JWTBearerClientAssertion:
+     #: Name of the client authentication method
+     CLIENT_AUTH_METHOD = "client_assertion_jwt"
+ 
+-    def __init__(self, token_url, validate_jti=True, leeway=60):
++    def __init__(self, token_url=None, validate_jti=True, leeway=60):
++        if token_url is not None:  # pragma: no cover
++            deprecate(
++                "'token_url' is deprecated. Override 'get_audiences' instead.",
++                version="1.8",
++            )
+         self.token_url = token_url
+         self._validate_jti = validate_jti
+         # A small allowance of time, typically no more than a few minutes,
+@@ -67,7 +72,7 @@ def verify_claims(self, claims: jwt.Claims):
+         options = {
+             "iss": {"essential": True},
+             "sub": {"essential": True},
+-            "aud": {"essential": True, "value": self.token_url},
++            "aud": {"essential": True, "values": self.get_audiences()},
+             "exp": {"essential": True},
+         }
+         claims_requests = jwt.JWTClaimsRegistry(leeway=self.leeway, **options)
+@@ -88,6 +93,22 @@ def verify_claims(self, claims: jwt.Claims):
+             if not self.validate_jti(claims, claims["jti"]):
+                 raise InvalidClientError(description="JWT ID is used before.")
+ 
++    def get_audiences(self):
++        """Return a list of valid audience identifiers for this authorization
++        server. Per RFC 7523 Section 3, the audience identifies the
++        authorization server as an intended audience.
++
++        Developers MUST implement this method::
++
++            def get_audiences(self):
++                return ["https://example.com/oauth/token", "https://example.com"]
++
++        :return: list of valid audience strings
++        """
++        if self.token_url is not None:  # pragma: no cover
++            return [self.token_url]
++        raise NotImplementedError()  # pragma: no cover
++
+     def process_assertion_claims(self, assertion, resolve_key):
+         """Extract JWT payload claims from request "assertion", per
+         `Section 3.1`_.
+diff --git a/authlib/oauth2/rfc7523/jwt_bearer.py b/authlib/oauth2/rfc7523/jwt_bearer.py
+index 57e1cb02f..9954a3eae 100644
+--- a/authlib/oauth2/rfc7523/jwt_bearer.py
++++ b/authlib/oauth2/rfc7523/jwt_bearer.py
+@@ -53,9 +53,18 @@ def sign(
+         )
+ 
+     def verify_claims(self, claims: jwt.Claims):
+-        claims_requests = jwt.JWTClaimsRegistry(
+-            leeway=self.LEEWAY, **self.CLAIMS_OPTIONS
+-        )
++        options = dict(self.CLAIMS_OPTIONS)
++        audiences = self.get_audiences()
++        if audiences:
++            options["aud"] = {"essential": True, "values": audiences}
++        else:
++            deprecate(
++                "'get_audiences' must return a non-empty list. "
++                "Audience validation will become mandatory.",
++                version="1.8",
++            )
++
++        claims_requests = jwt.JWTClaimsRegistry(leeway=self.LEEWAY, **options)
+         try:
+             claims_requests.validate(claims)
+         except JoseError as e:
+@@ -217,6 +226,27 @@ def authenticate_user(self, subject):
+         """
+         raise NotImplementedError()
+ 
++    def get_audiences(self):
++        """Return a list of valid audience identifiers for this authorization
++        server. Per RFC 7523 Section 3:
++
++            The authorization server MUST reject any JWT that does not
++            contain its own identity as the intended audience.
++
++        Developers SHOULD implement this method to return the list of valid
++        audience values, typically including the token endpoint URL and/or
++        the issuer identifier. For example::
++
++            def get_audiences(self):
++                return ["https://example.com/oauth/token", "https://example.com"]
++
++        If this method returns an empty list, audience value validation is
++        skipped (only presence is checked).
++
++        :return: list of valid audience strings
++        """
++        return []
++
+     def has_granted_permission(self, client, user):
+         """Check if the client has permission to access the given user's resource.
+         Developers MUST implement it in subclass, e.g.::
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+index 822fda0cc..efd096dae 100644
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -23,6 +23,7 @@ Version 1.7.0
+ - Allow ``ResourceProtector`` decorator to be used without parentheses. :issue:`604`
+ - Implement RFC9700 PKCE downgrade countermeasure.
+ - Set ``User-Agent`` header when fetching server metadata and JWKs. :issue:`704`
++- RFC7523 accepts the issuer URL as a valid audience. :issue:`730`
+ 
+ Upgrade Guide: :ref:`joserfc_upgrade`.
+ 
+diff --git a/docs/specs/rfc7523.rst b/docs/specs/rfc7523.rst
+index 47864319d..dd76031c6 100644
+--- a/docs/specs/rfc7523.rst
++++ b/docs/specs/rfc7523.rst
+@@ -35,6 +35,11 @@ methods in order to use it. Here is an example::
+     from authlib.oauth2.rfc7523 import JWTBearerGrant as _JWTBearerGrant
+ 
+     class JWTBearerGrant(_JWTBearerGrant):
++        def get_audiences(self):
++            # Per RFC 7523 Section 3, both the token endpoint URL and the
++            # authorization server's issuer identifier are valid audience values.
++            return ['https://example.com/oauth/token', 'https://example.com']
++
+         def resolve_issuer_client(self, issuer):
+             # if using client_id as issuer
+             return Client.objects.get(client_id=issuer)
+@@ -90,6 +95,11 @@ In Authlib, ``client_secret_jwt`` and ``private_key_jwt`` share the same API,
+ using :class:`JWTBearerClientAssertion` to create a new client authentication::
+ 
+     class JWTClientAuth(JWTBearerClientAssertion):
++        def get_audiences(self):
++            # Per RFC 7523 Section 3, both the token endpoint URL and the
++            # authorization server's issuer identifier are valid audience values.
++            return ['https://example.com/oauth/token', 'https://example.com']
++
+         def validate_jti(self, claims, jti):
+             # validate_jti is required by OpenID Connect
+             # but it is optional by RFC7523
+@@ -109,11 +119,13 @@ using :class:`JWTBearerClientAssertion` to create a new client authentication::
+ 
+     authorization_server.register_client_auth_method(
+         JWTClientAuth.CLIENT_AUTH_METHOD,
+-        JWTClientAuth('https://example.com/oauth/token')
++        JWTClientAuth()
+     )
+ 
+-The value ``https://example.com/oauth/token`` is your authorization server's
+-token endpoint, which is used as ``aud`` value in JWT.
++The ``get_audiences`` method returns the list of valid ``aud`` values
++accepted in client assertion JWTs. Per RFC 7523 Section 3,
++both the token endpoint URL and the authorization server's issuer
++identifier are valid audience values.
+ 
+ Now we have added this client auth method to authorization server, but no
+ grant types support this authentication method, you need to add it to the
+diff --git a/tests/flask/test_oauth2/test_jwt_bearer_client_auth.py b/tests/flask/test_oauth2/test_jwt_bearer_client_auth.py
+index 3685cf0ca..3123a3f52 100644
+--- a/tests/flask/test_oauth2/test_jwt_bearer_client_auth.py
++++ b/tests/flask/test_oauth2/test_jwt_bearer_client_auth.py
+@@ -41,6 +41,9 @@ def client(client, db):
+ 
+ def register_jwt_client_auth(server, validate_jti=True):
+     class JWTClientAuth(JWTBearerClientAssertion):
++        def get_audiences(self):
++            return ["https://provider.test/oauth/token"]
++
+         def validate_jti(self, claims, jti):
+             return jti != "used"
+ 
+@@ -51,7 +54,7 @@ def resolve_client_public_key(self, client, headers):
+ 
+     server.register_client_auth_method(
+         JWTClientAuth.CLIENT_AUTH_METHOD,
+-        JWTClientAuth("https://provider.test/oauth/token", validate_jti),
++        JWTClientAuth(validate_jti=validate_jti),
+     )
+ 
+ 
+@@ -299,3 +302,43 @@ def test_missing_jti(test_client, server):
+     resp = json.loads(rv.data)
+     assert "error" in resp
+     assert resp["error_description"] == "Missing JWT ID."
++
++
++def test_issuer_as_audience(test_client, server):
++    """Per RFC 7523 Section 3 and draft-ietf-oauth-rfc7523bis, the AS issuer
++    identifier should be a valid audience value for client assertion JWTs."""
++
++    class JWTClientAuth(JWTBearerClientAssertion):
++        def get_audiences(self):
++            return ["https://provider.test/oauth/token", "https://provider.test"]
++
++        def validate_jti(self, claims, jti):
++            return True
++
++        def resolve_client_public_key(self, client, headers):
++            return client.client_secret
++
++    server.register_client_auth_method(
++        JWTClientAuth.CLIENT_AUTH_METHOD,
++        JWTClientAuth(),
++    )
++
++    key = OctKey.import_key("client-secret")
++    claims = {
++        "iss": "client-id",
++        "sub": "client-id",
++        "aud": "https://provider.test",
++        "exp": int(time.time() + 3600),
++        "jti": "nonce",
++    }
++    client_assertion = jwt.encode({"alg": "HS256"}, claims, key)
++    rv = test_client.post(
++        "/oauth/token",
++        data={
++            "grant_type": "client_credentials",
++            "client_assertion_type": JWTBearerClientAssertion.CLIENT_ASSERTION_TYPE,
++            "client_assertion": client_assertion,
++        },
++    )
++    resp = json.loads(rv.data)
++    assert "access_token" in resp
+diff --git a/tests/flask/test_oauth2/test_jwt_bearer_grant.py b/tests/flask/test_oauth2/test_jwt_bearer_grant.py
+index 0fdc273fd..95ed243b4 100644
+--- a/tests/flask/test_oauth2/test_jwt_bearer_grant.py
++++ b/tests/flask/test_oauth2/test_jwt_bearer_grant.py
+@@ -187,3 +187,28 @@ def test_missing_assertion_claims(test_client):
+     )
+     resp = json.loads(rv.data)
+     assert "Missing claim" in resp["error_description"]
++
++
++def test_invalid_audience(test_client, server):
++    """RFC 7523 Section 3: The authorization server MUST reject any JWT that
++    does not contain its own identity as the intended audience."""
++
++    class StrictAudienceGrant(JWTBearerGrant):
++        def get_audiences(self):
++            return ["https://provider.test/token"]
++
++    server._token_grants.clear()
++    server.register_grant(StrictAudienceGrant)
++    assertion = StrictAudienceGrant.sign(
++        "foo",
++        issuer="client-id",
++        audience="https://evil.test/token",
++        subject=None,
++        header={"alg": "HS256", "kid": "1"},
++    )
++    rv = test_client.post(
++        "/oauth/token",
++        data={"grant_type": StrictAudienceGrant.GRANT_TYPE, "assertion": assertion},
++    )
++    resp = json.loads(rv.data)
++    assert resp["error"] == "invalid_grant"

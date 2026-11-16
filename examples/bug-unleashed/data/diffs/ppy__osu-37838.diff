@@ -1,0 +1,157 @@
+diff --git a/osu.Game.Tests/Visual/UserInterface/TestSceneDialogOverlay.cs b/osu.Game.Tests/Visual/UserInterface/TestSceneDialogOverlay.cs
+index f2313022ec4b..97f3dd455d2d 100644
+--- a/osu.Game.Tests/Visual/UserInterface/TestSceneDialogOverlay.cs
++++ b/osu.Game.Tests/Visual/UserInterface/TestSceneDialogOverlay.cs
+@@ -7,6 +7,7 @@
+ using System.Threading;
+ using NUnit.Framework;
+ using osu.Framework.Allocation;
++using osu.Framework.Bindables;
+ using osu.Framework.Graphics.Containers;
+ using osu.Framework.Graphics.Sprites;
+ using osu.Framework.Testing;
+@@ -16,10 +17,12 @@
+ namespace osu.Game.Tests.Visual.UserInterface
+ {
+     [TestFixture]
+-    public partial class TestSceneDialogOverlay : OsuTestScene
++    public partial class TestSceneDialogOverlay : OsuTestScene, IOverlayManager
+     {
+         private DialogOverlay overlay;
+ 
++        private readonly Bindable<OverlayActivation> overlayActivationMode = new Bindable<OverlayActivation>(OverlayActivation.All);
++
+         [SetUpSteps]
+         public void SetUpSteps()
+         {
+@@ -99,7 +102,8 @@ public void TestTooMuchText()
+             {
+                 Icon = FontAwesome.Regular.TrashAlt,
+                 HeaderText = @"Confirm deletion ofConfirm deletion ofConfirm deletion ofConfirm deletion ofConfirm deletion ofConfirm deletion of",
+-                BodyText = @"Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver. ",
++                BodyText =
++                    @"Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver.Ayase Rie - Yuima-ru*World TVver. ",
+                 Buttons = new PopupDialogButton[]
+                 {
+                     new PopupDialogOkButton
+@@ -116,6 +120,36 @@ public void TestTooMuchText()
+             }));
+         }
+ 
++        [Test]
++        public void TestPushWhileOverlayActivationDisabled()
++        {
++            PopupDialog dialog = null;
++
++            AddStep("set activation mode disabled", () => overlayActivationMode.Value = OverlayActivation.Disabled);
++
++            AddStep("push dialog", () =>
++            {
++                overlay.Push(dialog = new TestPopupDialog
++                {
++                    Buttons = new PopupDialogButton[]
++                    {
++                        new PopupDialogOkButton { Text = @"OK" },
++                    },
++                });
++            });
++
++            AddUntilStep("overlay not visible", () => overlay.State.Value, () => Is.EqualTo(Visibility.Hidden));
++
++            AddStep("set activation mode enabled", () => overlayActivationMode.Value = OverlayActivation.All);
++
++            AddUntilStep("overlay visible", () => overlay.State.Value, () => Is.EqualTo(Visibility.Visible));
++            AddUntilStep("dialog displayed", () => dialog.State.Value, () => Is.EqualTo(Visibility.Visible));
++            AddStep("set activation mode disabled", () => overlayActivationMode.Value = OverlayActivation.Disabled);
++
++            AddUntilStep("dialog hidden", () => dialog.State.Value, () => Is.EqualTo(Visibility.Hidden));
++            AddAssert("dialog dismissed", () => overlay.CurrentDialog, () => Is.Null);
++        }
++
+         [Test]
+         public void TestPushBeforeLoad()
+         {
+@@ -194,5 +228,17 @@ public void TestDismissBeforePushViaButtonPress()
+         private partial class TestPopupDialog : PopupDialog
+         {
+         }
++
++        public IBindable<OverlayActivation> OverlayActivationMode => overlayActivationMode;
++
++        public IDisposable RegisterBlockingOverlay(OverlayContainer overlayContainer) => throw new NotImplementedException();
++
++        public void ShowBlockingOverlay(OverlayContainer overlay)
++        {
++        }
++
++        public void HideBlockingOverlay(OverlayContainer overlay)
++        {
++        }
+     }
+ }
+diff --git a/osu.Game/Overlays/Dialog/PopupDialog.cs b/osu.Game/Overlays/Dialog/PopupDialog.cs
+index 0fec1625ebe9..4881c1f1e671 100644
+--- a/osu.Game/Overlays/Dialog/PopupDialog.cs
++++ b/osu.Game/Overlays/Dialog/PopupDialog.cs
+@@ -14,7 +14,6 @@
+ using osu.Framework.Graphics.Sprites;
+ using osu.Framework.Input.Events;
+ using osu.Framework.Localisation;
+-using osu.Game.Graphics;
+ using osu.Game.Graphics.Backgrounds;
+ using osu.Game.Graphics.Containers;
+ using osuTK;
+@@ -243,7 +242,7 @@ protected PopupDialog()
+         }
+ 
+         [BackgroundDependencyLoader]
+-        private void load(AudioManager audio, OsuColour colours)
++        private void load(AudioManager audio)
+         {
+             flashSample = audio.Samples.Get(@"UI/default-select-disabled");
+         }
+diff --git a/osu.Game/Overlays/DialogOverlay.cs b/osu.Game/Overlays/DialogOverlay.cs
+index 4e7aff84bcb1..a827b498bed0 100644
+--- a/osu.Game/Overlays/DialogOverlay.cs
++++ b/osu.Game/Overlays/DialogOverlay.cs
+@@ -13,6 +13,7 @@
+ using JetBrains.Annotations;
+ using osu.Framework.Allocation;
+ using osu.Framework.Input.Events;
++using osu.Framework.Logging;
+ 
+ namespace osu.Game.Overlays
+ {
+@@ -28,8 +29,14 @@ public partial class DialogOverlay : OsuFocusedOverlayContainer, IDialogOverlay
+ 
+         public PopupDialog CurrentDialog { get; private set; }
+ 
+-        public override bool IsPresent => Scheduler.HasPendingTasks
+-                                          || dialogContainer.Children.Count > 0;
++        public override bool IsPresent => (Scheduler.HasPendingTasks || dialogContainer.Children.Count > 0)
++                                          // The following line ensures that dialogs are not presented while the dialog overlay
++                                          // cannot be displayed. This is due to the `Schedule` usage inside `Push()`.
++                                          //
++                                          // Without this, a dialog pushed during disabled overlay activation mode would be presented,
++                                          // but immediately dismissed without ever being seen by the user (see
++                                          // https://github.com/ppy/osu/blob/ce5e54c9d27b17d460d99e774de502f9480fb710/osu.Game/Graphics/Containers/OsuFocusedOverlayContainer.cs#L131-L136).
++                                          && OverlayActivationMode.Value == OverlayActivation.All;
+ 
+         [CanBeNull]
+         private IDisposable duckOperation;
+@@ -77,6 +84,7 @@ public void Push(PopupDialog dialog)
+                     return;
+                 }
+ 
++                Logger.Log($"{nameof(DialogOverlay)}: Showing dialog {dialog}");
+                 dialogContainer.Add(dialog);
+                 Show();
+ 
+@@ -98,6 +106,7 @@ void dismiss()
+                 // Handle the case where the dialog is the currently displayed dialog.
+                 // In this scenario, the overlay itself should also be hidden.
+                 Hide();
++                Logger.Log($"{nameof(DialogOverlay)}: Dismissing dialog {dialog}");
+                 CurrentDialog = null;
+             }
+         }

@@ -1,0 +1,6 @@
+{
+  "title": "Fix invalid \"jump-to-def\" doc link generation when an item has a `derive` proc-macro",
+  "body": "Fixes https://github.com/rust-lang/rust/issues/158050.\r\n\r\nThe problem is that the proc-macros might generate an impl block `impl $(trait)? for Item` where `Item` then has its span pointing to the current item, overwriting its intra-doc link (hopefully this explanation makes sense ^^').\r\n\r\nIn short, the proc-macro generates an impl block, the `for Item` makes the code enter `visit_qpath` which in turn calls `handle_path` which will take the span of the last segment of the path (so `Item` here) and use it in the link def \"span map\".\r\n\r\nr? @urgau",
+  "head_sha": "813dbb9d195e736338c972c85d76a26a6da56ff5",
+  "base_sha": "c55fad5a9048ad0f7cff2a4867a297647af9392b"
+}

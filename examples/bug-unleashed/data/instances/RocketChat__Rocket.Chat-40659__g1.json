@@ -1,0 +1,26 @@
+{
+  "case_id": "RocketChat__Rocket.Chat-40659",
+  "repo": "RocketChat/Rocket.Chat",
+  "pr": 40659,
+  "title": "chore: migrate DDP callers to REST endpoints (used methods with REST replacement)",
+  "language": "TypeScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "RocketChat__Rocket.Chat-40659__g1",
+  "target": {
+    "gid": "RocketChat__Rocket.Chat-40659#g1",
+    "summary": "The `/v1/chat.getThreadMessages` REST endpoint defaults to a 50-message pagination limit, unlike the original DDP method. Querying it without pagination parameters causes threads containing more than 50 messages to be truncated and fail to render subsequent messages.",
+    "paths": [
+      "apps/meteor/client/views/room/contextualBar/Threads/hooks/useThreadMessagesQuery.ts"
+    ],
+    "notes": [
+      "faulty getThreadMessages call querying the REST endpoint without pagination parameters",
+      "definition of the REST endpoint hook that replaced the unpaginated DDP method"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "617ef504c87717ce0bae1c23fccf00b9f199ff20",
+  "base_sha": "10266c1ea1b82f54140f1d84d543debe9aa752e8",
+  "snapshot": "repos/RocketChat__Rocket.Chat/617ef504c87717ce0bae1c23fccf00b9f199ff20",
+  "diff": "diffs/RocketChat__Rocket.Chat-40659.diff"
+}

@@ -1,0 +1,667 @@
+diff --git a/apps/meteor/app/autotranslate/client/lib/autotranslate.ts b/apps/meteor/app/autotranslate/client/lib/autotranslate.ts
+index 9ab66e6086efc..bab1ed08213e1 100644
+--- a/apps/meteor/app/autotranslate/client/lib/autotranslate.ts
++++ b/apps/meteor/app/autotranslate/client/lib/autotranslate.ts
+@@ -85,10 +85,12 @@ export const AutoTranslate = {
+ 
+ 		const loadProviders = async () => {
+ 			try {
+-				[this.providersMetadata, this.supportedLanguages] = await Promise.all([
++				const [providersMetadata, supportedLanguagesResponse] = await Promise.all([
+ 					sdk.call('autoTranslate.getProviderUiMetadata'),
+-					sdk.call('autoTranslate.getSupportedLanguages', 'en'),
++					sdk.rest.get('/v1/autotranslate.getSupportedLanguages', { targetLanguage: 'en' }),
+ 				]);
++				this.providersMetadata = providersMetadata;
++				this.supportedLanguages = supportedLanguagesResponse.languages;
+ 			} catch (e: unknown) {
+ 				// Avoid unwanted error message on UI when autotranslate is disabled while fetching data
+ 				console.error((e as Error).message);
+diff --git a/apps/meteor/app/slashcommands-open/client/client.ts b/apps/meteor/app/slashcommands-open/client/client.ts
+index 88cee2fda319a..29354603ba716 100644
+--- a/apps/meteor/app/slashcommands-open/client/client.ts
++++ b/apps/meteor/app/slashcommands-open/client/client.ts
+@@ -27,11 +27,11 @@ slashCommands.add({
+ 			roomCoordinator.openRouteLink(subscription.t, subscription, router.getSearchParameters());
+ 		}
+ 
+-		if (type && type.indexOf('d') === -1) {
++		if (type?.indexOf('d') === -1) {
+ 			return;
+ 		}
+ 		try {
+-			await sdk.call('createDirectMessage', room);
++			await sdk.rest.post('/v1/im.create', { username: room });
+ 			const subscription = Subscriptions.state.find(predicate);
+ 			if (!subscription) {
+ 				return;
+diff --git a/apps/meteor/app/slashcommands-status/client/status.ts b/apps/meteor/app/slashcommands-status/client/status.ts
+index 3698b5fda4cb5..04795d1c1d8b9 100644
+--- a/apps/meteor/app/slashcommands-status/client/status.ts
++++ b/apps/meteor/app/slashcommands-status/client/status.ts
+@@ -12,7 +12,7 @@ slashCommands.add({
+ 		}
+ 
+ 		try {
+-			await sdk.call('setUserStatus', undefined, params);
++			await sdk.rest.post('/v1/users.setStatus', { message: params });
+ 		} catch (error) {
+ 			dispatchToastMessage({ type: 'error', message: error });
+ 		}
+diff --git a/apps/meteor/app/slashcommands-topic/client/topic.ts b/apps/meteor/app/slashcommands-topic/client/topic.ts
+index 697f87716a903..f28dddcafd9fb 100644
+--- a/apps/meteor/app/slashcommands-topic/client/topic.ts
++++ b/apps/meteor/app/slashcommands-topic/client/topic.ts
+@@ -12,7 +12,7 @@ slashCommands.add({
+ 	callback: async function Topic({ params, message }: SlashCommandCallbackParams<'topic'>): Promise<void> {
+ 		if (hasPermission('edit-room', message.rid)) {
+ 			try {
+-				await sdk.call('saveRoomSettings', message.rid, 'roomTopic', params);
++				await sdk.rest.post('/v1/rooms.saveRoomSettings', { rid: message.rid, roomTopic: params });
+ 				await clientCallbacks.run('roomTopicChanged', Rooms.state.get(message.rid));
+ 			} catch (error: unknown) {
+ 				dispatchToastMessage({ type: 'error', message: error });
+diff --git a/apps/meteor/client/apps/gameCenter/GameCenterInvitePlayersModal.tsx b/apps/meteor/client/apps/gameCenter/GameCenterInvitePlayersModal.tsx
+index e3a6f13271d01..e447038f70ae7 100644
+--- a/apps/meteor/client/apps/gameCenter/GameCenterInvitePlayersModal.tsx
++++ b/apps/meteor/client/apps/gameCenter/GameCenterInvitePlayersModal.tsx
+@@ -7,6 +7,7 @@ import { useState } from 'react';
+ import { useTranslation } from 'react-i18next';
+ 
+ import type { IGame } from './GameCenter';
++import { sdk } from '../../../app/utils/client/lib/SDKClient';
+ import UserAutoCompleteMultiple from '../../components/UserAutoCompleteMultiple';
+ import { useOpenedRoom } from '../../lib/RoomManager';
+ import { roomCoordinator } from '../../lib/rooms/roomCoordinator';
+@@ -30,14 +31,14 @@ const GameCenterInvitePlayersModal = ({ game, onClose }: IGameCenterInvitePlayer
+ 		const privateGroupName = `${name.replace(/\s/g, '-')}-${Random.id(10)}`;
+ 
+ 		try {
+-			const result = await callWithErrorHandling('createPrivateGroup' as any, privateGroupName, users);
++			const { group } = await sdk.rest.post('/v1/groups.create', { name: privateGroupName, members: users });
+ 
+-			roomCoordinator.openRouteLink(result.t, result);
++			roomCoordinator.openRouteLink(group.t, { rid: group._id, name: group.name });
+ 
+-			if (openedRoom === result.rid) {
+-				callWithErrorHandling('sendMessage', {
++			if (openedRoom === group._id) {
++				await callWithErrorHandling('sendMessage', {
+ 					_id: Random.id(),
+-					rid: result.rid,
++					rid: group._id,
+ 					msg: t('Apps_Game_Center_Play_Game_Together', { name }),
+ 				});
+ 			}
+diff --git a/apps/meteor/client/components/message/toolbar/useTranslateAction.ts b/apps/meteor/client/components/message/toolbar/useTranslateAction.ts
+index 8b377471bf572..30e7c5a929bda 100644
+--- a/apps/meteor/client/components/message/toolbar/useTranslateAction.ts
++++ b/apps/meteor/client/components/message/toolbar/useTranslateAction.ts
+@@ -1,5 +1,5 @@
+ import type { IMessage, ISubscription, IRoom } from '@rocket.chat/core-typings';
+-import { useMethod, usePermission, useSetting, useUser } from '@rocket.chat/ui-contexts';
++import { useEndpoint, usePermission, useSetting, useUser } from '@rocket.chat/ui-contexts';
+ import { useMemo } from 'react';
+ 
+ import { AutoTranslate } from '../../../../app/autotranslate/client';
+@@ -15,7 +15,7 @@ export const useTranslateAction = (
+ 	const user = useUser();
+ 	const autoTranslateEnabled = useSetting('AutoTranslate_Enabled', false);
+ 	const canAutoTranslate = usePermission('auto-translate');
+-	const translateMessage = useMethod('autoTranslate.translateMessage');
++	const translateMessage = useEndpoint('POST', '/v1/autotranslate.translateMessage');
+ 
+ 	const language = useMemo(
+ 		() => subscription?.autoTranslateLanguage || AutoTranslate.getLanguage(message.rid),
+@@ -54,7 +54,7 @@ export const useTranslateAction = (
+ 					(record) => record._id === message._id,
+ 					(record) => ({ ...record, autoTranslateFetching: true }),
+ 				);
+-				void translateMessage(message, language);
++				void translateMessage({ messageId: message._id, targetLanguage: language });
+ 			}
+ 
+ 			updateMessages(
+diff --git a/apps/meteor/client/components/message/toolbar/useViewOriginalTranslationAction.ts b/apps/meteor/client/components/message/toolbar/useViewOriginalTranslationAction.ts
+index 1ba6e7c98310a..b8958becaadc2 100644
+--- a/apps/meteor/client/components/message/toolbar/useViewOriginalTranslationAction.ts
++++ b/apps/meteor/client/components/message/toolbar/useViewOriginalTranslationAction.ts
+@@ -1,5 +1,5 @@
+ import type { IMessage, IRoom, ISubscription } from '@rocket.chat/core-typings';
+-import { useMethod, usePermission, useSetting, useUser } from '@rocket.chat/ui-contexts';
++import { useEndpoint, usePermission, useSetting, useUser } from '@rocket.chat/ui-contexts';
+ import { useMemo } from 'react';
+ 
+ import { AutoTranslate } from '../../../../app/autotranslate/client';
+@@ -15,7 +15,7 @@ export const useViewOriginalTranslationAction = (
+ 	const user = useUser();
+ 	const autoTranslateEnabled = useSetting('AutoTranslate_Enabled', false);
+ 	const canAutoTranslate = usePermission('auto-translate');
+-	const translateMessage = useMethod('autoTranslate.translateMessage');
++	const translateMessage = useEndpoint('POST', '/v1/autotranslate.translateMessage');
+ 
+ 	const language = useMemo(
+ 		() => subscription?.autoTranslateLanguage || AutoTranslate.getLanguage(message.rid),
+@@ -54,7 +54,7 @@ export const useViewOriginalTranslationAction = (
+ 					(record) => record._id === message._id,
+ 					(record) => ({ ...record, autoTranslateFetching: true }),
+ 				);
+-				void translateMessage(message, language);
++				void translateMessage({ messageId: message._id, targetLanguage: language });
+ 			}
+ 
+ 			updateMessages(
+diff --git a/apps/meteor/client/hooks/notification/useNotification.ts b/apps/meteor/client/hooks/notification/useNotification.ts
+index cb6fe93077d34..5f2f9ea6891ab 100644
+--- a/apps/meteor/client/hooks/notification/useNotification.ts
++++ b/apps/meteor/client/hooks/notification/useNotification.ts
+@@ -33,7 +33,7 @@ export const useNotification = () => {
+ 		} as any);
+ 
+ 		const n = new Notification(notification.title, {
+-			icon: notification.icon || getUserAvatarURL(notification.payload.sender?.username as string),
++			icon: notification.icon || getUserAvatarURL(notification.payload.sender?.username),
+ 			body: stripTags(message?.msg),
+ 			tag: msgId,
+ 			canReply: true,
+diff --git a/apps/meteor/client/lib/chats/data.ts b/apps/meteor/client/lib/chats/data.ts
+index 96d576e64f3ad..fe22df8d10646 100644
+--- a/apps/meteor/client/lib/chats/data.ts
++++ b/apps/meteor/client/lib/chats/data.ts
+@@ -9,6 +9,7 @@ import { sdk } from '../../../app/utils/client/lib/SDKClient';
+ import { Messages, Rooms, Subscriptions } from '../../stores';
+ import { settings } from '../settings';
+ import { getUserId } from '../user';
++import { mapMessageFromApi } from '../utils/mapMessageFromApi';
+ import { prependReplies } from '../utils/prependReplies';
+ import { upsertThreadMessageInCache } from '../utils/threadMessageUtils';
+ 
+@@ -34,7 +35,8 @@ export const createDataAPI = ({ rid, tmid }: { rid: IRoom['_id']; tmid: IMessage
+ 	};
+ 
+ 	const findMessageByID = async (mid: IMessage['_id']): Promise<IMessage | null> =>
+-		Messages.state.find((record) => record._id === mid && record._hidden !== true) ?? sdk.call('getSingleMessage', mid);
++		Messages.state.find((record) => record._id === mid && record._hidden !== true) ??
++		sdk.rest.get('/v1/chat.getMessage', { msgId: mid }).then((response) => mapMessageFromApi(response.message));
+ 
+ 	const getMessageByID = async (mid: IMessage['_id']): Promise<IMessage> => {
+ 		const message = await findMessageByID(mid);
+@@ -68,14 +70,14 @@ export const createDataAPI = ({ rid, tmid }: { rid: IRoom['_id']; tmid: IMessage
+ 		}
+ 
+ 		const canEditMessage = hasAtLeastOnePermission('edit-message', message.rid);
+-		const editAllowed = (settings.peek('Message_AllowEditing') as boolean | undefined) ?? false;
++		const editAllowed = settings.peek('Message_AllowEditing') ?? false;
+ 		const editOwn = message?.u && message.u._id === getUserId();
+ 
+ 		if (!canEditMessage && (!editAllowed || !editOwn)) {
+ 			return false;
+ 		}
+ 
+-		const blockEditInMinutes = settings.peek('Message_AllowEditing_BlockEditInMinutes') as number | undefined;
++		const blockEditInMinutes = settings.peek('Message_AllowEditing_BlockEditInMinutes');
+ 		const bypassBlockTimeLimit = hasPermission('bypass-time-limit-edit-and-delete', message.rid);
+ 
+ 		const elapsedMinutes = differenceInMinutes(new Date(), message.ts);
+@@ -206,7 +208,7 @@ export const createDataAPI = ({ rid, tmid }: { rid: IRoom['_id']; tmid: IMessage
+ 			return true;
+ 		}
+ 
+-		const deletionEnabled = settings.peek('Message_AllowDeleting') as boolean | undefined;
++		const deletionEnabled = settings.peek('Message_AllowDeleting');
+ 		if (!deletionEnabled) {
+ 			return false;
+ 		}
+@@ -219,7 +221,7 @@ export const createDataAPI = ({ rid, tmid }: { rid: IRoom['_id']; tmid: IMessage
+ 			return false;
+ 		}
+ 
+-		const blockDeleteInMinutes = settings.peek('Message_AllowDeleting_BlockDeleteInMinutes') as number | undefined;
++		const blockDeleteInMinutes = settings.peek('Message_AllowDeleting_BlockDeleteInMinutes');
+ 		const bypassBlockTimeLimit = hasPermission('bypass-time-limit-edit-and-delete', message.rid);
+ 		const elapsedMinutes = differenceInMinutes(new Date(), message.ts);
+ 		const onTimeForDelete = bypassBlockTimeLimit || !blockDeleteInMinutes || !elapsedMinutes || elapsedMinutes <= blockDeleteInMinutes;
+diff --git a/apps/meteor/client/lib/e2ee/rocketchat.e2e.room.ts b/apps/meteor/client/lib/e2ee/rocketchat.e2e.room.ts
+index e349e404fa08a..afbbdcc13f162 100644
+--- a/apps/meteor/client/lib/e2ee/rocketchat.e2e.room.ts
++++ b/apps/meteor/client/lib/e2ee/rocketchat.e2e.room.ts
+@@ -401,7 +401,7 @@ export class E2ERoom extends Emitter {
+ 
+ 		// Import session key for use.
+ 		try {
+-			const key = await Aes.importKey(JSON.parse(this.sessionKeyExportedString!));
++			const key = await Aes.importKey(JSON.parse(this.sessionKeyExportedString));
+ 			// Key has been obtained. E2E is now in session.
+ 			this.groupSessionKey = key;
+ 			span.info('Group key imported');
+@@ -423,7 +423,7 @@ export class E2ERoom extends Emitter {
+ 	async createGroupKey() {
+ 		await this.createNewGroupKey();
+ 
+-		await sdk.call('e2e.setRoomKeyID', this.roomId, this.keyID);
++		await sdk.rest.post('/v1/e2e.setRoomKeyID', { rid: this.roomId, keyID: this.keyID });
+ 		const myKey = await this.encryptGroupKeyForParticipant(e2e.publicKey!);
+ 		if (myKey) {
+ 			await sdk.rest.post('/v1/e2e.updateGroupKey', {
+@@ -482,7 +482,9 @@ export class E2ERoom extends Emitter {
+ 		try {
+ 			const mySub = Subscriptions.state.find((record) => record.rid === this.roomId);
+ 			const decryptedOldGroupKeys = await this.exportOldRoomKeys(mySub?.oldRoomKeys);
+-			const users = (await sdk.call('e2e.getUsersOfRoomWithoutKey', this.roomId)).users.filter((user) => user?.e2e?.public_key);
++			const users = (await sdk.rest.get('/v1/e2e.getUsersOfRoomWithoutKey', { rid: this.roomId })).users.filter(
++				(user) => user?.e2e?.public_key,
++			);
+ 
+ 			if (!users.length) {
+ 				span.info('No users to encrypt the key for');
+@@ -498,13 +500,13 @@ export class E2ERoom extends Emitter {
+ 				}[]
+ 			> = { [this.roomId]: [] };
+ 			for await (const user of users) {
+-				const encryptedGroupKey = await this.encryptGroupKeyForParticipant(user.e2e!.public_key!);
++				const encryptedGroupKey = await this.encryptGroupKeyForParticipant(user.e2e!.public_key);
+ 				if (!encryptedGroupKey) {
+ 					span.warn(`Could not encrypt group key for user ${user._id}`);
+ 					return;
+ 				}
+ 				if (decryptedOldGroupKeys) {
+-					const oldKeys = await this.encryptOldKeysForParticipant(user.e2e!.public_key!, decryptedOldGroupKeys);
++					const oldKeys = await this.encryptOldKeysForParticipant(user.e2e!.public_key, decryptedOldGroupKeys);
+ 					if (oldKeys) {
+ 						usersSuggestedGroupKeys[this.roomId].push({ _id: user._id, key: encryptedGroupKey, oldKeys });
+ 						continue;
+diff --git a/apps/meteor/client/lib/utils/mapCustomUserStatusFromApi.ts b/apps/meteor/client/lib/utils/mapCustomUserStatusFromApi.ts
+new file mode 100644
+index 0000000000000..0510f871b6daa
+--- /dev/null
++++ b/apps/meteor/client/lib/utils/mapCustomUserStatusFromApi.ts
+@@ -0,0 +1,6 @@
++import type { ICustomUserStatus, Serialized } from '@rocket.chat/core-typings';
++
++export const mapCustomUserStatusFromApi = ({ _updatedAt, ...status }: Serialized<ICustomUserStatus>): ICustomUserStatus => ({
++	...status,
++	_updatedAt: new Date(_updatedAt),
++});
+diff --git a/apps/meteor/client/lib/utils/mapReadReceiptFromApi.ts b/apps/meteor/client/lib/utils/mapReadReceiptFromApi.ts
+new file mode 100644
+index 0000000000000..f0c0cb28463fa
+--- /dev/null
++++ b/apps/meteor/client/lib/utils/mapReadReceiptFromApi.ts
+@@ -0,0 +1,7 @@
++import type { IReadReceiptWithUser, Serialized } from '@rocket.chat/core-typings';
++
++export const mapReadReceiptFromApi = ({ ts, _updatedAt, ...receipt }: Serialized<IReadReceiptWithUser>): IReadReceiptWithUser => ({
++	...receipt,
++	ts: new Date(ts),
++	_updatedAt: new Date(_updatedAt),
++});
+diff --git a/apps/meteor/client/navbar/NavBarSettingsToolbar/UserMenu/hooks/useStatusItems.tsx b/apps/meteor/client/navbar/NavBarSettingsToolbar/UserMenu/hooks/useStatusItems.tsx
+index 192e93aab46b6..a5d7f3663bc87 100644
+--- a/apps/meteor/client/navbar/NavBarSettingsToolbar/UserMenu/hooks/useStatusItems.tsx
++++ b/apps/meteor/client/navbar/NavBarSettingsToolbar/UserMenu/hooks/useStatusItems.tsx
+@@ -1,9 +1,10 @@
++import type { ICustomUserStatus } from '@rocket.chat/core-typings';
+ import { Box } from '@rocket.chat/fuselage';
+ import type { GenericMenuItemProps } from '@rocket.chat/ui-client';
+ import { clientCallbacks } from '@rocket.chat/ui-client';
+-import { useEndpoint, useMethod, useSetting, useStream } from '@rocket.chat/ui-contexts';
++import { useEndpoint, useSetting, useStream } from '@rocket.chat/ui-contexts';
+ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+-import { useEffect } from 'react';
++import { useCallback, useEffect } from 'react';
+ import { useTranslation } from 'react-i18next';
+ 
+ import { useCustomStatusModalHandler } from './useCustomStatusModalHandler';
+@@ -12,6 +13,7 @@ import { UserStatus } from '../../../../components/UserStatus';
+ import { useFireGlobalEvent } from '../../../../hooks/useFireGlobalEvent';
+ import { userStatuses } from '../../../../lib/userStatuses';
+ import type { UserStatusDescriptor } from '../../../../lib/userStatuses';
++import { mapCustomUserStatusFromApi } from '../../../../lib/utils/mapCustomUserStatusFromApi';
+ import { useStatusDisabledModal } from '../../../../views/admin/customUserStatus/hooks/useStatusDisabledModal';
+ 
+ export const useStatusItems = (): GenericMenuItemProps[] => {
+@@ -21,7 +23,20 @@ export const useStatusItems = (): GenericMenuItemProps[] => {
+ 
+ 	const queryClient = useQueryClient();
+ 	const stream = useStream('notify-logged');
+-	const listCustomUserStatus = useMethod('listCustomUserStatus');
++	const listCustomUserStatusEndpoint = useEndpoint('GET', '/v1/custom-user-status.list');
++	const listCustomUserStatus = useCallback(async (): Promise<ICustomUserStatus[]> => {
++		const all: ICustomUserStatus[] = [];
++		const count = 100;
++		let offset = 0;
++		// REST endpoint is paginated; loop until total reached.
++		while (true) {
++			const { statuses, total } = await listCustomUserStatusEndpoint({ count, offset });
++			all.push(...statuses.map(mapCustomUserStatusFromApi));
++			if (all.length >= total || statuses.length === 0) break;
++			offset += statuses.length;
++		}
++		return all;
++	}, [listCustomUserStatusEndpoint]);
+ 
+ 	useEffect(
+ 		() =>
+diff --git a/apps/meteor/client/views/account/tokens/AccountTokensTable/AccountTokensTable.tsx b/apps/meteor/client/views/account/tokens/AccountTokensTable/AccountTokensTable.tsx
+index 5da4ff48563e6..517e737faa865 100644
+--- a/apps/meteor/client/views/account/tokens/AccountTokensTable/AccountTokensTable.tsx
++++ b/apps/meteor/client/views/account/tokens/AccountTokensTable/AccountTokensTable.tsx
+@@ -8,7 +8,7 @@ import {
+ 	GenericTableHeaderCell,
+ 	usePagination,
+ } from '@rocket.chat/ui-client';
+-import { useSetModal, useToastMessageDispatch, useUserId, useMethod, useEndpoint } from '@rocket.chat/ui-contexts';
++import { useSetModal, useToastMessageDispatch, useUserId, useEndpoint } from '@rocket.chat/ui-contexts';
+ import { useQuery, useQueryClient } from '@tanstack/react-query';
+ import type { ReactElement, RefObject } from 'react';
+ import { useMemo, useCallback } from 'react';
+@@ -26,8 +26,8 @@ const AccountTokensTable = (): ReactElement => {
+ 	const setModal = useSetModal();
+ 	const userId = useUserId();
+ 
+-	const regenerateToken = useMethod('personalAccessTokens:regenerateToken');
+-	const removeToken = useMethod('personalAccessTokens:removeToken');
++	const regenerateToken = useEndpoint('POST', '/v1/users.regeneratePersonalAccessToken');
++	const removeToken = useEndpoint('POST', '/v1/users.removePersonalAccessToken');
+ 
+ 	const getPersonalAccessTokens = useEndpoint('GET', '/v1/users.getPersonalAccessTokens');
+ 	const { isPending, isSuccess, data, isError, error } = useQuery({
+@@ -69,7 +69,7 @@ const AccountTokensTable = (): ReactElement => {
+ 			const onConfirm: () => Promise<void> = async () => {
+ 				try {
+ 					setModal(null);
+-					const token = await regenerateToken({ tokenName: name });
++					const { token } = await regenerateToken({ tokenName: name });
+ 
+ 					setModal(
+ 						<GenericModal title={t('API_Personal_Access_Token_Generated')} onConfirm={closeModal}>
+diff --git a/apps/meteor/client/views/account/tokens/AccountTokensTable/AddToken.tsx b/apps/meteor/client/views/account/tokens/AccountTokensTable/AddToken.tsx
+index d790a66089ac1..43b99294f81ab 100644
+--- a/apps/meteor/client/views/account/tokens/AccountTokensTable/AddToken.tsx
++++ b/apps/meteor/client/views/account/tokens/AccountTokensTable/AddToken.tsx
+@@ -1,7 +1,7 @@
+ import type { SelectOption } from '@rocket.chat/fuselage';
+ import { Box, TextInput, Button, Margins, Select, FieldError, FieldGroup, Field, FieldRow } from '@rocket.chat/fuselage';
+ import { GenericModal } from '@rocket.chat/ui-client';
+-import { useSetModal, useToastMessageDispatch, useUserId, useMethod } from '@rocket.chat/ui-contexts';
++import { useSetModal, useToastMessageDispatch, useUserId, useEndpoint } from '@rocket.chat/ui-contexts';
+ import { useCallback, useId, useMemo } from 'react';
+ import { Controller, useForm } from 'react-hook-form';
+ import { Trans, useTranslation } from 'react-i18next';
+@@ -19,7 +19,7 @@ const AddToken = ({ reload }: AddTokenProps) => {
+ 	const { t } = useTranslation();
+ 	const userId = useUserId();
+ 	const setModal = useSetModal();
+-	const createTokenFn = useMethod('personalAccessTokens:generateToken');
++	const createTokenFn = useEndpoint('POST', '/v1/users.generatePersonalAccessToken');
+ 	const dispatchToastMessage = useToastMessageDispatch();
+ 
+ 	const initialValues = useMemo(() => ({ name: '', bypassTwoFactor: 'require' }), []);
+@@ -42,7 +42,7 @@ const AddToken = ({ reload }: AddTokenProps) => {
+ 	const handleAddToken = useCallback(
+ 		async ({ name: tokenName, bypassTwoFactor }: AddTokenFormData) => {
+ 			try {
+-				const token = await createTokenFn({ tokenName, bypassTwoFactor: bypassTwoFactor === 'bypass' });
++				const { token } = await createTokenFn({ tokenName, bypassTwoFactor: bypassTwoFactor === 'bypass' });
+ 
+ 				const handleDismissModal = () => {
+ 					setModal(null);
+diff --git a/apps/meteor/client/views/admin/workspace/VersionCard/modals/RegisteredWorkspaceModal.tsx b/apps/meteor/client/views/admin/workspace/VersionCard/modals/RegisteredWorkspaceModal.tsx
+index 999353071bf06..5992160c58b99 100644
+--- a/apps/meteor/client/views/admin/workspace/VersionCard/modals/RegisteredWorkspaceModal.tsx
++++ b/apps/meteor/client/views/admin/workspace/VersionCard/modals/RegisteredWorkspaceModal.tsx
+@@ -11,7 +11,7 @@ import {
+ 	ModalTitle,
+ } from '@rocket.chat/fuselage';
+ import { useSafely } from '@rocket.chat/fuselage-hooks';
+-import { useMethod, useSetModal, useToastMessageDispatch } from '@rocket.chat/ui-contexts';
++import { useEndpoint, useSetModal, useToastMessageDispatch } from '@rocket.chat/ui-contexts';
+ import { useState } from 'react';
+ import { useTranslation } from 'react-i18next';
+ 
+@@ -29,22 +29,23 @@ const RegisteredWorkspaceModal = ({ onClose, onStatusChange, ...props }: Registe
+ 	const bulletFeatures = useFeatureBullets();
+ 	const [isSyncing, setSyncing] = useSafely(useState(false));
+ 
+-	const syncWorkspace = useMethod('cloud:syncWorkspace');
++	const syncWorkspace = useEndpoint('POST', '/v1/cloud.syncWorkspace');
+ 
+ 	const handleSyncAction = async () => {
+ 		setSyncing(true);
+ 
+ 		try {
+-			const isSynced = await syncWorkspace();
++			const { success } = await syncWorkspace();
+ 
+-			if (!isSynced) {
++			if (!success) {
+ 				throw Error(t('RegisterWorkspace_Syncing_Error'));
+ 			}
+ 
+ 			dispatchToastMessage({ type: 'success', message: t('RegisterWorkspace_Syncing_Complete') });
+ 			setModal(null);
+ 		} catch (error) {
+-			dispatchToastMessage({ type: 'error', message: error });
++			const message = error instanceof Error ? error.message : t('RegisterWorkspace_Syncing_Error');
++			dispatchToastMessage({ type: 'error', message });
+ 		} finally {
+ 			onStatusChange?.();
+ 			setSyncing(false);
+diff --git a/apps/meteor/client/views/room/MessageList/hooks/useLoadSurroundingMessages.spec.ts b/apps/meteor/client/views/room/MessageList/hooks/useLoadSurroundingMessages.spec.ts
+index 3bc48f9e0ff8d..c699059d9f6d9 100644
+--- a/apps/meteor/client/views/room/MessageList/hooks/useLoadSurroundingMessages.spec.ts
++++ b/apps/meteor/client/views/room/MessageList/hooks/useLoadSurroundingMessages.spec.ts
+@@ -130,7 +130,7 @@ describe('useLoadSurroundingMessages', () => {
+ 							message,
+ 						}) as any,
+ 				)
+-				.withMethod('getRoomById', () => ({ _id: 'room-2', t: 'c', name: 'general' }) as any)
++				.withEndpoint('GET', '/v1/rooms.info', () => ({ room: { _id: 'room-2', t: 'c', name: 'general' } }) as any)
+ 				.build(),
+ 		});
+ 
+@@ -241,7 +241,7 @@ describe('useLoadSurroundingMessages', () => {
+ 							message,
+ 						}) as any,
+ 				)
+-				.withMethod('getRoomById', () => ({ _id: 'room-5', t: 'c', name: 'general' }) as any)
++				.withEndpoint('GET', '/v1/rooms.info', () => ({ room: { _id: 'room-5', t: 'c', name: 'general' } }) as any)
+ 				.build(),
+ 		});
+ 
+diff --git a/apps/meteor/client/views/room/composer/ComposerBoxPopupPreview.tsx b/apps/meteor/client/views/room/composer/ComposerBoxPopupPreview.tsx
+index df17ff5d5d8de..dfa02a7829945 100644
+--- a/apps/meteor/client/views/room/composer/ComposerBoxPopupPreview.tsx
++++ b/apps/meteor/client/views/room/composer/ComposerBoxPopupPreview.tsx
+@@ -1,5 +1,6 @@
+ import { Box, Skeleton, Tile, Option } from '@rocket.chat/fuselage';
+-import { useMethod } from '@rocket.chat/ui-contexts';
++import { Random } from '@rocket.chat/random';
++import { useEndpoint } from '@rocket.chat/ui-contexts';
+ import type { ForwardedRef, ReactNode } from 'react';
+ import { forwardRef, useEffect, useId, useImperativeHandle } from 'react';
+ 
+@@ -27,7 +28,7 @@ const ComposerBoxPopupPreview = forwardRef(function ComposerBoxPopupPreview(
+ ) {
+ 	const id = useId();
+ 	const chat = useChat();
+-	const executeSlashCommandPreviewMethod = useMethod('executeSlashCommandPreview');
++	const executeSlashCommandPreviewEndpoint = useEndpoint('POST', '/v1/commands.preview');
+ 
+ 	useImperativeHandle(
+ 		ref,
+@@ -63,13 +64,19 @@ const ComposerBoxPopupPreview = forwardRef(function ComposerBoxPopupPreview(
+ 					const cmd = matches[1].replace('/', '').trim().toLowerCase();
+ 
+ 					const params = matches[2];
+-					// TODO: Fix this solve the typing issue
+-					void executeSlashCommandPreviewMethod({ cmd, params, msg: { rid, tmid } }, { id: item._id, type: item.type, value: item.value });
++					void executeSlashCommandPreviewEndpoint({
++						command: cmd,
++						params,
++						roomId: rid,
++						...(tmid && { tmid }),
++						triggerId: Random.id(),
++						previewItem: { id: item._id, type: item.type, value: item.value },
++					});
+ 					chat?.composer?.setText('');
+ 				},
+ 			}),
+ 		}),
+-		[chat?.composer, executeSlashCommandPreviewMethod, rid, tmid, suspended],
++		[chat?.composer, executeSlashCommandPreviewEndpoint, rid, tmid, suspended],
+ 	);
+ 
+ 	const itemsFlat = items
+diff --git a/apps/meteor/client/views/room/contextualBar/Threads/hooks/useThreadMessagesQuery.ts b/apps/meteor/client/views/room/contextualBar/Threads/hooks/useThreadMessagesQuery.ts
+index 5966aa17cad4f..4a6e1e7a2202b 100644
+--- a/apps/meteor/client/views/room/contextualBar/Threads/hooks/useThreadMessagesQuery.ts
++++ b/apps/meteor/client/views/room/contextualBar/Threads/hooks/useThreadMessagesQuery.ts
+@@ -1,10 +1,11 @@
+ import { isThreadMessage, type IMessage, type IRoom, type IThreadMainMessage, type IThreadMessage } from '@rocket.chat/core-typings';
+-import { useMethod, useStream } from '@rocket.chat/ui-contexts';
++import { useEndpoint, useMethod, useStream } from '@rocket.chat/ui-contexts';
+ import { useQuery, useQueryClient } from '@tanstack/react-query';
+ import { useEffect, useRef } from 'react';
+ 
+ import { onClientMessageReceived } from '../../../../../lib/onClientMessageReceived';
+ import { roomsQueryKeys } from '../../../../../lib/queryKeys';
++import { mapMessageFromApi } from '../../../../../lib/utils/mapMessageFromApi';
+ import { modifyMessageOnFilesDelete } from '../../../../../lib/utils/modifyMessageOnFilesDelete';
+ import {
+ 	createDeleteCriteria,
+@@ -24,7 +25,11 @@ export const useThreadMessagesQuery = (tmid: IThreadMainMessage['_id'], rid?: IR
+ 
+ 	const queryClient = useQueryClient();
+ 	const queryKey = roomsQueryKeys.threadMessages(roomId, tmid);
+-	const getThreadMessages = useMethod('getThreadMessages');
++	const getThreadMessages = useEndpoint('GET', '/v1/chat.getThreadMessages');
++	// REST has no per-thread read-marker endpoint yet; fall back to the
++	// `readThreads` DDP method so the side effect that DDP getThreadMessages
++	// used to do server-side keeps happening for callers.
++	const readThreads = useMethod('readThreads');
+ 
+ 	const subscribeToRoomMessages = useStream('room-messages');
+ 	const subscribeToNotifyRoom = useStream('notify-room');
+@@ -105,10 +110,11 @@ export const useThreadMessagesQuery = (tmid: IThreadMainMessage['_id'], rid?: IR
+ 		queryFn: async () => {
+ 			const cachedMessages = queryClient.getQueryData<IThreadMessage[]>(queryKey) || [];
+ 
+-			const messages = await getThreadMessages({ tmid });
+-			const filtered = messages.filter(
+-				(msg): msg is IThreadMessage => isThreadMessage(msg) && msg.tmid === tmid && msg._id !== tmid && msg._hidden !== true,
+-			);
++			const { messages } = await getThreadMessages({ tmid });
++			void Promise.resolve(readThreads(tmid)).catch(() => undefined);
++			const filtered = messages
++				.map((m) => mapMessageFromApi(m))
++				.filter((msg): msg is IThreadMessage => isThreadMessage(msg) && msg.tmid === tmid && msg._id !== tmid && msg._hidden !== true);
+ 
+ 			const sorted = mergeThreadMessages(cachedMessages, filtered);
+ 			if (unprocessedReadMessagesEvent.current) {
+diff --git a/apps/meteor/client/views/room/hooks/useGoToRoom.ts b/apps/meteor/client/views/room/hooks/useGoToRoom.ts
+index 2c2569ab0bc01..373f1530b5877 100644
+--- a/apps/meteor/client/views/room/hooks/useGoToRoom.ts
++++ b/apps/meteor/client/views/room/hooks/useGoToRoom.ts
+@@ -1,6 +1,6 @@
+ import type { IRoom, ISubscription } from '@rocket.chat/core-typings';
+ import { useStableCallback } from '@rocket.chat/fuselage-hooks';
+-import { useMethod, useRouter, useToastMessageDispatch } from '@rocket.chat/ui-contexts';
++import { useEndpoint, useRouter, useToastMessageDispatch } from '@rocket.chat/ui-contexts';
+ 
+ import { roomCoordinator } from '../../../lib/rooms/roomCoordinator';
+ import { Subscriptions } from '../../../stores';
+@@ -12,7 +12,7 @@ type GoToRoomByIdOptions = {
+ 
+ export const useGoToRoom = (): ((roomId: IRoom['_id'], options?: GoToRoomByIdOptions) => Promise<void>) => {
+ 	const router = useRouter();
+-	const getRoomById = useMethod('getRoomById');
++	const getRoomInfo = useEndpoint('GET', '/v1/rooms.info');
+ 	const dispatchToastMessage = useToastMessageDispatch();
+ 
+ 	// TODO: remove params recycling
+@@ -27,7 +27,10 @@ export const useGoToRoom = (): ((roomId: IRoom['_id'], options?: GoToRoomByIdOpt
+ 		}
+ 
+ 		try {
+-			const room = await getRoomById(roomId);
++			const { room } = await getRoomInfo({ roomId });
++			if (!room) {
++				throw new Error('Room not found');
++			}
+ 			roomCoordinator.openRouteLink(room.t, { rid: room._id, ...room }, router.getSearchParameters(), options);
+ 		} catch (error) {
+ 			dispatchToastMessage({ type: 'error', message: error });
+diff --git a/apps/meteor/client/views/room/hooks/useOpenRoom.ts b/apps/meteor/client/views/room/hooks/useOpenRoom.ts
+index ee4b28fc19c47..284c632921e1e 100644
+--- a/apps/meteor/client/views/room/hooks/useOpenRoom.ts
++++ b/apps/meteor/client/views/room/hooks/useOpenRoom.ts
+@@ -1,6 +1,6 @@
+ import { isPublicRoom, type IRoom, type RoomType } from '@rocket.chat/core-typings';
+ import { getObjectKeys } from '@rocket.chat/tools';
+-import { useMethod, usePermission, useRoute, useSetting, useUser } from '@rocket.chat/ui-contexts';
++import { useEndpoint, useMethod, usePermission, useRoute, useSetting, useUser } from '@rocket.chat/ui-contexts';
+ import { useQuery, useQueryClient } from '@tanstack/react-query';
+ import { useEffect } from 'react';
+ 
+@@ -18,7 +18,7 @@ export function useOpenRoom({ type, reference }: { type: RoomType; reference: st
+ 	const hasPreviewPermission = usePermission('preview-c-room');
+ 	const allowAnonymousRead = useSetting('Accounts_AllowAnonymousRead', true);
+ 	const getRoomByTypeAndName = useMethod('getRoomByTypeAndName');
+-	const createDirectMessage = useMethod('createDirectMessage');
++	const createDirectMessage = useEndpoint('POST', '/v1/im.create');
+ 	const directRoute = useRoute('direct');
+ 	const openRoom = useOpenRoomMutation();
+ 
+@@ -44,9 +44,9 @@ export function useOpenRoom({ type, reference }: { type: RoomType; reference: st
+ 				}
+ 
+ 				try {
+-					const { rid } = await createDirectMessage(...reference.split(', '));
++					const { room } = await createDirectMessage({ usernames: reference });
+ 
+-					directRoute.push({ rid }, (prev) => prev);
++					directRoute.push({ rid: room._id }, (prev) => prev);
+ 				} catch (error) {
+ 					throw new RoomNotFoundError(undefined, { type, reference });
+ 				}
+diff --git a/apps/meteor/client/views/room/providers/ComposerPopupProvider.tsx b/apps/meteor/client/views/room/providers/ComposerPopupProvider.tsx
+index afce0c7cd751a..6cf9eb4ee411f 100644
+--- a/apps/meteor/client/views/room/providers/ComposerPopupProvider.tsx
++++ b/apps/meteor/client/views/room/providers/ComposerPopupProvider.tsx
+@@ -3,7 +3,7 @@ import { isOmnichannelRoom } from '@rocket.chat/core-typings';
+ import { useLocalStorage } from '@rocket.chat/fuselage-hooks';
+ import { escapeRegExp } from '@rocket.chat/string-helpers';
+ import type { SubscriptionWithRoom } from '@rocket.chat/ui-contexts';
+-import { useMethod, useSetting, useUserId, useUserPreference } from '@rocket.chat/ui-contexts';
++import { useEndpoint, useMethod, useSetting, useUserId, useUserPreference } from '@rocket.chat/ui-contexts';
+ import { useQueryClient } from '@tanstack/react-query';
+ import { useMemo, useState } from 'react';
+ import type { ReactNode } from 'react';
+@@ -83,7 +83,7 @@ const ComposerPopupProvider = ({ children, room }: ComposerPopupProviderProps) =
+ 	const encrypted = isRoomEncrypted && e2eEnabled && !unencryptedMessagesAllowed;
+ 	const queryClient = useQueryClient();
+ 	const uid = useUserId();
+-	const call = useMethod('getSlashCommandPreviews');
++	const call = useEndpoint('GET', '/v1/commands.preview');
+ 
+ 	const value: ComposerPopupContextValue = useMemo(() => {
+ 		return [
+@@ -371,13 +371,13 @@ const ComposerPopupProvider = ({ children, room }: ComposerPopupProviderProps) =
+ 				title: previewTitle,
+ 				matchSelectorRegex: /(?:^)(\/[\w\d\S]+ )[^]*$/,
+ 				preview: true,
+-				getItemsFromLocal: async ({ cmd, params, tmid }: { cmd: string; params: string; tmid: string }) => {
+-					const result = await call({ cmd, params, msg: { rid, tmid } });
++				getItemsFromLocal: async ({ cmd, params }: { cmd: string; params: string; tmid: string }) => {
++					const { preview } = await call({ command: cmd, params, roomId: rid });
+ 
+-					setPreviewTitle(t(result?.i18nTitle ?? ''));
++					setPreviewTitle(t(preview?.i18nTitle ?? ''));
+ 
+ 					return (
+-						result?.items.map((item) => ({
++						preview?.items.map((item) => ({
+ 							_id: item.id,
+ 							value: item.value,
+ 							type: item.type,

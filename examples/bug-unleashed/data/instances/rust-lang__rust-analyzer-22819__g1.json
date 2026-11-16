@@ -1,0 +1,25 @@
+{
+  "case_id": "rust-lang__rust-analyzer-22819",
+  "repo": "rust-lang/rust-analyzer",
+  "pr": 22819,
+  "title": "fix: When `experimental/serverStatus` is not supported by the client, only update the status if the message is different",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rust-lang__rust-analyzer-22819__g1",
+  "target": {
+    "gid": "rust-lang__rust-analyzer-22819#g1",
+    "summary": "Because self.last_reported_status is updated to status earlier in update_status_or_notify, self.last_reported_status.message != status.message always evaluates to false. Consequently, warning and error status notifications are never displayed to clients that do not support experimental/serverStatusNotification.",
+    "paths": [
+      "crates/rust-analyzer/src/main_loop.rs"
+    ],
+    "notes": [
+      "faulty condition; self.last_reported_status was already updated to status earlier in update_status_or_notify so this comparison always evaluates to false"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "2d2b22600d3166406afe70df48615c31deeee6e5",
+  "base_sha": "b0fec0dbee399b2768de3d0f2b15be64d74424ef",
+  "snapshot": "repos/rust-lang__rust-analyzer/2d2b22600d3166406afe70df48615c31deeee6e5",
+  "diff": "diffs/rust-lang__rust-analyzer-22819.diff"
+}

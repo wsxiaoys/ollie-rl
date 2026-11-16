@@ -1,0 +1,42 @@
+{
+  "case_id": "apache__airflow-61118",
+  "repo": "apache/airflow",
+  "pr": 61118,
+  "title": "Split Deadline Alerts into core and task-sdk components",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apache__airflow-61118__g1",
+  "target": {
+    "gid": "apache__airflow-61118#g1",
+    "summary": "`decode_deadline_alert` resolves reference classes exclusively via `SerializedReferenceModels.get_reference_class`, which raises `ValueError` for custom deadline references registered via `DeadlineReference.register_custom_reference`.",
+    "paths": [
+      "airflow-core/src/airflow/models/deadline_alert.py",
+      "airflow-core/src/airflow/serialization/decoders.py",
+      "airflow-core/src/airflow/serialization/definitions/deadline.py",
+      "airflow-core/src/airflow/serialization/encoders.py"
+    ],
+    "notes": [
+      "faulty statements resolving reference_type using get_reference_class which only handles built-in reference classes",
+      "copy of the same faulty pattern calling get_reference_class which cannot resolve custom reference classes",
+      "definition of get_reference_class helper that only looks up built-in reference classes and raises ValueError for custom classes",
+      "encoding functions that serialize references without preserving class path for custom classes"
+    ]
+  },
+  "siblings": [
+    {
+      "gid": "apache__airflow-61118#g2",
+      "summary": "In `AverageRuntimeDeadline._evaluate_with`, database duration queries can return `Decimal` values, causing `timedelta(seconds=avg_duration_seconds)` to raise a `TypeError` when calculating the deadline.",
+      "paths": [
+        "airflow-core/src/airflow/serialization/definitions/deadline.py"
+      ],
+      "notes": [
+        "faulty statement passing Decimal avg_duration_seconds to timedelta which raises TypeError"
+      ]
+    }
+  ],
+  "head_sha": "9fb5208d81146abe2ef1877ac21025d239354b3c",
+  "base_sha": "36e4284f3179c80d01b0c905ab2d51304ff11d5e",
+  "snapshot": "repos/apache__airflow/9fb5208d81146abe2ef1877ac21025d239354b3c",
+  "diff": "diffs/apache__airflow-61118.diff"
+}

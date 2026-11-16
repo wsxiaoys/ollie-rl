@@ -1,0 +1,133 @@
+diff --git a/crates/bevy_core_pipeline/src/prepass/node.rs b/crates/bevy_core_pipeline/src/prepass/node.rs
+index d404893f4e0d2..0b0e551ccf0fb 100644
+--- a/crates/bevy_core_pipeline/src/prepass/node.rs
++++ b/crates/bevy_core_pipeline/src/prepass/node.rs
+@@ -38,11 +38,7 @@ type PrepassViewQueryData = (
+         Option<&'static PreviousViewUniformOffset>,
+         Option<&'static MainPassResolutionOverride>,
+     ),
+-    (
+-        Has<OcclusionCulling>,
+-        Has<NoIndirectDrawing>,
+-        Has<DeferredPrepass>,
+-    ),
++    (Has<OcclusionCulling>, Has<NoIndirectDrawing>),
+ );
+ 
+ pub fn early_prepass(
+@@ -63,7 +59,7 @@ pub fn early_prepass(
+             view_prev_uniform_offset,
+             resolution_override,
+         ),
+-        (_, _, has_deferred),
++        (_, _),
+     ) = view.into_inner();
+ 
+     run_prepass_system(
+@@ -79,7 +75,6 @@ pub fn early_prepass(
+         background_motion_vectors_bind_group,
+         view_prev_uniform_offset,
+         resolution_override,
+-        has_deferred,
+         &opaque_prepass_phases,
+         &alpha_mask_prepass_phases,
+         &pipeline_cache,
+@@ -106,7 +101,7 @@ pub fn late_prepass(
+             view_prev_uniform_offset,
+             resolution_override,
+         ),
+-        (occlusion_culling, no_indirect_drawing, has_deferred),
++        (occlusion_culling, no_indirect_drawing),
+     ) = view.into_inner();
+ 
+     if !occlusion_culling || no_indirect_drawing {
+@@ -126,7 +121,6 @@ pub fn late_prepass(
+         background_motion_vectors_bind_group,
+         view_prev_uniform_offset,
+         resolution_override,
+-        has_deferred,
+         &opaque_prepass_phases,
+         &alpha_mask_prepass_phases,
+         &pipeline_cache,
+@@ -153,20 +147,12 @@ fn run_prepass_system(
+     background_motion_vectors_bind_group: Option<&BackgroundMotionVectorsBindGroup>,
+     view_prev_uniform_offset: Option<&PreviousViewUniformOffset>,
+     resolution_override: Option<&MainPassResolutionOverride>,
+-    has_deferred: bool,
+     opaque_prepass_phases: &ViewBinnedRenderPhases<Opaque3dPrepass>,
+     alpha_mask_prepass_phases: &ViewBinnedRenderPhases<AlphaMask3dPrepass>,
+     pipeline_cache: &PipelineCache,
+     ctx: &mut RenderContext,
+     label: &'static str,
+ ) {
+-    // If we're using deferred rendering, there will be a deferred prepass
+-    // instead of this one. Just bail out so we don't have to bother looking at
+-    // the empty bins.
+-    if has_deferred {
+-        return;
+-    }
+-
+     let (Some(opaque_prepass_phase), Some(alpha_mask_prepass_phase)) = (
+         opaque_prepass_phases.get(&extracted_view.retained_view_entity),
+         alpha_mask_prepass_phases.get(&extracted_view.retained_view_entity),
+@@ -174,6 +160,14 @@ fn run_prepass_system(
+         return;
+     };
+ 
++    // Skip starting a render pass if there's nothing to draw
++    if opaque_prepass_phase.is_empty()
++        && alpha_mask_prepass_phase.is_empty()
++        && background_motion_vectors_pipeline.is_none()
++    {
++        return;
++    }
++
+     #[cfg(feature = "trace")]
+     let _prepass_span = info_span!("prepass").entered();
+ 
+diff --git a/crates/bevy_dev_tools/src/render_debug.rs b/crates/bevy_dev_tools/src/render_debug.rs
+index 8be03003650ea..a9709dfd16e56 100644
+--- a/crates/bevy_dev_tools/src/render_debug.rs
++++ b/crates/bevy_dev_tools/src/render_debug.rs
+@@ -6,7 +6,7 @@ use bevy_core_pipeline::{
+     mip_generation::experimental::depth::ViewDepthPyramid,
+     oit::OrderIndependentTransparencySettingsOffset,
+     schedule::{Core3d, Core3dSystems},
+-    tonemapping::tonemapping,
++    upscaling::upscaling,
+     FullscreenShader,
+ };
+ use bevy_ecs::{
+@@ -40,6 +40,7 @@ use bevy_render::{
+     GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
+ };
+ use bevy_shader::Shader;
++use bevy_ui_render::render_pass::ui_pass;
+ 
+ use bevy_pbr::{
+     Bluenoise, MeshPipelineSet, MeshPipelineViewLayoutKey, MeshPipelineViewLayouts,
+@@ -94,8 +95,9 @@ impl Plugin for RenderDebugOverlayPlugin {
+             .add_systems(
+                 Core3d,
+                 render_debug_overlay
+-                    .after(tonemapping)
+-                    .in_set(Core3dSystems::PostProcess),
++                    .after(Core3dSystems::PostProcess)
++                    .before(ui_pass)
++                    .before(upscaling),
+             );
+     }
+ }
+diff --git a/crates/bevy_ui_render/src/lib.rs b/crates/bevy_ui_render/src/lib.rs
+index f925e0fc5106e..353b659a6655e 100644
+--- a/crates/bevy_ui_render/src/lib.rs
++++ b/crates/bevy_ui_render/src/lib.rs
+@@ -11,7 +11,7 @@ pub mod box_shadow;
+ mod color_space;
+ mod gradient;
+ mod pipeline;
+-mod render_pass;
++pub mod render_pass;
+ mod text;
+ pub mod ui_material;
+ mod ui_material_pipeline;

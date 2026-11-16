@@ -1,0 +1,6 @@
+{
+  "title": "fix(mirror): disable HTTP redirects on pull mirror sync",
+  "body": "Pull mirror sync ran `git fetch` / `remote update` / `remote prune` without disabling HTTP redirects. A mirror remote that later starts redirecting to an otherwise-blocked or internal address could be used as an SSRF/exfiltration vector on scheduled syncs, bypassing the allow/block validation applied at migration time.\n\nThis sets `http.followRedirects=false` on all three remote-contacting commands in the pull mirror path, matching the existing guard already present on the clone path.",
+  "head_sha": "94920457593c319d7995b8f8ce0d6d845522fda9",
+  "base_sha": "6507f1fd941e32dfb2d5b399a373707c507864f2"
+}

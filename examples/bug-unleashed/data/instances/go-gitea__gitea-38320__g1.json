@@ -1,0 +1,27 @@
+{
+  "case_id": "go-gitea__gitea-38320",
+  "repo": "go-gitea/gitea",
+  "pr": 38320,
+  "title": "fix(mirror): disable HTTP redirects on pull mirror sync",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "go-gitea__gitea-38320__g1",
+  "target": {
+    "gid": "go-gitea__gitea-38320#g1",
+    "summary": "Setting `http.followRedirects=false` causes mirror sync operations to fail for remote repositories whose URLs rely on legitimate HTTP redirects (such as 301 redirects for URLs lacking a `.git` suffix).",
+    "paths": [
+      "services/mirror/mirror_pull.go"
+    ],
+    "notes": [
+      "disables HTTP redirects for remote prune",
+      "disables HTTP redirects for fetch",
+      "disables HTTP redirects for remote update"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "94920457593c319d7995b8f8ce0d6d845522fda9",
+  "base_sha": "6507f1fd941e32dfb2d5b399a373707c507864f2",
+  "snapshot": "repos/go-gitea__gitea/94920457593c319d7995b8f8ce0d6d845522fda9",
+  "diff": "diffs/go-gitea__gitea-38320.diff"
+}

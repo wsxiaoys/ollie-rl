@@ -1,0 +1,25 @@
+{
+  "case_id": "prometheus__prometheus-19460",
+  "repo": "prometheus/prometheus",
+  "pr": 19460,
+  "title": "tsdb: fix gcSeries and mmapHeadChunksInStripe deadlocking",
+  "language": "Go",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "prometheus__prometheus-19460__g1",
+  "target": {
+    "gid": "prometheus__prometheus-19460#g1",
+    "summary": "Calling series.setHeadChunks(nil, 0) in gcSeries clears head chunks on evicted series while concurrent queries may still be reading them. This causes active readers holding a head chunk to panic and breaks isolation sample accounting.",
+    "paths": [
+      "tsdb/head.go"
+    ],
+    "notes": [
+      "faulty statement clearing head chunks on evicted series"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "aa96c94f62f769a84d79b23073e13b35f26c3882",
+  "base_sha": "d71c960302501ed81f908f546577b2c3570cc8f1",
+  "snapshot": "repos/prometheus__prometheus/aa96c94f62f769a84d79b23073e13b35f26c3882",
+  "diff": "diffs/prometheus__prometheus-19460.diff"
+}

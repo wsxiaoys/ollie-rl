@@ -1,0 +1,399 @@
+diff --git a/apps/advisor/go.mod b/apps/advisor/go.mod
+index 85ec92ccdbf47..c8ac2f6f2cf32 100644
+--- a/apps/advisor/go.mod
++++ b/apps/advisor/go.mod
+@@ -75,7 +75,7 @@ require (
+ 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
+ 	github.com/NYTimes/gziphandler v1.1.1 // indirect
+ 	github.com/ProtonMail/go-crypto v1.3.0 // indirect
+-	github.com/VividCortex/mysqlerr v0.0.0-20170204212430-6c6b55f8796f // indirect
++	github.com/VividCortex/mysqlerr v1.0.0 // indirect
+ 	github.com/alecthomas/units v0.0.0-20240927000941-0f3dac36c52b // indirect
+ 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+ 	github.com/apache/arrow-go/v18 v18.5.1 // indirect
+@@ -221,7 +221,7 @@ require (
+ 	github.com/mattn/go-colorable v0.1.14 // indirect
+ 	github.com/mattn/go-isatty v0.0.20 // indirect
+ 	github.com/mattn/go-runewidth v0.0.16 // indirect
+-	github.com/mattn/go-sqlite3 v1.14.32 // indirect
++	github.com/mattn/go-sqlite3 v1.14.34 // indirect
+ 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
+ 	github.com/mdlayher/socket v0.4.1 // indirect
+ 	github.com/mdlayher/vsock v1.2.1 // indirect
+@@ -332,7 +332,7 @@ require (
+ 	gopkg.in/alexcesaro/quotedprintable.v3 v3.0.0-20150716171945-2caba252f4dc // indirect
+ 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
+ 	gopkg.in/inf.v0 v0.9.1 // indirect
+-	gopkg.in/ini.v1 v1.67.0 // indirect
++	gopkg.in/ini.v1 v1.67.1 // indirect
+ 	gopkg.in/mail.v2 v2.3.1 // indirect
+ 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+ 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
+diff --git a/apps/advisor/go.sum b/apps/advisor/go.sum
+index 1db83a1870dd2..bf134aad13334 100644
+--- a/apps/advisor/go.sum
++++ b/apps/advisor/go.sum
+@@ -138,6 +138,7 @@ github.com/Shopify/sarama v1.19.0/go.mod h1:FVkBWblsNy7DGZRfXLU0O9RCGt5g3g3yEuWX
+ github.com/Shopify/toxiproxy v2.1.4+incompatible/go.mod h1:OXgGpZ6Cli1/URJOF1DMxUHB2q5Ap20/P/eIdh4G0pI=
+ github.com/VividCortex/mysqlerr v0.0.0-20170204212430-6c6b55f8796f h1:HR5nRmUQgXrwqZOwZ2DAc/aCi3Bu3xENpspW935vxu0=
+ github.com/VividCortex/mysqlerr v0.0.0-20170204212430-6c6b55f8796f/go.mod h1:f3HiCrHjHBdcm6E83vGaXh1KomZMA2P6aeo3hKx/wg0=
++github.com/VividCortex/mysqlerr v1.0.0/go.mod h1:xERx8E4tBhLvpjzdUyQiSfUxeMcATEQrflDAfXsqcAE=
+ github.com/Yiling-J/theine-go v0.6.2 h1:1GeoXeQ0O0AUkiwj2S9Jc0Mzx+hpqzmqsJ4kIC4M9AY=
+ github.com/Yiling-J/theine-go v0.6.2/go.mod h1:08QpMa5JZ2pKN+UJCRrCasWYO1IKCdl54Xa836rpmDU=
+ github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc/go.mod h1:LOuyumcjzFXgccqObfd/Ljyb9UuFJ6TxHnclSeseNhc=
+@@ -861,6 +862,7 @@ github.com/mattn/go-sqlite3 v1.14.6/go.mod h1:NyWgC/yNuGj7Q9rpYnZvas74GogHl5/Z4A
+ github.com/mattn/go-sqlite3 v1.14.22/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
+ github.com/mattn/go-sqlite3 v1.14.32 h1:JD12Ag3oLy1zQA+BNn74xRgaBbdhbNIDYvQUEuuErjs=
+ github.com/mattn/go-sqlite3 v1.14.32/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
++github.com/mattn/go-sqlite3 v1.14.34/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
+ github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
+ github.com/matttproud/golang_protobuf_extensions v1.0.4 h1:mmDVorXM7PCGKw94cs5zkfA9PSy5pEvNWRP0ET0TIVo=
+ github.com/matttproud/golang_protobuf_extensions v1.0.4/go.mod h1:BSXmuO+STAnVfrANrmjBb36TMTDstsz7MSK+HVaYKv4=
+@@ -1821,6 +1823,7 @@ gopkg.in/inf.v0 v0.9.1 h1:73M5CoZyi3ZLMOyDlQh031Cx6N9NDJ2Vvfl76EDAgDc=
+ gopkg.in/inf.v0 v0.9.1/go.mod h1:cWUDdTG/fYaXco+Dcufb5Vnc6Gp2YChqWtbxRZE0mXw=
+ gopkg.in/ini.v1 v1.67.0 h1:Dgnx+6+nfE+IfzjUEISNeydPJh9AXNNsWbGP9KzCsOA=
+ gopkg.in/ini.v1 v1.67.0/go.mod h1:pNLf8WUiyNEtQjuu5G5vTm06TEv9tsIgeAvK8hOrP4k=
++gopkg.in/ini.v1 v1.67.1/go.mod h1:x/cyOwCgZqOkJoDIJ3c1KNHMo10+nLGAhh+kn3Zizss=
+ gopkg.in/mail.v2 v2.3.1 h1:WYFn/oANrAGP2C0dcV6/pbkPzv8yGzqTjPmTeO7qoXk=
+ gopkg.in/mail.v2 v2.3.1/go.mod h1:htwXN1Qh09vZJ1NVKxQqHPBaCBbzKhp5GzuJEA4VJWw=
+ gopkg.in/natefinch/lumberjack.v2 v2.2.1 h1:bBRl1b0OH9s/DuPhuXpNl+VtCaJXFZ5/uEFST95x9zc=
+diff --git a/pkg/plugins/config/config.go b/pkg/plugins/config/config.go
+index c84e70233b326..d3803830e7340 100644
+--- a/pkg/plugins/config/config.go
++++ b/pkg/plugins/config/config.go
+@@ -5,7 +5,9 @@ package config
+ type PluginManagementCfg struct {
+ 	DevMode bool
+ 
+-	PluginsPath string
++	// PluginsPaths: list of paths where Grafana will look for plugins.
++	// Order is important, if multiple paths contain the same plugin, only the first one will be used.
++	PluginsPaths []string
+ 
+ 	PluginSettings       PluginSettings
+ 	PluginsAllowUnsigned []string
+@@ -35,12 +37,12 @@ type Features struct {
+ type PluginSettings map[string]map[string]string
+ 
+ // NewPluginManagementCfg returns a new PluginManagementCfg.
+-func NewPluginManagementCfg(devMode bool, pluginsPath string, pluginSettings PluginSettings, pluginsAllowUnsigned []string,
++func NewPluginManagementCfg(devMode bool, pluginsPaths []string, pluginSettings PluginSettings, pluginsAllowUnsigned []string,
+ 	pluginsCDNURLTemplate string, appURL string, features Features,
+ 	grafanaComAPIURL string, disablePlugins []string, forwardHostEnvVars []string, grafanaComAPIToken string,
+ ) *PluginManagementCfg {
+ 	return &PluginManagementCfg{
+-		PluginsPath:           pluginsPath,
++		PluginsPaths:          pluginsPaths,
+ 		DevMode:               devMode,
+ 		PluginSettings:        pluginSettings,
+ 		PluginsAllowUnsigned:  pluginsAllowUnsigned,
+diff --git a/pkg/plugins/manager/installer.go b/pkg/plugins/manager/installer.go
+index 894f939fd442c..21e5d2f9ab62e 100644
+--- a/pkg/plugins/manager/installer.go
++++ b/pkg/plugins/manager/installer.go
+@@ -35,7 +35,7 @@ type PluginInstaller struct {
+ func ProvideInstaller(cfg *config.PluginManagementCfg, pluginRegistry registry.Service, pluginLoader loader.Service,
+ 	pluginRepo repo.Service, serviceRegistry auth.ExternalServiceRegistry) *PluginInstaller {
+ 	return New(cfg, pluginRegistry, pluginLoader, pluginRepo,
+-		storage.FileSystem(log.NewPrettyLogger("installer.fs"), cfg.PluginsPath), storage.SimpleDirNameGeneratorFunc, serviceRegistry)
++		storage.FileSystem(log.NewPrettyLogger("installer.fs"), cfg.PluginsPaths[0]), storage.SimpleDirNameGeneratorFunc, serviceRegistry)
+ }
+ 
+ func New(cfg *config.PluginManagementCfg, pluginRegistry registry.Service, pluginLoader loader.Service,
+diff --git a/pkg/plugins/manager/sources/source_local_disk.go b/pkg/plugins/manager/sources/source_local_disk.go
+index fc0cf3efc7afe..53c547afc642e 100644
+--- a/pkg/plugins/manager/sources/source_local_disk.go
++++ b/pkg/plugins/manager/sources/source_local_disk.go
+@@ -251,33 +251,39 @@ func (s *LocalSource) readFile(pluginJSONPath string) (io.ReadCloser, error) {
+ 	return os.Open(filepath.Clean(absPluginJSONPath))
+ }
+ 
+-func DirAsLocalSources(cfg *config.PluginManagementCfg, pluginsPath string, class plugins.Class) ([]*LocalSource, error) {
+-	if pluginsPath == "" {
++func DirAsLocalSources(cfg *config.PluginManagementCfg, pluginsPaths []string, class plugins.Class) ([]*LocalSource, error) {
++	if len(pluginsPaths) == 0 {
+ 		return []*LocalSource{}, errors.New("plugins path not configured")
+ 	}
+ 
+ 	// It's safe to ignore gosec warning G304 since the variable part of the file path comes from a configuration
+ 	// variable.
+ 	// nolint:gosec
+-	d, err := os.ReadDir(pluginsPath)
+-	if err != nil {
+-		return []*LocalSource{}, errors.New("failed to open plugins path")
+-	}
++	sources := []*LocalSource{}
++	for _, pluginsPath := range pluginsPaths {
++		if _, err := os.Stat(pluginsPath); errors.Is(err, os.ErrNotExist) {
++			// If the directory does not exist, skip it
++			continue
++		}
++		d, err := os.ReadDir(pluginsPath)
++		if err != nil {
++			return []*LocalSource{}, fmt.Errorf("failed to open plugins path: %w", err)
++		}
+ 
+-	var pluginDirs []string
+-	for _, dir := range d {
+-		if dir.IsDir() || dir.Type()&os.ModeSymlink == os.ModeSymlink {
+-			pluginDirs = append(pluginDirs, filepath.Join(pluginsPath, dir.Name()))
++		var pluginDirs []string
++		for _, dir := range d {
++			if dir.IsDir() || dir.Type()&os.ModeSymlink == os.ModeSymlink {
++				pluginDirs = append(pluginDirs, filepath.Join(pluginsPath, dir.Name()))
++			}
+ 		}
+-	}
+-	slices.Sort(pluginDirs)
+-
+-	sources := make([]*LocalSource, len(pluginDirs))
+-	for i, dir := range pluginDirs {
+-		if cfg.DevMode {
+-			sources[i] = NewUnsafeLocalSource(class, []string{dir})
+-		} else {
+-			sources[i] = NewLocalSource(class, []string{dir})
++		slices.Sort(pluginDirs)
++
++		for _, dir := range pluginDirs {
++			if cfg.DevMode {
++				sources = append(sources, NewUnsafeLocalSource(class, []string{dir}))
++			} else {
++				sources = append(sources, NewLocalSource(class, []string{dir}))
++			}
+ 		}
+ 	}
+ 
+diff --git a/pkg/plugins/manager/sources/source_local_disk_test.go b/pkg/plugins/manager/sources/source_local_disk_test.go
+index 0a5b050a5d733..f08733e04f274 100644
+--- a/pkg/plugins/manager/sources/source_local_disk_test.go
++++ b/pkg/plugins/manager/sources/source_local_disk_test.go
+@@ -20,22 +20,22 @@ func TestDirAsLocalSources(t *testing.T) {
+ 	testdataDir := "../testdata"
+ 
+ 	tests := []struct {
+-		name        string
+-		pluginsPath string
+-		cfg         *config.PluginManagementCfg
+-		expected    []*LocalSource
+-		err         error
++		name         string
++		pluginsPaths []string
++		cfg          *config.PluginManagementCfg
++		expected     []*LocalSource
++		err          error
+ 	}{
+ 		{
+-			name:        "Empty path returns an error",
+-			pluginsPath: "",
+-			expected:    []*LocalSource{},
+-			err:         errors.New("plugins path not configured"),
++			name:         "Empty path returns an error",
++			pluginsPaths: []string{},
++			expected:     []*LocalSource{},
++			err:          errors.New("plugins path not configured"),
+ 		},
+ 		{
+-			name:        "Directory with subdirectories",
+-			pluginsPath: filepath.Join(testdataDir, "pluginRootWithDist"),
+-			cfg:         &config.PluginManagementCfg{},
++			name:         "Directory with subdirectories",
++			pluginsPaths: []string{filepath.Join(testdataDir, "pluginRootWithDist")},
++			cfg:          &config.PluginManagementCfg{},
+ 			expected: []*LocalSource{
+ 				{
+ 					paths:      []string{filepath.Join(testdataDir, "pluginRootWithDist", "datasource")},
+@@ -59,7 +59,7 @@ func TestDirAsLocalSources(t *testing.T) {
+ 			cfg: &config.PluginManagementCfg{
+ 				DevMode: true,
+ 			},
+-			pluginsPath: filepath.Join(testdataDir, "pluginRootWithDist"),
++			pluginsPaths: []string{filepath.Join(testdataDir, "pluginRootWithDist")},
+ 			expected: []*LocalSource{
+ 				{
+ 					paths:      []string{filepath.Join(testdataDir, "pluginRootWithDist", "datasource")},
+@@ -79,15 +79,15 @@ func TestDirAsLocalSources(t *testing.T) {
+ 			},
+ 		},
+ 		{
+-			name:        "Directory with no subdirectories",
+-			cfg:         &config.PluginManagementCfg{},
+-			pluginsPath: filepath.Join(testdataDir, "pluginRootWithDist", "datasource"),
+-			expected:    []*LocalSource{},
++			name:         "Directory with no subdirectories",
++			cfg:          &config.PluginManagementCfg{},
++			pluginsPaths: []string{filepath.Join(testdataDir, "pluginRootWithDist", "datasource")},
++			expected:     []*LocalSource{},
+ 		},
+ 		{
+-			name:        "Directory with a symlink to a directory",
+-			pluginsPath: filepath.Join(testdataDir, "symbolic-plugin-dirs"),
+-			cfg:         &config.PluginManagementCfg{},
++			name:         "Directory with a symlink to a directory",
++			pluginsPaths: []string{filepath.Join(testdataDir, "symbolic-plugin-dirs")},
++			cfg:          &config.PluginManagementCfg{},
+ 			expected: []*LocalSource{
+ 				{
+ 					paths:      []string{filepath.Join(testdataDir, "symbolic-plugin-dirs", "plugin")},
+@@ -96,10 +96,43 @@ func TestDirAsLocalSources(t *testing.T) {
+ 				},
+ 			},
+ 		},
++		{
++			name:         "Multiple paths",
++			pluginsPaths: []string{filepath.Join(testdataDir, "pluginRootWithDist"), filepath.Join(testdataDir, "symbolic-plugin-dirs")},
++			cfg:          &config.PluginManagementCfg{},
++			expected: []*LocalSource{
++				{
++					paths:      []string{filepath.Join(testdataDir, "pluginRootWithDist", "datasource")},
++					class:      plugins.ClassExternal,
++					strictMode: true,
++				},
++				{
++					paths:      []string{filepath.Join(testdataDir, "pluginRootWithDist", "dist")},
++					class:      plugins.ClassExternal,
++					strictMode: true,
++				},
++				{
++					paths:      []string{filepath.Join(testdataDir, "pluginRootWithDist", "panel")},
++					class:      plugins.ClassExternal,
++					strictMode: true,
++				},
++				{
++					paths:      []string{filepath.Join(testdataDir, "symbolic-plugin-dirs", "plugin")},
++					class:      plugins.ClassExternal,
++					strictMode: true,
++				},
++			},
++		},
++		{
++			name:         "Non existing directories are skipped",
++			cfg:          &config.PluginManagementCfg{},
++			pluginsPaths: []string{filepath.Join(testdataDir, "pluginRootWithDist", "nope")},
++			expected:     []*LocalSource{},
++		},
+ 	}
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			got, err := DirAsLocalSources(tt.cfg, tt.pluginsPath, plugins.ClassExternal)
++			got, err := DirAsLocalSources(tt.cfg, tt.pluginsPaths, plugins.ClassExternal)
+ 			if tt.err != nil {
+ 				require.Errorf(t, err, tt.err.Error())
+ 				return
+diff --git a/pkg/services/pluginsintegration/pluginconfig/config.go b/pkg/services/pluginsintegration/pluginconfig/config.go
+index 0dd3e8b0e7c1e..866e3dd8bf7c5 100644
+--- a/pkg/services/pluginsintegration/pluginconfig/config.go
++++ b/pkg/services/pluginsintegration/pluginconfig/config.go
+@@ -23,7 +23,7 @@ func ProvidePluginManagementConfig(cfg *setting.Cfg, settingProvider setting.Pro
+ 
+ 	return config.NewPluginManagementCfg(
+ 		settingProvider.KeyValue("", "app_mode").MustBool(cfg.Env == setting.Dev),
+-		cfg.PluginsPath,
++		cfg.PluginsPaths,
+ 		extractPluginSettings(settingProvider),
+ 		allowedUnsigned,
+ 		cfg.PluginsCDNURLTemplate,
+diff --git a/pkg/services/pluginsintegration/pluginsources/pluginsources.go b/pkg/services/pluginsintegration/pluginsources/pluginsources.go
+index 1d47d0cd1aae7..3fd70483a6aaf 100644
+--- a/pkg/services/pluginsintegration/pluginsources/pluginsources.go
++++ b/pkg/services/pluginsintegration/pluginsources/pluginsources.go
+@@ -39,7 +39,7 @@ func (s *Service) List(_ context.Context) []plugins.PluginSource {
+ }
+ 
+ func (s *Service) externalPluginSources() []plugins.PluginSource {
+-	localSrcs, err := sources.DirAsLocalSources(s.cfg, s.cfg.PluginsPath, plugins.ClassExternal)
++	localSrcs, err := sources.DirAsLocalSources(s.cfg, s.cfg.PluginsPaths, plugins.ClassExternal)
+ 	if err != nil {
+ 		s.log.Error("Failed to load external plugins", "error", err)
+ 		return []plugins.PluginSource{}
+diff --git a/pkg/services/pluginsintegration/pluginsources/pluginsources_test.go b/pkg/services/pluginsintegration/pluginsources/pluginsources_test.go
+index ba9e77bbfa294..75f7234b9561e 100644
+--- a/pkg/services/pluginsintegration/pluginsources/pluginsources_test.go
++++ b/pkg/services/pluginsintegration/pluginsources/pluginsources_test.go
+@@ -22,7 +22,7 @@ func TestSources_List(t *testing.T) {
+ 		}
+ 
+ 		pCfg := &config.PluginManagementCfg{
+-			PluginsPath: filepath.Join(testdata, "pluginRootWithDist"),
++			PluginsPaths: []string{filepath.Join(testdata, "pluginRootWithDist")},
+ 			PluginSettings: config.PluginSettings{
+ 				"foo": map[string]string{
+ 					"path": filepath.Join(testdata, "test-app"),
+@@ -99,7 +99,7 @@ func TestSources_List(t *testing.T) {
+ 		}
+ 
+ 		pCfg := &config.PluginManagementCfg{
+-			PluginsPath: filepath.Join(testdata, "symbolic-plugin-dirs"),
++			PluginsPaths: []string{filepath.Join(testdata, "symbolic-plugin-dirs")},
+ 		}
+ 
+ 		s := ProvideService(cfg, pCfg)
+diff --git a/pkg/services/pluginsintegration/renderer/renderer.go b/pkg/services/pluginsintegration/renderer/renderer.go
+index 6d02768f79e72..82ec0b44d6758 100644
+--- a/pkg/services/pluginsintegration/renderer/renderer.go
++++ b/pkg/services/pluginsintegration/renderer/renderer.go
+@@ -85,7 +85,7 @@ func (m *Manager) Renderer(ctx context.Context) (rendering.Plugin, bool) {
+ 		return m.renderer, true
+ 	}
+ 
+-	srcs, err := sources.DirAsLocalSources(m.cfg, m.cfg.PluginsPath, plugins.ClassExternal)
++	srcs, err := sources.DirAsLocalSources(m.cfg, m.cfg.PluginsPaths, plugins.ClassExternal)
+ 	if err != nil {
+ 		m.log.Error("Failed to get renderer plugin sources", "error", err)
+ 		return nil, false
+diff --git a/pkg/services/pluginsintegration/renderer/renderer_test.go b/pkg/services/pluginsintegration/renderer/renderer_test.go
+index 9dde07fd430e1..3b2f928b9f611 100644
+--- a/pkg/services/pluginsintegration/renderer/renderer_test.go
++++ b/pkg/services/pluginsintegration/renderer/renderer_test.go
+@@ -40,7 +40,7 @@ func TestRenderer(t *testing.T) {
+ 				return nil, nil
+ 			},
+ 		}
+-		cfg := &config.PluginManagementCfg{PluginsPath: filepath.Join(testdataDir)}
++		cfg := &config.PluginManagementCfg{PluginsPaths: []string{filepath.Join(testdataDir)}}
+ 
+ 		m := NewManager(cfg, loader)
+ 
+@@ -79,7 +79,7 @@ func TestRenderer(t *testing.T) {
+ 				return nil, nil
+ 			},
+ 		}
+-		cfg := &config.PluginManagementCfg{PluginsPath: filepath.Join(testdataDir)}
++		cfg := &config.PluginManagementCfg{PluginsPaths: []string{filepath.Join(testdataDir)}}
+ 
+ 		m := NewManager(cfg, loader)
+ 
+diff --git a/pkg/setting/setting.go b/pkg/setting/setting.go
+index 8c7d9a1e4674b..ee797ee4d95fe 100644
+--- a/pkg/setting/setting.go
++++ b/pkg/setting/setting.go
+@@ -150,8 +150,10 @@ type Cfg struct {
+ 	ProvisioningMaxRepositories           int64 // default 10, 0 in config = unlimited (converted to -1 internally)
+ 	DataPath                              string
+ 	LogsPath                              string
+-	PluginsPath                           string
+ 	EnterpriseLicensePath                 string
++	// PluginsPaths: list of paths where Grafana will look for plugins.
++	// Order is important, if multiple paths contain the same plugin, only the first one will be used.
++	PluginsPaths []string
+ 
+ 	// Classic Provisioning settings
+ 	ClassicProvisioningDashboardsServerLockMaxIntervalSeconds int64
+@@ -1220,7 +1222,8 @@ func (cfg *Cfg) parseINIFile(iniFile *ini.File) error {
+ 	cfg.LocalFileSystemAvailable = iniFile.Section("environment").Key("local_file_system_available").MustBool(true)
+ 	cfg.InstanceName = valueAsString(iniFile.Section(""), "instance_name", "unknown_instance_name")
+ 	plugins := valueAsString(iniFile.Section("paths"), "plugins", "")
+-	cfg.PluginsPath = makeAbsolute(plugins, cfg.HomePath)
++	bundledPlugins := valueAsString(iniFile.Section("paths"), "bundled_plugins", "data/plugins-bundled")
++	cfg.PluginsPaths = []string{makeAbsolute(plugins, cfg.HomePath), makeAbsolute(bundledPlugins, cfg.HomePath)}
+ 	provisioning := valueAsString(iniFile.Section("paths"), "provisioning", "")
+ 	cfg.ProvisioningPath = makeAbsolute(provisioning, cfg.HomePath)
+ 
+@@ -1602,7 +1605,7 @@ func (cfg *Cfg) LogConfigSources() {
+ 	cfg.Logger.Info("Path Home", "path", cfg.HomePath)
+ 	cfg.Logger.Info("Path Data", "path", cfg.DataPath)
+ 	cfg.Logger.Info("Path Logs", "path", cfg.LogsPath)
+-	cfg.Logger.Info("Path Plugins", "path", cfg.PluginsPath)
++	cfg.Logger.Info("Path Plugins", "path", cfg.PluginsPaths)
+ 	cfg.Logger.Info("Path Provisioning", "path", cfg.ProvisioningPath)
+ 	cfg.Logger.Info("App mode " + cfg.Env)
+ }

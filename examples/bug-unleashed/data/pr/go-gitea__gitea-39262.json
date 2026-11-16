@@ -1,0 +1,6 @@
+{
+  "title": "fix: restore owner name in PR target branch selector",
+  "body": "The target branch selector renders the base ref as `owner:branch`, but `BaseName` stopped being set after #37428, leaving every entry prefixed with a bare colon (`:main`).\r\n\r\n### Before\r\n\r\n<img width=\"600\" alt=\"image\" src=\"https://github.com/user-attachments/assets/ef998e6f-39ce-4f95-980e-4f7afd6c5a11\" />\r\n\r\n### After\r\n\r\n<img width=\"600\" alt=\"image\" src=\"https://github.com/user-attachments/assets/a622a35c-21fa-49d2-8371-1609a29d9bed\" />\r\n",
+  "head_sha": "a3f5f982d53fa1b75e94509d4033f043c1e43768",
+  "base_sha": "45a78bbc8efb88ef3e52cbf683a6aa736715bc82"
+}

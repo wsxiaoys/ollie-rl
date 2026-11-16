@@ -1,0 +1,25 @@
+{
+  "case_id": "immich-app__immich-29140",
+  "repo": "immich-app/immich",
+  "pr": 29140,
+  "title": "refactor(server): use uuids in schemas",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "immich-app__immich-29140__g1",
+  "target": {
+    "gid": "immich-app__immich-29140#g1",
+    "summary": "`AssetBulkUploadCheckResultSchema.id` is restricted to `z.uuidv4()`, but this field represents an arbitrary client-side identifier echoed back from the upload check request rather than an asset UUID. Clients using non-UUID identifiers will fail schema validation.",
+    "paths": [
+      "server/src/dtos/asset-media-response.dto.ts"
+    ],
+    "notes": [
+      "faulty schema property restricting client-side upload identifier to uuidv4"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c2b4750986c99a42b1ff69f3832f32dec32e1481",
+  "base_sha": "cc8d3b4107de07178d99ecaa7e43120d0c450051",
+  "snapshot": "repos/immich-app__immich/c2b4750986c99a42b1ff69f3832f32dec32e1481",
+  "diff": "diffs/immich-app__immich-29140.diff"
+}

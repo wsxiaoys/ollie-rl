@@ -1,0 +1,28 @@
+{
+  "case_id": "vitest-dev__vitest-10972",
+  "repo": "vitest-dev/vitest",
+  "pr": 10972,
+  "title": "fix(mocker): restrict redirect mocks to the fs allowlist",
+  "language": "TypeScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "vitest-dev__vitest-10972__g1",
+  "target": {
+    "gid": "vitest-dev__vitest-10972#g1",
+    "summary": "Redirect mock paths are resolved by joining server.config.root with redirectUrl.pathname using POSIX join without normalizing Windows path separators. On Windows, backslash directory traversal sequences are not resolved by POSIX join, allowing redirect mocks to bypass isFileLoadingAllowed and access files outside the allowed roots.",
+    "paths": [
+      "packages/browser/src/node/rpc.ts",
+      "packages/mocker/src/node/interceptorPlugin.ts"
+    ],
+    "notes": [
+      "faulty statement resolving redirect mock target using POSIX join without slash normalization",
+      "definition of interceptorPlugin function",
+      "copy of the same faulty pattern resolving redirect mock target without slash normalization before access check"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "e211a56d848e9563fbad77545b6ab9788aee1dec",
+  "base_sha": "5622f0959bcbccb9fe4757dc3bb694153998be65",
+  "snapshot": "repos/vitest-dev__vitest/e211a56d848e9563fbad77545b6ab9788aee1dec",
+  "diff": "diffs/vitest-dev__vitest-10972.diff"
+}

@@ -1,0 +1,27 @@
+{
+  "case_id": "shadps4-emu__shadPS4-4619",
+  "repo": "shadps4-emu/shadPS4",
+  "pr": 4619,
+  "title": "Memory Patch Fixes",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "shadps4-emu__shadPS4-4619__g1",
+  "target": {
+    "gid": "shadps4-emu__shadPS4-4619#g1",
+    "summary": "In convertNumBase, values without a '0x', '#', or '$' prefix default to base 10 instead of base 16, which causes unprefixed hexadecimal patch values to be parsed as decimal or throw std::invalid_argument on non-decimal characters. Furthermore, isHexSym recognizes '$' and '#' as prefixes, but std::stoul and std::stoull do not support these prefixes and will fail to parse them.",
+    "paths": [
+      "src/common/memory_patcher.cpp"
+    ],
+    "notes": [
+      "faulty numeric base determination and prefix checks",
+      "call site passing convertNumBase to std::stoul",
+      "call site passing convertNumBase to std::stoull"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "911f1e4de3b4d164a54dfcd350dfdf30b07a770a",
+  "base_sha": "aff387e8a9fdc01e93d4ee79cf3a910867cd2818",
+  "snapshot": "repos/shadps4-emu__shadPS4/911f1e4de3b4d164a54dfcd350dfdf30b07a770a",
+  "diff": "diffs/shadps4-emu__shadPS4-4619.diff"
+}

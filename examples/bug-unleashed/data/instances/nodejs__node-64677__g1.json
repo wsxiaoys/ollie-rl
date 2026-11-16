@@ -1,0 +1,25 @@
+{
+  "case_id": "nodejs__node-64677",
+  "repo": "nodejs/node",
+  "pr": 64677,
+  "title": "tls: fix authorized state on no-cert TLS1.3 client cert resumption",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "nodejs__node-64677__g1",
+  "target": {
+    "gid": "nodejs__node-64677#g1",
+    "summary": "Calling this._handle.getPeerX509Certificate() to check for certificate presence destructively consumes the underlying peer certificate chain during the handshake. Consequently, subsequent calls to server-side getPeerCertificate(true) fail to return the client certificate issuer chain, leaving issuerCertificate undefined.",
+    "paths": [
+      "lib/internal/tls/wrap.js"
+    ],
+    "notes": [
+      "call to getPeerX509Certificate() destructively consumes the peer certificate chain during handshake"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "892a7481f4698d5ff67040b140d35ce252b4f1df",
+  "base_sha": "2deb0a1b0f542c4b7fedc16dda1149c65e546f0d",
+  "snapshot": "repos/nodejs__node/892a7481f4698d5ff67040b140d35ce252b4f1df",
+  "diff": "diffs/nodejs__node-64677.diff"
+}

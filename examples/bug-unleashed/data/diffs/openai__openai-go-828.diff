@@ -1,0 +1,780 @@
+diff --git a/internal/requestconfig/requestconfig.go b/internal/requestconfig/requestconfig.go
+index 521ff9c0f..027155ee0 100644
+--- a/internal/requestconfig/requestconfig.go
++++ b/internal/requestconfig/requestconfig.go
+@@ -25,6 +25,10 @@ import (
+ 	"github.com/tidwall/gjson"
+ )
+ 
++// DefaultMaxServerDelay bounds server-directed retry and polling waits unless
++// the caller explicitly opts into a different retry limit.
++const DefaultMaxServerDelay = 8 * time.Second
++
+ func getDefaultHeaders() map[string]string {
+ 	return map[string]string{
+ 		"User-Agent": fmt.Sprintf("OpenAI/Go %s", internal.PackageVersion),
+@@ -271,11 +275,12 @@ func NewRequestConfig(ctx context.Context, method string, u string, body any, ds
+ 		req.Header.Add(k, v)
+ 	}
+ 	cfg := RequestConfig{
+-		MaxRetries: 2,
+-		Context:    ctx,
+-		Request:    req,
+-		HTTPClient: http.DefaultClient,
+-		Body:       reader,
++		MaxRetries:    2,
++		MaxRetryDelay: DefaultMaxServerDelay,
++		Context:       ctx,
++		Request:       req,
++		HTTPClient:    http.DefaultClient,
++		Body:          reader,
+ 	}
+ 	cfg.ResponseBodyInto = dst
+ 	cfg.Security = Security{
+@@ -324,6 +329,7 @@ type HTTPDoer interface {
+ // composing the RequestOption instead if possible.
+ type RequestConfig struct {
+ 	MaxRetries            int
++	MaxRetryDelay         time.Duration
+ 	RequestTimeout        time.Duration
+ 	Context               context.Context
+ 	Request               *http.Request
+@@ -403,10 +409,13 @@ func shouldRetry(req *http.Request, res *http.Response, err error) bool {
+ 		res.StatusCode >= http.StatusInternalServerError
+ }
+ 
+-func parseRetryAfterHeader(resp *http.Response) (time.Duration, bool) {
++func parseRetryAfterHeader(resp *http.Response, maxDelay time.Duration) (time.Duration, bool) {
+ 	if resp == nil {
+ 		return 0, false
+ 	}
++	if maxDelay <= 0 {
++		maxDelay = DefaultMaxServerDelay
++	}
+ 
+ 	type retryData struct {
+ 		header string
+@@ -448,10 +457,19 @@ func parseRetryAfterHeader(resp *http.Response) (time.Duration, bool) {
+ 			continue
+ 		}
+ 		if retryAfter, err := strconv.ParseFloat(v, 64); err == nil {
++			if math.IsNaN(retryAfter) || math.IsInf(retryAfter, 0) || retryAfter < 0 {
++				continue
++			}
++			if retryAfter >= float64(maxDelay)/float64(retry.units) {
++				return maxDelay, true
++			}
+ 			return time.Duration(retryAfter * float64(retry.units)), true
+ 		}
+ 		if d, ok := retry.custom(v); ok {
+-			return d, true
++			if d <= 0 {
++				return 0, true
++			}
++			return min(d, maxDelay), true
+ 		}
+ 	}
+ 
+@@ -509,23 +527,48 @@ func (b *closeOnceReadCloser) Close() error {
+ 	return b.err
+ }
+ 
+-func retryDelay(res *http.Response, retryCount int) time.Duration {
++func retryDelay(res *http.Response, retryCount int, maxDelay time.Duration) time.Duration {
++	if maxDelay <= 0 {
++		maxDelay = DefaultMaxServerDelay
++	}
++
+ 	// If the backend tells us to wait a certain amount of time, use that value
+-	if retryAfterDelay, ok := parseRetryAfterHeader(res); ok {
+-		return max(0, retryAfterDelay)
++	if retryAfterDelay, ok := parseRetryAfterHeader(res, maxDelay); ok {
++		return retryAfterDelay
+ 	}
+ 
+-	maxDelay := 8 * time.Second
+-	delay := time.Duration(0.5 * float64(time.Second) * math.Pow(2, float64(retryCount)))
+-	if delay > maxDelay {
++	backoff := 0.5 * float64(time.Second) * math.Pow(2, float64(retryCount))
++	var delay time.Duration
++	if math.IsInf(backoff, 0) || backoff >= float64(maxDelay) {
+ 		delay = maxDelay
++	} else {
++		delay = time.Duration(backoff)
+ 	}
+ 
+-	jitter := rand.Int63n(int64(delay / 4))
+-	delay -= time.Duration(jitter)
++	if jitterRange := int64(delay / 4); jitterRange > 0 {
++		delay -= time.Duration(rand.Int63n(jitterRange))
++	}
+ 	return delay
+ }
+ 
++// WaitForDelay waits for delay to elapse or for ctx to be cancelled, whichever
++// happens first. The timer is always released before returning.
++func WaitForDelay(ctx context.Context, delay time.Duration) error {
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++
++	timer := time.NewTimer(delay)
++	defer timer.Stop()
++
++	select {
++	case <-ctx.Done():
++		return ctx.Err()
++	case <-timer.C:
++		return nil
++	}
++}
++
+ func (cfg *RequestConfig) Execute() (err error) {
+ 	if cfg.BaseURL == nil {
+ 		if cfg.DefaultBaseURL != nil {
+@@ -625,10 +668,8 @@ func (cfg *RequestConfig) Execute() (err error) {
+ 			_ = res.Body.Close()
+ 		}
+ 
+-		select {
+-		case <-ctx.Done():
+-			return ctx.Err()
+-		case <-time.After(retryDelay(res, retryCount)):
++		if waitErr := WaitForDelay(ctx, retryDelay(res, retryCount, cfg.MaxRetryDelay)); waitErr != nil {
++			return waitErr
+ 		}
+ 	}
+ 
+diff --git a/internal/requestconfig/requestconfig_test.go b/internal/requestconfig/requestconfig_test.go
+index 1d2007cf5..1430bee38 100644
+--- a/internal/requestconfig/requestconfig_test.go
++++ b/internal/requestconfig/requestconfig_test.go
+@@ -7,7 +7,9 @@ import (
+ 	"net/http"
+ 	"net/url"
+ 	"os"
++	"strings"
+ 	"testing"
++	"time"
+ )
+ 
+ type closeTrackingReadCloser struct {
+@@ -175,6 +177,84 @@ func TestCloneDoesNotAliasMiddlewareSlice(t *testing.T) {
+ 	}
+ }
+ 
++func TestParseRetryAfterHeaderBoundsRemoteDelays(t *testing.T) {
++	tests := map[string]struct {
++		header http.Header
++		want   time.Duration
++		ok     bool
++	}{
++		"milliseconds": {
++			header: http.Header{"Retry-After-Ms": {"125"}},
++			want:   125 * time.Millisecond,
++			ok:     true,
++		},
++		"fractional seconds": {
++			header: http.Header{"Retry-After": {"0.25"}},
++			want:   250 * time.Millisecond,
++			ok:     true,
++		},
++		"huge value": {
++			header: http.Header{"Retry-After": {"1e100"}},
++			want:   DefaultMaxServerDelay,
++			ok:     true,
++		},
++		"finite scaling overflow": {
++			header: http.Header{"Retry-After": {"2" + strings.Repeat("0", 299)}},
++			want:   DefaultMaxServerDelay,
++			ok:     true,
++		},
++		"far future date": {
++			header: http.Header{"Retry-After": {time.Now().Add(time.Hour).UTC().Format(time.RFC1123)}},
++			want:   DefaultMaxServerDelay,
++			ok:     true,
++		},
++		"invalid preferred header falls back": {
++			header: http.Header{"Retry-After-Ms": {"-1"}, "Retry-After": {"0.5"}},
++			want:   500 * time.Millisecond,
++			ok:     true,
++		},
++		"zero": {
++			header: http.Header{"Retry-After": {"0"}},
++			ok:     true,
++		},
++		"zero milliseconds": {
++			header: http.Header{"Retry-After-Ms": {"0"}},
++			ok:     true,
++		},
++		"negative": {
++			header: http.Header{"Retry-After-Ms": {"-100"}},
++		},
++		"not a number": {
++			header: http.Header{"Retry-After": {"NaN"}},
++		},
++		"infinite": {
++			header: http.Header{"Retry-After": {"+Inf"}},
++		},
++		"past date": {
++			header: http.Header{"Retry-After": {time.Now().Add(-time.Hour).UTC().Format(time.RFC1123)}},
++			ok:     true,
++		},
++	}
++
++	for name, test := range tests {
++		t.Run(name, func(t *testing.T) {
++			got, ok := parseRetryAfterHeader(&http.Response{Header: test.header}, DefaultMaxServerDelay)
++			if ok != test.ok || got != test.want {
++				t.Fatalf("parseRetryAfterHeader() = (%s, %t), want (%s, %t)", got, ok, test.want, test.ok)
++			}
++		})
++	}
++}
++
++func TestWaitForDelayObservesCancellation(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++
++	if err := WaitForDelay(ctx, 0); !errors.Is(err, context.Canceled) {
++		t.Fatalf("WaitForDelay() error = %v, want %v", err, context.Canceled)
++	}
++}
++
+ func TestExecuteClosesAttemptBodyOnHandlerError(t *testing.T) {
+ 	t.Run("no retry", func(t *testing.T) {
+ 		body := newTrackedFileBody(t)
+diff --git a/option/requestoption.go b/option/requestoption.go
+index 5e4a49d12..09ccf4ad7 100644
+--- a/option/requestoption.go
++++ b/option/requestoption.go
+@@ -103,6 +103,21 @@ func WithMaxRetries(retries int) RequestOption {
+ 	})
+ }
+ 
++// WithMaxRetryDelay returns a RequestOption that sets the maximum delay between
++// retry attempts. This bounds both server-directed retry delays and the client's
++// exponential backoff. The default maximum is 8 seconds.
++//
++// WithMaxRetryDelay panics when delay is not positive.
++func WithMaxRetryDelay(delay time.Duration) RequestOption {
++	if delay <= 0 {
++		panic("option: max retry delay must be positive")
++	}
++	return requestconfig.RequestOptionFunc(func(r *requestconfig.RequestConfig) error {
++		r.MaxRetryDelay = delay
++		return nil
++	})
++}
++
+ // WithHeader returns a RequestOption that sets the header value to the associated key. It overwrites
+ // any value if there was one already present.
+ func WithHeader(key, value string) RequestOption {
+diff --git a/polling.go b/polling.go
+index a2ff2d16b..7db540765 100644
+--- a/polling.go
++++ b/polling.go
+@@ -2,14 +2,18 @@ package openai
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"net/http"
+ 	"strconv"
+ 	"time"
+ 
++	"github.com/openai/openai-go/v3/internal/requestconfig"
+ 	"github.com/openai/openai-go/v3/option"
+ )
+ 
++const maxPollInterval = time.Duration(1<<63 - 1)
++
+ func mkPollingOptions(pollIntervalMs int) []option.RequestOption {
+ 	options := []option.RequestOption{option.WithHeader("X-Stainless-Poll-Helper", "true")}
+ 	if pollIntervalMs > 0 {
+@@ -18,17 +22,46 @@ func mkPollingOptions(pollIntervalMs int) []option.RequestOption {
+ 	return options
+ }
+ 
+-func getPollInterval(raw *http.Response) (ms int) {
+-	if ms, err := strconv.Atoi(raw.Header.Get("openai-poll-after-ms")); err == nil {
+-		return ms
++func getPollInterval(raw *http.Response) time.Duration {
++	const defaultPollInterval = time.Second
++	if raw == nil {
++		return defaultPollInterval
++	}
++
++	ms, err := strconv.ParseInt(raw.Header.Get("openai-poll-after-ms"), 10, 64)
++	if err != nil {
++		if errors.Is(err, strconv.ErrRange) && ms > 0 {
++			return requestconfig.DefaultMaxServerDelay
++		}
++		return defaultPollInterval
+ 	}
+-	return 1000
++	if ms <= 0 {
++		return defaultPollInterval
++	}
++
++	maxServerMilliseconds := int64(requestconfig.DefaultMaxServerDelay / time.Millisecond)
++	return time.Duration(min(ms, maxServerMilliseconds)) * time.Millisecond
++}
++
++func pollInterval(pollIntervalMs int, raw *http.Response) time.Duration {
++	if pollIntervalMs <= 0 {
++		return getPollInterval(raw)
++	}
++
++	ms := int64(pollIntervalMs)
++	if ms > int64(maxPollInterval/time.Millisecond) {
++		return maxPollInterval
++	}
++	return time.Duration(ms) * time.Millisecond
+ }
+ 
+ // PollStatus waits until a VectorStoreFile is no longer in an incomplete state and returns it.
+ // Pass 0 as pollIntervalMs to use the default polling interval of 1 second.
++// Server-suggested intervals are limited to 8 seconds; pass a positive value to
++// explicitly use a longer interval.
+ func (r *VectorStoreFileService) PollStatus(ctx context.Context, vectorStoreID string, fileID string, pollIntervalMs int, opts ...option.RequestOption) (*VectorStoreFile, error) {
+ 	var raw *http.Response
++	var interval time.Duration
+ 	opts = append(opts, mkPollingOptions(pollIntervalMs)...)
+ 	opts = append(opts, option.WithResponseInto(&raw))
+ 	for {
+@@ -39,10 +72,12 @@ func (r *VectorStoreFileService) PollStatus(ctx context.Context, vectorStoreID s
+ 
+ 		switch file.Status {
+ 		case VectorStoreFileStatusInProgress:
+-			if pollIntervalMs <= 0 {
+-				pollIntervalMs = getPollInterval(raw)
++			if interval == 0 {
++				interval = pollInterval(pollIntervalMs, raw)
++			}
++			if err := requestconfig.WaitForDelay(ctx, interval); err != nil {
++				return nil, err
+ 			}
+-			time.Sleep(time.Duration(pollIntervalMs) * time.Millisecond)
+ 		case VectorStoreFileStatusCancelled,
+ 			VectorStoreFileStatusCompleted,
+ 			VectorStoreFileStatusFailed:
+@@ -50,20 +85,16 @@ func (r *VectorStoreFileService) PollStatus(ctx context.Context, vectorStoreID s
+ 		default:
+ 			return nil, fmt.Errorf("invalid vector store file status during polling: received %s", file.Status)
+ 		}
+-
+-		select {
+-		case <-ctx.Done():
+-			return nil, ctx.Err()
+-		default:
+-
+-		}
+ 	}
+ }
+ 
+ // PollStatus waits until a BetaVectorStoreFileBatch is no longer in an incomplete state and returns it.
+ // Pass 0 as pollIntervalMs to use the default polling interval of 1 second.
++// Server-suggested intervals are limited to 8 seconds; pass a positive value to
++// explicitly use a longer interval.
+ func (r *VectorStoreFileBatchService) PollStatus(ctx context.Context, vectorStoreID string, batchID string, pollIntervalMs int, opts ...option.RequestOption) (*VectorStoreFileBatch, error) {
+ 	var raw *http.Response
++	var interval time.Duration
+ 	opts = append(opts, option.WithResponseInto(&raw))
+ 	opts = append(opts, mkPollingOptions(pollIntervalMs)...)
+ 	for {
+@@ -74,10 +105,12 @@ func (r *VectorStoreFileBatchService) PollStatus(ctx context.Context, vectorStor
+ 
+ 		switch batch.Status {
+ 		case VectorStoreFileBatchStatusInProgress:
+-			if pollIntervalMs <= 0 {
+-				pollIntervalMs = getPollInterval(raw)
++			if interval == 0 {
++				interval = pollInterval(pollIntervalMs, raw)
++			}
++			if err := requestconfig.WaitForDelay(ctx, interval); err != nil {
++				return nil, err
+ 			}
+-			time.Sleep(time.Duration(pollIntervalMs) * time.Millisecond)
+ 		case VectorStoreFileBatchStatusCancelled,
+ 			VectorStoreFileBatchStatusCompleted,
+ 			VectorStoreFileBatchStatusFailed:
+@@ -85,22 +118,19 @@ func (r *VectorStoreFileBatchService) PollStatus(ctx context.Context, vectorStor
+ 		default:
+ 			return nil, fmt.Errorf("invalid vector store file batch status during polling: received %s", batch.Status)
+ 		}
+-
+-		select {
+-		case <-ctx.Done():
+-			return nil, ctx.Err()
+-		default:
+-		}
+ 	}
+ }
+ 
+ // PollStatus waits until a VectorStoreFile is no longer in an incomplete state and returns it.
+ // Pass 0 as pollIntervalMs to use the default polling interval of 1 second.
++// Server-suggested intervals are limited to 8 seconds; pass a positive value to
++// explicitly use a longer interval.
+ //
+ // Deprecated: The Sora API is scheduled to permanently shut down on September 24,
+ // 2026.
+ func (r *VideoService) PollStatus(ctx context.Context, videoID string, pollIntervalMs int, opts ...option.RequestOption) (*Video, error) {
+ 	var raw *http.Response
++	var interval time.Duration
+ 	opts = append(opts, mkPollingOptions(pollIntervalMs)...)
+ 	opts = append(opts, option.WithResponseInto(&raw))
+ 	for {
+@@ -111,22 +141,17 @@ func (r *VideoService) PollStatus(ctx context.Context, videoID string, pollInter
+ 
+ 		switch video.Status {
+ 		case VideoStatusQueued, VideoStatusInProgress:
+-			if pollIntervalMs <= 0 {
+-				pollIntervalMs = getPollInterval(raw)
++			if interval == 0 {
++				interval = pollInterval(pollIntervalMs, raw)
++			}
++			if err := requestconfig.WaitForDelay(ctx, interval); err != nil {
++				return nil, err
+ 			}
+-			time.Sleep(time.Duration(pollIntervalMs) * time.Millisecond)
+ 		case VideoStatusCompleted,
+ 			VideoStatusFailed:
+ 			return video, nil
+ 		default:
+ 			return nil, fmt.Errorf("invalid video status during polling: received %s", video.Status)
+ 		}
+-
+-		select {
+-		case <-ctx.Done():
+-			return nil, ctx.Err()
+-		default:
+-
+-		}
+ 	}
+ }
+diff --git a/polling_internal_test.go b/polling_internal_test.go
+new file mode 100644
+index 000000000..ef96ce28a
+--- /dev/null
++++ b/polling_internal_test.go
+@@ -0,0 +1,58 @@
++package openai
++
++import (
++	"net/http"
++	"testing"
++	"time"
++
++	"github.com/openai/openai-go/v3/internal/requestconfig"
++)
++
++func TestGetPollIntervalValidatesRemoteDelay(t *testing.T) {
++	tests := map[string]struct {
++		raw  *http.Response
++		want time.Duration
++	}{
++		"missing response": {
++			want: time.Second,
++		},
++		"missing header": {
++			raw:  &http.Response{Header: make(http.Header)},
++			want: time.Second,
++		},
++		"positive value": {
++			raw:  &http.Response{Header: http.Header{"Openai-Poll-After-Ms": {"250"}}},
++			want: 250 * time.Millisecond,
++		},
++		"zero": {
++			raw:  &http.Response{Header: http.Header{"Openai-Poll-After-Ms": {"0"}}},
++			want: time.Second,
++		},
++		"negative": {
++			raw:  &http.Response{Header: http.Header{"Openai-Poll-After-Ms": {"-1"}}},
++			want: time.Second,
++		},
++		"large value": {
++			raw:  &http.Response{Header: http.Header{"Openai-Poll-After-Ms": {"60000"}}},
++			want: requestconfig.DefaultMaxServerDelay,
++		},
++		"overflow": {
++			raw:  &http.Response{Header: http.Header{"Openai-Poll-After-Ms": {"999999999999999999999999"}}},
++			want: requestconfig.DefaultMaxServerDelay,
++		},
++	}
++
++	for name, test := range tests {
++		t.Run(name, func(t *testing.T) {
++			if got := getPollInterval(test.raw); got != test.want {
++				t.Fatalf("getPollInterval() = %s, want %s", got, test.want)
++			}
++		})
++	}
++}
++
++func TestPollIntervalAllowsExplicitLongerDelay(t *testing.T) {
++	if got := pollInterval(9000, nil); got != 9*time.Second {
++		t.Fatalf("pollInterval() = %s, want 9s", got)
++	}
++}
+diff --git a/polling_test.go b/polling_test.go
+new file mode 100644
+index 000000000..9bbf70d16
+--- /dev/null
++++ b/polling_test.go
+@@ -0,0 +1,120 @@
++package openai_test
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/openai/openai-go/v3"
++	"github.com/openai/openai-go/v3/option"
++)
++
++func pollResponse(headerValue string, body string) *http.Response {
++	header := http.Header{"Content-Type": {"application/json"}}
++	if headerValue != "" {
++		header.Set("openai-poll-after-ms", headerValue)
++	}
++	return &http.Response{
++		StatusCode: http.StatusOK,
++		Header:     header,
++		Body:       io.NopCloser(strings.NewReader(body)),
++	}
++}
++
++func TestPollStatusRemoteDelayObservesContext(t *testing.T) {
++	tests := map[string]struct {
++		header string
++		body   string
++		poll   func(context.Context, *openai.Client) error
++	}{
++		"vector store file positive delay": {
++			header: "1000",
++			body:   `{"id":"file_123","status":"in_progress","vector_store_id":"vs_123"}`,
++			poll: func(ctx context.Context, client *openai.Client) error {
++				_, err := client.VectorStores.Files.PollStatus(ctx, "vs_123", "file_123", 0)
++				return err
++			},
++		},
++		"vector store batch negative delay": {
++			header: "-1",
++			body:   `{"id":"batch_123","status":"in_progress","vector_store_id":"vs_123"}`,
++			poll: func(ctx context.Context, client *openai.Client) error {
++				_, err := client.VectorStores.FileBatches.PollStatus(ctx, "vs_123", "batch_123", 0)
++				return err
++			},
++		},
++		"video overflowing delay": {
++			header: "999999999999999999999999",
++			body:   `{"id":"video_123","status":"in_progress"}`,
++			poll: func(ctx context.Context, client *openai.Client) error {
++				_, err := client.Videos.PollStatus(ctx, "video_123", 0)
++				return err
++			},
++		},
++	}
++
++	for name, test := range tests {
++		t.Run(name, func(t *testing.T) {
++			attempts := 0
++			client := openai.NewClient(
++				option.WithAPIKey("test-key"),
++				option.WithBaseURL("https://example.com/"),
++				option.WithMaxRetries(0),
++				option.WithHTTPClient(&http.Client{Transport: &closureTransport{
++					fn: func(*http.Request) (*http.Response, error) {
++						attempts++
++						return pollResponse(test.header, test.body), nil
++					},
++				}}),
++			)
++			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
++			defer cancel()
++			started := time.Now()
++
++			err := test.poll(ctx, &client)
++			if !errors.Is(err, context.DeadlineExceeded) {
++				t.Fatalf("PollStatus() error = %v, want %v", err, context.DeadlineExceeded)
++			}
++			if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
++				t.Fatalf("PollStatus() returned after %s, want context cancellation before 500ms", elapsed)
++			}
++			if attempts != 1 {
++				t.Fatalf("attempts = %d, want 1", attempts)
++			}
++		})
++	}
++}
++
++func TestPollStatusUsesValidServerDelay(t *testing.T) {
++	attempts := 0
++	client := openai.NewClient(
++		option.WithAPIKey("test-key"),
++		option.WithBaseURL("https://example.com/"),
++		option.WithMaxRetries(0),
++		option.WithHTTPClient(&http.Client{Transport: &closureTransport{
++			fn: func(*http.Request) (*http.Response, error) {
++				attempts++
++				status := "in_progress"
++				if attempts == 2 {
++					status = "completed"
++				}
++				return pollResponse("1", `{"id":"file_123","status":"`+status+`","vector_store_id":"vs_123"}`), nil
++			},
++		}}),
++	)
++
++	file, err := client.VectorStores.Files.PollStatus(context.Background(), "vs_123", "file_123", 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if file.Status != openai.VectorStoreFileStatusCompleted {
++		t.Fatalf("status = %q, want %q", file.Status, openai.VectorStoreFileStatusCompleted)
++	}
++	if attempts != 2 {
++		t.Fatalf("attempts = %d, want 2", attempts)
++	}
++}
+diff --git a/retry_delay_test.go b/retry_delay_test.go
+new file mode 100644
+index 000000000..e399bdece
+--- /dev/null
++++ b/retry_delay_test.go
+@@ -0,0 +1,128 @@
++package openai_test
++
++import (
++	"context"
++	"net/http"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/openai/openai-go/v3"
++	"github.com/openai/openai-go/v3/option"
++	"github.com/openai/openai-go/v3/shared"
++)
++
++type retryDelayRoundTripperFunc func(*http.Request) (*http.Response, error)
++
++func (f retryDelayRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
++	return f(req)
++}
++
++func TestRetryAfterClampsToConfiguredMaximum(t *testing.T) {
++	attempts := 0
++	client := openai.NewClient(
++		option.WithAPIKey("My API Key"),
++		option.WithMaxRetries(1),
++		option.WithMaxRetryDelay(10*time.Millisecond),
++		option.WithHTTPClient(&http.Client{
++			Transport: retryDelayRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
++				attempts++
++				return &http.Response{
++					StatusCode: http.StatusTooManyRequests,
++					Header: http.Header{
++						http.CanonicalHeaderKey("Retry-After"): []string{"31536000"},
++					},
++					Body: http.NoBody,
++				}, nil
++			}),
++		}),
++	)
++	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
++	defer cancel()
++
++	_, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
++		Messages: []openai.ChatCompletionMessageParamUnion{{
++			OfUser: &openai.ChatCompletionUserMessageParam{
++				Content: openai.ChatCompletionUserMessageParamContentUnion{
++					OfString: openai.String("Say this is a test"),
++				},
++			},
++		}},
++		Model: shared.ChatModelGPT4o,
++	})
++	if err == nil {
++		t.Fatal("expected retry response to return an error")
++	}
++	if attempts != 2 {
++		t.Fatalf("attempts = %d, want 2", attempts)
++	}
++}
++
++func TestRetryAfterDelayEdgeCases(t *testing.T) {
++	tests := map[string]struct {
++		header        http.Header
++		maxRetryDelay time.Duration
++		timeout       time.Duration
++		wantAttempts  int
++	}{
++		"zero seconds": {
++			header:       http.Header{"Retry-After": {"0"}},
++			timeout:      250 * time.Millisecond,
++			wantAttempts: 2,
++		},
++		"zero milliseconds": {
++			header:       http.Header{"Retry-After-Ms": {"0"}},
++			timeout:      250 * time.Millisecond,
++			wantAttempts: 2,
++		},
++		"elapsed HTTP date": {
++			header:       http.Header{"Retry-After": {time.Now().Add(-time.Minute).UTC().Format(time.RFC1123)}},
++			timeout:      250 * time.Millisecond,
++			wantAttempts: 2,
++		},
++		"finite scaling overflow": {
++			header:        http.Header{"Retry-After": {"2" + strings.Repeat("0", 299)}},
++			maxRetryDelay: 700 * time.Millisecond,
++			timeout:       600 * time.Millisecond,
++			wantAttempts:  1,
++		},
++	}
++
++	for name, test := range tests {
++		t.Run(name, func(t *testing.T) {
++			attempts := 0
++			opts := []option.RequestOption{
++				option.WithAPIKey("My API Key"),
++				option.WithMaxRetries(1),
++				option.WithHTTPClient(&http.Client{Transport: retryDelayRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
++					attempts++
++					return &http.Response{
++						StatusCode: http.StatusTooManyRequests,
++						Header:     test.header,
++						Body:       http.NoBody,
++					}, nil
++				})}),
++			}
++			if test.maxRetryDelay > 0 {
++				opts = append(opts, option.WithMaxRetryDelay(test.maxRetryDelay))
++			}
++			client := openai.NewClient(opts...)
++			ctx, cancel := context.WithTimeout(context.Background(), test.timeout)
++			t.Cleanup(cancel)
++
++			_, _ = client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
++				Messages: []openai.ChatCompletionMessageParamUnion{{
++					OfUser: &openai.ChatCompletionUserMessageParam{
++						Content: openai.ChatCompletionUserMessageParamContentUnion{
++							OfString: openai.String("Say this is a test"),
++						},
++					},
++				}},
++				Model: shared.ChatModelGPT4o,
++			})
++			if attempts != test.wantAttempts {
++				t.Fatalf("attempts = %d, want %d", attempts, test.wantAttempts)
++			}
++		})
++	}
++}

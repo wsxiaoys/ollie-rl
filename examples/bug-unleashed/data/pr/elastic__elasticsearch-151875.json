@@ -1,0 +1,6 @@
+{
+  "title": "Use a bulk scorer for rescoring vectors",
+  "body": "Fixes https://github.com/elastic/elasticsearch/issues/134484\r\n\r\nUse a bulk scorer for rescoring vectors in batches of 32 (less than the default bulk size of 64, but we don't want to consume most of the buffer at once as we don't want to preempt the prefetches)",
+  "head_sha": "9291f53fc758a4d9009a550a7b9b955907bb641c",
+  "base_sha": "0e7ef0e4715390b3e0b3e10e1fbe7e4ef1cebc70"
+}

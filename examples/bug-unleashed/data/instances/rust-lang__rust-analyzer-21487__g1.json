@@ -1,0 +1,26 @@
+{
+  "case_id": "rust-lang__rust-analyzer-21487",
+  "repo": "rust-lang/rust-analyzer",
+  "pr": 21487,
+  "title": "feat: Support extract variable in macro call",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rust-lang__rust-analyzer-21487__g1",
+  "target": {
+    "gid": "rust-lang__rust-analyzer-21487#g1",
+    "summary": "When extracting an expression from inside a macro call, the extracted variable's initializer is built from the macro-expanded syntax tree rather than the original source tokens. This discards original whitespace and comments, altering user formatting and producing invalid Rust code when adjacent tokens require whitespace (such as `&mutbar` or `iftrue`).",
+    "paths": [
+      "crates/ide-assists/src/handlers/extract_variable.rs"
+    ],
+    "notes": [
+      "faulty statement returning macro-expanded analysis expression without preserving source expression for the initializer",
+      "variable initializer expression is initialized by cloning the macro-expanded analysis expression"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "144cce8a76950e767a8f65bbd35d72dae6f81050",
+  "base_sha": "f53911152a931648119710cbadb3244603343dfd",
+  "snapshot": "repos/rust-lang__rust-analyzer/144cce8a76950e767a8f65bbd35d72dae6f81050",
+  "diff": "diffs/rust-lang__rust-analyzer-21487.diff"
+}

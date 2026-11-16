@@ -1,0 +1,16 @@
+{
+  "case_id": "systemd__systemd-42638",
+  "repo": "systemd/systemd",
+  "pr": 42638,
+  "title": "unit-name: introduce \"strict\" mode for unit name mangling",
+  "language": "C",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "systemd__systemd-42638",
+  "target": null,
+  "siblings": [],
+  "head_sha": "14b1a92eb251f275d79245e4ed4668fb717804f5",
+  "base_sha": "364bc151db6ae5e7410366843be860c7b60599c7",
+  "snapshot": "repos/systemd__systemd/14b1a92eb251f275d79245e4ed4668fb717804f5",
+  "diff": "diffs/systemd__systemd-42638.diff"
+}

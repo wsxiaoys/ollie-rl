@@ -1,0 +1,6 @@
+{
+  "title": "resolve: fix effective visibilities for items in ambiguous glob sets",
+  "body": "<!-- homu-ignore:start -->\n*[View all comments](https://triagebot.infra.rust-lang.org/gh-comments/rust-lang/rust/pull/159039)*\n<!-- homu-ignore:end -->\n\nFixes rust-lang/rust#159038 (1.96.1 → 1.97.0 regression; details there).\r\n\r\nWhen an item is glob-imported twice at different visibilities, effective visibility was computed from whichever declaration arrived first, not the most visible one. An exported item could then get no MIR encoded, and downstream crates fail with ``missing optimized MIR``.\r\n\r\nFix: also walk the most visible declaration's re-export chain (`update_decl_chain`, recursing into `ambiguity_vis_max`). Lint behavior unchanged. Two regression tests added; `tests/ui/{imports,privacy,resolve}` pass with every rust-lang/rust#154149 / rust-lang/rust#156284 test unmodified.\r\n\r\n@rustbot label +A-resolve +A-visibility +T-compiler +regression-from-stable-to-stable\r\n",
+  "head_sha": "159b9a0c557ed43c9be3d52a58b8cbf10fbc2f4f",
+  "base_sha": "3664b37017c529cad0f0ed259769f15743c21a6a"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "argsman: Prevent duplicate option registration across categories",
+  "body": "Follow-up to #28802\r\n\r\nThis PR enforces the invariant that option names are unique across categories.\r\n\r\n-<ins>_**Rationale**_</ins>:\r\n- While adapting the `argsman_tests.cpp` cases introduced in #28802 for the GNU-style parsing changes proposed in #33540, I noticed that the same option name can currently be registered in multiple categories.\r\n\r\n- At present in `master`, this ambiguity is largely masked by the existing command-line parsing behaviour. However, it relies on assumptions about how options are interpreted based on their position. Future changes to option parsing, such as the GNU-style parsing proposed in #33540, may expose this ambiguity and lead to unexpected option resolution.\r\n\r\n- To avoid ambiguous option resolution and make the distinction between global and command-specific options explicit, this PR adds validation in `AddArg()` preventing the same option name from being registered across different categories.\r\n",
+  "head_sha": "32df86f1d80dc88bdde96e03ff021a196b4b4ea3",
+  "base_sha": "a30ef6b91f73a6669e5aeedf460e0c9be2745a49"
+}

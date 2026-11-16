@@ -1,0 +1,91 @@
+diff --git a/changelogs/current/bug_fixes/reverse_tunnel__deferred-delete-handshake-wrappers-on-listener-stop.rst b/changelogs/current/bug_fixes/reverse_tunnel__deferred-delete-handshake-wrappers-on-listener-stop.rst
+new file mode 100644
+index 0000000000000..953e24a7f41aa
+--- /dev/null
++++ b/changelogs/current/bug_fixes/reverse_tunnel__deferred-delete-handshake-wrappers-on-listener-stop.rst
+@@ -0,0 +1,3 @@
++Fixed a use-after-free where reverse-tunnel listener stop left in-flight handshake
++``RCConnectionWrapper`` objects alive until main-thread destruction. Worker
++``resetFileEvents()`` now shuts down those wrappers and deferred-deletes them.
+diff --git a/source/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle.cc b/source/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle.cc
+index f4cf4adedddfa..2d4edf77a0c64 100644
+--- a/source/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle.cc
++++ b/source/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle.cc
+@@ -408,6 +408,30 @@ void ReverseConnectionIOHandle::resetFileEvents() {
+   if (worker_dispatcher_ == nullptr || worker_dispatcher_->isThreadSafe()) {
+     rev_conn_retry_timer_.reset();
+   }
++
++  // Handshake connections have their own file events. Tear them down on this worker so main
++  // close()/destructor does not destroy in-flight codecs. Skip when worker_dispatcher_ is null
++  // (cleanup() after workers are gone).
++  if (worker_dispatcher_ != nullptr && worker_dispatcher_->isThreadSafe()) {
++    conn_wrapper_to_host_map_.clear();
++    std::vector<std::unique_ptr<RCConnectionWrapper>> wrappers = std::move(connection_wrappers_);
++    connection_wrappers_.clear();
++    for (auto& wrapper : wrappers) {
++      if (wrapper == nullptr) {
++        continue;
++      }
++      auto* connection = wrapper->getConnection();
++      if (connection && connection->state() == Network::Connection::State::Open) {
++        if (connection->getSocket()) {
++          connection->getSocket()->ioHandle().resetFileEvents();
++        }
++        connection->close(Network::ConnectionCloseType::NoFlush);
++      }
++      wrapper->shutdown();
++      worker_dispatcher_->deferredDelete(std::move(wrapper));
++    }
++  }
++
+   IoSocketHandleImpl::resetFileEvents();
+ }
+ 
+diff --git a/test/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle_test.cc b/test/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle_test.cc
+index 7ba1bc2040297..2352cc23c4701 100644
+--- a/test/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle_test.cc
++++ b/test/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle_test.cc
+@@ -3503,6 +3503,42 @@ TEST_F(ReverseConnectionIOHandleTest, ResetFileEventsStopsReplacementDialOnListe
+   EXPECT_EQ(getHostConnectionInfo(host).connection_keys.count(connection_key), 0);
+ }
+ 
++// Listener stop must shut down in-flight handshake wrappers on the worker.
++TEST_F(ReverseConnectionIOHandleTest, ResetFileEventsShutsDownHandshakeWrappers) {
++  setupThreadLocalSlot();
++
++  auto config = createDefaultTestConfig();
++  io_handle_ = createTestIOHandle(config);
++  ASSERT_NE(io_handle_, nullptr);
++
++  auto* mock_timer = new NiceMock<Event::MockTimer>();
++  EXPECT_CALL(dispatcher_, createTimer_(_)).WillOnce(Return(mock_timer));
++  EXPECT_CALL(*mock_timer, enableTimer(_, _)).Times(testing::AnyNumber());
++
++  Event::FileReadyCb mock_callback = [](uint32_t) -> absl::Status { return absl::OkStatus(); };
++  io_handle_->initializeFileEvent(dispatcher_, mock_callback, Event::FileTriggerType::Level,
++                                  Event::FileReadyType::Read);
++
++  auto mock_connection = setupMockConnection();
++  EXPECT_CALL(*mock_connection, close(Network::ConnectionCloseType::NoFlush));
++  EXPECT_CALL(*mock_connection, state()).WillRepeatedly(Return(Network::Connection::State::Open));
++  EXPECT_CALL(*mock_connection, id()).WillRepeatedly(Return(42));
++
++  auto mock_host = std::make_shared<NiceMock<Upstream::MockHostDescription>>();
++  auto wrapper = std::make_unique<RCConnectionWrapper>(*io_handle_, std::move(mock_connection),
++                                                       mock_host, "test-cluster");
++  addWrapperToHostMap(wrapper.get(), "192.168.1.1");
++  pushConnectionWrapper(std::move(wrapper));
++  ASSERT_EQ(getConnectionWrappers().size(), 1);
++
++  io_handle_->resetFileEvents();
++
++  EXPECT_TRUE(getConnectionWrappers().empty());
++  EXPECT_TRUE(getConnWrapperToHostMap().empty());
++
++  dispatcher_.clearDeferredDeleteList();
++}
++
+ } // namespace ReverseConnection
+ } // namespace Bootstrap
+ } // namespace Extensions

@@ -1,0 +1,32 @@
+{
+  "case_id": "rapid7__metasploit-framework-21552",
+  "repo": "rapid7/metasploit-framework",
+  "pr": 21552,
+  "title": "Fix LHOST validation rejecting tunnel hostnames when DNS lookup fails",
+  "language": "Ruby",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rapid7__metasploit-framework-21552__g1",
+  "target": {
+    "gid": "rapid7__metasploit-framework-21552#g1",
+    "summary": "OptAddressOrHostname#valid? delegates IP address validation to OptAddressRoutable#valid?, which rejects zero addresses. Consequently, setting LHOST to wildcard addresses such as 0.0.0.0 or :: fails option validation on reverse handlers.",
+    "paths": [
+      "lib/msf/core/handler/reverse.rb",
+      "lib/msf/core/handler/reverse_http.rb",
+      "lib/msf/core/handler/reverse_udp.rb",
+      "lib/msf/core/opt_address_or_hostname.rb"
+    ],
+    "notes": [
+      "faulty statement delegating IP address validation to OptAddressRoutable#valid?, which rejects wildcard addresses 0.0.0.0 and ::",
+      "definition of valid? method",
+      "call site registering LHOST as OptAddressOrHostname on reverse handler",
+      "call site registering LHOST as OptAddressOrHostname on reverse HTTP handler",
+      "call site registering LHOST as OptAddressOrHostname on reverse UDP handler"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a7aaa49dc6c287a93dcf384a7d36ada3926af3b2",
+  "base_sha": "81648e60715389554f3d394955a3d68786569467",
+  "snapshot": "repos/rapid7__metasploit-framework/a7aaa49dc6c287a93dcf384a7d36ada3926af3b2",
+  "diff": "diffs/rapid7__metasploit-framework-21552.diff"
+}

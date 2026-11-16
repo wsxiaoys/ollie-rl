@@ -1,0 +1,26 @@
+{
+  "case_id": "elastic__elasticsearch-157547",
+  "repo": "elastic/elasticsearch",
+  "pr": 157547,
+  "title": "Prewarm id lookup terms blocks on relocation",
+  "language": "Java",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "elastic__elasticsearch-157547__g1",
+  "target": {
+    "gid": "elastic__elasticsearch-157547#g1",
+    "summary": "prepareSeekExact delegates directly to the underlying terms enum without checking the bloom filter with mayContainTerm. This bypasses the bloom filter during ID existence lookups, causing unnecessary disk/cache reads and severe indexing performance degradation.",
+    "paths": [
+      "server/src/main/java/org/elasticsearch/index/codec/bloomfilter/ES87BloomFilterPostingsFormat.java"
+    ],
+    "notes": [
+      "faulty statement delegating prepareSeekExact directly to delegate without checking bloom filter",
+      "definition of the prepareSeekExact method whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a0e377995beb5d8497d5c9492503bc94d040d38d",
+  "base_sha": "a4ed003bb41983f67a7febc01ea2525fab43f71c",
+  "snapshot": "repos/elastic__elasticsearch/a0e377995beb5d8497d5c9492503bc94d040d38d",
+  "diff": "diffs/elastic__elasticsearch-157547.diff"
+}

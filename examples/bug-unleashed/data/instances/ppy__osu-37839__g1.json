@@ -1,0 +1,27 @@
+{
+  "case_id": "ppy__osu-37839",
+  "repo": "ppy/osu",
+  "pr": 37839,
+  "title": "Move configuration migrations to `OsuGame`",
+  "language": "C#",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ppy__osu-37839__g1",
+  "target": {
+    "gid": "ppy__osu-37839#g1",
+    "summary": "Updating `OsuSetting.Version` in `OsuGame.LoadComplete` overwrites the stored configuration before `UpdateManager` inspects the prior version. Consequently, the previous and current versions match when `UpdateManager` runs, preventing the update completion notification from being shown.",
+    "paths": [
+      "osu.Game/OsuGame.cs",
+      "osu.Game/Updater/UpdateManager.cs"
+    ],
+    "notes": [
+      "prematurely updating OsuSetting.Version before UpdateManager can check it",
+      "removal of version update where the prior version was checked and updated"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "d18274d832547efd8b62bb228febb1760627d87e",
+  "base_sha": "cd27c935d6c15c3c6f2f5b561cc3340130f27407",
+  "snapshot": "repos/ppy__osu/d18274d832547efd8b62bb228febb1760627d87e",
+  "diff": "diffs/ppy__osu-37839.diff"
+}

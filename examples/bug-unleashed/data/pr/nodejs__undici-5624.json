@@ -1,0 +1,6 @@
+{
+  "title": "fix: propagate dispatcher origin to composed interceptors",
+  "body": "Summary\r\nThis change ensures that composed interceptors receive the dispatcher origin automatically when a Client or Pool dispatches a request without an explicit origin in the request options.\r\n\r\nWhat changed\r\nPropagate the dispatcher’s base origin into request options before interceptor dispatch.\r\nPreserve existing behavior for requests that already specify an origin.\r\nUpdate interceptor regression tests to cover Client and Pool requests without an explicit origin.\r\nWhy\r\nSome interceptors depend on opts.origin being present. Without this propagation, requests dispatched through a composed Client or Pool could bypass interceptor behavior unexpectedly.\r\n\r\nTesting\r\nVerified the interceptor test suite with:\r\nnpm run test:interceptors\r\nCo-authored-by: [jibinjose884@gmail.com]",
+  "head_sha": "b571c7269e78a2d36c49e2b169f07d1d8a6a9ff8",
+  "base_sha": "f59b0f239ca2390481f0028536b2dcd50cb789da"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "fix: params/searchParams in client page crashing dev instant validation",
+  "body": "Fixes an oversight where `params`/`searchParams` in client pages would cause dev instant validation to go down a codepath intended for build-time instant validation. We'd end up unintentionally wrapping params with an excaustive proxy which would then crash because the store is not set up as expected:\r\n```\r\n## Error Message\r\nRoute \"/store/[slug]\": Could not validate `instant` because an error prevented the target segment from rendering.\r\n\r\nNext.js version: 16.3.0-preview.5 (Turbopack)\r\n\r\n  [cause]: Error [InvariantError]: Invariant: Expected to have a workUnitStore that provides validationSampleTracking. This is a bug in Next.js.\r\n      at Page (app/store/[slug]/page.tsx:6:11)\r\n    4 |\r\n    5 | export default function Page(props: PageProps<\"/store/[slug]\">) {\r\n  > 6 |   const { slug } = use(props.params);\r\n      |           ^\r\n    7 |   return (\r\n    8 |     <>\r\n    9 |       <h1>Store {slug}</h1>\r\n}\r\n```\r\nThe proxy code should've been gated on `workUnitStore.validationSamples` like we do in other places that care about samples.",
+  "head_sha": "516d95920373d34b4e6c141c0b61853415bafa14",
+  "base_sha": "dff50cc7367ea68bed28c968412bd78f88a62839"
+}

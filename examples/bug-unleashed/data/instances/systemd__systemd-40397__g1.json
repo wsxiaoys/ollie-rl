@@ -1,0 +1,26 @@
+{
+  "case_id": "systemd__systemd-40397",
+  "repo": "systemd/systemd",
+  "pr": 40397,
+  "title": "sd-varlink: ensure that \"any\" actually means \"any but null\"",
+  "language": "C",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "systemd__systemd-40397__g1",
+  "target": {
+    "gid": "systemd__systemd-40397#g1",
+    "summary": "Using assert(!sd_json_variant_is_null(v)) causes an assertion abort and crashes the service when validating an array or map containing a null element.",
+    "paths": [
+      "src/libsystemd/sd-varlink/sd-varlink-idl.c"
+    ],
+    "notes": [
+      "faulty statement asserting variant is not null",
+      "definition of varlink_idl_validate_field_element_type"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "e4114f0d734592b0994ca99510bfa08e4ba56351",
+  "base_sha": "8a5fb3627a1518d2d2ef70919c81448158d64ac0",
+  "snapshot": "repos/systemd__systemd/e4114f0d734592b0994ca99510bfa08e4ba56351",
+  "diff": "diffs/systemd__systemd-40397.diff"
+}

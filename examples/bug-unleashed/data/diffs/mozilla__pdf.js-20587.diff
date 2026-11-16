@@ -1,0 +1,1844 @@
+diff --git a/src/core/document.js b/src/core/document.js
+index d5865736f6a76..53bd54e44f1d8 100644
+--- a/src/core/document.js
++++ b/src/core/document.js
+@@ -464,6 +464,8 @@ class Page {
+     task,
+     intent,
+     cacheKey,
++    pageId = this.pageIndex,
++    pageIndex = this.pageIndex,
+     annotationStorage = null,
+     modifiedIds = null,
+   }) {
+@@ -549,13 +551,12 @@ class Page {
+         RESOURCES_KEYS_OPERATOR_LIST
+       );
+       const opList = new OperatorList(intent, sink);
+-
+       handler.send("StartRenderPage", {
+         transparency: partialEvaluator.hasBlendModes(
+           resources,
+           this.nonBlendModesSet
+         ),
+-        pageIndex: this.pageIndex,
++        pageIndex,
+         cacheKey,
+       });
+ 
+diff --git a/src/core/worker.js b/src/core/worker.js
+index 1b6accb852927..a167730f9e72b 100644
+--- a/src/core/worker.js
++++ b/src/core/worker.js
+@@ -853,8 +853,8 @@ class WorkerMessageHandler {
+     );
+ 
+     handler.on("GetOperatorList", function (data, sink) {
+-      const pageIndex = data.pageIndex;
+-      pdfManager.getPage(pageIndex).then(function (page) {
++      const { pageId, pageIndex } = data;
++      pdfManager.getPage(pageId).then(function (page) {
+         const task = new WorkerTask(`GetOperatorList: page ${pageIndex}`);
+         startWorkerTask(task);
+ 
+@@ -871,6 +871,7 @@ class WorkerMessageHandler {
+             cacheKey: data.cacheKey,
+             annotationStorage: data.annotationStorage,
+             modifiedIds: data.modifiedIds,
++            pageIndex,
+           })
+           .then(
+             function (operatorListInfo) {
+@@ -899,9 +900,10 @@ class WorkerMessageHandler {
+     });
+ 
+     handler.on("GetTextContent", function (data, sink) {
+-      const { pageIndex, includeMarkedContent, disableNormalization } = data;
++      const { pageId, pageIndex, includeMarkedContent, disableNormalization } =
++        data;
+ 
+-      pdfManager.getPage(pageIndex).then(function (page) {
++      pdfManager.getPage(pageId).then(function (page) {
+         const task = new WorkerTask("GetTextContent: page " + pageIndex);
+         startWorkerTask(task);
+ 
+diff --git a/src/display/annotation_layer.js b/src/display/annotation_layer.js
+index 261a802f879ac..30517540496a8 100644
+--- a/src/display/annotation_layer.js
++++ b/src/display/annotation_layer.js
+@@ -293,7 +293,7 @@ class AnnotationElement {
+       this.annotationStorage.setValue(`${AnnotationEditorPrefix}${data.id}`, {
+         id: data.id,
+         annotationType: data.annotationType,
+-        pageIndex: this.parent.page._pageIndex,
++        page: this.parent.page,
+         popup,
+         popupRef: data.popupRef,
+         modificationDate: new Date(),
+diff --git a/src/display/annotation_storage.js b/src/display/annotation_storage.js
+index 0e864ba90a97c..58e0407b9e854 100644
+--- a/src/display/annotation_storage.js
++++ b/src/display/annotation_storage.js
+@@ -196,6 +196,10 @@ class AnnotationStorage {
+         val instanceof AnnotationEditor
+           ? val.serialize(/* isForCopying = */ false, context)
+           : val;
++      if (val.page) {
++        val.pageIndex = val.page._pageIndex;
++        delete val.page;
++      }
+       if (serialized) {
+         map.set(key, serialized);
+ 
+diff --git a/src/display/api.js b/src/display/api.js
+index 3642f08ead6d0..5695c3f1d2a71 100644
+--- a/src/display/api.js
++++ b/src/display/api.js
+@@ -40,6 +40,7 @@ import {
+   deprecated,
+   isDataScheme,
+   isValidFetchUrl,
++  PagesMapper,
+   PageViewport,
+   RenderingCancelledException,
+   StatTimer,
+@@ -1328,6 +1329,8 @@ class PDFDocumentProxy {
+ class PDFPageProxy {
+   #pendingCleanup = false;
+ 
++  #pagesMapper = PagesMapper.instance;
++
+   constructor(pageIndex, pageInfo, transport, pdfBug = false) {
+     this._pageIndex = pageIndex;
+     this._pageInfo = pageInfo;
+@@ -1350,6 +1353,13 @@ class PDFPageProxy {
+     return this._pageIndex + 1;
+   }
+ 
++  /**
++   * @param {number} value - The page number to set. First page is 1.
++   */
++  set pageNumber(value) {
++    this._pageIndex = value - 1;
++  }
++
+   /**
+    * @type {number} The number of degrees the page is rotated clockwise.
+    */
+@@ -1699,6 +1709,7 @@ class PDFPageProxy {
+     return this._transport.messageHandler.sendWithStream(
+       "GetTextContent",
+       {
++        pageId: this.#pagesMapper.getPageId(this._pageIndex + 1) - 1,
+         pageIndex: this._pageIndex,
+         includeMarkedContent: includeMarkedContent === true,
+         disableNormalization: disableNormalization === true,
+@@ -1884,6 +1895,7 @@ class PDFPageProxy {
+     const readableStream = this._transport.messageHandler.sendWithStream(
+       "GetOperatorList",
+       {
++        pageId: this.#pagesMapper.getPageId(this._pageIndex + 1) - 1,
+         pageIndex: this._pageIndex,
+         intent: renderingIntent,
+         cacheKey,
+@@ -2389,6 +2401,8 @@ class WorkerTransport {
+ 
+   #passwordCapability = null;
+ 
++  #pagesMapper = PagesMapper.instance;
++
+   constructor(
+     messageHandler,
+     loadingTask,
+@@ -2424,6 +2438,8 @@ class WorkerTransport {
+ 
+     this.setupMessageHandler();
+ 
++    this.#pagesMapper.addListener(this.#updateCaches.bind(this));
++
+     if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+       // For testing purposes.
+       Object.defineProperty(this, "getNetworkStreamName", {
+@@ -2448,6 +2464,24 @@ class WorkerTransport {
+     }
+   }
+ 
++  #updateCaches() {
++    const newPageCache = new Map();
++    const newPromiseCache = new Map();
++    for (let i = 0, ii = this.#pagesMapper.pagesNumber; i < ii; i++) {
++      const prevPageIndex = this.#pagesMapper.getPrevPageNumber(i + 1) - 1;
++      const page = this.#pageCache.get(prevPageIndex);
++      if (page) {
++        newPageCache.set(i, page);
++      }
++      const promise = this.#pagePromises.get(prevPageIndex);
++      if (promise) {
++        newPromiseCache.set(i, promise);
++      }
++    }
++    this.#pageCache = newPageCache;
++    this.#pagePromises = newPromiseCache;
++  }
++
+   #cacheSimpleMethod(name, data = null) {
+     const cachedPromise = this.#methodPromises.get(name);
+     if (cachedPromise) {
+@@ -2710,6 +2744,7 @@ class WorkerTransport {
+     });
+ 
+     messageHandler.on("GetDoc", ({ pdfInfo }) => {
++      this.#pagesMapper.pagesNumber = pdfInfo.numPages;
+       this._numPages = pdfInfo.numPages;
+       this._htmlForXfa = pdfInfo.htmlForXfa;
+       delete pdfInfo.htmlForXfa;
+@@ -2932,26 +2967,27 @@ class WorkerTransport {
+     if (
+       !Number.isInteger(pageNumber) ||
+       pageNumber <= 0 ||
+-      pageNumber > this._numPages
++      pageNumber > this.#pagesMapper.pagesNumber
+     ) {
+       return Promise.reject(new Error("Invalid page request."));
+     }
++    const pageIndex = pageNumber - 1;
++    const newPageIndex = this.#pagesMapper.getPageId(pageNumber) - 1;
+ 
+-    const pageIndex = pageNumber - 1,
+-      cachedPromise = this.#pagePromises.get(pageIndex);
++    const cachedPromise = this.#pagePromises.get(pageIndex);
+     if (cachedPromise) {
+       return cachedPromise;
+     }
+     const promise = this.messageHandler
+       .sendWithPromise("GetPage", {
+-        pageIndex,
++        pageIndex: newPageIndex,
+       })
+       .then(pageInfo => {
+         if (this.destroyed) {
+           throw new Error("Transport destroyed");
+         }
+         if (pageInfo.refStr) {
+-          this.#pageRefCache.set(pageInfo.refStr, pageNumber);
++          this.#pageRefCache.set(pageInfo.refStr, newPageIndex);
+         }
+ 
+         const page = new PDFPageProxy(
+@@ -2967,19 +3003,20 @@ class WorkerTransport {
+     return promise;
+   }
+ 
+-  getPageIndex(ref) {
++  async getPageIndex(ref) {
+     if (!isRefProxy(ref)) {
+-      return Promise.reject(new Error("Invalid pageIndex request."));
++      throw new Error("Invalid pageIndex request.");
+     }
+-    return this.messageHandler.sendWithPromise("GetPageIndex", {
++    const index = await this.messageHandler.sendWithPromise("GetPageIndex", {
+       num: ref.num,
+       gen: ref.gen,
+     });
++    return this.#pagesMapper.getPageNumber(index + 1) - 1;
+   }
+ 
+   getAnnotations(pageIndex, intent) {
+     return this.messageHandler.sendWithPromise("GetAnnotations", {
+-      pageIndex,
++      pageIndex: this.#pagesMapper.getPageId(pageIndex + 1) - 1,
+       intent,
+     });
+   }
+@@ -3046,13 +3083,13 @@ class WorkerTransport {
+ 
+   getPageJSActions(pageIndex) {
+     return this.messageHandler.sendWithPromise("GetPageJSActions", {
+-      pageIndex,
++      pageIndex: this.#pagesMapper.getPageId(pageIndex + 1) - 1,
+     });
+   }
+ 
+   getStructTree(pageIndex) {
+     return this.messageHandler.sendWithPromise("GetStructTree", {
+-      pageIndex,
++      pageIndex: this.#pagesMapper.getPageId(pageIndex + 1) - 1,
+     });
+   }
+ 
+@@ -3122,7 +3159,10 @@ class WorkerTransport {
+       return null;
+     }
+     const refStr = ref.gen === 0 ? `${ref.num}R` : `${ref.num}R${ref.gen}`;
+-    return this.#pageRefCache.get(refStr) ?? null;
++    const pageIndex = this.#pageRefCache.get(refStr);
++    return pageIndex >= 0
++      ? this.#pagesMapper.getPageNumber(pageIndex + 1)
++      : null;
+   }
+ }
+ 
+@@ -3130,7 +3170,7 @@ class WorkerTransport {
+  * Allows controlling of the rendering tasks.
+  */
+ class RenderTask {
+-  #internalRenderTask = null;
++  _internalRenderTask = null;
+ 
+   /**
+    * Callback for incremental rendering -- a function that will be called
+@@ -3151,12 +3191,12 @@ class RenderTask {
+   onError = null;
+ 
+   constructor(internalRenderTask) {
+-    this.#internalRenderTask = internalRenderTask;
++    this._internalRenderTask = internalRenderTask;
+ 
+     if (typeof PDFJSDev === "undefined" || PDFJSDev.test("TESTING")) {
+       // For testing purposes.
+       Object.defineProperty(this, "getOperatorList", {
+-        value: () => this.#internalRenderTask.operatorList,
++        value: () => this._internalRenderTask.operatorList,
+       });
+     }
+   }
+@@ -3166,7 +3206,7 @@ class RenderTask {
+    * @type {Promise<void>}
+    */
+   get promise() {
+-    return this.#internalRenderTask.capability.promise;
++    return this._internalRenderTask.capability.promise;
+   }
+ 
+   /**
+@@ -3177,7 +3217,7 @@ class RenderTask {
+    * @param {number} [extraDelay]
+    */
+   cancel(extraDelay = 0) {
+-    this.#internalRenderTask.cancel(/* error = */ null, extraDelay);
++    this._internalRenderTask.cancel(/* error = */ null, extraDelay);
+   }
+ 
+   /**
+@@ -3185,11 +3225,11 @@ class RenderTask {
+    * @type {boolean}
+    */
+   get separateAnnots() {
+-    const { separateAnnots } = this.#internalRenderTask.operatorList;
++    const { separateAnnots } = this._internalRenderTask.operatorList;
+     if (!separateAnnots) {
+       return false;
+     }
+-    const { annotationCanvasMap } = this.#internalRenderTask;
++    const { annotationCanvasMap } = this._internalRenderTask;
+     return (
+       separateAnnots.form ||
+       (separateAnnots.canvas && annotationCanvasMap?.size > 0)
+@@ -3389,7 +3429,6 @@ class InternalRenderTask {
+       if (this.operatorList.lastChunk) {
+         this.gfx.endDrawing();
+         InternalRenderTask.#canvasInUse.delete(this._canvas);
+-
+         this.callback();
+       }
+     }
+diff --git a/src/display/display_utils.js b/src/display/display_utils.js
+index 2d48082ad1192..1d9a1be78ebd3 100644
+--- a/src/display/display_utils.js
++++ b/src/display/display_utils.js
+@@ -17,6 +17,7 @@ import {
+   BaseException,
+   DrawOPS,
+   FeatureTest,
++  MathClamp,
+   shadow,
+   Util,
+   warn,
+@@ -1034,6 +1035,197 @@ function makePathFromDrawOPS(data) {
+   return path;
+ }
+ 
++/**
++ * Maps between page IDs and page numbers, allowing bidirectional conversion
++ * between the two representations. This is useful when the page numbering
++ * in the PDF document doesn't match the default sequential ordering.
++ */
++class PagesMapper {
++  /**
++   * Maps page IDs to their corresponding page numbers.
++   * @type {Uint32Array|null}
++   */
++  static #idToPageNumber = null;
++
++  /**
++   * Maps page numbers to their corresponding page IDs.
++   * @type {Uint32Array|null}
++   */
++  static #pageNumberToId = null;
++
++  /**
++   * Previous mapping of page IDs to page numbers.
++   * @type {Uint32Array|null}
++   */
++  static #prevIdToPageNumber = null;
++
++  /**
++   * The total number of pages.
++   * @type {number}
++   */
++  static #pagesNumber = 0;
++
++  /**
++   * Listeners for page changes.
++   * @type {Array<function>}
++   */
++  static #listeners = [];
++
++  /**
++   * Gets the total number of pages.
++   * @returns {number} The number of pages.
++   */
++  get pagesNumber() {
++    return PagesMapper.#pagesNumber;
++  }
++
++  /**
++   * Sets the total number of pages and initializes default mappings
++   * where page IDs equal page numbers (1-indexed).
++   * @param {number} n - The total number of pages.
++   */
++  set pagesNumber(n) {
++    if (PagesMapper.#pagesNumber === n) {
++      return;
++    }
++    PagesMapper.#pagesNumber = n;
++    if (n === 0) {
++      PagesMapper.#pageNumberToId = null;
++      PagesMapper.#idToPageNumber = null;
++    }
++  }
++
++  addListener(listener) {
++    PagesMapper.#listeners.push(listener);
++  }
++
++  removeListener(listener) {
++    const index = PagesMapper.#listeners.indexOf(listener);
++    if (index >= 0) {
++      PagesMapper.#listeners.splice(index, 1);
++    }
++  }
++
++  #updateListeners() {
++    for (const listener of PagesMapper.#listeners) {
++      listener();
++    }
++  }
++
++  #init(mustInit) {
++    if (PagesMapper.#pageNumberToId) {
++      return;
++    }
++    const n = PagesMapper.#pagesNumber;
++
++    // Allocate a single array for better memory locality.
++    const array = new Uint32Array(3 * n);
++    const pageNumberToId = (PagesMapper.#pageNumberToId = array.subarray(0, n));
++    const idToPageNumber = (PagesMapper.#idToPageNumber = array.subarray(
++      n,
++      2 * n
++    ));
++    if (mustInit) {
++      for (let i = 0; i < n; i++) {
++        pageNumberToId[i] = idToPageNumber[i] = i + 1;
++      }
++    }
++    PagesMapper.#prevIdToPageNumber = array.subarray(2 * n);
++  }
++
++  /**
++   * Move a set of pages to a new position while keeping ID→number mappings in
++   * sync.
++   *
++   * @param {Set<number>} selectedPages - Page numbers being moved (1-indexed).
++   * @param {number[]} pagesToMove - Ordered list of page numbers to move.
++   * @param {number} index - Zero-based insertion index in the page-number list.
++   */
++  movePages(selectedPages, pagesToMove, index) {
++    this.#init(true);
++    const pageNumberToId = PagesMapper.#pageNumberToId;
++    const idToPageNumber = PagesMapper.#idToPageNumber;
++    PagesMapper.#prevIdToPageNumber.set(idToPageNumber);
++    const movedCount = pagesToMove.length;
++    const mappedPagesToMove = new Uint32Array(movedCount);
++    let removedBeforeTarget = 0;
++
++    for (let i = 0; i < movedCount; i++) {
++      const pageIndex = pagesToMove[i] - 1;
++      mappedPagesToMove[i] = pageNumberToId[pageIndex];
++      if (pageIndex < index) {
++        removedBeforeTarget += 1;
++      }
++    }
++
++    const pagesNumber = PagesMapper.#pagesNumber;
++    // target index after removing elements that were before it
++    let adjustedTarget = index - removedBeforeTarget;
++    const remainingLen = pagesNumber - movedCount;
++    adjustedTarget = MathClamp(adjustedTarget, 0, remainingLen);
++
++    // Create the new mapping.
++    // First copy over the pages that are not being moved.
++    // Then insert the moved pages at the target position.
++    for (let i = 0, r = 0; i < pagesNumber; i++) {
++      if (!selectedPages.has(i + 1)) {
++        pageNumberToId[r++] = pageNumberToId[i];
++      }
++    }
++
++    // Shift the pages after the target position.
++    pageNumberToId.copyWithin(
++      adjustedTarget + movedCount,
++      adjustedTarget,
++      remainingLen
++    );
++    // Finally insert the moved pages.
++    pageNumberToId.set(mappedPagesToMove, adjustedTarget);
++
++    for (let i = 0, ii = pagesNumber; i < ii; i++) {
++      idToPageNumber[pageNumberToId[i] - 1] = i + 1;
++    }
++    this.#updateListeners();
++  }
++
++  getPrevPageNumber(pageNumber) {
++    return PagesMapper.#prevIdToPageNumber[
++      PagesMapper.#pageNumberToId[pageNumber - 1] - 1
++    ];
++  }
++
++  /**
++   * Gets the page number for a given page ID.
++   * @param {number} id - The page ID (1-indexed).
++   * @returns {number} The page number, or the ID itself if no mapping exists.
++   */
++  getPageNumber(id) {
++    return PagesMapper.#idToPageNumber?.[id - 1] ?? id;
++  }
++
++  /**
++   * Gets the page ID for a given page number.
++   * @param {number} pageNumber - The page number (1-indexed).
++   * @returns {number} The page ID, or the page number itself if no mapping
++   * exists.
++   */
++  getPageId(pageNumber) {
++    return PagesMapper.#pageNumberToId?.[pageNumber - 1] ?? pageNumber;
++  }
++
++  /**
++   * Gets or creates a singleton instance of PagesMapper.
++   * @returns {PagesMapper} The singleton instance.
++   */
++  static get instance() {
++    return shadow(this, "instance", new PagesMapper());
++  }
++
++  getMapping() {
++    return PagesMapper.#pageNumberToId.subarray(0, this.pagesNumber);
++  }
++}
++
+ export {
+   applyOpacity,
+   ColorScheme,
+@@ -1054,6 +1246,7 @@ export {
+   makePathFromDrawOPS,
+   noContextMenu,
+   OutputScale,
++  PagesMapper,
+   PageViewport,
+   PDFDateString,
+   PixelsPerInch,
+diff --git a/src/display/draw_layer.js b/src/display/draw_layer.js
+index 61994012a3738..78b338c6de4b6 100644
+--- a/src/display/draw_layer.js
++++ b/src/display/draw_layer.js
+@@ -30,10 +30,6 @@ class DrawLayer {
+ 
+   static #id = 0;
+ 
+-  constructor({ pageIndex }) {
+-    this.pageIndex = pageIndex;
+-  }
+-
+   setParent(parent) {
+     if (!this.#parent) {
+       this.#parent = parent;
+@@ -103,7 +99,7 @@ class DrawLayer {
+     root.append(defs);
+     const path = DrawLayer._svgFactory.createElement("path");
+     defs.append(path);
+-    const pathId = `path_p${this.pageIndex}_${id}`;
++    const pathId = `path_${id}`;
+     path.setAttribute("id", pathId);
+     path.setAttribute("vector-effect", "non-scaling-stroke");
+ 
+@@ -135,7 +131,7 @@ class DrawLayer {
+     root.append(defs);
+     const path = DrawLayer._svgFactory.createElement("path");
+     defs.append(path);
+-    const pathId = `path_p${this.pageIndex}_${id}`;
++    const pathId = `path_${id}`;
+     path.setAttribute("id", pathId);
+     path.setAttribute("vector-effect", "non-scaling-stroke");
+ 
+@@ -143,7 +139,7 @@ class DrawLayer {
+     if (mustRemoveSelfIntersections) {
+       const mask = DrawLayer._svgFactory.createElement("mask");
+       defs.append(mask);
+-      maskId = `mask_p${this.pageIndex}_${id}`;
++      maskId = `mask_${id}`;
+       mask.setAttribute("id", maskId);
+       mask.setAttribute("maskUnits", "objectBoundingBox");
+       const rect = DrawLayer._svgFactory.createElement("rect");
+diff --git a/src/display/editor/annotation_editor_layer.js b/src/display/editor/annotation_editor_layer.js
+index 1ef6453452fef..a740d3952f514 100644
+--- a/src/display/editor/annotation_editor_layer.js
++++ b/src/display/editor/annotation_editor_layer.js
+@@ -144,6 +144,10 @@ class AnnotationEditorLayer {
+     this.#uiManager.addLayer(this);
+   }
+ 
++  updatePageIndex(newPageIndex) {
++    this.pageIndex = newPageIndex;
++  }
++
+   get isEmpty() {
+     return this.#editors.size === 0;
+   }
+diff --git a/src/display/editor/editor.js b/src/display/editor/editor.js
+index e330a4a94d802..e958bbb838485 100644
+--- a/src/display/editor/editor.js
++++ b/src/display/editor/editor.js
+@@ -209,6 +209,10 @@ class AnnotationEditor {
+     this.deleted = false;
+   }
+ 
++  updatePageIndex(newPageIndex) {
++    this.pageIndex = newPageIndex;
++  }
++
+   get editorType() {
+     return Object.getPrototypeOf(this).constructor._type;
+   }
+diff --git a/src/display/editor/tools.js b/src/display/editor/tools.js
+index 3f3b3c1da409c..75c2ca16b334d 100644
+--- a/src/display/editor/tools.js
++++ b/src/display/editor/tools.js
+@@ -948,6 +948,7 @@ class AnnotationEditorUIManager {
+       evt => this.updateParams(evt.type, evt.value),
+       { signal }
+     );
++    eventBus._on("pagesedited", this.onPagesEdited.bind(this), { signal });
+     window.addEventListener(
+       "pointerdown",
+       () => {
+@@ -1259,6 +1260,26 @@ class AnnotationEditorUIManager {
+     }
+   }
+ 
++  onPagesEdited({ pagesMapper }) {
++    for (const editor of this.#allEditors.values()) {
++      editor.updatePageIndex(
++        pagesMapper.getPrevPageNumber(editor.pageIndex + 1) - 1
++      );
++    }
++    const allLayers = this.#allLayers;
++    const newAllLayers = (this.#allLayers = new Map());
++    for (const [pageIndex, layer] of allLayers) {
++      const prevPageIndex = pagesMapper.getPrevPageNumber(pageIndex + 1) - 1;
++      if (prevPageIndex === -1) {
++        // TODO: handle the case where the deletion of the page has been undone.
++        layer.destroy();
++        continue;
++      }
++      newAllLayers.set(prevPageIndex, layer);
++      layer.updatePageIndex(prevPageIndex);
++    }
++  }
++
+   onPageChanging({ pageNumber }) {
+     this.#currentPageIndex = pageNumber - 1;
+   }
+diff --git a/src/pdf.js b/src/pdf.js
+index 707add654bcf9..c5fd11f9f9070 100644
+--- a/src/pdf.js
++++ b/src/pdf.js
+@@ -57,6 +57,7 @@ import {
+   isPdfFile,
+   noContextMenu,
+   OutputScale,
++  PagesMapper,
+   PDFDateString,
+   PixelsPerInch,
+   RenderingCancelledException,
+@@ -128,6 +129,7 @@ globalThis.pdfjsLib = {
+   normalizeUnicode,
+   OPS,
+   OutputScale,
++  PagesMapper,
+   PasswordResponses,
+   PDFDataRangeTransport,
+   PDFDateString,
+@@ -187,6 +189,7 @@ export {
+   normalizeUnicode,
+   OPS,
+   OutputScale,
++  PagesMapper,
+   PasswordResponses,
+   PDFDataRangeTransport,
+   PDFDateString,
+diff --git a/test/integration/reorganize_pages_spec.mjs b/test/integration/reorganize_pages_spec.mjs
+index c4332a7ea2486..2f258e5e7362f 100644
+--- a/test/integration/reorganize_pages_spec.mjs
++++ b/test/integration/reorganize_pages_spec.mjs
+@@ -59,20 +59,40 @@ function waitForPagesEdited(page) {
+   });
+ }
+ 
++async function waitForHavingContents(page, expected) {
++  await page.evaluate(() => {
++    // Make sure all the pages will be visible.
++    window.PDFViewerApplication.pdfViewer.scrollMode = 2 /* = ScrollMode.WRAPPED = */;
++    window.PDFViewerApplication.pdfViewer.updateScale({
++      drawingDelay: 0,
++      scaleFactor: 0.01,
++    });
++  });
++  return page.waitForFunction(
++    ex => {
++      const buffer = [];
++      for (const textLayer of document.querySelectorAll(".textLayer")) {
++        buffer.push(parseInt(textLayer.textContent.trim(), 10));
++      }
++      return ex.length === buffer.length && ex.every((v, i) => v === buffer[i]);
++    },
++    {},
++    expected
++  );
++}
++
+ function getSearchResults(page) {
+   return page.evaluate(() => {
+     const pages = document.querySelectorAll(".page");
+     const results = [];
+     for (let i = 0; i < pages.length; i++) {
+       const domPage = pages[i];
+-      const pageNumber = parseInt(domPage.getAttribute("data-page-number"), 10);
+       const highlights = domPage.querySelectorAll("span.highlight");
+       if (highlights.length === 0) {
+         continue;
+       }
+       results.push([
+         i + 1,
+-        pageNumber,
+         Array.from(highlights).map(span => span.textContent),
+       ]);
+     }
+@@ -184,11 +204,13 @@ describe("Reorganize Pages View", () => {
+             10
+           );
+           const pagesMapping = await awaitPromise(handlePagesEdited);
++          const expected = [
++            2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
++          ];
+           expect(pagesMapping)
+             .withContext(`In ${browserName}`)
+-            .toEqual([
+-              2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+-            ]);
++            .toEqual(expected);
++          await waitForHavingContents(page, expected);
+         })
+       );
+     });
+@@ -208,11 +230,13 @@ describe("Reorganize Pages View", () => {
+             10
+           );
+           const pagesMapping = await awaitPromise(handlePagesEdited);
++          const expected = [
++            2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
++          ];
+           expect(pagesMapping)
+             .withContext(`In ${browserName}`)
+-            .toEqual([
+-              2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+-            ]);
++            .toEqual(expected);
++          await waitForHavingContents(page, expected);
+         })
+       );
+     });
+@@ -233,11 +257,13 @@ describe("Reorganize Pages View", () => {
+             10
+           );
+           const pagesMapping = await awaitPromise(handlePagesEdited);
++          const expected = [
++            3, 4, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
++          ];
+           expect(pagesMapping)
+             .withContext(`In ${browserName}`)
+-            .toEqual([
+-              3, 4, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+-            ]);
++            .toEqual(expected);
++          await waitForHavingContents(page, expected);
+         })
+       );
+     });
+@@ -266,11 +292,13 @@ describe("Reorganize Pages View", () => {
+             10
+           );
+           const pagesMapping = await awaitPromise(handlePagesEdited);
++          const expected = [
++            2, 1, 14, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17,
++          ];
+           expect(pagesMapping)
+             .withContext(`In ${browserName}`)
+-            .toEqual([
+-              2, 1, 14, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17,
+-            ]);
++            .toEqual(expected);
++          await waitForHavingContents(page, expected);
+         })
+       );
+     });
+@@ -296,10 +324,10 @@ describe("Reorganize Pages View", () => {
+           );
+           await awaitPromise(handlePagesEdited);
+           await page.waitForSelector(
+-            `${getThumbnailSelector(2)}[aria-current="false"]`
++            `${getThumbnailSelector(2)}[aria-current="page"]`
+           );
+           await page.waitForSelector(
+-            `${getThumbnailSelector(1)}[aria-current="page"]`
++            `${getThumbnailSelector(1)}[aria-current="false"]`
+           );
+         })
+       );
+@@ -344,16 +372,16 @@ describe("Reorganize Pages View", () => {
+           expect(results)
+             .withContext(`In ${browserName}`)
+             .toEqual([
+-              // Page number, Id, [matches]
+-              [1, 1, ["1"]],
+-              [10, 10, ["1"]],
+-              [11, 11, ["1", "1"]],
+-              [12, 12, ["1"]],
+-              [13, 13, ["1"]],
+-              [14, 14, ["1"]],
+-              [15, 15, ["1"]],
+-              [16, 16, ["1"]],
+-              [17, 17, ["1"]],
++              // Page number, [matches]
++              [1, ["1"]],
++              [10, ["1"]],
++              [11, ["1", "1"]],
++              [12, ["1"]],
++              [13, ["1"]],
++              [14, ["1"]],
++              [15, ["1"]],
++              [16, ["1"]],
++              [17, ["1"]],
+             ]);
+ 
+           await movePages(page, [11, 2], 3);
+@@ -373,16 +401,16 @@ describe("Reorganize Pages View", () => {
+           expect(results)
+             .withContext(`In ${browserName}`)
+             .toEqual([
+-              // Page number, Id, [matches]
+-              [1, 1, ["1"]],
+-              [4, 11, ["1", "1"]],
+-              [11, 10, ["1"]],
+-              [12, 12, ["1"]],
+-              [13, 13, ["1"]],
+-              [14, 14, ["1"]],
+-              [15, 15, ["1"]],
+-              [16, 16, ["1"]],
+-              [17, 17, ["1"]],
++              // Page number, [matches]
++              [1, ["1"]],
++              [4, ["1", "1"]],
++              [11, ["1"]],
++              [12, ["1"]],
++              [13, ["1"]],
++              [14, ["1"]],
++              [15, ["1"]],
++              [16, ["1"]],
++              [17, ["1"]],
+             ]);
+ 
+           await movePages(page, [13], 0);
+@@ -402,16 +430,16 @@ describe("Reorganize Pages View", () => {
+           expect(results)
+             .withContext(`In ${browserName}`)
+             .toEqual([
+-              // Page number, Id, [matches]
+-              [1, 13, ["1"]],
+-              [2, 1, ["1"]],
+-              [5, 11, ["1", "1"]],
+-              [12, 10, ["1"]],
+-              [13, 12, ["1"]],
+-              [14, 14, ["1"]],
+-              [15, 15, ["1"]],
+-              [16, 16, ["1"]],
+-              [17, 17, ["1"]],
++              // Page number, [matches]
++              [1, ["1"]],
++              [2, ["1"]],
++              [5, ["1", "1"]],
++              [12, ["1"]],
++              [13, ["1"]],
++              [14, ["1"]],
++              [15, ["1"]],
++              [16, ["1"]],
++              [17, ["1"]],
+             ]);
+         })
+       );
+@@ -442,13 +470,6 @@ describe("Reorganize Pages View", () => {
+           await movePages(page, [2], 10);
+           await scrollIntoView(page, getAnnotationSelector("107R"));
+           await page.click(getAnnotationSelector("107R"));
+-          await page.waitForSelector(
+-            ".page[data-page-number='10'] + .page[data-page-number='2']",
+-            {
+-              visible: true,
+-            }
+-          );
+-
+           const currentPage = await page.$eval(
+             "#pageNumber",
+             el => el.valueAsNumber
+@@ -469,12 +490,6 @@ describe("Reorganize Pages View", () => {
+           await page.waitForSelector("#outlinesView", { visible: true });
+ 
+           await page.click("#outlinesView .treeItem:nth-child(2)");
+-          await page.waitForSelector(
+-            ".page[data-page-number='10'] + .page[data-page-number='2']",
+-            {
+-              visible: true,
+-            }
+-          );
+ 
+           const currentPage = await page.$eval(
+             "#pageNumber",
+diff --git a/test/integration/signature_editor_spec.mjs b/test/integration/signature_editor_spec.mjs
+index ce94f44dcd750..83f99d33e9b85 100644
+--- a/test/integration/signature_editor_spec.mjs
++++ b/test/integration/signature_editor_spec.mjs
+@@ -177,7 +177,7 @@ describe("Signature Editor", () => {
+           const editorSelector = getEditorSelector(0);
+           await page.waitForSelector(editorSelector, { visible: true });
+           await page.waitForSelector(
+-            `.canvasWrapper > svg use[href="#path_p1_0"]`,
++            `.canvasWrapper > svg use[href="#path_0"]`,
+             { visible: true }
+           );
+ 
+@@ -282,7 +282,7 @@ describe("Signature Editor", () => {
+           });
+ 
+           await page.waitForSelector(
+-            ".canvasWrapper > svg use[href='#path_p1_0']"
++            ".canvasWrapper > svg use[href='#path_0']"
+           );
+         })
+       );
+@@ -340,7 +340,7 @@ describe("Signature Editor", () => {
+           });
+ 
+           await page.waitForSelector(
+-            ".canvasWrapper > svg use[href='#path_p1_0']"
++            ".canvasWrapper > svg use[href='#path_0']"
+           );
+         })
+       );
+@@ -427,7 +427,7 @@ describe("Signature Editor", () => {
+           const editorSelector = getEditorSelector(0);
+           await page.waitForSelector(editorSelector, { visible: true });
+           await page.waitForSelector(
+-            `.canvasWrapper > svg use[href="#path_p1_0"]`,
++            `.canvasWrapper > svg use[href="#path_0"]`,
+             { visible: true }
+           );
+ 
+@@ -527,13 +527,13 @@ describe("Signature Editor", () => {
+           const editorSelector = getEditorSelector(0);
+           await page.waitForSelector(editorSelector, { visible: true });
+           await page.waitForSelector(
+-            `.canvasWrapper > svg use[href="#path_p1_0"]`,
++            `.canvasWrapper > svg use[href="#path_0"]`,
+             { visible: true }
+           );
+ 
+           const color = await page.evaluate(() => {
+             const use = document.querySelector(
+-              `.canvasWrapper > svg use[href="#path_p1_0"]`
++              `.canvasWrapper > svg use[href="#path_0"]`
+             );
+             return use.parentNode.getAttribute("fill");
+           });
+@@ -583,13 +583,13 @@ describe("Signature Editor", () => {
+           const editorSelector = getEditorSelector(0);
+           await page.waitForSelector(editorSelector, { visible: true });
+           await page.waitForSelector(
+-            `.canvasWrapper > svg use[href="#path_p1_0"]`,
++            `.canvasWrapper > svg use[href="#path_0"]`,
+             { visible: true }
+           );
+ 
+           const color = await page.evaluate(() => {
+             const use = document.querySelector(
+-              `.canvasWrapper > svg use[href="#path_p1_0"]`
++              `.canvasWrapper > svg use[href="#path_0"]`
+             );
+             return use.parentNode.getAttribute("fill");
+           });
+@@ -672,7 +672,7 @@ describe("Signature Editor", () => {
+           });
+           const { width, height } = await getRect(
+             page,
+-            ".canvasWrapper > svg use[href='#path_p1_0']"
++            ".canvasWrapper > svg use[href='#path_0']"
+           );
+ 
+           expect(Math.abs(contentWidth / width - contentHeight / height))
+diff --git a/test/unit/pdf_spec.js b/test/unit/pdf_spec.js
+index 35e92b9ae6ebf..1a3b32581c2f7 100644
+--- a/test/unit/pdf_spec.js
++++ b/test/unit/pdf_spec.js
+@@ -48,6 +48,7 @@ import {
+   isPdfFile,
+   noContextMenu,
+   OutputScale,
++  PagesMapper,
+   PDFDateString,
+   PixelsPerInch,
+   RenderingCancelledException,
+@@ -112,6 +113,7 @@ const expectedAPI = Object.freeze({
+   normalizeUnicode,
+   OPS,
+   OutputScale,
++  PagesMapper,
+   PasswordResponses,
+   PDFDataRangeTransport,
+   PDFDateString,
+diff --git a/web/draw_layer_builder.js b/web/draw_layer_builder.js
+index 003a84e36897a..6fe0729550738 100644
+--- a/web/draw_layer_builder.js
++++ b/web/draw_layer_builder.js
+@@ -15,11 +15,6 @@
+ 
+ import { DrawLayer } from "pdfjs-lib";
+ 
+-/**
+- * @typedef {Object} DrawLayerBuilderOptions
+- * @property {number} pageIndex
+- */
+-
+ /**
+  * @typedef {Object} DrawLayerBuilderRenderOptions
+  * @property {string} [intent] - The default value is "display".
+@@ -28,13 +23,6 @@ import { DrawLayer } from "pdfjs-lib";
+ class DrawLayerBuilder {
+   #drawLayer = null;
+ 
+-  /**
+-   * @param {DrawLayerBuilderOptions} options
+-   */
+-  constructor(options) {
+-    this.pageIndex = options.pageIndex;
+-  }
+-
+   /**
+    * @param {DrawLayerBuilderRenderOptions} options
+    * @returns {Promise<void>}
+@@ -43,9 +31,7 @@ class DrawLayerBuilder {
+     if (intent !== "display" || this.#drawLayer || this._cancelled) {
+       return;
+     }
+-    this.#drawLayer = new DrawLayer({
+-      pageIndex: this.pageIndex,
+-    });
++    this.#drawLayer = new DrawLayer();
+   }
+ 
+   cancel() {
+diff --git a/web/pdf_find_controller.js b/web/pdf_find_controller.js
+index 52b63b8a71612..64ca3d6a37a79 100644
+--- a/web/pdf_find_controller.js
++++ b/web/pdf_find_controller.js
+@@ -17,11 +17,7 @@
+ /** @typedef {import("./event_utils").EventBus} EventBus */
+ /** @typedef {import("./interfaces").IPDFLinkService} IPDFLinkService */
+ 
+-import {
+-  binarySearchFirstItem,
+-  PagesMapper,
+-  scrollIntoView,
+-} from "./ui_utils.js";
++import { binarySearchFirstItem, scrollIntoView } from "./ui_utils.js";
+ import { getCharacterType, getNormalizeWithNFKC } from "./pdf_find_utils.js";
+ 
+ const FindState = {
+@@ -426,8 +422,6 @@ class PDFFindController {
+ 
+   #visitedPagesCount = 0;
+ 
+-  #pagesMapper = PagesMapper.instance;
+-
+   /**
+    * @param {PDFFindControllerOptions} options
+    */
+@@ -801,13 +795,12 @@ class PDFFindController {
+     if (query.length === 0) {
+       return; // Do nothing: the matches should be wiped out already.
+     }
+-    const pageId = this.getPageId(pageIndex);
+-    const pageContent = this._pageContents[pageId];
++    const pageContent = this._pageContents[pageIndex];
+     const matcherResult = this.match(query, pageContent, pageIndex);
+ 
+     const matches = (this._pageMatches[pageIndex] = []);
+     const matchesLength = (this._pageMatchesLength[pageIndex] = []);
+-    const diffs = this._pageDiffs[pageId];
++    const diffs = this._pageDiffs[pageIndex];
+ 
+     matcherResult?.forEach(({ index, length }) => {
+       const [matchPos, matchLen] = getOriginalIndex(diffs, index, length);
+@@ -856,7 +849,7 @@ class PDFFindController {
+    *   page.
+    */
+   match(query, pageContent, pageIndex) {
+-    const hasDiacritics = this._hasDiacritics[this.getPageId(pageIndex)];
++    const hasDiacritics = this._hasDiacritics[pageIndex];
+ 
+     let isUnicode = false;
+     if (typeof query === "string") {
+@@ -957,14 +950,6 @@ class PDFFindController {
+     }
+   }
+ 
+-  getPageNumber(idx) {
+-    return this.#pagesMapper.getPageNumber(idx + 1) - 1;
+-  }
+-
+-  getPageId(pageNumber) {
+-    return this.#pagesMapper.getPageId(pageNumber + 1) - 1;
+-  }
+-
+   #updatePage(index) {
+     if (this._scrollMatches && this._selected.pageIdx === index) {
+       // If the page is selected, scroll the page into view, which triggers
+@@ -976,7 +961,6 @@ class PDFFindController {
+     this._eventBus.dispatch("updatetextlayermatches", {
+       source: this,
+       pageIndex: index,
+-      pageId: this.getPageId(index),
+     });
+   }
+ 
+@@ -984,7 +968,6 @@ class PDFFindController {
+     this._eventBus.dispatch("updatetextlayermatches", {
+       source: this,
+       pageIndex: -1,
+-      pageId: -1,
+     });
+   }
+ 
+@@ -1016,7 +999,7 @@ class PDFFindController {
+           continue;
+         }
+         this._pendingFindMatches.add(i);
+-        this._extractTextPromises[this.getPageId(i)].then(() => {
++        this._extractTextPromises[i].then(() => {
+           this._pendingFindMatches.delete(i);
+           this.#calculateMatch(i);
+         });
+@@ -1144,12 +1127,23 @@ class PDFFindController {
+     }
+   }
+ 
+-  #onPagesEdited() {
++  #onPagesEdited({ pagesMapper }) {
+     if (this._extractTextPromises.length === 0) {
+       return;
+     }
+     this.#onFindBarClose();
+     this._dirtyMatch = true;
++    const prevTextPromises = this._extractTextPromises;
++    const extractTextPromises = (this._extractTextPromises.length = []);
++    for (let i = 0, ii = pagesMapper.length; i < ii; i++) {
++      const prevPageIndex = pagesMapper.getPrevPageNumber(i + 1) - 1;
++      if (prevPageIndex === -1) {
++        continue;
++      }
++      extractTextPromises.push(
++        prevTextPromises[prevPageIndex] || Promise.resolve()
++      );
++    }
+   }
+ 
+   #onFindBarClose(evt) {
+diff --git a/web/pdf_link_service.js b/web/pdf_link_service.js
+index b3b2329c829a4..885de2bc83130 100644
+--- a/web/pdf_link_service.js
++++ b/web/pdf_link_service.js
+@@ -16,8 +16,8 @@
+ /** @typedef {import("./event_utils").EventBus} EventBus */
+ /** @typedef {import("./interfaces").IPDFLinkService} IPDFLinkService */
+ 
+-import { PagesMapper, parseQueryString } from "./ui_utils.js";
+ import { isValidExplicitDest } from "pdfjs-lib";
++import { parseQueryString } from "./ui_utils.js";
+ 
+ const DEFAULT_LINK_REL = "noopener noreferrer nofollow";
+ 
+@@ -50,8 +50,6 @@ const LinkTarget = {
+ class PDFLinkService {
+   externalLinkEnabled = true;
+ 
+-  #pagesMapper = PagesMapper.instance;
+-
+   /**
+    * @param {PDFLinkServiceOptions} options
+    */
+@@ -140,7 +138,7 @@ class PDFLinkService {
+     if (!this.pdfDocument) {
+       return;
+     }
+-    let namedDest, explicitDest, pageId;
++    let namedDest, explicitDest, pageNumber;
+     if (typeof dest === "string") {
+       namedDest = dest;
+       explicitDest = await this.pdfDocument.getDestination(dest);
+@@ -158,13 +156,13 @@ class PDFLinkService {
+     const [destRef] = explicitDest;
+ 
+     if (destRef && typeof destRef === "object") {
+-      pageId = this.pdfDocument.cachedPageNumber(destRef);
++      pageNumber = this.pdfDocument.cachedPageNumber(destRef);
+ 
+-      if (!pageId) {
++      if (!pageNumber) {
+         // Fetch the page reference if it's not yet available. This could
+         // only occur during loading, before all pages have been resolved.
+         try {
+-          pageId = (await this.pdfDocument.getPageIndex(destRef)) + 1;
++          pageNumber = (await this.pdfDocument.getPageIndex(destRef)) + 1;
+         } catch {
+           console.error(
+             `goToDestination: "${destRef}" is not a valid page reference, for dest="${dest}".`
+@@ -173,25 +171,20 @@ class PDFLinkService {
+         }
+       }
+     } else if (Number.isInteger(destRef)) {
+-      pageId = destRef + 1;
++      pageNumber = destRef + 1;
+     }
+-    if (!pageId || pageId < 1 || pageId > this.pagesCount) {
++    if (!pageNumber || pageNumber < 1 || pageNumber > this.pagesCount) {
+       console.error(
+-        `goToDestination: "${pageId}" is not a valid page number, for dest="${dest}".`
++        `goToDestination: "${pageNumber}" is not a valid page number, for dest="${dest}".`
+       );
+       return;
+     }
+ 
+-    const pageNumber = this.#pagesMapper.getPageNumber(pageId);
+-    if (pageNumber === null) {
+-      return;
+-    }
+-
+     if (this.pdfHistory) {
+       // Update the browser history before scrolling the new destination into
+       // view, to be able to accurately capture the current document position.
+       this.pdfHistory.pushCurrentPosition();
+-      this.pdfHistory.push({ namedDest, explicitDest, pageNumber: pageId });
++      this.pdfHistory.push({ namedDest, explicitDest, pageNumber });
+     }
+ 
+     this.pdfViewer.scrollPageIntoView({
+@@ -204,7 +197,7 @@ class PDFLinkService {
+     this.eventBus._on(
+       "textlayerrendered",
+       evt => {
+-        if (evt.pageNumber === pageId) {
++        if (evt.pageNumber === pageNumber) {
+           evt.source.textLayer.div.focus();
+           ac.abort();
+         }
+diff --git a/web/pdf_page_view.js b/web/pdf_page_view.js
+index 15968a8f28b51..b3364661a2ede 100644
+--- a/web/pdf_page_view.js
++++ b/web/pdf_page_view.js
+@@ -319,6 +319,25 @@ class PDFPageView extends BasePDFPageView {
+     );
+   }
+ 
++  updatePageNumber(newPageNumber) {
++    if (this.id === newPageNumber) {
++      return;
++    }
++    this.id = newPageNumber;
++    this.renderingId = `page${newPageNumber}`;
++    if (this.pdfPage) {
++      this.pdfPage.pageNumber = newPageNumber;
++    }
++    // TODO: do we set the page label ?
++    this.setPageLabel(this.pageLabel);
++    const { div } = this;
++    div.setAttribute("data-page-number", newPageNumber);
++    div.setAttribute("data-l10n-args", JSON.stringify({ page: newPageNumber }));
++    this._textHighlighter.pageIdx = newPageNumber - 1;
++    // Don't update the page index for the draw layer, since it's just used as
++    // an identifier.
++  }
++
+   setPdfPage(pdfPage) {
+     if (
+       (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) &&
+@@ -1116,9 +1135,7 @@ class PDFPageView extends BasePDFPageView {
+       if (!annotationEditorUIManager) {
+         return;
+       }
+-      this.drawLayer ||= new DrawLayerBuilder({
+-        pageIndex: this.id,
+-      });
++      this.drawLayer ||= new DrawLayerBuilder();
+       await this.#renderDrawLayer();
+       this.drawLayer.setParent(canvasWrapper);
+ 
+diff --git a/web/pdf_thumbnail_view.js b/web/pdf_thumbnail_view.js
+index 1b6caeba99fcf..c1f72e6ec69f4 100644
+--- a/web/pdf_thumbnail_view.js
++++ b/web/pdf_thumbnail_view.js
+@@ -100,7 +100,7 @@ class PDFThumbnailView {
+     enableSplitMerge = false,
+   }) {
+     this.id = id;
+-    this.renderingId = "thumbnail" + id;
++    this.renderingId = `thumbnail${id}`;
+     this.pageLabel = null;
+ 
+     this.pdfPage = null;
+@@ -144,6 +144,14 @@ class PDFThumbnailView {
+     container.append(imageContainer);
+   }
+ 
++  updateId(newId) {
++    this.id = newId;
++    this.renderingId = `thumbnail${newId}`;
++    this.div.setAttribute("page-number", newId);
++    // TODO: do we set the page label ?
++    this.setPageLabel(this.pageLabel);
++  }
++
+   #updateDims() {
+     const { width, height } = this.viewport;
+     const ratio = width / height;
+diff --git a/web/pdf_thumbnail_viewer.js b/web/pdf_thumbnail_viewer.js
+index 6a71654cc50e2..afc30a36b899c 100644
+--- a/web/pdf_thumbnail_viewer.js
++++ b/web/pdf_thumbnail_viewer.js
+@@ -24,11 +24,10 @@ import {
+   binarySearchFirstItem,
+   getVisibleElements,
+   isValidRotation,
+-  PagesMapper,
+   RenderingStates,
+   watchScroll,
+ } from "./ui_utils.js";
+-import { MathClamp, noContextMenu, stopEvent } from "pdfjs-lib";
++import { MathClamp, noContextMenu, PagesMapper, stopEvent } from "pdfjs-lib";
+ import { PDFThumbnailView } from "./pdf_thumbnail_view.js";
+ 
+ const SCROLL_OPTIONS = {
+@@ -110,8 +109,6 @@ class PDFThumbnailViewer {
+ 
+   #pagesMapper = PagesMapper.instance;
+ 
+-  #originalThumbnails = null;
+-
+   /**
+    * @param {PDFThumbnailViewerOptions} options
+    */
+@@ -385,6 +382,26 @@ class PDFThumbnailViewer {
+     ));
+   }
+ 
++  #updateThumbnails() {
++    const pagesMapper = this.#pagesMapper;
++    this.container.replaceChildren();
++    const prevThumbnails = this._thumbnails;
++    const newThumbnails = (this._thumbnails = []);
++    const fragment = document.createDocumentFragment();
++    for (let i = 0, ii = pagesMapper.pagesNumber; i < ii; i++) {
++      const prevPageIndex = pagesMapper.getPrevPageNumber(i + 1) - 1;
++      if (prevPageIndex === -1) {
++        continue;
++      }
++      const newThumbnail = prevThumbnails[prevPageIndex];
++      newThumbnails.push(newThumbnail);
++      newThumbnail.updateId(i + 1);
++      newThumbnail.checkbox.checked = false;
++      fragment.append(newThumbnail.div);
++    }
++    this.container.append(fragment);
++  }
++
+   #onStartDragging(draggedThumbnail) {
+     this.#currentScrollTop = this.scrollableContainer.scrollTop;
+     this.#currentScrollBottom =
+@@ -449,8 +466,6 @@ class PDFThumbnailViewer {
+     this.#dragAC.abort();
+     this.#dragAC = null;
+ 
+-    this.#originalThumbnails ||= this._thumbnails;
+-
+     this.container.classList.remove("isDragging");
+     for (const selected of this.#selectedPages) {
+       const thumbnail = this._thumbnails[selected - 1];
+@@ -481,11 +496,7 @@ class PDFThumbnailViewer {
+     ) {
+       const newIndex = lastDraggedOverIndex + 1;
+       const pagesToMove = Array.from(selectedPages).sort((a, b) => a - b);
+-      const movedCount = pagesToMove.length;
+-      const thumbnails = this._thumbnails;
+       const pagesMapper = this.#pagesMapper;
+-      const N = thumbnails.length;
+-      pagesMapper.pagesNumber = N;
+       const currentPageId = pagesMapper.getPageId(this._currentPageNumber);
+       const newCurrentPageId = pagesMapper.getPageId(
+         isNaN(this.#pageNumberToRemove)
+@@ -493,37 +504,14 @@ class PDFThumbnailViewer {
+           : this.#pageNumberToRemove
+       );
+ 
+-      // Move the thumbnails in the DOM.
+-      let thumbnail = thumbnails[pagesToMove[0] - 1];
+-      thumbnail.checkbox.checked = false;
+-      if (newIndex === 0) {
+-        thumbnails[0].div.before(thumbnail.div);
+-      } else {
+-        thumbnails[newIndex - 1].div.after(thumbnail.div);
+-      }
+-      for (let i = 1; i < movedCount; i++) {
+-        const newThumbnail = thumbnails[pagesToMove[i] - 1];
+-        newThumbnail.checkbox.checked = false;
+-        thumbnail.div.after(newThumbnail.div);
+-        thumbnail = newThumbnail;
+-      }
+-
+       this.eventBus.dispatch("beforepagesedited", {
+         source: this,
+         pagesMapper,
+-        index: newIndex,
+-        pagesToMove,
+       });
+ 
+       pagesMapper.movePages(selectedPages, pagesToMove, newIndex);
+ 
+-      const newThumbnails = (this._thumbnails = new Array(N));
+-      const originalThumbnails = this.#originalThumbnails;
+-      for (let i = 0; i < N; i++) {
+-        const newThumbnail = (newThumbnails[i] =
+-          originalThumbnails[pagesMapper.getPageId(i + 1) - 1]);
+-        newThumbnail.div.setAttribute("page-number", i + 1);
+-      }
++      this.#updateThumbnails();
+ 
+       this._currentPageNumber = pagesMapper.getPageNumber(currentPageId);
+       this.#computeThumbnailsPosition();
+@@ -534,8 +522,6 @@ class PDFThumbnailViewer {
+       this.eventBus.dispatch("pagesedited", {
+         source: this,
+         pagesMapper,
+-        index: newIndex,
+-        pagesToMove,
+       });
+ 
+       const newCurrentPageNumber = pagesMapper.getPageNumber(newCurrentPageId);
+diff --git a/web/pdf_viewer.js b/web/pdf_viewer.js
+index c6491d3f45e45..70943ad47669b 100644
+--- a/web/pdf_viewer.js
++++ b/web/pdf_viewer.js
+@@ -33,6 +33,7 @@ import {
+   AnnotationEditorUIManager,
+   AnnotationMode,
+   MathClamp,
++  PagesMapper,
+   PermissionFlag,
+   PixelsPerInch,
+   shadow,
+@@ -52,7 +53,6 @@ import {
+   MAX_AUTO_SCALE,
+   MAX_SCALE,
+   MIN_SCALE,
+-  PagesMapper,
+   PresentationModeState,
+   removeNullCharacters,
+   RenderingStates,
+@@ -289,8 +289,6 @@ class PDFViewer {
+ 
+   #viewerAlert = null;
+ 
+-  #originalPages = null;
+-
+   #pagesMapper = PagesMapper.instance;
+ 
+   /**
+@@ -885,6 +883,7 @@ class PDFViewer {
+       this.#annotationEditorMode = AnnotationEditorType.NONE;
+ 
+       this.#printingAllowed = true;
++      this.#pagesMapper.pagesNumber = 0;
+     }
+ 
+     this.pdfDocument = pdfDocument;
+@@ -1180,37 +1179,40 @@ class PDFViewer {
+       });
+   }
+ 
+-  onBeforePagesEdited() {
+-    this._currentPageId = this.#pagesMapper.getPageId(this._currentPageNumber);
++  async onBeforePagesEdited({ pagesMapper }) {
++    await this._pagesCapability.promise;
++    this._currentPageId = pagesMapper.getPageId(this._currentPageNumber);
+   }
+ 
+-  onPagesEdited({ index, pagesToMove }) {
+-    const pagesMapper = this.#pagesMapper;
++  onPagesEdited({ pagesMapper }) {
+     this._currentPageNumber = pagesMapper.getPageNumber(this._currentPageId);
++    const prevPages = this._pages;
++    const newPages = (this._pages = []);
++    for (let i = 0, ii = pagesMapper.pagesNumber; i < ii; i++) {
++      const prevPageNumber = pagesMapper.getPrevPageNumber(i + 1) - 1;
++      if (prevPageNumber === -1) {
++        continue;
++      }
++      const page = prevPages[prevPageNumber];
++      newPages[i] = page;
++      page.updatePageNumber(i + 1);
++    }
+ 
+     const viewerElement =
+       this._scrollMode === ScrollMode.PAGE ? null : this.viewer;
+     if (viewerElement) {
+-      const pages = this._pages;
+-      let page = pages[pagesToMove[0] - 1].div;
+-      if (index === 0) {
+-        pages[0].div.before(page);
+-      } else {
+-        pages[index - 1].div.after(page);
+-      }
+-      for (let i = 1, ii = pagesToMove.length; i < ii; i++) {
+-        const newPage = pages[pagesToMove[i] - 1].div;
+-        page.after(newPage);
+-        page = newPage;
++      viewerElement.replaceChildren();
++      const fragment = document.createDocumentFragment();
++      for (let i = 0, ii = pagesMapper.pagesNumber; i < ii; i++) {
++        const { div } = newPages[i];
++        div.setAttribute("data-page-number", i + 1);
++        fragment.append(div);
+       }
++      viewerElement.append(fragment);
+     }
+-
+-    this.#originalPages ||= this._pages;
+-    const newPages = (this._pages = []);
+-    for (let i = 0, ii = pagesMapper.pagesNumber; i < ii; i++) {
+-      const pageView = this.#originalPages[pagesMapper.getPageId(i + 1) - 1];
+-      newPages.push(pageView);
+-    }
++    setTimeout(() => {
++      this.forceRendering();
++    });
+   }
+ 
+   /**
+@@ -1357,12 +1359,11 @@ class PDFViewer {
+ 
+   #scrollIntoView(pageView, pageSpot = null) {
+     const { div, id } = pageView;
+-    const pageNumber = this.#pagesMapper.getPageNumber(id);
+ 
+     // Ensure that `this._currentPageNumber` is correct, when `#scrollIntoView`
+     // is called directly (and not from `#resetCurrentPageView`).
+-    if (this._currentPageNumber !== pageNumber) {
+-      this._setCurrentPageNumber(pageNumber);
++    if (this._currentPageNumber !== id) {
++      this._setCurrentPageNumber(id);
+     }
+     if (this._scrollMode === ScrollMode.PAGE) {
+       this.#ensurePageViewVisible();
+@@ -1823,22 +1824,20 @@ class PDFViewer {
+       this._spreadMode === SpreadMode.NONE &&
+       (this._scrollMode === ScrollMode.PAGE ||
+         this._scrollMode === ScrollMode.VERTICAL);
+-    const currentId = this.#pagesMapper.getPageId(this._currentPageNumber);
++    const currentPageNumber = this._currentPageNumber;
+     let stillFullyVisible = false;
+ 
+     for (const page of visiblePages) {
+       if (page.percent < 100) {
+         break;
+       }
+-      if (page.id === currentId && isSimpleLayout) {
++      if (page.id === currentPageNumber && isSimpleLayout) {
+         stillFullyVisible = true;
+         break;
+       }
+     }
+     this._setCurrentPageNumber(
+-      stillFullyVisible
+-        ? this._currentPageNumber
+-        : this.#pagesMapper.getPageNumber(visiblePages[0].id)
++      stillFullyVisible ? this._currentPageNumber : visiblePages[0].id
+     );
+ 
+     this._updateLocation(visible.first);
+diff --git a/web/pdfjs.js b/web/pdfjs.js
+index e7a9fa3bcf169..f85e5bcede613 100644
+--- a/web/pdfjs.js
++++ b/web/pdfjs.js
+@@ -49,6 +49,7 @@ const {
+   normalizeUnicode,
+   OPS,
+   OutputScale,
++  PagesMapper,
+   PasswordResponses,
+   PDFDataRangeTransport,
+   PDFDateString,
+@@ -108,6 +109,7 @@ export {
+   normalizeUnicode,
+   OPS,
+   OutputScale,
++  PagesMapper,
+   PasswordResponses,
+   PDFDataRangeTransport,
+   PDFDateString,
+diff --git a/web/text_highlighter.js b/web/text_highlighter.js
+index 9b8e3f5576219..72d883f4627af 100644
+--- a/web/text_highlighter.js
++++ b/web/text_highlighter.js
+@@ -77,7 +77,7 @@ class TextHighlighter {
+       this.eventBus._on(
+         "updatetextlayermatches",
+         evt => {
+-          if (evt.pageId === this.pageIdx || evt.pageId === -1) {
++          if (evt.pageIndex === this.pageIdx || evt.pageIndex === -1) {
+             this._updateMatches();
+           }
+         },
+@@ -159,8 +159,7 @@ class TextHighlighter {
+     const { findController, pageIdx } = this;
+     const { textContentItemsStr, textDivs } = this;
+ 
+-    const isSelectedPage =
+-      findController.getPageNumber(pageIdx) === findController.selected.pageIdx;
++    const isSelectedPage = pageIdx === findController.selected.pageIdx;
+     const selectedMatchIdx = findController.selected.matchIdx;
+     const highlightAll = findController.state.highlightAll;
+     let prevEnd = null;
+@@ -274,7 +273,7 @@ class TextHighlighter {
+         findController.scrollMatchIntoView({
+           element: textDivs[begin.divIdx],
+           selectedLeft,
+-          pageIndex: findController.getPageNumber(pageIdx),
++          pageIndex: pageIdx,
+           matchIndex: selectedMatchIdx,
+         });
+       }
+@@ -309,10 +308,8 @@ class TextHighlighter {
+     }
+     // Convert the matches on the `findController` into the match format
+     // used for the textLayer.
+-    const pageNumber = findController.getPageNumber(pageIdx);
+-    const pageMatches = findController.pageMatches[pageNumber] || null;
+-    const pageMatchesLength =
+-      findController.pageMatchesLength[pageNumber] || null;
++    const pageMatches = findController.pageMatches[pageIdx] || null;
++    const pageMatchesLength = findController.pageMatchesLength[pageIdx] || null;
+ 
+     this.matches = this._convertMatches(pageMatches, pageMatchesLength);
+     this._renderMatches(this.matches);
+diff --git a/web/ui_utils.js b/web/ui_utils.js
+index c296ff8e5d8fa..0251c37b69066 100644
+--- a/web/ui_utils.js
++++ b/web/ui_utils.js
+@@ -13,7 +13,7 @@
+  * limitations under the License.
+  */
+ 
+-import { MathClamp, shadow } from "pdfjs-lib";
++import { MathClamp } from "pdfjs-lib";
+ 
+ const DEFAULT_SCALE_VALUE = "auto";
+ const DEFAULT_SCALE = 1.0;
+@@ -883,142 +883,6 @@ const calcRound =
+         return e.style.width === "calc(1320px)" ? Math.fround : x => x;
+       })();
+ 
+-/**
+- * Maps between page IDs and page numbers, allowing bidirectional conversion
+- * between the two representations. This is useful when the page numbering
+- * in the PDF document doesn't match the default sequential ordering.
+- */
+-class PagesMapper {
+-  /**
+-   * Maps page IDs to their corresponding page numbers.
+-   * @type {Uint32Array|null}
+-   */
+-  static #idToPageNumber = null;
+-
+-  /**
+-   * Maps page numbers to their corresponding page IDs.
+-   * @type {Uint32Array|null}
+-   */
+-  static #pageNumberToId = null;
+-
+-  /**
+-   * The total number of pages.
+-   * @type {number}
+-   */
+-  static #pagesNumber = 0;
+-
+-  /**
+-   * Gets the total number of pages.
+-   * @returns {number} The number of pages.
+-   */
+-  get pagesNumber() {
+-    return PagesMapper.#pagesNumber;
+-  }
+-
+-  /**
+-   * Sets the total number of pages and initializes default mappings
+-   * where page IDs equal page numbers (1-indexed).
+-   * @param {number} n - The total number of pages.
+-   */
+-  set pagesNumber(n) {
+-    if (PagesMapper.#pagesNumber === n) {
+-      return;
+-    }
+-    PagesMapper.#pagesNumber = n;
+-    const pageNumberToId = (PagesMapper.#pageNumberToId = new Uint32Array(
+-      2 * n
+-    ));
+-    const idToPageNumber = (PagesMapper.#idToPageNumber =
+-      pageNumberToId.subarray(n));
+-    for (let i = 0; i < n; i++) {
+-      pageNumberToId[i] = idToPageNumber[i] = i + 1;
+-    }
+-  }
+-
+-  /**
+-   * Move a set of pages to a new position while keeping ID→number mappings in
+-   * sync.
+-   *
+-   * @param {Set<number>} selectedPages - Page numbers being moved (1-indexed).
+-   * @param {number[]} pagesToMove - Ordered list of page numbers to move.
+-   * @param {number} index - Zero-based insertion index in the page-number list.
+-   */
+-  movePages(selectedPages, pagesToMove, index) {
+-    const pageNumberToId = PagesMapper.#pageNumberToId;
+-    const idToPageNumber = PagesMapper.#idToPageNumber;
+-    const movedCount = pagesToMove.length;
+-    const mappedPagesToMove = new Uint32Array(movedCount);
+-    let removedBeforeTarget = 0;
+-
+-    for (let i = 0; i < movedCount; i++) {
+-      const pageIndex = pagesToMove[i] - 1;
+-      mappedPagesToMove[i] = pageNumberToId[pageIndex];
+-      if (pageIndex < index) {
+-        removedBeforeTarget += 1;
+-      }
+-    }
+-
+-    const pagesNumber = PagesMapper.#pagesNumber;
+-    // target index after removing elements that were before it
+-    let adjustedTarget = index - removedBeforeTarget;
+-    const remainingLen = pagesNumber - movedCount;
+-    adjustedTarget = MathClamp(adjustedTarget, 0, remainingLen);
+-
+-    // Create the new mapping.
+-    // First copy over the pages that are not being moved.
+-    // Then insert the moved pages at the target position.
+-    for (let i = 0, r = 0; i < pagesNumber; i++) {
+-      if (!selectedPages.has(i + 1)) {
+-        pageNumberToId[r++] = pageNumberToId[i];
+-      }
+-    }
+-
+-    // Shift the pages after the target position.
+-    pageNumberToId.copyWithin(
+-      adjustedTarget + movedCount,
+-      adjustedTarget,
+-      remainingLen
+-    );
+-    // Finally insert the moved pages.
+-    pageNumberToId.set(mappedPagesToMove, adjustedTarget);
+-
+-    for (let i = 0, ii = pagesNumber; i < ii; i++) {
+-      idToPageNumber[pageNumberToId[i] - 1] = i + 1;
+-    }
+-  }
+-
+-  /**
+-   * Gets the page number for a given page ID.
+-   * @param {number} id - The page ID (1-indexed).
+-   * @returns {number} The page number, or the ID itself if no mapping exists.
+-   */
+-  getPageNumber(id) {
+-    return PagesMapper.#idToPageNumber?.[id - 1] ?? id;
+-  }
+-
+-  /**
+-   * Gets the page ID for a given page number.
+-   * @param {number} pageNumber - The page number (1-indexed).
+-   * @returns {number} The page ID, or the page number itself if no mapping
+-   * exists.
+-   */
+-  getPageId(pageNumber) {
+-    return PagesMapper.#pageNumberToId?.[pageNumber - 1] ?? pageNumber;
+-  }
+-
+-  /**
+-   * Gets or creates a singleton instance of PagesMapper.
+-   * @returns {PagesMapper} The singleton instance.
+-   */
+-  static get instance() {
+-    return shadow(this, "instance", new PagesMapper());
+-  }
+-
+-  getMapping() {
+-    return PagesMapper.#pageNumberToId.subarray(0, this.pagesNumber);
+-  }
+-}
+-
+ export {
+   animationStarted,
+   apiPageLayoutToViewerModes,
+@@ -1046,7 +910,6 @@ export {
+   MIN_SCALE,
+   normalizeWheelEventDelta,
+   normalizeWheelEventDirection,
+-  PagesMapper,
+   parseQueryString,
+   PresentationModeState,
+   ProgressBar,

@@ -1,0 +1,6 @@
+{
+  "title": "Move configuration migrations to `OsuGame`",
+  "body": "As we go forward, migrations are going to likely become more complex, requiring access to more components and also at a point in time where they are ready.\r\n\r\nIn the upcoming case, `DialogOverlay` and `Audio` are important. Access to `Audio` is a killer as migrations were run before the `GameHost` has a chance to initialise it.",
+  "head_sha": "d18274d832547efd8b62bb228febb1760627d87e",
+  "base_sha": "cd27c935d6c15c3c6f2f5b561cc3340130f27407"
+}

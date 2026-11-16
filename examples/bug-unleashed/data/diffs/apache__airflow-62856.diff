@@ -1,0 +1,51 @@
+diff --git a/airflow-core/src/airflow/api_fastapi/core_api/security.py b/airflow-core/src/airflow/api_fastapi/core_api/security.py
+index 188ee1686932f..0e59fb3550c9f 100644
+--- a/airflow-core/src/airflow/api_fastapi/core_api/security.py
++++ b/airflow-core/src/airflow/api_fastapi/core_api/security.py
+@@ -297,8 +297,13 @@ async def inner(
+         dag_id = None
+ 
+         # Try to retrieve the dag_id from the backfill_id path param
+-        backfill_id = request.path_params.get("backfill_id")
+-        if backfill_id is not None and isinstance(backfill_id, int):
++        backfill_id_raw = request.path_params.get("backfill_id")
++        try:
++            backfill_id = int(backfill_id_raw) if backfill_id_raw is not None else None
++        except ValueError:
++            backfill_id = None
++
++        if backfill_id is not None:
+             backfill = session.scalars(select(Backfill).where(Backfill.id == backfill_id)).one_or_none()
+             dag_id = backfill.dag_id if backfill else None
+ 
+diff --git a/airflow-core/tests/unit/api_fastapi/core_api/test_security.py b/airflow-core/tests/unit/api_fastapi/core_api/test_security.py
+index 9b599a41c5c73..e5cb5f17cf98e 100644
+--- a/airflow-core/tests/unit/api_fastapi/core_api/test_security.py
++++ b/airflow-core/tests/unit/api_fastapi/core_api/test_security.py
+@@ -269,7 +269,7 @@ async def test_requires_access_backfill_authorized_from_path(
+         session.scalars.return_value.one_or_none.return_value = backfill
+ 
+         request = Mock()
+-        request.path_params = {"backfill_id": 42}
++        request.path_params = {"backfill_id": "42"}
+         request.json = AsyncMock(return_value={})
+ 
+         user = Mock()
+@@ -333,7 +333,7 @@ async def test_requires_access_backfill_unauthorized(self, mock_get_auth_manager
+         session.scalars.return_value.one_or_none.return_value = backfill
+ 
+         request = Mock()
+-        request.path_params = {"backfill_id": 1}
++        request.path_params = {"backfill_id": "1"}
+         user = Mock()
+ 
+         inner = requires_access_backfill("GET")
+@@ -364,7 +364,7 @@ async def test_requires_access_backfill_backfill_not_found_falls_back_to_body(
+         session.scalars.return_value.one_or_none.return_value = None
+ 
+         request = Mock()
+-        request.path_params = {"backfill_id": 999}
++        request.path_params = {"backfill_id": "999"}
+         request.json = AsyncMock(return_value={"dag_id": "fallback_dag_id"})
+ 
+         user = Mock()

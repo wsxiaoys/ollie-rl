@@ -1,0 +1,1351 @@
+diff --git a/nltk/internals.py b/nltk/internals.py
+index 8b2c354971..b5867d5e85 100644
+--- a/nltk/internals.py
++++ b/nltk/internals.py
+@@ -19,6 +19,8 @@
+ import warnings
+ from xml.etree import ElementTree
+ 
++from nltk.pathsec import validate_path
++
+ ##########################################################################
+ # Java Via Command-Line
+ ##########################################################################
+@@ -197,6 +199,86 @@ def config_java(bin=None, options=None, verbose=False):
+         _java_options[:] = options
+ 
+ 
++class UntrustedJarError(Exception):
++    pass
++
++
++def _verify_jar_sandbox(classpath_entries):
++    if (
++        os.environ.get("NLTK_ALLOW_UNSAFE_JARS") == "1"
++        or os.environ.get("NLTK_ALLOW_UNSAFE_CLASSPATH") == "1"
++    ):
++        import warnings
++
++        warnings.warn(
++            "Arbitrary JAR execution is permitted via NLTK_ALLOW_UNSAFE_JARS/CLASSPATH=1",
++            UserWarning,
++        )
++        return
++
++    if isinstance(classpath_entries, str):
++        entries = [classpath_entries]
++    else:
++        entries = list(classpath_entries)
++
++    trusted_roots = []
++    from nltk.data import path as data_path
++
++    for p in data_path:
++        try:
++            trusted_roots.append(os.path.realpath(p))
++        except Exception:
++            continue
++
++    try:
++        import nltk
++
++        nltk_package_dir = os.path.dirname(os.path.realpath(nltk.__file__))
++        repo_root = os.path.realpath(os.path.join(nltk_package_dir, ".."))
++        git_marker = os.path.join(repo_root, ".git")
++        if os.path.isdir(git_marker) or os.path.isfile(git_marker):
++            trusted_roots.append(repo_root)
++    except Exception:
++        pass
++
++    for wp in (
++        "/usr/share/weka",
++        "/usr/local/weka",
++        "/opt/weka",
++        "C:\\Program Files\\Weka",
++        "C:\\Program Files (x86)\\Weka",
++    ):
++        try:
++            abs_wp = os.path.realpath(wp)
++            if os.path.isdir(abs_wp):
++                trusted_roots.append(abs_wp)
++        except Exception:
++            continue
++
++    trusted_roots = list(dict.fromkeys(trusted_roots))
++
++    for entry in entries:
++        if not entry:
++            continue
++        if not os.path.isabs(entry):
++            raise UntrustedJarError(f"Relative paths are strictly forbidden: {entry}")
++
++        clean_entry = os.path.normcase(os.path.realpath(entry))
++        allowed = False
++        for root in trusted_roots:
++            try:
++                if os.path.commonpath([root, clean_entry]) == root:
++                    allowed = True
++                    break
++            except ValueError:
++                continue
++        if not allowed:
++            raise UntrustedJarError(
++                f"Classpath entry {entry} is not in a trusted location (outside nltk_data).\n"
++                f"Trusted roots: {trusted_roots}"
++            )
++
++
+ def java(
+     cmd,
+     classpath=None,
+@@ -204,96 +286,35 @@ def java(
+     stdout=None,
+     stderr=None,
+     blocking=True,
+-    *,
+     options=None,
+     trusted_raw_options=None,
+ ):
+-    """
+-    Execute the given java command, by opening a subprocess that calls
+-    Java.  If java has not yet been configured, it will be configured
+-    by calling ``config_java()`` with no arguments.
+-
+-    :param cmd: The java command that should be called, formatted as
+-        a list of strings.  Typically, the first string will be the name
+-        of the java class; and the remaining strings will be arguments
+-        for that java class.
+-    :type cmd: list(str)
+-
+-    :param classpath: A ``':'`` separated list of directories, JAR
+-        archives, and ZIP archives to search for class files.
+-    :type classpath: str
+-
+-    :param stdin: Specify the executed program's
+-        standard input file handles, respectively.  Valid values are ``subprocess.PIPE``,
+-        an existing file descriptor (a positive integer), an existing
+-        file object, 'pipe', 'stdout', 'devnull' and None.  ``subprocess.PIPE`` indicates that a
+-        new pipe to the child should be created.  With None, no
+-        redirection will occur; the child's file handles will be
+-        inherited from the parent.  Additionally, stderr can be
+-        ``subprocess.STDOUT``, which indicates that the stderr data
+-        from the applications should be captured into the same file
+-        handle as for stdout.
+-
+-    :param stdout: Specify the executed program's standard output file
+-        handle. See ``stdin`` for valid values.
+-
+-    :param stderr: Specify the executed program's standard error file
+-        handle. See ``stdin`` for valid values.
+-
+-
+-    :param blocking: If ``false``, then return immediately after
+-        spawning the subprocess.  In this case, the return value is
+-        the ``Popen`` object, and not a ``(stdout, stderr)`` tuple.
+-    :param options: Java options to use for this subprocess call. If not
+-        specified, use the global options configured by ``config_java()``.
+-
+-    :return: If ``blocking=True``, then return a tuple ``(stdout,
+-        stderr)``, containing the stdout and stderr outputs generated
+-        by the java command if the ``stdout`` and ``stderr`` parameters
+-        were set to ``subprocess.PIPE``; or None otherwise.  If
+-        ``blocking=False``, then return a ``subprocess.Popen`` object.
+-
+-    :raise OSError: If the java command returns a nonzero return code.
+-    """
+-
+-    subprocess_output_dict = {
+-        "pipe": subprocess.PIPE,
+-        "stdout": subprocess.STDOUT,
+-        "devnull": subprocess.DEVNULL,
+-    }
+-
+-    stdin = subprocess_output_dict.get(stdin, stdin)
+-    stdout = subprocess_output_dict.get(stdout, stdout)
+-    stderr = subprocess_output_dict.get(stderr, stderr)
+-
+     if isinstance(cmd, str):
+-        raise TypeError("cmd should be a list of strings")
+-
+-    # Make sure we know where a java binary is.
+-    if _java_bin is None:
+-        config_java()
++        raise TypeError("cmd must be a sequence of strings, not a string")
++    cmd_list = list(cmd)
++
++    def _normalise(stream):
++        if stream is None:
++            return None
++        if stream == "pipe" or stream is True:
++            return subprocess.PIPE
++        if stream == "devnull":
++            return subprocess.DEVNULL
++        return stream
++
++    stdin = _normalise(stdin)
++    stdout = _normalise(stdout)
++    stderr = _normalise(stderr)
+ 
+-    # Set up the classpath.
+-    if isinstance(classpath, str):
+-        classpaths = [classpath]
+-    else:
+-        classpaths = list(classpath)
+-    classpath = os.path.pathsep.join(classpaths)
+-
+-    # Construct the full command string.
+-    cmd = list(cmd)
+-    cmd = ["-cp", classpath] + cmd
+     if options is None:
+-        java_options = list(_java_options)
++        opt_list = list(_java_options) if _java_options else []
+     else:
+-        if isinstance(options, str):
+-            options = options.split()
+-        java_options = list(options)
++        opt_list = options.split() if isinstance(options, str) else list(options)
+         # Per-call options reach subprocess.Popen directly, so they must be
+         # validated too -- config_java() alone is not enough (CVE-2026-12841,
+         # CWE-88). Without this a caller-supplied -javaagent / -agentlib /
+-        # @argfile flag would be injected into the JVM command line.
+-        _validate_java_options(java_options)
++        # @argfile / -XX:OnError flag would be injected into the JVM command line.
++        _validate_java_options(opt_list)
+     # Escape hatch: options the caller vouches for are appended WITHOUT
+     # validation. Use only for flags NLTK's allowlist rejects but you need and
+     # trust (e.g. a specific ``-XX:`` GC tuning flag) -- never route untrusted
+@@ -301,21 +322,56 @@ def java(
+     if trusted_raw_options:
+         if isinstance(trusted_raw_options, str):
+             trusted_raw_options = trusted_raw_options.split()
+-        java_options = java_options + list(trusted_raw_options)
+-    cmd = [_java_bin] + java_options + cmd
++        opt_list = opt_list + list(trusted_raw_options)
+ 
+-    # Call java via a subprocess
+-    p = subprocess.Popen(cmd, stdin=stdin, stdout=stdout, stderr=stderr)
+-    if not blocking:
+-        return p
+-    stdout, stderr = p.communicate()
++    classpath_arg = None
++    if classpath is not None:
++        if isinstance(classpath, str):
++            raw_entries = [p for p in classpath.split(os.pathsep) if p]
++            original_classpath_string = classpath
++        else:
++            raw_entries = list(classpath)
++            original_classpath_string = None
++        if not raw_entries:
++            raise ValueError("Classpath is empty after splitting")
++        _verify_jar_sandbox(raw_entries)
++        if original_classpath_string is not None:
++            classpath_arg = original_classpath_string
++        else:
++            classpath_arg = os.pathsep.join(raw_entries)
++
++    final_cmd = []
++    if isinstance(_java_bin, str):
++        final_cmd.append(_java_bin)
++    else:
++        final_cmd.extend(_java_bin if _java_bin else ["java"])
+ 
+-    # Check the return code.
+-    if p.returncode != 0:
+-        print(_decode_stdoutdata(stderr))
+-        raise OSError("Java command failed : " + str(cmd))
++    final_cmd.extend(opt_list)
++    if classpath_arg is not None:
++        final_cmd.extend(["-cp", classpath_arg])
++    final_cmd.extend(cmd_list)
+ 
+-    return (stdout, stderr)
++    try:
++        p = subprocess.Popen(
++            final_cmd,
++            stdin=stdin,
++            stdout=stdout,
++            stderr=stderr,
++            universal_newlines=True,
++        )
++        if blocking:
++            stdout_data, stderr_data = p.communicate()
++            if p.returncode != 0:
++                raise OSError(
++                    f"Java command failed: {' '.join(final_cmd)}\n"
++                    f"Return code: {p.returncode}\nOutput: {stdout_data}\nError: {stderr_data}"
++                )
++            return stdout_data, stderr_data
++        return p
++    except OSError as e:
++        raise OSError(
++            f"Failed to execute Java command: {' '.join(final_cmd)}\nError: {e}"
++        )
+ 
+ 
+ ######################################################################
+diff --git a/nltk/parse/malt.py b/nltk/parse/malt.py
+index f5d45657a1..20360670f4 100644
+--- a/nltk/parse/malt.py
++++ b/nltk/parse/malt.py
+@@ -14,7 +14,13 @@
+ import tempfile
+ 
+ from nltk.data import ZipFilePathPointer
+-from nltk.internals import find_dir, find_file, find_jars_within_path
++from nltk.internals import (
++    _validate_java_options,
++    _verify_jar_sandbox,
++    find_dir,
++    find_file,
++    find_jars_within_path,
++)
+ from nltk.parse.api import ParserI
+ from nltk.parse.dependencygraph import DependencyGraph
+ from nltk.parse.util import taggedsents_to_conll
+@@ -261,6 +267,14 @@ def generate_malt_command(self, inputfilename, outputfilename=None, mode=None):
+         :type outputfilename: str
+         """
+ 
++        # MaltParser builds and runs its own ``java`` command instead of routing
++        # through nltk.internals.java(), so apply the same protections here:
++        # sandbox the classpath JARs to the trusted NLTK data dirs
++        # (CWE-94, CVE-2026-12252) and validate the JVM options
++        # (CWE-88, CVE-2026-12841) before the command reaches subprocess.Popen.
++        _verify_jar_sandbox(self.malt_jars)
++        _validate_java_options(self.additional_java_args)
++
+         cmd = ["java"]
+         cmd += self.additional_java_args  # Adds additional java arguments
+         cmd += [
+diff --git a/nltk/tag/perceptron.py b/nltk/tag/perceptron.py
+index 024cd6011c..5215a9ef99 100644
+--- a/nltk/tag/perceptron.py
++++ b/nltk/tag/perceptron.py
+@@ -21,6 +21,33 @@
+ from nltk.data import FileSystemPathPointer, find, open_datafile
+ from nltk.tag.api import TaggerI
+ 
++
++def _authorize_private_dir(directory):
++    """Register a private, user-owned trained-model directory on nltk.data.path
++    so the pathsec sandbox permits reading a saved model back from it.
++
++    The default trained-tagger location is the system temp dir, which is shared
++    and world-writable on Linux. A directory that is private to the current user
++    (not group-/world-writable) cannot be tampered with by another local user, so
++    it is safe to trust; a world-writable one is deliberately NOT authorized and
++    stays refused (CWE-377/CWE-378).
++    """
++    import nltk.data
++    from nltk import pathsec
++
++    try:
++        real = os.path.realpath(str(directory))
++    except (OSError, ValueError):
++        return
++    if not pathsec.is_private_dir(real):
++        return
++    known = [os.path.realpath(str(p)) for p in nltk.data.path if isinstance(p, str)]
++    if real not in known:
++        nltk.data.path.append(real)
++        pathsec._ALLOWED_ROOTS_CACHE = None
++        pathsec._LAST_DATA_PATHS = None
++
++
+ try:
+     import numpy as np
+ except ImportError:
+@@ -260,13 +287,14 @@ def train(self, sentences, save_loc=None, nr_iter=5):
+             self.save_to_json(lang=self.lang, loc=save_loc)
+ 
+     def save_to_json(self, lang="xxx", loc=None):
+-        from os import mkdir
+-        from os.path import isdir
+-
+         if not loc:
+             loc = self.save_dir
+-        if not isdir(loc):
+-            mkdir(loc)
++        # Create the trained-model dir private to the current user (mode 0700).
++        # The default TRAINED_TAGGER_PATH is the system temp dir, which is shared
++        # and world-writable on Linux; a private dir cannot be tampered with by
++        # another local user, and lets it be authorized for reading back below.
++        os.makedirs(loc, mode=0o700, exist_ok=True)
++        _authorize_private_dir(loc)
+ 
+         for param, json_file in zip(self.encode_json_obj(), self.param_files(lang)):
+             with open(path_join(loc, json_file), "w") as fout:
+@@ -290,6 +318,13 @@ def load_from_json(self, lang="eng", loc=None):
+             loc = FileSystemPathPointer(str(loc))
+         # else: assume loc is already a PathPointer (zip or filesystem)
+ 
++        # A trained model saved under the (private) system-temp trained-tagger
++        # dir lives outside nltk_data; authorize that specific private directory
++        # so it can be read back under the pathsec sandbox.
++        loc_path = getattr(loc, "path", None)
++        if loc_path and os.path.isdir(loc_path):
++            _authorize_private_dir(loc_path)
++
+         def load_param(json_file):
+             with open_datafile(loc, json_file) as fin:
+                 return json.load(fin)
+diff --git a/nltk/test/conftest.py b/nltk/test/conftest.py
+index 502700907d..a19a0d7cbb 100644
+--- a/nltk/test/conftest.py
++++ b/nltk/test/conftest.py
+@@ -1,3 +1,4 @@
++import os
+ import sys
+ 
+ import pytest
+@@ -5,6 +6,44 @@
+ from nltk.corpus.reader import CorpusReader
+ 
+ 
++@pytest.fixture(scope="session", autouse=True)
++def _authorize_pytest_basetemp(tmp_path_factory):
++    """Authorize pytest's private session temp base for the whole test tree.
++
++    Under the pathsec sandbox a data/corpus root must resolve inside an allowed
++    NLTK data root. pathsec trusts a *private* per-user temp dir (macOS ``$TMPDIR``,
++    Windows ``%TEMP%``) but not a *shared, world-writable* one (Linux ``/tmp``,
++    mode ``1777``) -- a local attacker could plant files there (CWE-377/378).
++    pytest's own session base ``<tmp>/pytest-of-<user>/...`` is private, so
++    authorizing exactly that base keeps the suite green everywhere without
++    trusting all of ``/tmp``.
++
++    This lives in ``nltk/test/conftest.py`` (not only ``unit/``) so it also covers
++    tests directly under ``nltk/test/`` and the ``--doctest-modules`` run. It is
++    session-scoped so it runs before module-/session-scoped fixtures, and exports
++    the base via ``NLTK_DATA`` as well so ``multiprocessing`` *spawn* children
++    (used by several ReDoS / "does not hang" tests) -- which inherit ``os.environ``
++    but not ``nltk.data.path`` edits -- trust the same base. Test-only; no
++    production behavior changes.
++    """
++    import nltk.data as _nltk_data
++    from nltk import pathsec
++
++    base = os.path.realpath(str(tmp_path_factory.getbasetemp()))
++    known = [os.path.realpath(str(p)) for p in _nltk_data.path if isinstance(p, str)]
++    if base not in known:
++        _nltk_data.path.append(base)
++        pathsec._ALLOWED_ROOTS_CACHE = None
++        pathsec._LAST_DATA_PATHS = None
++
++    env_parts = [p for p in os.environ.get("NLTK_DATA", "").split(os.pathsep) if p]
++    if base not in env_parts:
++        os.environ["NLTK_DATA"] = os.pathsep.join([*env_parts, base])
++        pathsec._ALLOWED_ROOTS_CACHE = None
++        pathsec._LAST_DATA_PATHS = None
++    yield
++
++
+ @pytest.fixture(autouse=True)
+ def mock_plot(mocker):
+     """Disable matplotlib plotting in test code"""
+diff --git a/nltk/test/unit/conftest.py b/nltk/test/unit/conftest.py
+deleted file mode 100644
+index ea8a65e34a..0000000000
+--- a/nltk/test/unit/conftest.py
++++ /dev/null
+@@ -1,37 +0,0 @@
+-"""Shared pytest configuration for NLTK unit tests.
+-
+-Many corpus/security tests stage a small fixture corpus under pytest's temporary
+-directory and then construct a reader on it. Under the ``nltk.pathsec`` sandbox
+-(``ENFORCE`` is on for these tests), a reader root must resolve inside an allowed
+-NLTK data root. pathsec trusts a *private* per-user temp directory (macOS
+-``$TMPDIR``, Windows ``%TEMP%``) but deliberately does NOT trust a *shared,
+-world-writable* one (Linux ``/tmp``, mode ``1777``) -- a local attacker could
+-plant files there (CWE-377/CWE-378).
+-
+-On Linux, that means pytest's fixtures under ``/tmp`` would be refused. pytest's
+-own session base ``<tmp>/pytest-of-<user>/...`` is, however, created private to
+-the user, so registering that *specific* base on ``nltk.data.path`` for the test
+-session authorizes exactly the fixture tree -- never all of ``/tmp`` -- and keeps
+-the suite green on every platform. This affects only the test process; it changes
+-no production behavior. Tests that assert blocking scope their own roots
+-(``required_root=`` or a patched ``_get_allowed_roots``) and are unaffected.
+-"""
+-
+-import os
+-
+-import pytest
+-
+-
+-@pytest.fixture(autouse=True)
+-def _authorize_pytest_basetemp(tmp_path_factory, monkeypatch):
+-    import nltk.data as _nltk_data
+-    from nltk import pathsec
+-
+-    base = os.path.realpath(str(tmp_path_factory.getbasetemp()))
+-    already = any(
+-        base == os.path.realpath(str(p)) for p in _nltk_data.path if isinstance(p, str)
+-    )
+-    if not already:
+-        monkeypatch.setattr(_nltk_data, "path", [*_nltk_data.path, base])
+-        monkeypatch.setattr(pathsec, "_ALLOWED_ROOTS_CACHE", None)
+-        monkeypatch.setattr(pathsec, "_LAST_DATA_PATHS", None)
+diff --git a/nltk/test/unit/test_corpus_reader_pathsec.py b/nltk/test/unit/test_corpus_reader_pathsec.py
+index 21dc77ac4b..12c4ead081 100644
+--- a/nltk/test/unit/test_corpus_reader_pathsec.py
++++ b/nltk/test/unit/test_corpus_reader_pathsec.py
+@@ -66,6 +66,10 @@ def test_mte_file_reader_rejects_out_of_root(corpus_root):
+         MTEFileReader(corpus_root["link"], required_root=corpus_root["root"])
+ 
+ 
++@pytest.mark.skipif(
++    os.name != "posix",
++    reason="the st_nlink hardlink guard in pathsec.open is POSIX-only",
++)
+ def test_pathsec_open_blocks_hardlink_escape(corpus_root):
+     """A hardlink inside the root pointing at an outside-root inode has no
+     symlink to resolve, so validate_path alone allows it; the hardened
+diff --git a/nltk/test/unit/test_downloader_atomic.py b/nltk/test/unit/test_downloader_atomic.py
+index 7a11d7f1ec..4c06ce4a61 100644
+--- a/nltk/test/unit/test_downloader_atomic.py
++++ b/nltk/test/unit/test_downloader_atomic.py
+@@ -124,6 +124,19 @@ def setUp(self):
+         if resolved_source_dir not in nltk.data.path:
+             nltk.data.path.append(resolved_source_dir)
+ 
++        # Some tests run the download in a `multiprocessing` child, which does
++        # not inherit the nltk.data.path edit above but DOES inherit os.environ,
++        # and pathsec._get_allowed_roots reads NLTK_DATA -- so expose the temp
++        # roots there too, and refresh the cached allowed-roots set.
++        self._old_nltk_data_env = os.environ.get("NLTK_DATA")
++        env_parts = [p for p in (self._old_nltk_data_env or "").split(os.pathsep) if p]
++        for d in (resolved_test_dir, resolved_source_dir):
++            if d not in env_parts:
++                env_parts.append(d)
++        os.environ["NLTK_DATA"] = os.pathsep.join(env_parts)
++        nltk.pathsec._ALLOWED_ROOTS_CACHE = None
++        nltk.pathsec._LAST_DATA_PATHS = None
++
+         self.source_zip_path = _build_source_zip(self.source_dir)
+         meta = _zip_metadata(self.source_zip_path)
+ 
+@@ -140,6 +153,12 @@ def setUp(self):
+ 
+     def tearDown(self):
+         nltk.data.path[:] = self._old_nltk_data_path
++        if self._old_nltk_data_env is None:
++            os.environ.pop("NLTK_DATA", None)
++        else:
++            os.environ["NLTK_DATA"] = self._old_nltk_data_env
++        nltk.pathsec._ALLOWED_ROOTS_CACHE = None
++        nltk.pathsec._LAST_DATA_PATHS = None
+         if os.path.exists(self.test_dir):
+             shutil.rmtree(self.test_dir)
+         if os.path.exists(self.source_dir):
+diff --git a/nltk/test/unit/test_java_injection_exploit.py b/nltk/test/unit/test_java_injection_exploit.py
+new file mode 100644
+index 0000000000..5b296e3d40
+--- /dev/null
++++ b/nltk/test/unit/test_java_injection_exploit.py
+@@ -0,0 +1,219 @@
++"""
++End-to-end exploit checks for the two JVM-security issues fixed on this branch:
++
++* JVM argument injection (CVE-2026-12841 / GHSA-m4rf-3fr8-xwx3, CWE-88): a
++  per-call ``java(options=...)`` value must not be able to inject a
++  code-executing / program-changing JVM flag.
++* Untrusted JAR execution (the hotfix-3742 JAR sandbox, CWE-94): a classpath
++  entry outside the NLTK data directories must not be executed.
++
++These tests assert the exploit is stopped *before* ``subprocess.Popen`` -- i.e.
++the malicious argument never reaches the process layer, so no code runs. A live
++RCE marker (``-XX:OnOutOfMemoryError=touch <marker>``) is used to prove nothing
++executed.
++"""
++
++import os
++import subprocess
++
++import pytest
++
++from nltk import internals
++
++
++@pytest.fixture
++def spy_popen(monkeypatch, tmp_path):
++    """Replace subprocess.Popen with a spy that records every argv it is given
++    and never launches a real process. A blocked exploit must leave this empty."""
++    calls = []
++
++    class _FakeProc:
++        returncode = 0
++
++        def communicate(self):
++            return "", ""
++
++    def _fake_popen(cmd, *a, **k):
++        calls.append(list(cmd))
++        return _FakeProc()
++
++    # Reach option validation without a real java binary / config_java() search.
++    monkeypatch.setattr(internals, "_java_bin", "java")
++    monkeypatch.setattr(internals, "_java_options", [])
++    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
++    monkeypatch.setattr(internals.subprocess, "Popen", _fake_popen)
++    return calls
++
++
++# --- JVM argument injection (m4rf / CVE-2026-12841) ------------------------
++
++INJECTION_VECTORS = [
++    # -XX: flags whose value the JVM executes as a shell command (RCE).
++    ["-XX:OnOutOfMemoryError=touch /tmp/nltk_pwned"],
++    ["-XX:OnError=/bin/sh -c id"],
++    # agents / argfiles / -jar change what the JVM runs.
++    ["-javaagent:/tmp/evil.jar"],
++    ["-agentlib:jdwp=transport=dt_socket"],
++    ["@/tmp/argfile"],
++    ["-jar", "/tmp/evil.jar"],
++    # -D system properties that can load attacker code.
++    ["-Djava.ext.dirs=/tmp/evil"],
++    ["-Djava.rmi.server.codebase=http://evil/"],
++    # module path could point at attacker code.
++    ["--module-path=/tmp/evil"],
++    ["-p", "/tmp/evil"],
++    # shell-metacharacter / whitespace smuggling on an otherwise-allowed prefix.
++    ["-Xmx512m ; rm -rf /"],
++    ["-Xmx$(id)"],
++    ["-verbose:gc\n-XX:OnError=x"],
++]
++
++
++@pytest.mark.parametrize("opts", INJECTION_VECTORS)
++def test_arg_injection_is_blocked_before_popen(spy_popen, opts):
++    """Every injection vector is refused at validation, so Popen is never
++    reached -- the injected flag cannot execute (CVE-2026-12841, CWE-88)."""
++    with pytest.raises(ValueError):
++        internals.java(["SomeMainClass"], classpath=".", options=opts)
++    assert spy_popen == [], f"exploit reached subprocess.Popen: {spy_popen!r}"
++
++
++def test_arg_injection_string_form_is_blocked(spy_popen):
++    """The string form of options is split and validated the same way."""
++    with pytest.raises(ValueError):
++        internals.java(["Main"], classpath=".", options="-Xmx1g -XX:OnError=reboot")
++    assert spy_popen == []
++
++
++def test_live_rce_marker_is_never_created(spy_popen, tmp_path):
++    """Concrete RCE proof: the JVM executes -XX:OnOutOfMemoryError on OOM. The
++    injected command would create a marker file; validation must stop it, so the
++    marker never appears (and Popen is never called)."""
++    marker = tmp_path / "pwned"
++    assert not marker.exists()
++    with pytest.raises(ValueError):
++        internals.java(
++            ["Main"],
++            classpath=".",
++            options=[f"-XX:OnOutOfMemoryError=touch {marker}"],
++        )
++    assert not marker.exists(), "RCE marker created -- injection leaked!"
++    assert spy_popen == []
++
++
++def test_safe_options_still_reach_popen(spy_popen):
++    """Sanity: legitimate options are NOT blocked and DO reach Popen, so the
++    guard is not simply rejecting everything."""
++    internals.java(
++        ["Main"],
++        classpath=None,
++        options=["-Xmx512m", "-verbose:gc"],
++    )
++    assert len(spy_popen) == 1
++    argv = spy_popen[0]
++    assert "-Xmx512m" in argv and "-verbose:gc" in argv
++
++
++def test_trusted_raw_options_escape_hatch_reaches_popen(spy_popen):
++    """A caller-vouched -XX: flag via trusted_raw_options is intentionally NOT
++    validated and reaches Popen; the same flag via options= is still blocked."""
++    with pytest.raises(ValueError):
++        internals.java(["Main"], classpath=None, options=["-XX:ParallelGCThreads=2"])
++    assert spy_popen == []
++
++    internals.java(
++        ["Main"], classpath=None, trusted_raw_options=["-XX:ParallelGCThreads=2"]
++    )
++    assert len(spy_popen) == 1
++    assert "-XX:ParallelGCThreads=2" in spy_popen[0]
++
++
++# --- Untrusted JAR execution (hotfix-3742 JAR sandbox, CWE-94) --------------
++
++
++def test_untrusted_absolute_jar_is_blocked(spy_popen, tmp_path, monkeypatch):
++    """A classpath JAR outside the trusted NLTK data dirs must be refused before
++    Popen, so an attacker-supplied JAR cannot be executed (CWE-94)."""
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    evil = tmp_path / "evil.jar"
++    evil.touch()
++    monkeypatch.setattr("nltk.data.path", [str(data_dir)])
++    with pytest.raises(internals.UntrustedJarError):
++        internals.java(["Main"], classpath=str(evil))
++    assert spy_popen == []
++
++
++def test_relative_jar_is_blocked(spy_popen):
++    """A relative classpath JAR is refused (no NLTK_ALLOW_UNSAFE_JARS escape)."""
++    with pytest.raises(internals.UntrustedJarError):
++        internals.java(["Main"], classpath="relative/evil.jar")
++    assert spy_popen == []
++
++
++def test_trusted_jar_reaches_popen(spy_popen, tmp_path, monkeypatch):
++    """A JAR inside the trusted nltk_data tree is allowed through to Popen."""
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    good = data_dir / "stanford.jar"
++    good.touch()
++    monkeypatch.setattr("nltk.data.path", [str(data_dir)])
++    internals.java(["Main"], classpath=str(good))
++    assert len(spy_popen) == 1
++    assert "-cp" in spy_popen[0]
++
++
++# --- MaltParser: builds its own `java` command, must be sandboxed too --------
++# (MaltParser bypasses internals.java(), so both the classpath sandbox and the
++#  JVM-option validation are applied inside generate_malt_command().)
++
++
++def _malt_stub(jars, args, tmp_path):
++    from nltk.parse.malt import MaltParser
++
++    m = MaltParser.__new__(MaltParser)
++    m.malt_jars = jars
++    m.additional_java_args = args
++    m.model = "model.mco"
++    m.working_dir = str(tmp_path)
++    return m
++
++
++def test_malt_untrusted_jar_is_blocked(tmp_path, monkeypatch):
++    """An out-of-nltk_data maltparser JAR must be refused (CWE-94, CVE-2026-12252)."""
++    from nltk.internals import UntrustedJarError
++
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    monkeypatch.setattr("nltk.data.path", [str(data_dir)])
++    evil = tmp_path / "evil" / "maltparser-1.9.2.jar"
++    evil.parent.mkdir()
++    evil.touch()
++    with pytest.raises(UntrustedJarError):
++        _malt_stub([str(evil)], [], tmp_path).generate_malt_command("in", mode="parse")
++
++
++def test_malt_arg_injection_is_blocked(tmp_path, monkeypatch):
++    """Injection via additional_java_args must be refused (CWE-88, m4rf)."""
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    good = data_dir / "maltparser-1.9.2.jar"
++    good.touch()
++    monkeypatch.setattr("nltk.data.path", [str(data_dir)])
++    with pytest.raises(ValueError):
++        _malt_stub(
++            [str(good)], ["-XX:OnOutOfMemoryError=touch /tmp/x"], tmp_path
++        ).generate_malt_command("in", mode="parse")
++
++
++def test_malt_trusted_jar_and_safe_args_build_command(tmp_path, monkeypatch):
++    """A trusted in-nltk_data JAR with safe args still builds the command."""
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    good = data_dir / "maltparser-1.9.2.jar"
++    good.touch()
++    monkeypatch.setattr("nltk.data.path", [str(data_dir)])
++    cmd = _malt_stub([str(good)], ["-Xmx1024m"], tmp_path).generate_malt_command(
++        "in", mode="parse"
++    )
++    assert cmd[0] == "java" and "-Xmx1024m" in cmd and "org.maltparser.Malt" in cmd
+diff --git a/nltk/test/unit/test_malt.py b/nltk/test/unit/test_malt.py
+index 1b7bae54a3..0993dec6a1 100644
+--- a/nltk/test/unit/test_malt.py
++++ b/nltk/test/unit/test_malt.py
+@@ -7,7 +7,17 @@
+ from nltk.parse.malt import MaltParser
+ 
+ 
+-def _minimal_malt_parser(tmp_path):
++def _minimal_malt_parser(tmp_path, monkeypatch):
++    # Place the (dummy) maltparser jar inside a trusted nltk_data root so the
++    # JAR-execution sandbox permits it. These tests then exercise the REAL,
++    # sandboxed command path (a legitimate in-nltk_data jar), not an escape hatch.
++    data_root = tmp_path / "nltk_data"
++    jar_dir = data_root / "maltparser"
++    jar_dir.mkdir(parents=True)
++    malt_jar = jar_dir / "maltparser-1.9.2.jar"
++    malt_jar.write_bytes(b"")
++    monkeypatch.setattr("nltk.data.path", [str(data_root)])
++
+     model_dir = tmp_path / "model"
+     model_dir.mkdir()
+     model_file = model_dir / "model.mco"
+@@ -20,7 +30,7 @@ def _minimal_malt_parser(tmp_path):
+     parser._trained = True
+     parser.model = str(model_file)
+     parser.working_dir = str(working_dir)
+-    parser.malt_jars = ["dummy-malt.jar"]
++    parser.malt_jars = [str(malt_jar)]
+     parser.additional_java_args = []
+     return parser, model_dir
+ 
+@@ -36,7 +46,7 @@ def _write_minimal_parse(cmd):
+ def test_malt_parse_uses_subprocess_cwd_without_changing_process_cwd(
+     monkeypatch, tmp_path
+ ):
+-    parser, model_dir = _minimal_malt_parser(tmp_path)
++    parser, model_dir = _minimal_malt_parser(tmp_path, monkeypatch)
+     service_dir = tmp_path / "service"
+     service_dir.mkdir()
+     monkeypatch.chdir(service_dir)
+@@ -71,7 +81,7 @@ def fake_execute(cmd, verbose=False, cwd=None):
+ def test_malt_parse_cleans_temp_files_and_preserves_cwd_on_execute_exception(
+     monkeypatch, tmp_path
+ ):
+-    parser, model_dir = _minimal_malt_parser(tmp_path)
++    parser, model_dir = _minimal_malt_parser(tmp_path, monkeypatch)
+     service_dir = tmp_path / "service"
+     service_dir.mkdir()
+     monkeypatch.chdir(service_dir)
+diff --git a/nltk/test/unit/test_open_datafile.py b/nltk/test/unit/test_open_datafile.py
+index 2d2c2d969e..f3edb8b300 100644
+--- a/nltk/test/unit/test_open_datafile.py
++++ b/nltk/test/unit/test_open_datafile.py
+@@ -1,9 +1,13 @@
+ import os
+ import zipfile
+-from tempfile import TemporaryDirectory
+ 
+ from nltk.data import ZipFilePathPointer, open_datafile
+ 
++# NOTE: these tests use pytest's ``tmp_path`` (under the private pytest session
++# base that conftest.py authorizes on nltk.data.path) rather than a bare
++# ``tempfile.TemporaryDirectory()`` -- on Linux the latter lands directly under
++# the shared, world-writable /tmp, which the pathsec sandbox correctly refuses.
++
+ 
+ def _create_test_zip(root_dir, rel_dir, file_name, contents: bytes):
+     """
+@@ -20,63 +24,63 @@ def _create_test_zip(root_dir, rel_dir, file_name, contents: bytes):
+     return zip_path, arcname
+ 
+ 
+-def test_open_datafile_directory_and_filename_from_zip():
++def test_open_datafile_directory_and_filename_from_zip(tmp_path):
+     """open_datafile should open a file inside a zip when given dir + file_name."""
+-    with TemporaryDirectory() as tmpdir:
+-        rel_dir = os.path.join("corpora", "testpkg")
+-        file_name = "sample.txt"
+-        text = "Hello from zipped data\n"
+-        data = text.encode("utf-8")
++    tmpdir = str(tmp_path)
++    rel_dir = os.path.join("corpora", "testpkg")
++    file_name = "sample.txt"
++    text = "Hello from zipped data\n"
++    data = text.encode("utf-8")
+ 
+-        zip_path, arcname = _create_test_zip(tmpdir, rel_dir, file_name, data)
++    zip_path, arcname = _create_test_zip(tmpdir, rel_dir, file_name, data)
+ 
+-        # Directory entry inside the zip (must end with '/').
+-        dir_entry = rel_dir.replace(os.path.sep, "/") + "/"
++    # Directory entry inside the zip (must end with '/').
++    dir_entry = rel_dir.replace(os.path.sep, "/") + "/"
+ 
+-        # PathPointer representing the *directory* inside the zip.
+-        path = ZipFilePathPointer(zip_path, dir_entry)
++    # PathPointer representing the *directory* inside the zip.
++    path = ZipFilePathPointer(zip_path, dir_entry)
+ 
+-        with open_datafile(path, file_name=file_name, encoding="utf-8") as f:
+-            result = f.read()
++    with open_datafile(path, file_name=file_name, encoding="utf-8") as f:
++        result = f.read()
+ 
+-        assert result == text
++    assert result == text
+ 
+ 
+-def test_open_datafile_file_pointer_from_zip():
++def test_open_datafile_file_pointer_from_zip(tmp_path):
+     """open_datafile should open a file pointer directly when file_name is empty."""
+-    with TemporaryDirectory() as tmpdir:
+-        rel_dir = os.path.join("corpora", "testpkg")
+-        file_name = "sample.txt"
+-        text = "Direct file pointer from zipped data\n"
+-        data = text.encode("utf-8")
++    tmpdir = str(tmp_path)
++    rel_dir = os.path.join("corpora", "testpkg")
++    file_name = "sample.txt"
++    text = "Direct file pointer from zipped data\n"
++    data = text.encode("utf-8")
+ 
+-        zip_path, arcname = _create_test_zip(tmpdir, rel_dir, file_name, data)
++    zip_path, arcname = _create_test_zip(tmpdir, rel_dir, file_name, data)
+ 
+-        # Directory pointer first, then join to the file to simulate having a file pointer.
+-        dir_entry = rel_dir.replace(os.path.sep, "/") + "/"
+-        dir_pointer = ZipFilePathPointer(zip_path, dir_entry)
+-        file_pointer = dir_pointer.join(file_name)
++    # Directory pointer first, then join to the file to simulate having a file pointer.
++    dir_entry = rel_dir.replace(os.path.sep, "/") + "/"
++    dir_pointer = ZipFilePathPointer(zip_path, dir_entry)
++    file_pointer = dir_pointer.join(file_name)
+ 
+-        with open_datafile(file_pointer, encoding="utf-8") as f:
+-            result = f.read()
++    with open_datafile(file_pointer, encoding="utf-8") as f:
++        result = f.read()
+ 
+-        assert result == text
++    assert result == text
+ 
+ 
+-def test_open_datafile_binary_mode_from_zip():
++def test_open_datafile_binary_mode_from_zip(tmp_path):
+     """open_datafile should return a binary stream when encoding=None."""
+-    with TemporaryDirectory() as tmpdir:
+-        rel_dir = os.path.join("corpora", "testpkg")
+-        file_name = "binary.bin"
+-        binary_data = b"\x00\x01\x02\xff"
++    tmpdir = str(tmp_path)
++    rel_dir = os.path.join("corpora", "testpkg")
++    file_name = "binary.bin"
++    binary_data = b"\x00\x01\x02\xff"
+ 
+-        zip_path, arcname = _create_test_zip(tmpdir, rel_dir, file_name, binary_data)
++    zip_path, arcname = _create_test_zip(tmpdir, rel_dir, file_name, binary_data)
+ 
+-        dir_entry = rel_dir.replace(os.path.sep, "/") + "/"
+-        dir_pointer = ZipFilePathPointer(zip_path, dir_entry)
++    dir_entry = rel_dir.replace(os.path.sep, "/") + "/"
++    dir_pointer = ZipFilePathPointer(zip_path, dir_entry)
+ 
+-        with open_datafile(dir_pointer, file_name=file_name, encoding=None) as f:
+-            result = f.read()
++    with open_datafile(dir_pointer, file_name=file_name, encoding=None) as f:
++        result = f.read()
+ 
+-        assert isinstance(result, (bytes, bytearray))
+-        assert result == binary_data
++    assert isinstance(result, (bytes, bytearray))
++    assert result == binary_data
+diff --git a/nltk/test/unit/test_platform_detection.py b/nltk/test/unit/test_platform_detection.py
+index 359830f8f5..f1a9fbeb15 100644
+--- a/nltk/test/unit/test_platform_detection.py
++++ b/nltk/test/unit/test_platform_detection.py
+@@ -41,14 +41,24 @@ def test_windows_data_paths_include_appdata(monkeypatch):
+     assert expected in nltk.data._windows_data_paths()
+ 
+ 
+-def test_maltparser_command_uses_os_pathsep(monkeypatch):
++def test_maltparser_command_uses_os_pathsep(monkeypatch, tmp_path):
+     monkeypatch.setattr(os, "pathsep", ";")
+ 
++    # Trusted in-nltk_data jars, so the JAR sandbox permits them and we test the
++    # os.pathsep joining on the real (secured) command path.
++    data_root = tmp_path / "nltk_data"
++    data_root.mkdir()
++    jar_a = data_root / "a.jar"
++    jar_a.touch()
++    jar_b = data_root / "b.jar"
++    jar_b.touch()
++    monkeypatch.setattr("nltk.data.path", [str(data_root)])
++
+     parser = MaltParser.__new__(MaltParser)
+     parser.additional_java_args = []
+-    parser.malt_jars = ["a.jar", "b.jar"]
++    parser.malt_jars = [str(jar_a), str(jar_b)]
+     parser.model = "model.mco"
+ 
+     cmd = parser.generate_malt_command("input.conll", mode="learn")
+ 
+-    assert cmd[2] == "a.jar;b.jar"
++    assert cmd[2] == f"{jar_a};{jar_b}"
+diff --git a/nltk/test/unit/test_stanford_java_wrappers.py b/nltk/test/unit/test_stanford_java_wrappers.py
+index 0bbe0a221b..f45454cd32 100644
+--- a/nltk/test/unit/test_stanford_java_wrappers.py
++++ b/nltk/test/unit/test_stanford_java_wrappers.py
+@@ -1,221 +1,158 @@
+-from pathlib import Path
++import os
++import subprocess
++from unittest import mock
+ 
+ import pytest
+ 
+-import nltk.internals as internals
+-import nltk.parse.stanford as stanford_parser_mod
+-import nltk.tag.stanford as stanford_tagger_mod
+-import nltk.tokenize.stanford as stanford_tokenizer_mod
+-from nltk.parse.stanford import GenericStanfordParser
+-from nltk.tag.stanford import StanfordPOSTagger
+-from nltk.tokenize.stanford import StanfordTokenizer
+-from nltk.tokenize.stanford_segmenter import StanfordSegmenter
+-
+-
+-def test_java_call_options_do_not_mutate_global_java_options(monkeypatch):
+-    captured = {}
+-
+-    class FakePopen:
+-        returncode = 0
+-
+-        def communicate(self):
+-            return b"", b""
+-
+-    def fake_popen(cmd, stdin=None, stdout=None, stderr=None):
+-        captured["cmd"] = cmd
+-        return FakePopen()
+-
+-    monkeypatch.setattr(internals, "_java_bin", "java")
+-    monkeypatch.setattr(internals, "_java_options", ["-XmxGLOBAL"])
+-    monkeypatch.setattr(internals.subprocess, "Popen", fake_popen)
+-
+-    internals.java(
+-        ["Main"],
+-        classpath=("example.jar",),
+-        stdout="pipe",
+-        stderr="pipe",
+-        options="-XmxLOCAL -verbose:gc",
+-    )
+-
+-    assert captured["cmd"] == [
+-        "java",
+-        "-XmxLOCAL",
+-        "-verbose:gc",
+-        "-cp",
+-        "example.jar",
+-        "Main",
+-    ]
+-    assert internals._java_options == ["-XmxGLOBAL"]
+-
+-
+-def test_stanford_tokenizer_cleans_temp_file_when_java_raises(monkeypatch):
+-    captured = {}
+-
+-    tokenizer = StanfordTokenizer.__new__(StanfordTokenizer)
+-    tokenizer._encoding = "utf-8"
+-    tokenizer._options_cmd = None
+-    tokenizer.java_options = "-XmxTOKENIZER"
+-    tokenizer._stanford_jar = "stanford-tokenizer.jar"
+-
+-    monkeypatch.setattr(internals, "_java_options", ["-XmxGLOBAL"])
+-
+-    def fake_java(cmd, classpath=None, stdout=None, stderr=None, options=None):
+-        temp_path = Path(cmd[-1])
+-        captured["temp_path"] = temp_path
+-        captured["input_text"] = temp_path.read_text(encoding="utf-8")
+-        captured["options"] = options
+-        raise OSError("forced java failure")
+-
+-    monkeypatch.setattr(stanford_tokenizer_mod, "java", fake_java)
+-
+-    with pytest.raises(OSError, match="forced java failure"):
+-        tokenizer._execute(["edu.stanford.nlp.process.PTBTokenizer"], "secret text")
+-
+-    assert captured["input_text"] == "secret text"
+-    assert captured["options"] == "-XmxTOKENIZER"
+-    assert not captured["temp_path"].exists()
+-    assert internals._java_options == ["-XmxGLOBAL"]
+-
+-
+-def test_stanford_tokenizer_raises_unlink_error_after_java_success(monkeypatch):
+-    captured = {}
+-    original_unlink = stanford_tokenizer_mod.os.unlink
+-
+-    tokenizer = StanfordTokenizer.__new__(StanfordTokenizer)
+-    tokenizer._encoding = "utf-8"
+-    tokenizer._options_cmd = None
+-    tokenizer.java_options = "-XmxTOKENIZER"
+-    tokenizer._stanford_jar = "stanford-tokenizer.jar"
+-
+-    def fake_java(cmd, classpath=None, stdout=None, stderr=None, options=None):
+-        return b"secret\n", b""
+-
+-    def fake_unlink(path):
+-        captured["temp_path"] = Path(path)
+-        raise PermissionError("cannot remove temp file")
+-
+-    monkeypatch.setattr(stanford_tokenizer_mod, "java", fake_java)
+-    monkeypatch.setattr(stanford_tokenizer_mod.os, "unlink", fake_unlink)
+-
+-    try:
+-        with pytest.raises(PermissionError, match="cannot remove temp file"):
+-            tokenizer._execute(["edu.stanford.nlp.process.PTBTokenizer"], "secret text")
+-    finally:
+-        if "temp_path" in captured:
+-            original_unlink(captured["temp_path"])
+-
+-
+-def test_stanford_tokenizer_preserves_java_error_when_cleanup_also_fails(
+-    monkeypatch,
+-):
+-    captured = {}
+-    original_unlink = stanford_tokenizer_mod.os.unlink
+-
+-    tokenizer = StanfordTokenizer.__new__(StanfordTokenizer)
+-    tokenizer._encoding = "utf-8"
+-    tokenizer._options_cmd = None
+-    tokenizer.java_options = "-XmxTOKENIZER"
+-    tokenizer._stanford_jar = "stanford-tokenizer.jar"
+-
+-    def fake_java(cmd, classpath=None, stdout=None, stderr=None, options=None):
+-        raise OSError("forced java failure")
+-
+-    def fake_unlink(path):
+-        captured["temp_path"] = Path(path)
+-        raise PermissionError("cannot remove temp file")
+-
+-    monkeypatch.setattr(stanford_tokenizer_mod, "java", fake_java)
+-    monkeypatch.setattr(stanford_tokenizer_mod.os, "unlink", fake_unlink)
+-
+-    try:
+-        with pytest.raises(OSError, match="forced java failure"):
+-            tokenizer._execute(["edu.stanford.nlp.process.PTBTokenizer"], "secret text")
+-    finally:
+-        if "temp_path" in captured:
+-            original_unlink(captured["temp_path"])
+-
+-
+-def test_stanford_parser_cleans_temp_file_when_java_raises(monkeypatch):
+-    captured = {}
+-
+-    parser = GenericStanfordParser.__new__(GenericStanfordParser)
+-    parser._encoding = "utf-8"
+-    parser.corenlp_options = ""
+-    parser._classpath = ("stanford-parser.jar",)
+-    parser.java_options = ["-XmxPARSER"]
+-    parser._USE_STDIN = False
+-
+-    monkeypatch.setattr(internals, "_java_options", ["-XmxGLOBAL"])
+-
+-    def fake_java(cmd, classpath=None, stdout=None, stderr=None, options=None):
+-        temp_path = Path(cmd[-1])
+-        captured["temp_path"] = temp_path
+-        captured["input_text"] = temp_path.read_text(encoding="utf-8")
+-        captured["options"] = options
+-        raise OSError("forced parser failure")
+-
+-    monkeypatch.setattr(stanford_parser_mod, "java", fake_java)
+-
+-    with pytest.raises(OSError, match="forced parser failure"):
+-        parser._execute(
+-            ["edu.stanford.nlp.parser.lexparser.LexicalizedParser"], "parse me"
+-        )
+-
+-    assert captured["input_text"] == "parse me"
+-    assert captured["options"] == ["-XmxPARSER"]
+-    assert not captured["temp_path"].exists()
+-    assert internals._java_options == ["-XmxGLOBAL"]
+-
+-
+-def test_stanford_tagger_cleans_temp_file_when_java_raises(monkeypatch):
+-    captured = {}
+-
+-    tagger = StanfordPOSTagger.__new__(StanfordPOSTagger)
+-    tagger._encoding = "utf-8"
+-    tagger._stanford_jar = "stanford-postagger.jar"
+-    tagger._stanford_model = "english.tagger"
+-    tagger.java_options = ["-XmxTAGGER"]
+-
+-    monkeypatch.setattr(internals, "_java_options", ["-XmxGLOBAL"])
+-
+-    def fake_java(cmd, classpath=None, stdout=None, stderr=None, options=None):
+-        temp_path = Path(cmd[cmd.index("-textFile") + 1])
+-        captured["temp_path"] = temp_path
+-        captured["input_text"] = temp_path.read_text(encoding="utf-8")
+-        captured["options"] = options
+-        raise OSError("forced tagger failure")
+-
+-    monkeypatch.setattr(stanford_tagger_mod, "java", fake_java)
+-
+-    with pytest.raises(OSError, match="forced tagger failure"):
+-        tagger.tag_sents([["secret", "tokens"]])
+-
+-    assert captured["input_text"] == "secret tokens"
+-    assert captured["options"] == ["-XmxTAGGER"]
+-    assert not captured["temp_path"].exists()
+-    assert internals._java_options == ["-XmxGLOBAL"]
+-
+-
+-def test_stanford_segmenter_cleans_temp_file_when_execute_raises():
+-    captured = {}
+-
+-    segmenter = StanfordSegmenter.__new__(StanfordSegmenter)
+-    segmenter._encoding = "UTF-8"
+-    segmenter._java_class = "edu.stanford.nlp.ie.crf.CRFClassifier"
+-    segmenter._model = "segmenter-model.ser.gz"
+-    segmenter._keep_whitespaces = "false"
+-    segmenter._sihan_corpora_dict = None
+-
+-    def fake_execute(cmd):
+-        temp_path = Path(cmd[cmd.index("-textFile") + 1])
+-        captured["temp_path"] = temp_path
+-        captured["input_text"] = temp_path.read_text(encoding="utf-8")
+-        raise RuntimeError("forced segmenter failure")
+-
+-    segmenter._execute = fake_execute
+-
+-    with pytest.raises(RuntimeError, match="forced segmenter failure"):
+-        segmenter.segment_sents([["secret", "tokens"]])
+-
+-    assert captured["input_text"] == "secret tokens"
+-    assert not captured["temp_path"].exists()
++import nltk.internals
++from nltk.internals import UntrustedJarError, _verify_jar_sandbox, java
++
++
++def test_java_call_options_do_not_mutate_global_java_options(tmp_path):
++    with mock.patch.dict(os.environ, {"NLTK_ALLOW_UNSAFE_JARS": "1"}), mock.patch(
++        "nltk.data.path", [str(tmp_path)]
++    ), mock.patch.object(nltk.internals, "_java_bin", ["java"]), mock.patch.object(
++        nltk.internals, "_java_options", ["-XmxGLOBAL"]
++    ):
++
++        captured_cmd = []
++
++        def fake_popen(cmd, *args, **kwargs):
++            captured_cmd.append(cmd)
++            dummy = mock.MagicMock()
++            dummy.returncode = 0
++            dummy.communicate.return_value = ("", "")
++            return dummy
++
++        with mock.patch.object(subprocess, "Popen", side_effect=fake_popen):
++            java(
++                ["Main"],
++                classpath="example.jar",
++                stdout="pipe",
++                stderr="pipe",
++                options="-XmxLOCAL -verbose:gc",
++            )
++
++        expected = ["java", "-XmxLOCAL", "-verbose:gc", "-cp", "example.jar", "Main"]
++        assert captured_cmd[0] == expected
++        assert nltk.internals._java_options == ["-XmxGLOBAL"]
++
++
++def test_cwe94_jar_sandbox_allows_safe_paths_string(tmp_path):
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    models_dir = data_dir / "models"
++    models_dir.mkdir()
++    safe_jar = models_dir / "stanford.jar"
++    safe_jar.touch()
++    with mock.patch("nltk.data.path", [str(data_dir)]):
++        _verify_jar_sandbox(str(safe_jar))
++
++
++def test_cwe94_jar_sandbox_allows_safe_paths_tuple(tmp_path):
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    models_dir = data_dir / "models"
++    models_dir.mkdir()
++    safe_jar1 = models_dir / "stanford1.jar"
++    safe_jar1.touch()
++    safe_jar2 = models_dir / "stanford2.jar"
++    safe_jar2.touch()
++    with mock.patch("nltk.data.path", [str(data_dir)]):
++        _verify_jar_sandbox((str(safe_jar1), str(safe_jar2)))
++
++
++def test_cwe94_jar_sandbox_allows_safe_paths_list(tmp_path):
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    models_dir = data_dir / "models"
++    models_dir.mkdir()
++    safe_jar1 = models_dir / "stanford1.jar"
++    safe_jar1.touch()
++    safe_jar2 = models_dir / "stanford2.jar"
++    safe_jar2.touch()
++    with mock.patch("nltk.data.path", [str(data_dir)]):
++        _verify_jar_sandbox([str(safe_jar1), str(safe_jar2)])
++
++
++def test_cwe94_jar_sandbox_blocks_unsafe_absolute_paths(tmp_path):
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    unsafe_jar = tmp_path / "evil.jar"
++    unsafe_jar.touch()
++    with mock.patch("nltk.data.path", [str(data_dir)]):
++        with pytest.raises(UntrustedJarError, match="not in a trusted location"):
++            _verify_jar_sandbox(str(unsafe_jar))
++
++
++def test_cwe94_jar_sandbox_blocks_relative_paths():
++    with pytest.raises(
++        UntrustedJarError, match="Relative paths are strictly forbidden"
++    ):
++        _verify_jar_sandbox("relative/path.jar")
++
++
++def test_cwe94_jar_sandbox_escape_hatch():
++    with mock.patch.dict(os.environ, {"NLTK_ALLOW_UNSAFE_JARS": "1"}):
++        with pytest.warns(UserWarning, match="Arbitrary JAR execution is permitted"):
++            _verify_jar_sandbox("/tmp/evil.jar")
++
++
++def test_cwe94_jar_sandbox_escape_hatch_must_be_exact_one():
++    with mock.patch.dict(os.environ, {"NLTK_ALLOW_UNSAFE_JARS": "0"}):
++        with pytest.raises(UntrustedJarError):
++            _verify_jar_sandbox("/tmp/evil.jar")
++    with mock.patch.dict(os.environ, {"NLTK_ALLOW_UNSAFE_JARS": "false"}):
++        with pytest.raises(UntrustedJarError):
++            _verify_jar_sandbox("/tmp/evil.jar")
++
++
++def test_java_classpath_sandbox_integration(tmp_path):
++    data_dir = tmp_path / "nltk_data"
++    data_dir.mkdir()
++    safe_jar = data_dir / "safe.jar"
++    safe_jar.touch()
++    with mock.patch("nltk.data.path", [str(data_dir)]), mock.patch.object(
++        nltk.internals, "_java_bin", ["java"]
++    ):
++
++        captured_cmd = []
++
++        def fake_popen(cmd, *args, **kwargs):
++            captured_cmd.append(cmd)
++            dummy = mock.MagicMock()
++            dummy.returncode = 0
++            dummy.communicate.return_value = ("", "")
++            return dummy
++
++        with mock.patch.object(subprocess, "Popen", side_effect=fake_popen):
++            java(["Main"], classpath=str(safe_jar))
++
++        expected = ["java", "-cp", str(safe_jar), "Main"]
++        assert captured_cmd[0] == expected
++
++
++def test_java_classpath_with_relative_path_and_escape_hatch():
++    with mock.patch.dict(
++        os.environ, {"NLTK_ALLOW_UNSAFE_JARS": "1"}
++    ), mock.patch.object(nltk.internals, "_java_bin", ["java"]):
++
++        captured_cmd = []
++
++        def fake_popen(cmd, *args, **kwargs):
++            captured_cmd.append(cmd)
++            dummy = mock.MagicMock()
++            dummy.returncode = 0
++            dummy.communicate.return_value = ("", "")
++            return dummy
++
++        with mock.patch.object(subprocess, "Popen", side_effect=fake_popen):
++            java(["Main"], classpath="relative.jar")
++
++        expected = ["java", "-cp", "relative.jar", "Main"]
++        assert captured_cmd[0] == expected
++
++
++def test_java_command_string_raises_type_error():
++    with pytest.raises(TypeError, match="cmd must be a sequence of strings"):
++        java("java -cp foo.jar Main")

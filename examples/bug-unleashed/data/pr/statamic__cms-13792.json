@@ -1,0 +1,6 @@
+{
+  "title": "[6.x] Avoid searching server results with fuzzysort",
+  "body": "This PR aims to fix the issue mentioned in #13768, where content results would only be returned if the query matched the title, and not any of the other \"indexed fields\".\r\n\r\n**Example:** An entry with the title \"Kaboom\", and an additional indexed field containing \"Loud explosion\". Searching for \"Kaboom\" would return the result (as expected), but searching \"Loud\" wouldn't return the result even though it's part of the server's results.\r\n\r\nThis pull request attempts to fix it by _not_ passing server results to fuzzysort and prepending them to the results array. We _do_ still pass them through fuzzysort, but only for highlighting purposes.\r\n\r\nAnother approach would be to include a `keywords` string in the result object, and use that in addition to the item text when searching with fuzzysort.\r\n\r\nFixes #13768",
+  "head_sha": "bc7b6e8a1b0d9367ed02408c4a30c6912992e7f1",
+  "base_sha": "b826489294c76a4fdcfaaa9ef28dbecf5a54b5de"
+}

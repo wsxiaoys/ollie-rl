@@ -1,0 +1,29 @@
+{
+  "case_id": "microsoft__playwright-40123",
+  "repo": "microsoft/playwright",
+  "pr": 40123,
+  "title": "chore: move CLI options from FullConfigInternal to TestRunOptions",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "microsoft__playwright-40123__g1",
+  "target": {
+    "gid": "microsoft__playwright-40123#g1",
+    "summary": "filterLastFailed() returns an empty array when no last-run file exists or on read errors, while callers guard on array length. Consequently, running with --last-failed when the previous run had no failures attaches no filter and re-runs the entire test suite instead of running nothing.",
+    "paths": [
+      "packages/playwright/src/runner/lastRun.ts",
+      "packages/playwright/src/runner/tasks.ts",
+      "packages/playwright/src/runner/testRunner.ts"
+    ],
+    "notes": [
+      "filterLastFailed returns an empty array instead of undefined when no last-run file exists or on read errors",
+      "checks lastFailedTestIds.length instead of existence, skipping test filter attachment when previous run had zero failures",
+      "call site checks lastFailedTestIds.length, omitting options.lastFailedTestIds when previous run had zero failures"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "7c214f28aa27a0d99d5b2bfa601659921c1bcbda",
+  "base_sha": "bc5448504e6b486bb0ecf0fb6265ecf151e3b620",
+  "snapshot": "repos/microsoft__playwright/7c214f28aa27a0d99d5b2bfa601659921c1bcbda",
+  "diff": "diffs/microsoft__playwright-40123.diff"
+}

@@ -1,0 +1,16 @@
+{
+  "case_id": "carbon-language__carbon-lang-7406",
+  "repo": "carbon-language/carbon-lang",
+  "pr": 7406,
+  "title": "Fix accessing members of const/partial types",
+  "language": "C++",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "carbon-language__carbon-lang-7406",
+  "target": null,
+  "siblings": [],
+  "head_sha": "9ba536898bbb01de23d5b7a926d319d04176bfc0",
+  "base_sha": "885b1110d51a009b4a0682488bdb4eccd925faae",
+  "snapshot": "repos/carbon-language__carbon-lang/9ba536898bbb01de23d5b7a926d319d04176bfc0",
+  "diff": "diffs/carbon-language__carbon-lang-7406.diff"
+}

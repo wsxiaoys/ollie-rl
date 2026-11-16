@@ -1,0 +1,777 @@
+diff --git a/.oxlintrc.json b/.oxlintrc.json
+index eb6acbdcec0..5caab52e86a 100644
+--- a/.oxlintrc.json
++++ b/.oxlintrc.json
+@@ -376,55 +376,9 @@
+   },
+   "overrides": [
+     {
+-      // TODO: fix the issues in these files
+-      "files": [
+-        "packages/component-library/src/Menu.tsx",
+-        "packages/desktop-client/src/components/accounts/Account.jsx",
+-        "packages/desktop-client/src/components/accounts/MobileAccount.jsx",
+-        "packages/desktop-client/src/components/accounts/MobileAccounts.jsx",
+-        "packages/desktop-client/src/components/budget/BudgetCategories.jsx",
+-        "packages/desktop-client/src/components/budget/BudgetSummaries.tsx",
+-        "packages/desktop-client/src/components/budget/DynamicBudgetTable.tsx",
+-        "packages/desktop-client/src/components/budget/envelope/HoldMenu.tsx",
+-        "packages/desktop-client/src/components/budget/envelope/TransferMenu.tsx",
+-        "packages/desktop-client/src/components/budget/index.tsx",
+-        "packages/desktop-client/src/components/budget/MobileBudget.tsx",
+-        "packages/desktop-client/src/components/FinancesApp.tsx",
+-        "packages/desktop-client/src/components/GlobalKeys.ts",
+-        "packages/desktop-client/src/components/LoggedInUser.tsx",
+-        "packages/desktop-client/src/components/manager/ManagementApp.jsx",
+-        "packages/desktop-client/src/components/manager/subscribe/common.tsx",
+-        "packages/desktop-client/src/components/ManageRules.tsx",
+-        "packages/desktop-client/src/components/mobile/MobileAmountInput.jsx",
+-        "packages/desktop-client/src/components/mobile/MobileNavTabs.tsx",
+-        "packages/desktop-client/src/components/Modals.tsx",
+-        "packages/desktop-client/src/components/modals/EditRule.jsx",
+-        "packages/desktop-client/src/components/modals/ImportTransactions.jsx",
+-        "packages/desktop-client/src/components/modals/ImportTransactionsModal/ImportTransactionsModal.tsx",
+-        "packages/desktop-client/src/components/modals/MergeUnusedPayees.jsx",
+-        "packages/desktop-client/src/components/Notifications.tsx",
+-        "packages/desktop-client/src/components/payees/ManagePayees.jsx",
+-        "packages/desktop-client/src/components/payees/ManagePayeesWithData.jsx",
+-        "packages/desktop-client/src/components/payees/PayeeTable.tsx",
+-        "packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx",
+-        "packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTableTotals.tsx",
+-        "packages/desktop-client/src/components/reports/reports/CashFlowCard.jsx",
+-        "packages/desktop-client/src/components/reports/reports/CustomReport.jsx",
+-        "packages/desktop-client/src/components/reports/reports/CustomReport.tsx",
+-        "packages/desktop-client/src/components/reports/reports/NetWorthCard.jsx",
+-        "packages/desktop-client/src/components/reports/SaveReportName.tsx",
+-        "packages/desktop-client/src/components/reports/useReport.ts",
+-        "packages/desktop-client/src/components/schedules/ScheduleDetails.jsx",
+-        "packages/desktop-client/src/components/schedules/ScheduleEditModal.tsx",
+-        "packages/desktop-client/src/components/schedules/SchedulesTable.tsx",
+-        "packages/desktop-client/src/components/select/DateSelect.tsx",
+-        "packages/desktop-client/src/components/sidebar/Tools.tsx",
+-        "packages/desktop-client/src/components/sort.tsx",
+-        "packages/desktop-client/src/hooks/useEffectAfterMount.ts",
+-        "packages/desktop-client/src/hooks/useQuery.ts"
+-      ],
++      "files": ["packages/desktop-electron/**/*"],
+       "rules": {
+-        "react/exhaustive-deps": "off"
++        "react/rules-of-hooks": "off"
+       }
+     },
+     {
+diff --git a/packages/desktop-client/src/components/FinancesApp.tsx b/packages/desktop-client/src/components/FinancesApp.tsx
+index 53dbfa75b04..d94c807f6d2 100644
+--- a/packages/desktop-client/src/components/FinancesApp.tsx
++++ b/packages/desktop-client/src/components/FinancesApp.tsx
+@@ -1,5 +1,10 @@
+ // @ts-strict-ignore
+-import React, { type ReactElement, useEffect, useRef } from 'react';
++import React, {
++  type ReactElement,
++  useEffect,
++  useEffectEvent,
++  useRef,
++} from 'react';
+ import { useTranslation } from 'react-i18next';
+ import { Route, Routes, Navigate, useLocation, useHref } from 'react-router';
+ 
+@@ -97,15 +102,13 @@ export function FinancesApp() {
+ 
+   const multiuserEnabled = useMultiuserEnabled();
+ 
+-  useEffect(() => {
++  const init = useEffectEvent(() => {
+     // Wait a little bit to make sure the sync button will get the
+     // sync start event. This can be improved later.
+     setTimeout(async () => {
+       await dispatch(sync());
+     }, 100);
+-  }, []);
+ 
+-  useEffect(() => {
+     async function run() {
+       await global.Actual.waitForUpdateReadyForDownload(); // This will only resolve when an update is ready
+       dispatch(
+@@ -130,7 +133,9 @@ export function FinancesApp() {
+     }
+ 
+     run();
+-  }, []);
++  });
++
++  useEffect(() => init(), []);
+ 
+   useEffect(() => {
+     dispatch(getLatestAppVersion());
+diff --git a/packages/desktop-client/src/components/GlobalKeys.ts b/packages/desktop-client/src/components/GlobalKeys.ts
+index 0c76a883eb5..c2c86c67ee0 100644
+--- a/packages/desktop-client/src/components/GlobalKeys.ts
++++ b/packages/desktop-client/src/components/GlobalKeys.ts
+@@ -36,7 +36,7 @@ export function GlobalKeys() {
+     document.addEventListener('keydown', handleKeys);
+ 
+     return () => document.removeEventListener('keydown', handleKeys);
+-  }, []);
++  }, [navigate]);
+ 
+   return null;
+ }
+diff --git a/packages/desktop-client/src/components/LoggedInUser.tsx b/packages/desktop-client/src/components/LoggedInUser.tsx
+index 3f3321c74d2..16225323377 100644
+--- a/packages/desktop-client/src/components/LoggedInUser.tsx
++++ b/packages/desktop-client/src/components/LoggedInUser.tsx
+@@ -1,4 +1,10 @@
+-import React, { useState, useEffect, useRef, type CSSProperties } from 'react';
++import React, {
++  useState,
++  useEffect,
++  useRef,
++  useCallback,
++  type CSSProperties,
++} from 'react';
+ import { Trans, useTranslation } from 'react-i18next';
+ import { useLocation } from 'react-router';
+ 
+@@ -56,7 +62,7 @@ export function LoggedInUser({
+   const currentFile = remoteFiles.find(f => f.cloudFileId === cloudFileId);
+   const hasSyncedPrefs = useSelector(state => state.prefs.synced);
+ 
+-  const initializeUserData = async () => {
++  const initializeUserData = useCallback(async () => {
+     try {
+       await dispatch(getUserData());
+     } catch (error) {
+@@ -64,11 +70,11 @@ export function LoggedInUser({
+     } finally {
+       setLoading(false);
+     }
+-  };
++  }, [dispatch]);
+ 
+   useEffect(() => {
+     initializeUserData();
+-  }, []);
++  }, [initializeUserData]);
+ 
+   useEffect(() => {
+     return listen('sync-event', ({ type }) => {
+@@ -89,7 +95,7 @@ export function LoggedInUser({
+         setLoading(false);
+       }
+     });
+-  }, [userData]);
++  }, [initializeUserData, userData]);
+ 
+   async function onCloseBudget() {
+     await dispatch(closeBudget());
+diff --git a/packages/desktop-client/src/components/ManageRules.tsx b/packages/desktop-client/src/components/ManageRules.tsx
+index 1eab7f877dc..8db308db2cf 100644
+--- a/packages/desktop-client/src/components/ManageRules.tsx
++++ b/packages/desktop-client/src/components/ManageRules.tsx
+@@ -1,8 +1,8 @@
+ // @ts-strict-ignore
+ import React, {
+   useState,
++  useEffectEvent,
+   useEffect,
+-  useCallback,
+   useMemo,
+   type SetStateAction,
+   type Dispatch,
+@@ -167,17 +167,15 @@ export function ManageRules({
+             ),
+           )
+     ).slice(0, 100 + page * 50);
+-  }, [allRules, filter, filterData, page]);
++  }, [allRules, filter, filterData, page, schedules]);
++
+   const selectedInst = useSelected('manage-rules', filteredRules, []);
+   const [hoveredRule, setHoveredRule] = useState(null);
+ 
+-  const onSearchChange = useCallback(
+-    (value: string) => {
+-      setFilter(value);
+-      setPage(0);
+-    },
+-    [setFilter],
+-  );
++  const onSearchChange = (value: string) => {
++    setFilter(value);
++    setPage(0);
++  };
+ 
+   async function loadRules() {
+     setLoading(true);
+@@ -195,7 +193,7 @@ export function ManageRules({
+     return loadedRules;
+   }
+ 
+-  useEffect(() => {
++  const init = useEffectEvent(() => {
+     async function loadData() {
+       await loadRules();
+       setLoading(false);
+@@ -212,13 +210,16 @@ export function ManageRules({
+     return () => {
+       undo.setUndoState('openModal', null);
+     };
++  });
++  useEffect(() => {
++    return init();
+   }, []);
+ 
+   function loadMore() {
+     setPage(page => page + 1);
+   }
+ 
+-  const onDeleteSelected = useCallback(async () => {
++  const onDeleteSelected = async () => {
+     setLoading(true);
+ 
+     const { someDeletionsFailed } = await send('rule-delete-all', [
+@@ -234,7 +235,7 @@ export function ManageRules({
+     await loadRules();
+     selectedInst.dispatch({ type: 'select-none' });
+     setLoading(false);
+-  }, [selectedInst]);
++  };
+ 
+   async function onDeleteRule(id: string) {
+     setLoading(true);
+@@ -243,7 +244,7 @@ export function ManageRules({
+     setLoading(false);
+   }
+ 
+-  const onEditRule = useCallback(rule => {
++  const onEditRule = rule => {
+     dispatch(
+       pushModal({
+         modal: {
+@@ -258,7 +259,7 @@ export function ManageRules({
+         },
+       }),
+     );
+-  }, []);
++  };
+ 
+   function onCreateRule() {
+     const rule: NewRuleEntity = {
+@@ -298,9 +299,9 @@ export function ManageRules({
+     );
+   }
+ 
+-  const onHover = useCallback(id => {
++  const onHover = id => {
+     setHoveredRule(id);
+-  }, []);
++  };
+ 
+   return (
+     <SelectedProvider instance={selectedInst}>
+diff --git a/packages/desktop-client/src/components/Modals.tsx b/packages/desktop-client/src/components/Modals.tsx
+index a6917c473ac..797084a7c5d 100644
+--- a/packages/desktop-client/src/components/Modals.tsx
++++ b/packages/desktop-client/src/components/Modals.tsx
+@@ -95,7 +95,8 @@ export function Modals() {
+     if (modalStack.length > 0) {
+       dispatch(closeModal());
+     }
+-  }, [location]);
++    // oxlint-disable-next-line react/exhaustive-deps
++  }, [dispatch, location]);
+ 
+   const modals = modalStack
+     .map((modal, idx) => {
+diff --git a/packages/desktop-client/src/components/Notifications.tsx b/packages/desktop-client/src/components/Notifications.tsx
+index c04f183d55e..28d9a6a22d3 100644
+--- a/packages/desktop-client/src/components/Notifications.tsx
++++ b/packages/desktop-client/src/components/Notifications.tsx
+@@ -1,6 +1,7 @@
+ // @ts-strict-ignore
+ import React, {
+   useState,
++  useEffectEvent,
+   useEffect,
+   useMemo,
+   type SetStateAction,
+@@ -123,7 +124,7 @@ function Notification({
+   const [loading, setLoading] = useState(false);
+   const [overlayLoading, setOverlayLoading] = useState(false);
+ 
+-  useEffect(() => {
++  const connected = useEffectEvent(() => {
+     if (type === 'error' && internal) {
+       console.error('Internal error:', internal);
+     }
+@@ -131,14 +132,15 @@ function Notification({
+     if (!sticky) {
+       setTimeout(onRemove, timeout || 6500);
+     }
+-  }, []);
++  });
++  useEffect(() => connected(), []);
+ 
+   const positive = type === 'message';
+   const error = type === 'error';
+ 
+   const processedMessage = useMemo(
+     () => compileMessage(message, messageActions, setOverlayLoading, onRemove),
+-    [message, messageActions],
++    [message, messageActions, onRemove, setOverlayLoading],
+   );
+ 
+   const { isNarrowWidth } = useResponsive();
+diff --git a/packages/desktop-client/src/components/budget/BudgetSummaries.tsx b/packages/desktop-client/src/components/budget/BudgetSummaries.tsx
+index e6be414fc91..fccb9118827 100644
+--- a/packages/desktop-client/src/components/budget/BudgetSummaries.tsx
++++ b/packages/desktop-client/src/components/budget/BudgetSummaries.tsx
+@@ -1,9 +1,10 @@
+ import React, {
+-  useContext,
+-  useState,
+-  useRef,
+   useCallback,
++  useContext,
+   useLayoutEffect,
++  useMemo,
++  useRef,
++  useState,
+ } from 'react';
+ import { useSpring, animated } from 'react-spring';
+ 
+@@ -20,6 +21,7 @@ import { useResizeObserver } from '@desktop-client/hooks/useResizeObserver';
+ 
+ export function BudgetSummaries() {
+   const { months } = useContext(MonthsContext);
++  const [firstMonth] = months;
+ 
+   const [widthState, setWidthState] = useState(0);
+   const [styles, spring] = useSpring(() => ({
+@@ -33,15 +35,18 @@ export function BudgetSummaries() {
+     }, []),
+   );
+ 
+-  const prevMonth0 = useRef(months[0]);
+-  const allMonths = [...months];
+-  allMonths.unshift(subMonths(months[0], 1));
+-  allMonths.push(addMonths(months[months.length - 1], 1));
++  const prevMonth0 = useRef(firstMonth);
++  const allMonths = useMemo(() => {
++    const all = [...months];
++    all.unshift(subMonths(firstMonth, 1));
++    all.push(addMonths(months[months.length - 1], 1));
++    return all;
++  }, [months, firstMonth]);
+   const monthWidth = widthState / months.length;
+ 
+   useLayoutEffect(() => {
+     const prevMonth = prevMonth0.current;
+-    const reversed = prevMonth > months[0];
++    const reversed = prevMonth > firstMonth;
+     const offsetX = monthWidth;
+     let from = reversed ? -offsetX * 2 : 0;
+ 
+@@ -51,15 +56,15 @@ export function BudgetSummaries() {
+ 
+     const to = -offsetX;
+     spring.start({ from: { x: from }, x: to });
+-  }, [months[0]]);
++  }, [spring, firstMonth, monthWidth, allMonths]);
+ 
+   useLayoutEffect(() => {
+-    prevMonth0.current = months[0];
+-  }, [months[0]]);
++    prevMonth0.current = firstMonth;
++  }, [firstMonth]);
+ 
+   useLayoutEffect(() => {
+     spring.start({ from: { x: -monthWidth }, to: { x: -monthWidth } });
+-  }, [monthWidth]);
++  }, [spring, monthWidth]);
+ 
+   const { SummaryComponent } = useBudgetComponents();
+ 
+diff --git a/packages/desktop-client/src/components/budget/DynamicBudgetTable.tsx b/packages/desktop-client/src/components/budget/DynamicBudgetTable.tsx
+index 9af4c8b9c98..416ad3acefd 100644
+--- a/packages/desktop-client/src/components/budget/DynamicBudgetTable.tsx
++++ b/packages/desktop-client/src/components/budget/DynamicBudgetTable.tsx
+@@ -60,7 +60,7 @@ const DynamicBudgetTable = ({
+ 
+   useEffect(() => {
+     setDisplayMax(numPossible);
+-  }, [numPossible]);
++  }, [setDisplayMax, numPossible]);
+ 
+   function getValidMonth(month) {
+     const start = monthBounds.start;
+diff --git a/packages/desktop-client/src/components/budget/index.tsx b/packages/desktop-client/src/components/budget/index.tsx
+index aa47952ce35..3dea7cdf61a 100644
+--- a/packages/desktop-client/src/components/budget/index.tsx
++++ b/packages/desktop-client/src/components/budget/index.tsx
+@@ -1,5 +1,11 @@
+ // @ts-strict-ignore
+-import React, { useMemo, useState, useEffect, type ComponentType } from 'react';
++import React, {
++  useMemo,
++  useState,
++  useEffect,
++  useEffectEvent,
++  type ComponentType,
++} from 'react';
+ 
+ import { styles } from '@actual-app/components/styles';
+ import { View } from '@actual-app/components/view';
+@@ -50,7 +56,7 @@ export function Budget() {
+   const [initialized, setInitialized] = useState(false);
+   const { grouped: categoryGroups } = useCategories();
+ 
+-  useEffect(() => {
++  const init = useEffectEvent(() => {
+     async function run() {
+       await dispatch(getCategories());
+ 
+@@ -68,15 +74,17 @@ export function Budget() {
+     }
+ 
+     run();
+-  }, []);
++  });
++  useEffect(() => init(), []);
+ 
+-  useEffect(() => {
++  const loadBoundBudgets = useEffectEvent(() => {
+     send('get-budget-bounds').then(({ start, end }) => {
+       if (bounds.start !== start || bounds.end !== end) {
+         setBounds({ start, end });
+       }
+     });
+-  }, []);
++  });
++  useEffect(() => loadBoundBudgets(), []);
+ 
+   const onMonthSelect = async (month, numDisplayed) => {
+     setStartMonthPref(month);
+diff --git a/packages/desktop-client/src/components/manager/subscribe/common.tsx b/packages/desktop-client/src/components/manager/subscribe/common.tsx
+index 4c01b39086e..3950ae5d7dd 100644
+--- a/packages/desktop-client/src/components/manager/subscribe/common.tsx
++++ b/packages/desktop-client/src/components/manager/subscribe/common.tsx
+@@ -90,7 +90,14 @@ export function useBootstrapped(redirect = true) {
+       }
+     }
+     run();
+-  }, [location]);
++  }, [
++    location,
++    navigate,
++    redirect,
++    setLoginMethods,
++    setMultiuserEnabled,
++    setServerURL,
++  ]);
+ 
+   return { checked };
+ }
+diff --git a/packages/desktop-client/src/components/modals/ImportTransactionsModal/ImportTransactionsModal.tsx b/packages/desktop-client/src/components/modals/ImportTransactionsModal/ImportTransactionsModal.tsx
+index 4a6cded2216..962e2c272db 100644
+--- a/packages/desktop-client/src/components/modals/ImportTransactionsModal/ImportTransactionsModal.tsx
++++ b/packages/desktop-client/src/components/modals/ImportTransactionsModal/ImportTransactionsModal.tsx
+@@ -746,6 +746,7 @@ export function ImportTransactionsModal({
+ 
+     runImportPreview();
+     // intentionally exclude runImportPreview from dependencies to avoid infinite rerenders
++    // oxlint-disable-next-line react/exhaustive-deps
+   }, [
+     filetype,
+     flipAmount,
+diff --git a/packages/desktop-client/src/components/payees/PayeeTable.tsx b/packages/desktop-client/src/components/payees/PayeeTable.tsx
+index a8f38f02cee..1b97f44c671 100644
+--- a/packages/desktop-client/src/components/payees/PayeeTable.tsx
++++ b/packages/desktop-client/src/components/payees/PayeeTable.tsx
+@@ -45,6 +45,7 @@ export const PayeeTable = forwardRef<
+       if (typeof ref !== 'function') {
+         ref.current.scrollTo(firstSelected, 'center');
+       }
++      // oxlint-disable-next-line react-hooks/exhaustive-deps
+     }, []);
+ 
+     const onHover = useCallback(id => {
+diff --git a/packages/desktop-client/src/components/reports/SaveReportName.tsx b/packages/desktop-client/src/components/reports/SaveReportName.tsx
+index 7a5acce83b8..252f0ea5ea8 100644
+--- a/packages/desktop-client/src/components/reports/SaveReportName.tsx
++++ b/packages/desktop-client/src/components/reports/SaveReportName.tsx
+@@ -44,7 +44,7 @@ export function SaveReportName({
+     if (inputRef.current) {
+       inputRef.current.focus();
+     }
+-  }, []);
++  }, [inputRef]);
+ 
+   return (
+     <>
+diff --git a/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx b/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx
+index 751a61bac42..ed4fa357f5d 100644
+--- a/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx
++++ b/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx
+@@ -1,6 +1,5 @@
+ import React, {
+   type RefObject,
+-  useCallback,
+   useLayoutEffect,
+   useRef,
+   type UIEventHandler,
+@@ -83,7 +82,7 @@ export function ReportTable({
+     }
+   });
+ 
+-  const renderRow = useCallback(({ item, mode, style }: renderRowProps) => {
++  const renderRow = ({ item, mode, style }: renderRowProps) => {
+     return (
+       <ReportTableRow
+         item={item}
+@@ -102,42 +101,39 @@ export function ReportTable({
+         interval={interval}
+       />
+     );
+-  }, []);
++  };
+ 
+-  const renderTotals = useCallback(
+-    ({
+-      metadata,
+-      mode,
+-      totalsStyle,
+-      testStyle,
+-      scrollWidthTotals,
+-    }: renderTotalsProps) => {
+-      return (
+-        <ReportTableRow
+-          item={metadata}
+-          balanceTypeOp={balanceTypeOp}
+-          groupBy={groupBy}
+-          mode={mode}
+-          filters={filters}
+-          startDate={data.startDate}
+-          endDate={data.endDate}
+-          intervalsCount={intervalsCount}
+-          compact={compact}
+-          style={totalsStyle}
+-          compactStyle={compactStyle}
+-          showHiddenCategories={showHiddenCategories}
+-          showOffBudget={showOffBudget}
+-          totalStyle={testStyle}
+-          totalScrollRef={totalScrollRef}
+-          handleScroll={handleScroll}
+-          height={32 + scrollWidthTotals}
+-          interval={interval}
+-          colorized
+-        />
+-      );
+-    },
+-    [],
+-  );
++  const renderTotals = ({
++    metadata,
++    mode,
++    totalsStyle,
++    testStyle,
++    scrollWidthTotals,
++  }: renderTotalsProps) => {
++    return (
++      <ReportTableRow
++        item={metadata}
++        balanceTypeOp={balanceTypeOp}
++        groupBy={groupBy}
++        mode={mode}
++        filters={filters}
++        startDate={data.startDate}
++        endDate={data.endDate}
++        intervalsCount={intervalsCount}
++        compact={compact}
++        style={totalsStyle}
++        compactStyle={compactStyle}
++        showHiddenCategories={showHiddenCategories}
++        showOffBudget={showOffBudget}
++        totalStyle={testStyle}
++        totalScrollRef={totalScrollRef}
++        handleScroll={handleScroll}
++        height={32 + scrollWidthTotals}
++        interval={interval}
++        colorized
++      />
++    );
++  };
+ 
+   return (
+     <View>
+diff --git a/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTableTotals.tsx b/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTableTotals.tsx
+index 733ed395b26..5acc7378c1d 100644
+--- a/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTableTotals.tsx
++++ b/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTableTotals.tsx
+@@ -76,7 +76,7 @@ export function ReportTableTotals({
+       ];
+       setScrollWidthTotals(parent > 0 && child > 0 ? parent - child : 0);
+     }
+-  });
++  }, [totalScrollRef]);
+ 
+   const metadata: GroupedEntity = {
+     id: '',
+diff --git a/packages/desktop-client/src/components/reports/reports/CustomReport.tsx b/packages/desktop-client/src/components/reports/reports/CustomReport.tsx
+index 4bb9133795c..f1fc0a0f60d 100644
+--- a/packages/desktop-client/src/components/reports/reports/CustomReport.tsx
++++ b/packages/desktop-client/src/components/reports/reports/CustomReport.tsx
+@@ -397,6 +397,7 @@ function CustomReportInner({ report: initialReport }: CustomReportInnerProps) {
+ 
+     run();
+     // omitted `conditions` and `conditionsOp` from dependencies to avoid infinite loops
++    // oxlint-disable-next-line react/exhaustive-deps
+   }, [
+     interval,
+     dateRange,
+diff --git a/packages/desktop-client/src/components/reports/useReport.ts b/packages/desktop-client/src/components/reports/useReport.ts
+index 2ca1f355d00..e22a2c3c951 100644
+--- a/packages/desktop-client/src/components/reports/useReport.ts
++++ b/packages/desktop-client/src/components/reports/useReport.ts
+@@ -14,6 +14,6 @@ export function useReport<T>(
+ 
+   useEffect(() => {
+     getData(spreadsheet, results => setResults(results));
+-  }, [getData]);
++  }, [getData, spreadsheet]);
+   return results;
+ }
+diff --git a/packages/desktop-client/src/components/schedules/SchedulesTable.tsx b/packages/desktop-client/src/components/schedules/SchedulesTable.tsx
+index beedcae6bb6..f4f9e7867d8 100644
+--- a/packages/desktop-client/src/components/schedules/SchedulesTable.tsx
++++ b/packages/desktop-client/src/components/schedules/SchedulesTable.tsx
+@@ -376,7 +376,7 @@ export function SchedulesTable({
+         filterIncludes(dateStr)
+       );
+     });
+-  }, [payees, accounts, schedules, filter, statuses]);
++  }, [payees, accounts, schedules, filter, statuses, format, dateFormat]);
+ 
+   const items: readonly SchedulesTableItem[] = useMemo(() => {
+     const unCompletedSchedules = filteredSchedules.filter(s => !s.completed);
+diff --git a/packages/desktop-client/src/components/select/DateSelect.tsx b/packages/desktop-client/src/components/select/DateSelect.tsx
+index 6dc72716cb2..facf5c93ec1 100644
+--- a/packages/desktop-client/src/components/select/DateSelect.tsx
++++ b/packages/desktop-client/src/components/select/DateSelect.tsx
+@@ -174,7 +174,7 @@ const DatePicker = forwardRef<DatePickerForwardedRef, DatePickerProps>(
+           }
+         },
+       }),
+-      [],
++      [onUpdate],
+     );
+ 
+     useLayoutEffect(() => {
+@@ -203,6 +203,7 @@ const DatePicker = forwardRef<DatePickerForwardedRef, DatePickerProps>(
+       return () => {
+         picker.current.destroy();
+       };
++      // oxlint-disable-next-line react-hooks/exhaustive-deps
+     }, []);
+ 
+     useEffect(() => {
+@@ -316,7 +317,7 @@ function DateSelectDesktop({
+         setSelectedValue(value);
+       }
+     }
+-  }, [value]);
++  }, [value, onUpdate, dateFormat]);
+ 
+   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+     if (
+diff --git a/packages/desktop-client/src/components/sort.tsx b/packages/desktop-client/src/components/sort.tsx
+index 03358c107e7..c487eb22e81 100644
+--- a/packages/desktop-client/src/components/sort.tsx
++++ b/packages/desktop-client/src/components/sort.tsx
+@@ -68,7 +68,7 @@ export function useDraggable<T>({
+ 
+   useLayoutEffect(() => {
+     _onDragChange.current = onDragChange;
+-  });
++  }, [onDragChange]);
+ 
+   return { dragRef };
+ }
+@@ -95,6 +95,7 @@ export function useDroppable<T extends { id: string }>({
+   onLongHover,
+ }: UseDroppableArgs) {
+   const ref = useRef(null);
++  const onLongHoverRef = useRef(onLongHover);
+   const [dropPos, setDropPos] = useState<DropPosition | null>(null);
+ 
+   const [{ isOver }, dropRef] = useDrop<
+@@ -123,12 +124,20 @@ export function useDroppable<T extends { id: string }>({
+   const handleDropRef = useDragRef(dropRef);
+ 
+   useEffect(() => {
+-    let timeout;
+-    if (onLongHover && isOver) {
+-      timeout = setTimeout(onLongHover, 700);
++    onLongHoverRef.current = onLongHover;
++  }, [onLongHover]);
++
++  useEffect(() => {
++    let timeout: ReturnType<typeof setTimeout> | null = null;
++    if (onLongHoverRef.current && isOver) {
++      timeout = setTimeout(() => onLongHoverRef.current?.(), 700);
+     }
+ 
+-    return () => timeout && clearTimeout(timeout);
++    return () => {
++      if (timeout) {
++        clearTimeout(timeout);
++      }
++    };
+   }, [isOver]);
+ 
+   return {
+diff --git a/packages/desktop-client/src/hooks/useEffectAfterMount.ts b/packages/desktop-client/src/hooks/useEffectAfterMount.ts
+index 88648cab441..2373b72eb89 100644
+--- a/packages/desktop-client/src/hooks/useEffectAfterMount.ts
++++ b/packages/desktop-client/src/hooks/useEffectAfterMount.ts
+@@ -19,5 +19,6 @@ export function useEffectAfterMount(
+       return effect();
+     }
+     isFirstRender.current = false;
++    // oxlint-disable-next-line react-hooks/exhaustive-deps -- caller owns deps
+   }, deps);
+ }
+diff --git a/packages/desktop-client/src/hooks/useQuery.ts b/packages/desktop-client/src/hooks/useQuery.ts
+index a1c0a70d2a4..41ec5046661 100644
+--- a/packages/desktop-client/src/hooks/useQuery.ts
++++ b/packages/desktop-client/src/hooks/useQuery.ts
+@@ -16,7 +16,7 @@ export function useQuery<Response = unknown>(
+ ): UseQueryResult<Response> {
+   // Memo the resulting query. We don't care if the function
+   // that creates the query changes, only the resulting query.
+-  // Safe to ignore the eslint warning here.
++  // oxlint-disable-next-line react-hooks/exhaustive-deps -- caller owns deps
+   const query = useMemo(makeQuery, dependencies);
+ 
+   const [data, setData] = useState<ReadonlyArray<Response> | null>(null);
+diff --git a/packages/desktop-electron/e2e/fixtures.ts b/packages/desktop-electron/e2e/fixtures.ts
+index e3bce97b5c3..cb5f9fce3ca 100644
+--- a/packages/desktop-electron/e2e/fixtures.ts
++++ b/packages/desktop-electron/e2e/fixtures.ts
+@@ -1,4 +1,3 @@
+-/* oxlint-disable react-hooks/rules-of-hooks */
+ import path from 'node:path';
+ 
+ import {
+diff --git a/upcoming-release-notes/6667.md b/upcoming-release-notes/6667.md
+new file mode 100644
+index 00000000000..7afe81a21fd
+--- /dev/null
++++ b/upcoming-release-notes/6667.md
+@@ -0,0 +1,6 @@
++---
++category: Maintenance
++authors: [MatissJanis]
++---
++
++lint: patch some react oxlint violations

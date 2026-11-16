@@ -1,0 +1,25 @@
+{
+  "case_id": "go-gitea__gitea-39262",
+  "repo": "go-gitea/gitea",
+  "pr": 39262,
+  "title": "fix: restore owner name in PR target branch selector",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "go-gitea__gitea-39262__g1",
+  "target": {
+    "gid": "go-gitea__gitea-39262#g1",
+    "summary": "`#pull-target-branch` is queried within `pullDescEditor`, but it is not a descendant of `#pull-desc-editor`. Selecting a branch from the branch-select dropdown evaluates `pullTargetBranch` to null, throwing a TypeError when accessing its attributes and breaking target branch selection.",
+    "paths": [
+      "web_src/js/features/repo-issue.ts"
+    ],
+    "notes": [
+      "faulty querySelector for #pull-target-branch within pullDescEditor where it is not a descendant"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a3f5f982d53fa1b75e94509d4033f043c1e43768",
+  "base_sha": "45a78bbc8efb88ef3e52cbf683a6aa736715bc82",
+  "snapshot": "repos/go-gitea__gitea/a3f5f982d53fa1b75e94509d4033f043c1e43768",
+  "diff": "diffs/go-gitea__gitea-39262.diff"
+}

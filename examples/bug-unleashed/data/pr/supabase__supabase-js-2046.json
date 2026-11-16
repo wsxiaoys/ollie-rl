@@ -1,0 +1,6 @@
+{
+  "title": "feat(supabase): add missing HTTP headers for client platform and runtime detection",
+  "body": "Moved from https://github.com/supabase/supabase-js/pull/1505\r\nAuthor: @grdsdev \r\n\r\n## Summary\r\n\r\nAdd missing HTTP headers for client platform and runtime detection with simplified logic that only includes headers when detection is reliable.\r\n\r\n## New Headers Added\r\n\r\n- `X-Supabase-Client-Platform`: OS detection (macOS, Windows, Linux, iOS, Android)\r\n- `X-Supabase-Client-Platform-Version`: Platform version \r\n- `X-Supabase-Client-Runtime`: Runtime environment (node, deno, bun)\r\n- `X-Supabase-Client-Runtime-Version`: Runtime version\r\n\r\n## Key Features\r\n\r\n- Simple detection without regex pattern matching\r\n- Headers omitted when detection fails (no \"unknown\" values)\r\n- Backward compatible with existing `X-Client-Info` header\r\n- Comprehensive unit tests added\r\n\r\n## Test plan\r\n\r\n- [x] All existing tests pass\r\n- [x] New unit tests cover all detection functions\r\n- [x] Tests verify conditional header inclusion",
+  "head_sha": "7fbec0d3751519f70ac9a88da943e76601637e20",
+  "base_sha": "188b83f58fc03e9aa151e1e62c7794e9477c41cc"
+}

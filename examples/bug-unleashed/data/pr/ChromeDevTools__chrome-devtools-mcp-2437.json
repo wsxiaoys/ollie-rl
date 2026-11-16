@@ -1,0 +1,6 @@
+{
+  "title": "fix: don't throw if Dialog was handled",
+  "body": "Fixes #2424\r\n\r\nPuppeteer now exposes `handled` property on the Dialog. This will mean we can safely handle if from anywhere.\r\n\r\n`package-lock.json` changes are from `npm audit fix`",
+  "head_sha": "a5bd7cc4adc12b05af10eaf755a6f353f5b8d552",
+  "base_sha": "d5d91ee787ab3645ee062fa579749e5f17196740"
+}

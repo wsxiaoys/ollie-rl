@@ -1,0 +1,1064 @@
+diff --git a/.chloggen/config-snapshot-watcher.yaml b/.chloggen/config-snapshot-watcher.yaml
+new file mode 100644
+index 000000000000..895371809a41
+--- /dev/null
++++ b/.chloggen/config-snapshot-watcher.yaml
+@@ -0,0 +1,25 @@
++# Use this changelog template to create an entry for release notes.
++
++# One of 'breaking', 'deprecation', 'new_component', 'enhancement', 'bug_fix'
++change_type: deprecation
++
++# The name of the component, or a single word describing the area of concern, (e.g. otlpreceiver)
++component: pkg/service
++
++# A brief description of the change.  Surround your text with quotes ("") if it needs to start with a backtick (`).
++note: Deprecate `service.Settings.CollectorConf` and `extensioncapabilities.ConfigWatcher` in favor of `service.Settings.ConfigSnapshot` and `extensioncapabilities.ConfigSnapshotWatcher`, which provide effective and unexpanded configuration representations.
++
++# One or more tracking issues or pull requests related to the change
++issues: [15432]
++
++# (Optional) One or more lines of additional information to render under the primary note.
++# These lines will be padded with 2 spaces and then inserted directly into the document.
++# Use pipe (|) for multiline entries.
++subtext:
++
++# Optional: The change log or logs in which this entry should be included.
++# e.g. '[user]' or '[user, api]'
++# Include 'user' if the change is relevant to end users.
++# Include 'api' if there is a change to a library API.
++# Default: '[user]'
++change_logs: [api]
+diff --git a/confmap/resolver.go b/confmap/resolver.go
+index 4fa84f01632e..6f9c928c8e15 100644
+--- a/confmap/resolver.go
++++ b/confmap/resolver.go
+@@ -29,6 +29,10 @@ type Resolver struct {
+ 
+ 	closers []CloseFunc
+ 	watcher chan error
++
++	// unexpandedConfMap holds the merged configuration captured during the most
++	// recent Resolve call before provider/env-var references were expanded.
++	unexpandedConfMap map[string]any
+ }
+ 
+ // ResolverSettings are the settings to configure the behavior of the Resolver.
+@@ -181,6 +185,9 @@ func (mr *Resolver) Resolve(ctx context.Context) (*Conf, error) {
+ 		}
+ 	}
+ 
++	// Capture the pre-expansion map (provider references intact) before expanding.
++	mr.unexpandedConfMap = retMap.ToStringMap()
++
+ 	cfgMap := make(map[string]any)
+ 	for _, k := range retMap.AllKeys() {
+ 		ug := internal.UnsanitizedGetter{Conf: retMap}
+@@ -202,6 +209,20 @@ func (mr *Resolver) Resolve(ctx context.Context) (*Conf, error) {
+ 	return retMap, nil
+ }
+ 
++// UnexpandedConf returns a Conf built from the merged configuration as captured
++// by the most recent Resolve call, before provider and env-var references were
++// expanded (i.e. with ${env:FOO} syntax intact). Returns nil if Resolve has not
++// been called.
++//
++// Experimental: This method is experimental. Its behavior may change without backward
++// compatibility until this notice is removed.
++func (mr *Resolver) UnexpandedConf() *Conf {
++	if mr.unexpandedConfMap == nil {
++		return nil
++	}
++	return NewFromStringMap(mr.unexpandedConfMap)
++}
++
+ func escapeDollarSigns(val any) any {
+ 	switch v := val.(type) {
+ 	case string:
+diff --git a/confmap/resolver_test.go b/confmap/resolver_test.go
+index 9d157c28603d..cd083a7607ce 100644
+--- a/confmap/resolver_test.go
++++ b/confmap/resolver_test.go
+@@ -564,3 +564,47 @@ func TestProviderRaceCondition(t *testing.T) {
+ 	require.NotNil(t, c)
+ 	require.NoError(t, resolver.Shutdown(context.Background()))
+ }
++
++func TestResolverUnexpandedConf(t *testing.T) {
++	t.Run("nil before Resolve", func(t *testing.T) {
++		r, err := NewResolver(ResolverSettings{
++			URIs:              []string{"mock:"},
++			ProviderFactories: []ProviderFactory{newMockProvider(&mockProvider{retM: map[string]any{"a": "b"}})},
++		})
++		require.NoError(t, err)
++		assert.Nil(t, r.UnexpandedConf())
++	})
++
++	t.Run("captures pre-expansion view", func(t *testing.T) {
++		input := newFakeProvider("input", func(context.Context, string, WatcherFunc) (*Retrieved, error) {
++			return NewRetrieved(map[string]any{
++				"top": map[string]any{
++					"plain": "literal",
++					"host":  "${env:HOST}",
++				},
++			})
++		})
++		r, err := NewResolver(ResolverSettings{
++			URIs:              []string{"input:"},
++			ProviderFactories: []ProviderFactory{input, newEnvProvider()},
++		})
++		require.NoError(t, err)
++
++		resolved, err := r.Resolve(context.Background())
++		require.NoError(t, err)
++		require.NotNil(t, resolved)
++
++		// Resolved view has the env reference expanded.
++		assert.Equal(t, "localhost", resolved.Get("top::host"))
++
++		// Pre-expansion view preserves the ${env:HOST} reference verbatim.
++		pre := r.UnexpandedConf()
++		require.NotNil(t, pre)
++		assert.Equal(t, map[string]any{
++			"top": map[string]any{
++				"plain": "literal",
++				"host":  "${env:HOST}",
++			},
++		}, pre.ToStringMap())
++	})
++}
+diff --git a/extension/extensioncapabilities/interfaces.go b/extension/extensioncapabilities/interfaces.go
+index 370210970ed8..f3eb0a153a3c 100644
+--- a/extension/extensioncapabilities/interfaces.go
++++ b/extension/extensioncapabilities/interfaces.go
+@@ -40,6 +40,8 @@ type PipelineWatcher interface {
+ 
+ // ConfigWatcher is an interface that should be implemented by an extension that
+ // wishes to be notified of the Collector's effective configuration.
++//
++// Deprecated [v0.155.0]: use ConfigSnapshotWatcher instead.
+ type ConfigWatcher interface {
+ 	// NotifyConfig notifies the extension of the Collector's current effective configuration.
+ 	// The extension owns the `confmap.Conf`. Callers must ensure that it's safe for
+@@ -47,3 +49,58 @@ type ConfigWatcher interface {
+ 	// instances of `conf`.
+ 	NotifyConfig(ctx context.Context, conf *confmap.Conf) error
+ }
++
++// ConfigSnapshot provides access to different representations of the Collector's
++// configuration.
++type ConfigSnapshot interface {
++	// Effective returns the Collector's current effective configuration.
++	// The returned configuration is owned by the caller.
++	Effective() *confmap.Conf
++
++	// Unexpanded returns the Collector's configuration before provider
++	// references are expanded and with sensitive fields redacted.
++	// The returned configuration is owned by the caller.
++	Unexpanded() *confmap.Conf
++
++	unexportedConfigSnapshot()
++}
++
++type configSnapshot struct {
++	effective  *confmap.Conf
++	unexpanded *confmap.Conf
++}
++
++// NewConfigSnapshot creates a ConfigSnapshot from the given configuration
++// representations.
++func NewConfigSnapshot(effective, unexpanded *confmap.Conf) ConfigSnapshot {
++	return configSnapshot{
++		effective:  cloneConf(effective),
++		unexpanded: cloneConf(unexpanded),
++	}
++}
++
++func (cs configSnapshot) unexportedConfigSnapshot() {}
++
++func (cs configSnapshot) Effective() *confmap.Conf {
++	return cloneConf(cs.effective)
++}
++
++func (cs configSnapshot) Unexpanded() *confmap.Conf {
++	return cloneConf(cs.unexpanded)
++}
++
++func cloneConf(conf *confmap.Conf) *confmap.Conf {
++	if conf == nil {
++		return nil
++	}
++	return confmap.NewFromStringMap(conf.ToStringMap())
++}
++
++// ConfigSnapshotWatcher is an interface that should be implemented by an
++// extension that wishes to be notified of the Collector's configuration.
++type ConfigSnapshotWatcher interface {
++	// NotifyConfigSnapshot notifies the extension of the Collector's current
++	// configuration. The provided ConfigSnapshot returns configuration instances
++	// owned by the extension.
++	NotifyConfigSnapshot(ctx context.Context, configSnapshot ConfigSnapshot) error
++}
+diff --git a/extension/extensioncapabilities/interfaces_test.go b/extension/extensioncapabilities/interfaces_test.go
+new file mode 100644
+index 000000000000..4afa260a7d49
+--- /dev/null
++++ b/extension/extensioncapabilities/interfaces_test.go
+@@ -0,0 +1,73 @@
++// Copyright The OpenTelemetry Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package extensioncapabilities
++
++import (
++	"reflect"
++	"testing"
++
++	"go.opentelemetry.io/collector/confmap"
++)
++
++func TestConfigSnapshot(t *testing.T) {
++	effective := confmap.NewFromStringMap(map[string]any{
++		"receivers": map[string]any{
++			"nop": map[string]any{"endpoint": "localhost:4317"},
++		},
++	})
++	unexpanded := confmap.NewFromStringMap(map[string]any{
++		"receivers": map[string]any{
++			"nop": map[string]any{"endpoint": "${env:ENDPOINT}"},
++		},
++	})
++
++	snapshot := NewConfigSnapshot(effective, unexpanded)
++
++	gotEffective := snapshot.Effective()
++	if gotEffective == nil {
++		t.Fatal("Effective() returned nil")
++	}
++	if !reflect.DeepEqual(effective.ToStringMap(), gotEffective.ToStringMap()) {
++		t.Fatalf("Effective() = %v, want %v", gotEffective.ToStringMap(), effective.ToStringMap())
++	}
++
++	gotUnexpanded := snapshot.Unexpanded()
++	if gotUnexpanded == nil {
++		t.Fatal("Unexpanded() returned nil")
++	}
++	if !reflect.DeepEqual(unexpanded.ToStringMap(), gotUnexpanded.ToStringMap()) {
++		t.Fatalf("Unexpanded() = %v, want %v", gotUnexpanded.ToStringMap(), unexpanded.ToStringMap())
++	}
++}
++
++func TestConfigSnapshotReturnsIndependentConfs(t *testing.T) {
++	snapshot := NewConfigSnapshot(confmap.NewFromStringMap(map[string]any{"a": "b"}), nil)
++
++	got := snapshot.Effective()
++	if got == nil {
++		t.Fatal("Effective() returned nil")
++	}
++	if !got.Delete("a") {
++		t.Fatal("Delete() returned false")
++	}
++
++	gotAgain := snapshot.Effective()
++	if gotAgain == nil {
++		t.Fatal("Effective() returned nil")
++	}
++	if !reflect.DeepEqual(map[string]any{"a": "b"}, gotAgain.ToStringMap()) {
++		t.Fatalf("Effective() after mutation = %v, want %v", gotAgain.ToStringMap(), map[string]any{"a": "b"})
++	}
++}
++
++func TestConfigSnapshotNilRepresentations(t *testing.T) {
++	snapshot := NewConfigSnapshot(nil, nil)
++
++	if snapshot.Effective() != nil {
++		t.Fatal("Effective() returned non-nil config")
++	}
++	if snapshot.Unexpanded() != nil {
++		t.Fatal("Unexpanded() returned non-nil config")
++	}
++}
+diff --git a/otelcol/collector.go b/otelcol/collector.go
+index a1fe882552a5..e0be2a593ea3 100644
+--- a/otelcol/collector.go
++++ b/otelcol/collector.go
+@@ -21,6 +21,7 @@ import (
+ 
+ 	"go.opentelemetry.io/collector/component"
+ 	"go.opentelemetry.io/collector/confmap"
++	"go.opentelemetry.io/collector/extension/extensioncapabilities"
+ 	"go.opentelemetry.io/collector/otelcol/internal/grpclog"
+ 	"go.opentelemetry.io/collector/service"
+ )
+@@ -198,6 +199,10 @@ func (col *Collector) setupConfigurationComponents(ctx context.Context) error {
+ 		return fmt.Errorf("could not marshal configuration: %w", err)
+ 	}
+ 
++	// Build a pre-expansion view of the configuration (with provider references
++	// such as ${env:FOO} still intact and configopaque.String fields redacted).
++	unexpandedConf := redactByMirroring(col.configProvider.mapResolver.UnexpandedConf(), conf)
++
+ 	// Wrap the buildZapLogger to append LoggingOptions from collector settings,
+ 	// since service.Settings.LoggingOptions is deprecated.
+ 	buildZapLogger := col.buildZapLogger
+@@ -210,8 +215,9 @@ func (col *Collector) setupConfigurationComponents(ctx context.Context) error {
+ 	}
+ 
+ 	col.service, err = service.New(ctx, service.Settings{
+-		BuildInfo:     col.set.BuildInfo,
+-		CollectorConf: conf,
++		BuildInfo:      col.set.BuildInfo,
++		ConfigSnapshot: extensioncapabilities.NewConfigSnapshot(conf, unexpandedConf),
++		CollectorConf:  conf,
+ 
+ 		ReceiversConfigs:    cfg.Receivers,
+ 		ReceiversFactories:  factories.Receivers,
+diff --git a/otelcol/go.mod b/otelcol/go.mod
+index 99ccbb9498cc..7dfe7a0621d8 100644
+--- a/otelcol/go.mod
++++ b/otelcol/go.mod
+@@ -19,6 +19,7 @@ require (
+ 	go.opentelemetry.io/collector/exporter/exportertest v0.154.0
+ 	go.opentelemetry.io/collector/exporter/xexporter v0.154.0
+ 	go.opentelemetry.io/collector/extension v1.60.0
++	go.opentelemetry.io/collector/extension/extensioncapabilities v0.154.0
+ 	go.opentelemetry.io/collector/extension/extensiontest v0.154.0
+ 	go.opentelemetry.io/collector/featuregate v1.60.0
+ 	go.opentelemetry.io/collector/internal/componentalias v0.154.0
+@@ -83,7 +84,6 @@ require (
+ 	go.opentelemetry.io/collector/consumer/consumererror v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/consumer/consumertest v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/consumer/xconsumer v0.154.0 // indirect
+-	go.opentelemetry.io/collector/extension/extensioncapabilities v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/internal/fanoutconsumer v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/internal/telemetry v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/pdata v1.60.0 // indirect
+diff --git a/otelcol/otelcoltest/go.mod b/otelcol/otelcoltest/go.mod
+index 76ace8a38fcc..4e0f0f070ebd 100644
+--- a/otelcol/otelcoltest/go.mod
++++ b/otelcol/otelcoltest/go.mod
+@@ -62,6 +62,7 @@ require (
+ 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+ 	go.opentelemetry.io/collector/component/componentstatus v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/component/componenttest v0.154.0 // indirect
++	go.opentelemetry.io/collector/config/configopaque v1.60.0 // indirect
+ 	go.opentelemetry.io/collector/config/configtelemetry v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/confmap/xconfmap v0.154.0 // indirect
+ 	go.opentelemetry.io/collector/connector v0.154.0 // indirect
+diff --git a/otelcol/redact.go b/otelcol/redact.go
+new file mode 100644
+index 000000000000..5ac3ba4b1770
+--- /dev/null
++++ b/otelcol/redact.go
+@@ -0,0 +1,58 @@
++// Copyright The OpenTelemetry Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package otelcol // import "go.opentelemetry.io/collector/otelcol"
++
++import (
++	"regexp"
++
++	"go.opentelemetry.io/collector/config/configopaque"
++	"go.opentelemetry.io/collector/confmap"
++)
++
++// redactedMask is the masked value emitted by configopaque.String.MarshalText.
++var redactedMask = func() string {
++	b, _ := configopaque.String("").MarshalText()
++	return string(b)
++}()
++
++// redactByMirroring returns a copy of raw conf where every leaf set to redactedMask
++// in the redacted view is copied over, unless the corresponding pre-expansion leaf
++// is exactly a ${...} provider reference, in which case it is left untouched.
++func redactByMirroring(raw, redacted *confmap.Conf) *confmap.Conf {
++	if raw == nil || redacted == nil {
++		return raw
++	}
++	redactedRaw := applyMask(raw.ToStringMap(), redacted.ToStringMap())
++	return confmap.NewFromStringMap(redactedRaw.(map[string]any))
++}
++
++// applyMask recursively applies redaction to `raw` by mirroring it with the redacted structure.
++// It mutates raw and returns it.
++func applyMask(raw, redacted any) any {
++	switch redVal := redacted.(type) {
++	case map[string]any:
++		if rawMap, ok := raw.(map[string]any); ok {
++			for k, rawMapVal := range rawMap {
++				if redMapVal, ok := redVal[k]; ok {
++					rawMap[k] = applyMask(rawMapVal, redMapVal)
++				}
++			}
++		}
++	case []any:
++		if rawSlice, ok := raw.([]any); ok {
++			for i := 0; i < min(len(rawSlice), len(redVal)); i++ {
++				rawSlice[i] = applyMask(rawSlice[i], redVal[i])
++			}
++		}
++	case string:
++		if redVal == redactedMask {
++			if rawVal, ok := raw.(string); !ok || !providerReferenceRegexp.MatchString(rawVal) {
++				return redactedMask
++			}
++		}
++	}
++	return raw
++}
++
++var providerReferenceRegexp = regexp.MustCompile(`^\$\{[^}]*\}$`)
+diff --git a/otelcol/redact_test.go b/otelcol/redact_test.go
+new file mode 100644
+index 000000000000..5308cb9de4cc
+--- /dev/null
++++ b/otelcol/redact_test.go
+@@ -0,0 +1,204 @@
++// Copyright The OpenTelemetry Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package otelcol
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"go.opentelemetry.io/collector/confmap"
++)
++
++func TestRedactWithPreExpansion(t *testing.T) {
++	tests := []struct {
++		name     string
++		pre      map[string]any
++		redacted map[string]any
++		want     map[string]any
++	}{
++		{
++			name: "redact hardcoded opaque value",
++			pre: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": "secret",
++						"other": "hello",
++					},
++				},
++			},
++			redacted: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": redactedMask,
++						"other": "hello",
++					},
++				},
++			},
++			want: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": redactedMask,
++						"other": "hello",
++					},
++				},
++			},
++		},
++		{
++			name: "preserve provider reference at opaque leaf",
++			pre: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": "${env:TOKEN}",
++					},
++				},
++			},
++			redacted: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": redactedMask,
++					},
++				},
++			},
++			want: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": "${env:TOKEN}",
++					},
++				},
++			},
++		},
++		{
++			name: "redact embedded provider reference at opaque leaf",
++			pre: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": "Bearer ${env:TOKEN}",
++					},
++				},
++			},
++			redacted: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": redactedMask,
++					},
++				},
++			},
++			want: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": redactedMask,
++					},
++				},
++			},
++		},
++		{
++			name: "redact provider reference with hardcoded suffix at opaque leaf",
++			pre: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": "${env:TOKEN} hardcoded-secret",
++					},
++				},
++			},
++			redacted: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": redactedMask,
++					},
++				},
++			},
++			want: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"token": redactedMask,
++					},
++				},
++			},
++		},
++		{
++			name: "redact nested map and slice",
++			pre: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"nested": map[string]any{
++							"secret": "abc",
++							"list":   []any{"a", "${env:B}", "c"},
++						},
++					},
++				},
++			},
++			redacted: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"nested": map[string]any{
++							"secret": redactedMask,
++							"list":   []any{redactedMask, redactedMask, redactedMask},
++						},
++					},
++				},
++			},
++			want: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"nested": map[string]any{
++							"secret": redactedMask,
++							"list":   []any{redactedMask, "${env:B}", redactedMask},
++						},
++					},
++				},
++			},
++		},
++		{
++			name: "non-opaque strings untouched",
++			pre: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						// Value happens to equal the masked string but is not an
++						// opaque field — the redacted view confirms that by
++						// carrying the same plain string back.
++						"other": redactedMask,
++					},
++				},
++			},
++			redacted: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"other": redactedMask,
++					},
++				},
++			},
++			want: map[string]any{
++				"exporters": map[string]any{
++					"foo": map[string]any{
++						"other": redactedMask,
++					},
++				},
++			},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			pre := confmap.NewFromStringMap(tt.pre)
++			red := confmap.NewFromStringMap(tt.redacted)
++			got := redactByMirroring(pre, red)
++			require.NotNil(t, got)
++			assert.Equal(t, tt.want, got.ToStringMap())
++		})
++	}
++}
++
++func TestRedactWithPreExpansion_NilPreExpansion(t *testing.T) {
++	got := redactByMirroring(nil, confmap.New())
++	assert.Nil(t, got)
++}
++
++func TestRedactWithPreExpansion_NilRedacted(t *testing.T) {
++	pre := confmap.NewFromStringMap(map[string]any{"a": "b"})
++	got := redactByMirroring(pre, nil)
++	require.NotNil(t, got)
++	assert.Equal(t, map[string]any{"a": "b"}, got.ToStringMap())
++}
+diff --git a/service/extensions/extensions.go b/service/extensions/extensions.go
+index 66658bb129f1..232f5db72e5d 100644
+--- a/service/extensions/extensions.go
++++ b/service/extensions/extensions.go
+@@ -115,13 +115,32 @@ func (bes *Extensions) NotifyPipelineNotReady() error {
+ 	return errs
+ }
+ 
++// NotifyConfig notifies extensions of the Collector's current effective
++// configuration.
++//
++// Deprecated [v0.155.0]: use NotifyConfigSnapshot instead.
+ func (bes *Extensions) NotifyConfig(ctx context.Context, conf *confmap.Conf) error {
++	if conf == nil {
++		return nil
++	}
++	return bes.NotifyConfigSnapshot(ctx, extensioncapabilities.NewConfigSnapshot(conf, nil))
++}
++
++func (bes *Extensions) NotifyConfigSnapshot(ctx context.Context, configSnapshot extensioncapabilities.ConfigSnapshot) error {
++	if configSnapshot == nil {
++		return nil
++	}
+ 	var errs error
+ 	for _, extID := range bes.extensionIDs {
+ 		ext := bes.extMap[extID]
++		if cw, ok := ext.(extensioncapabilities.ConfigSnapshotWatcher); ok {
++			errs = multierr.Append(errs, cw.NotifyConfigSnapshot(ctx, configSnapshot))
++			continue
++		}
+ 		if cw, ok := ext.(extensioncapabilities.ConfigWatcher); ok {
+-			clonedConf := confmap.NewFromStringMap(conf.ToStringMap())
+-			errs = multierr.Append(errs, cw.NotifyConfig(ctx, clonedConf))
++			if effectiveConf := configSnapshot.Effective(); effectiveConf != nil {
++				errs = multierr.Append(errs, cw.NotifyConfig(ctx, effectiveConf))
++			}
+ 		}
+ 	}
+ 	return errs
+diff --git a/service/extensions/extensions_test.go b/service/extensions/extensions_test.go
+index 2a33c9fd7409..66d4197b500a 100644
+--- a/service/extensions/extensions_test.go
++++ b/service/extensions/extensions_test.go
+@@ -291,6 +291,27 @@ func TestNotifyConfig(t *testing.T) {
+ 	}
+ }
+ 
++func TestNotifyConfigWithNilConfig(t *testing.T) {
++	called := false
++	extensionFactory := newConfigWatcherExtensionFactory(component.MustNewType("notifiable"), func() error {
++		called = true
++		return errors.New("unexpected notification")
++	})
++
++	extensions, err := New(context.Background(), Settings{
++		Telemetry: componenttest.NewNopTelemetrySettings(),
++		BuildInfo: component.NewDefaultBuildInfo(),
++		Extensions: builders.NewExtension(
++			map[component.ID]component.Config{component.MustNewID("notifiable"): extensionFactory.CreateDefaultConfig()},
++			map[component.Type]extension.Factory{component.MustNewType("notifiable"): extensionFactory},
++		),
++	}, []component.ID{component.MustNewID("notifiable")})
++	require.NoError(t, err)
++
++	require.NoError(t, extensions.NotifyConfig(context.Background(), nil))
++	assert.False(t, called)
++}
++
+ type configWatcherExtension struct {
+ 	fn func() error
+ }
+@@ -526,3 +547,206 @@ func (ext *recordingExtension) Start(_ context.Context, host component.Host) err
+ func (ext *recordingExtension) Shutdown(context.Context) error {
+ 	return ext.shutdownCallback(ext.createSettings)
+ }
++
++func TestNotifyConfigSnapshot(t *testing.T) {
++	notificationError := errors.New("Error processing config snapshot")
++	nopExtensionFactory := extensiontest.NewNopFactory()
++	nopExtensionConfig := nopExtensionFactory.CreateDefaultConfig()
++	n1ExtensionFactory := newConfigSnapshotWatcherExtensionFactory(component.MustNewType("snapshotnotifiable1"), func(extensioncapabilities.ConfigSnapshot) error { return nil })
++	n1ExtensionConfig := n1ExtensionFactory.CreateDefaultConfig()
++	nErrExtensionFactory := newConfigSnapshotWatcherExtensionFactory(component.MustNewType("snapshotnotifiableErr"), func(extensioncapabilities.ConfigSnapshot) error { return notificationError })
++	nErrExtensionConfig := nErrExtensionFactory.CreateDefaultConfig()
++
++	tests := []struct {
++		name              string
++		factories         map[component.Type]extension.Factory
++		extensionsConfigs map[component.ID]component.Config
++		serviceExtensions []component.ID
++		want              error
++	}{
++		{
++			name: "No config-snapshot-watcher extensions",
++			factories: map[component.Type]extension.Factory{
++				component.MustNewType("nop"): nopExtensionFactory,
++			},
++			extensionsConfigs: map[component.ID]component.Config{
++				component.MustNewID("nop"): nopExtensionConfig,
++			},
++			serviceExtensions: []component.ID{component.MustNewID("nop")},
++		},
++		{
++			name: "One config-snapshot-watcher extension",
++			factories: map[component.Type]extension.Factory{
++				component.MustNewType("snapshotnotifiable1"): n1ExtensionFactory,
++			},
++			extensionsConfigs: map[component.ID]component.Config{
++				component.MustNewID("snapshotnotifiable1"): n1ExtensionConfig,
++			},
++			serviceExtensions: []component.ID{component.MustNewID("snapshotnotifiable1")},
++		},
++		{
++			name: "Errors in config-snapshot notification",
++			factories: map[component.Type]extension.Factory{
++				component.MustNewType("snapshotnotifiableErr"): nErrExtensionFactory,
++			},
++			extensionsConfigs: map[component.ID]component.Config{
++				component.MustNewID("snapshotnotifiableErr"): nErrExtensionConfig,
++			},
++			serviceExtensions: []component.ID{component.MustNewID("snapshotnotifiableErr")},
++			want:              notificationError,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			extensions, err := New(context.Background(), Settings{
++				Telemetry:  componenttest.NewNopTelemetrySettings(),
++				BuildInfo:  component.NewDefaultBuildInfo(),
++				Extensions: builders.NewExtension(tt.extensionsConfigs, tt.factories),
++			}, tt.serviceExtensions)
++			require.NoError(t, err)
++			errs := extensions.NotifyConfigSnapshot(
++				context.Background(),
++				extensioncapabilities.NewConfigSnapshot(confmap.NewFromStringMap(map[string]any{}), nil),
++			)
++			assert.Equal(t, tt.want, errs)
++		})
++	}
++}
++
++func TestNotifyConfigSnapshotWithNilSnapshot(t *testing.T) {
++	called := false
++	extensionFactory := newConfigSnapshotWatcherExtensionFactory(component.MustNewType("snapshotnotifiable"), func(extensioncapabilities.ConfigSnapshot) error {
++		called = true
++		return errors.New("unexpected notification")
++	})
++
++	exts, err := New(context.Background(), Settings{
++		Telemetry: componenttest.NewNopTelemetrySettings(),
++		BuildInfo: component.NewDefaultBuildInfo(),
++		Extensions: builders.NewExtension(
++			map[component.ID]component.Config{component.MustNewID("snapshotnotifiable"): extensionFactory.CreateDefaultConfig()},
++			map[component.Type]extension.Factory{component.MustNewType("snapshotnotifiable"): extensionFactory},
++		),
++	}, []component.ID{component.MustNewID("snapshotnotifiable")})
++	require.NoError(t, err)
++
++	require.NoError(t, exts.NotifyConfigSnapshot(context.Background(), nil))
++	assert.False(t, called)
++}
++
++func TestNotifyConfigSnapshotWithNilEffectiveConfig(t *testing.T) {
++	called := false
++	extensionFactory := newConfigWatcherExtensionFactory(component.MustNewType("notifiable"), func() error {
++		called = true
++		return errors.New("unexpected notification")
++	})
++
++	exts, err := New(context.Background(), Settings{
++		Telemetry: componenttest.NewNopTelemetrySettings(),
++		BuildInfo: component.NewDefaultBuildInfo(),
++		Extensions: builders.NewExtension(
++			map[component.ID]component.Config{component.MustNewID("notifiable"): extensionFactory.CreateDefaultConfig()},
++			map[component.Type]extension.Factory{component.MustNewType("notifiable"): extensionFactory},
++		),
++	}, []component.ID{component.MustNewID("notifiable")})
++	require.NoError(t, err)
++
++	err = exts.NotifyConfigSnapshot(
++		context.Background(),
++		extensioncapabilities.NewConfigSnapshot(nil, confmap.NewFromStringMap(map[string]any{"unexpanded": "${env:VALUE}"})),
++	)
++	require.NoError(t, err)
++	assert.False(t, called)
++}
++
++func TestNotifyConfigSnapshotPrefersSnapshotWatcher(t *testing.T) {
++	var configSnapshotNotifications, configNotifications int
++	extensionFactory := newConfigSnapshotAndConfigWatcherExtensionFactory(
++		component.MustNewType("bothwatchers"),
++		func() { configSnapshotNotifications++ },
++		func() { configNotifications++ },
++	)
++
++	exts, err := New(context.Background(), Settings{
++		Telemetry: componenttest.NewNopTelemetrySettings(),
++		BuildInfo: component.NewDefaultBuildInfo(),
++		Extensions: builders.NewExtension(
++			map[component.ID]component.Config{component.MustNewID("bothwatchers"): extensionFactory.CreateDefaultConfig()},
++			map[component.Type]extension.Factory{component.MustNewType("bothwatchers"): extensionFactory},
++		),
++	}, []component.ID{component.MustNewID("bothwatchers")})
++	require.NoError(t, err)
++
++	err = exts.NotifyConfigSnapshot(
++		context.Background(),
++		extensioncapabilities.NewConfigSnapshot(confmap.NewFromStringMap(map[string]any{}), nil),
++	)
++	require.NoError(t, err)
++	assert.Equal(t, 1, configSnapshotNotifications)
++	assert.Zero(t, configNotifications)
++}
++
++type configSnapshotWatcherExtension struct {
++	fn func(extensioncapabilities.ConfigSnapshot) error
++}
++
++func (comp *configSnapshotWatcherExtension) Start(context.Context, component.Host) error {
++	return nil
++}
++
++func (comp *configSnapshotWatcherExtension) Shutdown(context.Context) error {
++	return nil
++}
++
++func (comp *configSnapshotWatcherExtension) NotifyConfigSnapshot(_ context.Context, configSnapshot extensioncapabilities.ConfigSnapshot) error {
++	return comp.fn(configSnapshot)
++}
++
++func newConfigSnapshotWatcherExtensionFactory(name component.Type, fn func(extensioncapabilities.ConfigSnapshot) error) extension.Factory {
++	return extension.NewFactory(
++		name,
++		func() component.Config { return &struct{}{} },
++		func(context.Context, extension.Settings, component.Config) (extension.Extension, error) {
++			return &configSnapshotWatcherExtension{fn: fn}, nil
++		},
++		component.StabilityLevelDevelopment,
++	)
++}
++
++type configSnapshotAndConfigWatcherExtension struct {
++	notifyConfigSnapshot func()
++	notifyConfig         func()
++}
++
++func (comp *configSnapshotAndConfigWatcherExtension) Start(context.Context, component.Host) error {
++	return nil
++}
++
++func (comp *configSnapshotAndConfigWatcherExtension) Shutdown(context.Context) error {
++	return nil
++}
++
++func (comp *configSnapshotAndConfigWatcherExtension) NotifyConfigSnapshot(context.Context, extensioncapabilities.ConfigSnapshot) error {
++	comp.notifyConfigSnapshot()
++	return nil
++}
++
++func (comp *configSnapshotAndConfigWatcherExtension) NotifyConfig(context.Context, *confmap.Conf) error {
++	comp.notifyConfig()
++	return nil
++}
++
++func newConfigSnapshotAndConfigWatcherExtensionFactory(name component.Type, notifyConfigSnapshot, notifyConfig func()) extension.Factory {
++	return extension.NewFactory(
++		name,
++		func() component.Config { return &struct{}{} },
++		func(context.Context, extension.Settings, component.Config) (extension.Extension, error) {
++			return &configSnapshotAndConfigWatcherExtension{
++				notifyConfigSnapshot: notifyConfigSnapshot,
++				notifyConfig:         notifyConfig,
++			}, nil
++		},
++		component.StabilityLevelDevelopment,
++	)
++}
+diff --git a/service/service.go b/service/service.go
+index 0780648a4070..808aac5ddeef 100644
+--- a/service/service.go
++++ b/service/service.go
+@@ -21,6 +21,7 @@ import (
+ 	"go.opentelemetry.io/collector/connector"
+ 	"go.opentelemetry.io/collector/exporter"
+ 	"go.opentelemetry.io/collector/extension"
++	"go.opentelemetry.io/collector/extension/extensioncapabilities"
+ 	"go.opentelemetry.io/collector/pdata/pcommon"
+ 	"go.opentelemetry.io/collector/processor"
+ 	"go.opentelemetry.io/collector/receiver"
+@@ -45,7 +46,16 @@ type Settings struct {
+ 	// BuildInfo provides collector start information.
+ 	BuildInfo component.BuildInfo
+ 
+-	// CollectorConf contains the Collector's current configuration
++	// ConfigSnapshot contains the Collector's current configuration
++	// representations. It is passed to extensions implementing
++	// extensioncapabilities.ConfigSnapshotWatcher.
++	ConfigSnapshot extensioncapabilities.ConfigSnapshot
++
++	// CollectorConf contains the Collector's current effective configuration.
++	// It is passed to extensions implementing extensioncapabilities.ConfigWatcher
++	// via NotifyConfig.
++	//
++	// Deprecated [v0.155.0]: use ConfigSnapshot instead.
+ 	CollectorConf *confmap.Conf
+ 
+ 	// Receivers configuration to its builder.
+@@ -101,7 +111,7 @@ type Service struct {
+ 	buildInfo          component.BuildInfo
+ 	telemetrySettings  component.TelemetrySettings
+ 	host               *graph.Host
+-	collectorConf      *confmap.Conf
++	configSnapshot     extensioncapabilities.ConfigSnapshot
+ 	loggerShutdownFunc component.ShutdownFunc
+ 	meterProvider      telemetry.MeterProvider
+ 	tracerProvider     telemetry.TracerProvider
+@@ -109,6 +119,11 @@ type Service struct {
+ 
+ // New creates a new Service, its telemetry, and Components.
+ func New(ctx context.Context, set Settings, cfg Config) (_ *Service, resultErr error) {
++	configSnapshot := set.ConfigSnapshot
++	if configSnapshot == nil && set.CollectorConf != nil {
++		configSnapshot = extensioncapabilities.NewConfigSnapshot(set.CollectorConf, nil)
++	}
++
+ 	srv := &Service{
+ 		buildInfo: set.BuildInfo,
+ 		host: &graph.Host{
+@@ -122,7 +137,7 @@ func New(ctx context.Context, set Settings, cfg Config) (_ *Service, resultErr e
+ 			BuildInfo:         set.BuildInfo,
+ 			AsyncErrorChannel: set.AsyncErrorChannel,
+ 		},
+-		collectorConf: set.CollectorConf,
++		configSnapshot: configSnapshot,
+ 	}
+ 
+ 	if set.TelemetryFactory == nil {
+@@ -247,8 +262,8 @@ func (srv *Service) Start(ctx context.Context) error {
+ 		return fmt.Errorf("failed to start extensions: %w", err)
+ 	}
+ 
+-	if srv.collectorConf != nil {
+-		if err := srv.host.ServiceExtensions.NotifyConfig(ctx, srv.collectorConf); err != nil {
++	if srv.configSnapshot != nil {
++		if err := srv.host.ServiceExtensions.NotifyConfigSnapshot(ctx, srv.configSnapshot); err != nil {
+ 			return err
+ 		}
+ 	}
+diff --git a/service/service_test.go b/service/service_test.go
+index c104421af1b4..8f6dbf6cded3 100644
+--- a/service/service_test.go
++++ b/service/service_test.go
+@@ -28,6 +28,7 @@ import (
+ 	"go.opentelemetry.io/collector/config/configtelemetry"
+ 	"go.opentelemetry.io/collector/confmap"
+ 	"go.opentelemetry.io/collector/extension"
++	"go.opentelemetry.io/collector/extension/extensioncapabilities"
+ 	"go.opentelemetry.io/collector/extension/zpagesextension"
+ 	"go.opentelemetry.io/collector/internal/testutil"
+ 	"go.opentelemetry.io/collector/pdata/pcommon"
+@@ -408,6 +409,49 @@ func TestNilCollectorEffectiveConfig(t *testing.T) {
+ 	require.NoError(t, srv.Shutdown(context.Background()))
+ }
+ 
++func TestConfigSnapshotNotification(t *testing.T) {
++	set := newNopSettings()
++	set.CollectorConf = nil
++	set.ConfigSnapshot = extensioncapabilities.NewConfigSnapshot(
++		confmap.NewFromStringMap(map[string]any{"effective": "value"}),
++		confmap.NewFromStringMap(map[string]any{"unexpanded": "${env:VALUE}"}),
++	)
++	cfg := newNopConfig()
++
++	extName := component.MustNewType("configSnapshotWatcher")
++	factory := newConfigSnapshotWatcherExtensionFactory(extName)
++	set.ExtensionsConfigs = map[component.ID]component.Config{component.NewID(extName): factory.CreateDefaultConfig()}
++	set.ExtensionsFactories = map[component.Type]extension.Factory{extName: factory}
++	cfg.Extensions = []component.ID{component.NewID(extName)}
++
++	srv, err := New(context.Background(), set, cfg)
++	require.NoError(t, err)
++
++	// Start surfaces the error returned by the extension's NotifyConfig.
++	require.ErrorContains(t, srv.Start(context.Background()), "config-snapshot error")
++	require.NoError(t, srv.Shutdown(context.Background()))
++}
++
++func TestConfigSnapshotNotSetSkipsHook(t *testing.T) {
++	set := newNopSettings()
++	set.CollectorConf = nil
++	set.ConfigSnapshot = nil
++	cfg := newNopConfig()
++
++	extName := component.MustNewType("configSnapshotWatcher")
++	factory := newConfigSnapshotWatcherExtensionFactory(extName)
++	set.ExtensionsConfigs = map[component.ID]component.Config{component.NewID(extName): factory.CreateDefaultConfig()}
++	set.ExtensionsFactories = map[component.Type]extension.Factory{extName: factory}
++	cfg.Extensions = []component.ID{component.NewID(extName)}
++
++	srv, err := New(context.Background(), set, cfg)
++	require.NoError(t, err)
++
++	// With ConfigSnapshot nil, the hook is skipped and Start succeeds.
++	require.NoError(t, srv.Start(context.Background()))
++	require.NoError(t, srv.Shutdown(context.Background()))
++}
++
+ func TestServiceTelemetryLogger(t *testing.T) {
+ 	srv, err := New(context.Background(), newNopSettings(), newNopConfig())
+ 	require.NoError(t, err)
+@@ -564,6 +608,31 @@ func newConfigWatcherExtensionFactory(name component.Type) extension.Factory {
+ 	)
+ }
+ 
++type configSnapshotWatcherExtension struct{}
++
++func (comp *configSnapshotWatcherExtension) Start(context.Context, component.Host) error {
++	return nil
++}
++
++func (comp *configSnapshotWatcherExtension) Shutdown(context.Context) error {
++	return nil
++}
++
++func (comp *configSnapshotWatcherExtension) NotifyConfigSnapshot(context.Context, extensioncapabilities.ConfigSnapshot) error {
++	return errors.New("config-snapshot error")
++}
++
++func newConfigSnapshotWatcherExtensionFactory(name component.Type) extension.Factory {
++	return extension.NewFactory(
++		name,
++		func() component.Config { return &struct{}{} },
++		func(context.Context, extension.Settings, component.Config) (extension.Extension, error) {
++			return &configSnapshotWatcherExtension{}, nil
++		},
++		component.StabilityLevelDevelopment,
++	)
++}
++
+ func TestValidateGraph(t *testing.T) {
+ 	testCases := map[string]struct {
+ 		connectorCfg  map[component.ID]component.Config

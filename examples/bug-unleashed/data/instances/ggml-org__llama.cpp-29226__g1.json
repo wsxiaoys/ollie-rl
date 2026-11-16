@@ -1,0 +1,27 @@
+{
+  "case_id": "ggml-org__llama.cpp-29226",
+  "repo": "ggml-org/llama.cpp",
+  "pr": 29226,
+  "title": "model :support Gemma4 DSpark draft backbone",
+  "language": "Python",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "ggml-org__llama.cpp-29226__g1",
+  "target": {
+    "gid": "ggml-org__llama.cpp-29226#g1",
+    "summary": "When a draft model has token embeddings but no output head, load_arch_tensors unconditionally duplicates the token embeddings as the output tensor instead of sharing the target model's head. For draft models that share the target's output head (such as Nemotron DSpark), this assigns incorrect weights to the output projection and drops draft acceptance to zero.",
+    "paths": [
+      "conversion/gemma.py",
+      "src/models/dflash.cpp"
+    ],
+    "notes": [
+      "faulty statement unconditionally duplicating token embeddings into output when output tensor is absent",
+      "converter check allowing omitted lm_head.weight when tie_word_embeddings is true, relying on runtime embedding duplication"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "37e1e3781933cde684443c8785dae94d68796725",
+  "base_sha": "7ab4ee7baad2d920464cbacfad4f4b07cf111fd2",
+  "snapshot": "repos/ggml-org__llama.cpp/37e1e3781933cde684443c8785dae94d68796725",
+  "diff": "diffs/ggml-org__llama.cpp-29226.diff"
+}

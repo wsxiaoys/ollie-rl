@@ -1,0 +1,1278 @@
+diff --git a/packages/bruno-app/src/components/Sidebar/ApiSpecs/CreateApiSpec/index.js b/packages/bruno-app/src/components/Sidebar/ApiSpecs/CreateApiSpec/index.js
+index c8100080e2a..d04268c6bea 100644
+--- a/packages/bruno-app/src/components/Sidebar/ApiSpecs/CreateApiSpec/index.js
++++ b/packages/bruno-app/src/components/Sidebar/ApiSpecs/CreateApiSpec/index.js
+@@ -9,19 +9,9 @@ import { createApiSpecFile } from 'providers/ReduxStore/slices/apiSpec';
+ import { useState } from 'react';
+ import StyledWrapper from './StyledWrapper';
+ import { exportApiSpec } from 'utils/exporters/openapi-spec';
+-import { each } from 'lodash';
+ import { showApiSpecPage } from 'providers/ReduxStore/slices/app';
+ import { validateName, validateNameError } from 'utils/common/regex';
+-
+-export const getEnvironmentVariablesKeyValuePairs = (envVariables) => {
+-  let variables = {};
+-  each(envVariables, (variable) => {
+-    if (variable.name && variable.value && variable.enabled) {
+-      variables[variable.name] = variable.value;
+-    }
+-  });
+-  return variables;
+-};
++import { buildSkippedFilesMessage, buildExportWarningsMessage, buildSpecVariables } from 'utils/common/apiSpec';
+ 
+ const CreateApiSpec = ({ onClose }) => {
+   const inputRef = useRef();
+@@ -73,27 +63,34 @@ const CreateApiSpec = ({ onClose }) => {
+     }),
+     onSubmit: async (values) => {
+       let yamlContent = '';
+-      if (values?.importFrom === 'collection' && values?.collectionLocation && collectionData) {
+-        const { files, envVariables, processEnvVariables } = collectionData;
+-        let variables = {
+-          processEnvVariables
+-        };
+-        // Get selected env's variables
+-        if (values?.environment && values?.environment?.length) {
+-          variables = {
+-            ...getEnvironmentVariablesKeyValuePairs(envVariables[values?.environment] || {}),
+-            ...variables
+-          };
++      let exportWarnings = [];
++      if (values?.importFrom === 'collection') {
++        if (!collectionData?.configFile) {
++          toast.error('Could not load that collection. Pick a folder that contains a bruno.json or opencollection.yml.');
++          return;
+         }
+-        // Convert envVariables (keyed by filename) to environments array for multi-server export
+-        const environmentsList = Object.entries(envVariables || {}).map(([envFile, vars]) => ({
+-          name: envFile.replace(/\.(bru|yml)$/, ''),
+-          variables: vars
+-        }));
+-        // Create API spec yaml
+-        let exportedYamlContentData = exportApiSpec({ name: values?.apiSpecName, variables, items: files, environments: environmentsList });
+-        if (exportedYamlContentData?.content) {
+-          yamlContent = exportedYamlContentData?.content;
++        const { requests, envVariables, processEnvVariables, collectionVariables } = collectionData;
++        try {
++          const variables = buildSpecVariables({
++            collectionVariables,
++            envVariables,
++            environment: values?.environment,
++            processEnvVariables,
++            workspaceProcessEnvVariables: activeWorkspace?.processEnvVariables
++          });
++          const environmentsList = Object.entries(envVariables || {}).map(([name, variables]) => ({
++            name,
++            variables
++          }));
++          const exportedYamlContentData = exportApiSpec({ name: values?.apiSpecName, variables, items: requests, environments: environmentsList });
++          if (exportedYamlContentData?.content) {
++            yamlContent = exportedYamlContentData?.content;
++          }
++          exportWarnings = exportedYamlContentData?.warnings || [];
++        } catch (error) {
++          console.error('Failed to build the API spec from the collection:', error);
++          toast.error('Could not build an API spec from that collection');
++          return;
+         }
+       }
+ 
+@@ -103,9 +100,12 @@ const CreateApiSpec = ({ onClose }) => {
+             dispatch(showApiSpecPage());
+           }, 200);
+           toast.success('ApiSpec created');
++          if (exportWarnings.length) {
++            toast(buildExportWarningsMessage(exportWarnings), { icon: '⚠️' });
++          }
+           onClose();
+         })
+-        .catch((err) => toast.error(err?.message));
++        .catch((err) => toast.error(err?.message || 'Failed to create the API spec'));
+     }
+   });
+ 
+@@ -151,18 +151,22 @@ const CreateApiSpec = ({ onClose }) => {
+       const { ipcRenderer } = window;
+       ipcRenderer
+         .invoke('renderer:get-collection-json', collectionLocation)
+-        .then(({ files, name, envVariables, processEnvVariables }) => {
+-          setCollectionData({ name, files, envVariables, processEnvVariables });
+-          const environments = envVariables || {};
++        .then(({ skipped, ...collectionData }) => {
++          setCollectionData(collectionData);
++          const environments = collectionData.envVariables || {};
+           const environmentNames = Object.keys(environments);
+-          if (environmentNames?.length) {
+-            setEnvironments(environments);
+-            formik.setFieldValue('environment', environmentNames[0] || '');
++          setEnvironments(environments);
++          formik.setFieldValue('environment', environmentNames[0] || '');
++          if (skipped?.length) {
++            toast.error(buildSkippedFilesMessage(skipped));
+           }
+         })
+         .catch((err) => {
+           console.error('Error loading collection:', err);
+-          toast.error('Failed to load collection');
++          setCollectionData(null);
++          setEnvironments({});
++          formik.setFieldValue('environment', '');
++          toast.error(err?.message || 'Failed to load collection');
+         });
+     }
+   }, [formik.values.collectionLocation]);
+diff --git a/packages/bruno-app/src/utils/common/apiSpec.js b/packages/bruno-app/src/utils/common/apiSpec.js
+new file mode 100644
+index 00000000000..3563a8bc2f8
+--- /dev/null
++++ b/packages/bruno-app/src/utils/common/apiSpec.js
+@@ -0,0 +1,46 @@
++import { each } from 'lodash';
++
++const MAX_SKIPPED_FILES_LISTED = 5;
++
++const hasValue = (value) => value !== undefined && value !== null && value !== '';
++
++export const getEnvironmentVariablesKeyValuePairs = (envVariables) => {
++  const variables = {};
++  each(envVariables, (variable) => {
++    if (variable.name && variable.enabled && hasValue(variable.value)) {
++      variables[variable.name] = variable.value;
++    }
++  });
++  return variables;
++};
++
++export const buildSpecVariables = ({
++  collectionVariables,
++  envVariables,
++  environment,
++  processEnvVariables,
++  workspaceProcessEnvVariables
++}) => ({
++  ...(collectionVariables || {}),
++  ...(environment ? getEnvironmentVariablesKeyValuePairs(envVariables?.[environment] || {}) : {}),
++  process: {
++    env: {
++      ...(workspaceProcessEnvVariables || {}),
++      ...(processEnvVariables || {})
++    }
++  }
++});
++
++export const buildSkippedFilesMessage = (skipped) => {
++  const listed = skipped.slice(0, MAX_SKIPPED_FILES_LISTED);
++  const remaining = skipped.length - listed.length;
++  const names = listed.join(', ');
++  const summary = remaining > 0 ? `${names} and ${remaining} more` : names;
++  const subject = skipped.length === 1 ? 'it was' : 'they were';
++  return `Could not parse ${summary}; ${subject} skipped`;
++};
++
++export const buildExportWarningsMessage = (warnings) => {
++  const label = warnings.length === 1 ? 'warning' : 'warnings';
++  return `Created with ${warnings.length} ${label}; some request bodies could not be fully parsed`;
++};
+diff --git a/packages/bruno-app/src/utils/common/apiSpec.spec.js b/packages/bruno-app/src/utils/common/apiSpec.spec.js
+new file mode 100644
+index 00000000000..2e2e51a2bb3
+--- /dev/null
++++ b/packages/bruno-app/src/utils/common/apiSpec.spec.js
+@@ -0,0 +1,163 @@
++import {
++  buildSkippedFilesMessage,
++  buildExportWarningsMessage,
++  buildSpecVariables,
++  getEnvironmentVariablesKeyValuePairs
++} from './apiSpec';
++
++describe('getEnvironmentVariablesKeyValuePairs', () => {
++  it('ignores variables that are switched off or left blank', () => {
++    const variables = [
++      { name: 'baseUrl', value: 'https://api.test', enabled: true },
++      { name: 'disabled', value: 'x', enabled: false },
++      { name: 'blank', value: '', enabled: true },
++      { name: '', value: 'noName', enabled: true }
++    ];
++    expect(getEnvironmentVariablesKeyValuePairs(variables)).toEqual({ baseUrl: 'https://api.test' });
++  });
++
++  it('keeps a variable whose value is off or zero, which a typed environment really can hold', () => {
++    const variables = [
++      { name: 'featureOff', value: false, enabled: true },
++      { name: 'retries', value: 0, enabled: true }
++    ];
++    expect(getEnvironmentVariablesKeyValuePairs(variables)).toEqual({ featureOff: false, retries: 0 });
++  });
++
++  it('leaves out a secret, because its value never leaves the secrets store', () => {
++    const variables = [
++      { name: 'token', value: '', enabled: true, secret: true },
++      { name: 'baseUrl', value: 'https://api.test', enabled: true }
++    ];
++    expect(getEnvironmentVariablesKeyValuePairs(variables)).toEqual({ baseUrl: 'https://api.test' });
++  });
++});
++
++describe('buildSpecVariables', () => {
++  const envVariables = {
++    Local: [{ name: 'baseUrl', value: 'https://local.test', enabled: true }],
++    Prod: [{ name: 'baseUrl', value: 'https://prod.test', enabled: true }]
++  };
++
++  it('lets the chosen environment win over a collection variable of the same name', () => {
++    const variables = buildSpecVariables({
++      collectionVariables: { baseUrl: 'https://collection.test', other: 'kept' },
++      envVariables,
++      environment: 'Prod',
++      processEnvVariables: {}
++    });
++    expect(variables.baseUrl).toBe('https://prod.test');
++    expect(variables.other).toBe('kept');
++  });
++
++  it('keeps the collection variables when no environment is chosen', () => {
++    const variables = buildSpecVariables({
++      collectionVariables: { baseUrl: 'https://collection.test' },
++      envVariables,
++      environment: '',
++      processEnvVariables: {}
++    });
++    expect(variables.baseUrl).toBe('https://collection.test');
++  });
++
++  it('puts dotenv values where {{process.env.NAME}} can find them', () => {
++    const variables = buildSpecVariables({
++      collectionVariables: {},
++      envVariables,
++      environment: 'Local',
++      processEnvVariables: { API_TOKEN: 'from-dotenv' }
++    });
++    expect(variables.process.env.API_TOKEN).toBe('from-dotenv');
++    expect(variables.API_TOKEN).toBeUndefined();
++  });
++
++  it('finds a value that only the workspace .env defines', () => {
++    const variables = buildSpecVariables({
++      collectionVariables: {},
++      envVariables,
++      environment: 'Local',
++      processEnvVariables: { API_TOKEN: 'from-collection-dotenv' },
++      workspaceProcessEnvVariables: { API_HOST: 'from-workspace-dotenv' }
++    });
++
++    expect(variables.process.env.API_HOST).toBe('from-workspace-dotenv');
++    expect(variables.process.env.API_TOKEN).toBe('from-collection-dotenv');
++  });
++
++  it('lets the collection .env win over the workspace .env, the order the app resolves them in', () => {
++    const variables = buildSpecVariables({
++      collectionVariables: {},
++      envVariables,
++      environment: 'Local',
++      processEnvVariables: { API_HOST: 'from-collection-dotenv' },
++      workspaceProcessEnvVariables: { API_HOST: 'from-workspace-dotenv' }
++    });
++
++    expect(variables.process.env.API_HOST).toBe('from-collection-dotenv');
++  });
++
++  it('copes with a collection that has nothing in it', () => {
++    expect(buildSpecVariables({})).toEqual({ process: { env: {} } });
++  });
++
++  it('copes with an environment name that does not exist', () => {
++    const variables = buildSpecVariables({ collectionVariables: { a: '1' }, envVariables, environment: 'Missing' });
++    expect(variables).toEqual({ a: '1', process: { env: {} } });
++  });
++});
++
++describe('buildSkippedFilesMessage', () => {
++  const files = (count) => Array.from({ length: count }, (_, i) => `File${i + 1}.bru`);
++
++  it('says "it was skipped" when only one file could not be read', () => {
++    expect(buildSkippedFilesMessage(['Broken.bru'])).toBe('Could not parse Broken.bru; it was skipped');
++  });
++
++  it('says "they were skipped" when several files could not be read', () => {
++    expect(buildSkippedFilesMessage(files(2))).toBe('Could not parse File1.bru, File2.bru; they were skipped');
++  });
++
++  it('lists all the file names when there are few enough to show', () => {
++    const message = buildSkippedFilesMessage(files(5));
++    expect(message).toBe(
++      'Could not parse File1.bru, File2.bru, File3.bru, File4.bru, File5.bru; they were skipped'
++    );
++    expect(message).not.toContain('more');
++  });
++
++  it('shows the first few file names and counts how many others there were', () => {
++    expect(buildSkippedFilesMessage(files(8))).toBe(
++      'Could not parse File1.bru, File2.bru, File3.bru, File4.bru, File5.bru and 3 more; they were skipped'
++    );
++  });
++
++  it('never floods the message with names, even when hundreds of files were skipped', () => {
++    const message = buildSkippedFilesMessage(files(200));
++    expect(message.match(/File\d+\.bru/g)).toHaveLength(5);
++    expect(message).toContain('and 195 more');
++  });
++
++  it('always matches the leftover count to the names it left out', () => {
++    const message = buildSkippedFilesMessage(files(9));
++    expect(message.match(/File\d+\.bru/g)).toHaveLength(5);
++    expect(message).toContain('and 4 more');
++  });
++});
++
++describe('buildExportWarningsMessage', () => {
++  it('says "warning" when only one request could not be read fully', () => {
++    expect(buildExportWarningsMessage(['GetUsers.bru'])).toBe(
++      'Created with 1 warning; some request bodies could not be fully parsed'
++    );
++  });
++
++  it('says "warnings" when several requests could not be read fully', () => {
++    expect(buildExportWarningsMessage(['GetUsers.bru', 'CreateUser.bru'])).toBe(
++      'Created with 2 warnings; some request bodies could not be fully parsed'
++    );
++  });
++
++  it('counts every warning, however many there are', () => {
++    expect(buildExportWarningsMessage(new Array(12).fill('Broken.bru'))).toContain('Created with 12 warnings');
++  });
++});
+diff --git a/packages/bruno-app/src/utils/exporters/openapi-spec.js b/packages/bruno-app/src/utils/exporters/openapi-spec.js
+index 4d16555d0ce..9f929c61636 100644
+--- a/packages/bruno-app/src/utils/exporters/openapi-spec.js
++++ b/packages/bruno-app/src/utils/exporters/openapi-spec.js
+@@ -109,6 +109,8 @@ export const exportApiSpec = ({ variables, items, name, environments }) => {
+     return componentId;
+   };
+ 
++  const restoreUnresolvedPlaceholders = (value) => value.replace(/%7B%7B(.*?)%7D%7D/gi, '{{$1}}');
++
+   // Resolve a raw request URL to a path and optional operation-level server override.
+   // Checks for request-level baseUrl overrides (vars.req), then {{baseUrl}} placeholder,
+   // then known baseUrl sources. Falls back to full resolution for unknown URLs.
+@@ -127,7 +129,7 @@ export const exportApiSpec = ({ variables, items, name, environments }) => {
+     // URL uses {{baseUrl}} placeholder — strip it and resolve remaining path
+     if (rawUrl.startsWith('{{baseUrl}}')) {
+       const path = rawUrl.slice('{{baseUrl}}'.length) || '/';
+-      return { url: interpolate(path, {}), operationLevelServer: null };
++      return { url: interpolate(path, variables), operationLevelServer: null };
+     }
+ 
+     // URL matches a known baseUrl value directly (e.g. user typed template vars inline)
+@@ -135,7 +137,7 @@ export const exportApiSpec = ({ variables, items, name, environments }) => {
+       if (rawUrl.startsWith(source.baseUrl)) {
+         const rawPath = rawUrl.slice(source.baseUrl.length);
+         const path = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+-        return { url: interpolate(path, {}), operationLevelServer: null };
++        return { url: interpolate(path, source.vars || variables), operationLevelServer: null };
+       }
+     }
+ 
+@@ -143,7 +145,10 @@ export const exportApiSpec = ({ variables, items, name, environments }) => {
+     const resolvedUrl = interpolate(rawUrl, variables);
+     if (isValidUrl(resolvedUrl)) {
+       const urlDetails = new URL(resolvedUrl);
+-      return { url: urlDetails.pathname, operationLevelServer: buildServerEntry(urlDetails.origin, variables) };
++      return {
++        url: restoreUnresolvedPlaceholders(urlDetails.pathname),
++        operationLevelServer: buildServerEntry(urlDetails.origin, variables)
++      };
+     }
+ 
+     return { url: rawUrl, operationLevelServer: null };
+diff --git a/packages/bruno-app/src/utils/exporters/openapi-spec.spec.js b/packages/bruno-app/src/utils/exporters/openapi-spec.spec.js
+index c5539c0334b..0a8c6b3e620 100644
+--- a/packages/bruno-app/src/utils/exporters/openapi-spec.spec.js
++++ b/packages/bruno-app/src/utils/exporters/openapi-spec.spec.js
+@@ -1,3 +1,4 @@
++import jsyaml from 'js-yaml';
+ import { exportApiSpec } from './openapi-spec';
+ import path from 'path';
+ import openApiToBruno from '../../../../bruno-converters/src/openapi/openapi-to-bruno';
+@@ -1002,3 +1003,136 @@ describe('exportApiSpec - descriptions', () => {
+     );
+   });
+ });
++
++describe('exportApiSpec - collections that do not have any requests in them', () => {
++  it('still produces a usable spec file when the collection has no requests in it yet', () => {
++    const result = exportApiSpec({ name: 'EmptyColl', variables: {}, items: [], environments: [] });
++    const spec = jsyaml.load(result.content);
++    expect(spec.openapi).toBe('3.0.0');
++    expect(spec.info).toEqual({ title: 'EmptyColl', version: '1.0.0' });
++    expect(spec.paths).toEqual({});
++    expect(result.warnings).toEqual([]);
++  });
++
++  it('keeps the server addresses from each environment even when there are no requests', () => {
++    const result = exportApiSpec({
++      name: 'EmptyColl',
++      variables: { baseUrl: 'https://api.test' },
++      items: [],
++      environments: [{ name: 'Local', variables: [{ name: 'baseUrl', value: 'https://local.test', enabled: true }] }]
++    });
++    const spec = jsyaml.load(result.content);
++    expect(spec.paths).toEqual({});
++    expect(spec.servers.map((server) => server.url)).toEqual(['https://api.test', 'https://local.test']);
++  });
++
++  it('treats a collection that only contains folders as having no requests', () => {
++    const result = exportApiSpec({
++      name: 'FoldersOnly',
++      variables: {},
++      items: [{ type: 'folder', name: 'A' }],
++      environments: []
++    });
++    expect(jsyaml.load(result.content).paths).toEqual({});
++  });
++
++  it('refuses to guess when the list of requests is missing altogether', () => {
++    expect(() => exportApiSpec({ name: 'NoList', variables: {}, environments: [] })).toThrow();
++  });
++});
++
++describe('exportApiSpec - a variable that could not be resolved', () => {
++  const itemWithUrl = (url) => ({
++    name: 'Request',
++    type: 'http-request',
++    request: { url, method: 'GET', params: [], headers: [], body: {}, auth: {} }
++  });
++
++  const pathsIn = (content) =>
++    String(content)
++      .split('\n')
++      .filter((line) => /^ {2}\//.test(line))
++      .map((line) => line.trim().replace(/:$/, ''));
++
++  it('leaves the placeholder readable in the path instead of percent encoding its braces', () => {
++    const { content } = exportApiSpec({
++      variables: { baseUrl: 'https://api.test' },
++      items: [itemWithUrl('https://other.test/api/v1/{{secret-var}}/github')],
++      name: 'Test API'
++    });
++
++    expect(pathsIn(content)).toEqual(['/api/v1/{{secret-var}}/github']);
++    expect(content).not.toContain('%7B');
++  });
++
++  it('writes the placeholder the same way whether or not the url starts with the base url', () => {
++    const viaBaseUrl = exportApiSpec({
++      variables: { baseUrl: 'https://api.test' },
++      items: [itemWithUrl('{{baseUrl}}/api/v1/{{secret-var}}/github')],
++      name: 'Test API'
++    });
++    const viaLiteralHost = exportApiSpec({
++      variables: { baseUrl: 'https://api.test' },
++      items: [itemWithUrl('https://other.test/api/v1/{{secret-var}}/github')],
++      name: 'Test API'
++    });
++
++    expect(pathsIn(viaLiteralHost.content)).toEqual(pathsIn(viaBaseUrl.content));
++  });
++
++  it('keeps a character the user genuinely encoded, which still means what it meant', () => {
++    const { content } = exportApiSpec({
++      variables: { baseUrl: 'https://api.test' },
++      items: [itemWithUrl('https://other.test/api/v1/a%20b')],
++      name: 'Test API'
++    });
++
++    expect(pathsIn(content)).toEqual(['/api/v1/a%20b']);
++  });
++});
++
++describe('exportApiSpec - a secret that has a value', () => {
++  const itemWithUrl = (url) => ({
++    name: 'Request',
++    type: 'http-request',
++    request: { url, method: 'GET', params: [], headers: [], body: {}, auth: {} }
++  });
++
++  const pathsIn = (content) =>
++    String(content)
++      .split('\n')
++      .filter((line) => /^ {2}\//.test(line))
++      .map((line) => line.trim().replace(/:$/, ''));
++
++  const variables = { 'baseUrl': 'https://api.test', 'secret-var': 'secret-value' };
++
++  it('writes the value into the path when the url starts with the base url', () => {
++    const { content } = exportApiSpec({
++      variables,
++      items: [itemWithUrl('{{baseUrl}}/api/v1/{{secret-var}}/some-value/github')],
++      name: 'Test API'
++    });
++
++    expect(pathsIn(content)).toEqual(['/api/v1/secret-value/some-value/github']);
++  });
++
++  it('writes the value into the path when the url names the host outright', () => {
++    const { content } = exportApiSpec({
++      variables,
++      items: [itemWithUrl('https://other.test/api/v1/{{secret-var}}/some-value/github')],
++      name: 'Test API'
++    });
++
++    expect(pathsIn(content)).toEqual(['/api/v1/secret-value/some-value/github']);
++  });
++
++  it('resolves an ordinary variable in the path too, which used to be left as written', () => {
++    const { content } = exportApiSpec({
++      variables: { baseUrl: 'https://api.test', userId: '42' },
++      items: [itemWithUrl('{{baseUrl}}/users/{{userId}}')],
++      name: 'Test API'
++    });
++
++    expect(pathsIn(content)).toEqual(['/users/42']);
++  });
++});
+diff --git a/packages/bruno-electron/src/ipc/collection.js b/packages/bruno-electron/src/ipc/collection.js
+index 2961a714fae..0fc66bd1424 100644
+--- a/packages/bruno-electron/src/ipc/collection.js
++++ b/packages/bruno-electron/src/ipc/collection.js
+@@ -20,7 +20,6 @@ const {
+   parseEnvironment,
+   DEFAULT_COLLECTION_FORMAT
+ } = require('@usebruno/filestore');
+-const { dotenvToJson } = require('@usebruno/lang');
+ const { utils } = require('@usebruno/common');
+ const brunoConverters = require('@usebruno/converters');
+ const { postmanToBruno } = brunoConverters;
+@@ -28,6 +27,7 @@ const { cookiesStore } = require('../store/cookies');
+ const { parseLargeRequestWithRedaction } = require('../utils/parse');
+ const { getWsClient } = require('../ipc/network/ws-event-handlers');
+ const { hasSubDirectories } = require('../utils/filesystem');
++const { readCollectionForApiSpec } = require('../utils/collection-reader');
+ const { transformProxyConfig } = require('@usebruno/requests');
+ 
+ const {
+@@ -58,11 +58,7 @@ const {
+   moveCollectionDirectory,
+   getPaths,
+   generateUniqueName,
+-  isDotEnvFile,
+   isValidDotEnvFilename,
+-  isBrunoConfigFile,
+-  isBruEnvironmentConfig,
+-  isCollectionRootBruFile,
+   scanForBrunoFiles,
+   withFileLock
+ } = require('../utils/filesystem');
+@@ -2510,114 +2506,15 @@ const registerRendererEventHandlers = (mainWindow, watcher) => {
+     return runNpmInstall({ collectionPath: collectionPathname, packages });
+   });
+ 
+-  ipcMain.handle('renderer:get-collection-json', async (event, collectionPath) => {
+-    let variables = {};
+-    let name = '';
+-    const getBruFilesRecursively = async (dir) => {
+-      const getFilesInOrder = async (dir) => {
+-        let bruJsons = [];
+-
+-        const traverse = async (currentPath) => {
+-          const filesInCurrentDir = fs.readdirSync(currentPath);
+-
+-          if (currentPath.includes('node_modules')) {
+-            return;
+-          }
+-
+-          for (const file of filesInCurrentDir) {
+-            const filePath = path.join(currentPath, file);
+-            const stats = fs.lstatSync(filePath);
+-
+-            if (stats.isDirectory() && !filePath.startsWith('.git') && !filePath.startsWith('node_modules')) {
+-              await traverse(filePath);
+-            }
+-          }
+-
+-          const currentDirBruJsons = [];
+-          for (const file of filesInCurrentDir) {
+-            const filePath = path.join(currentPath, file);
+-            const stats = fs.lstatSync(filePath);
+-
+-            if (isBrunoConfigFile(filePath, collectionPath)) {
+-              try {
+-                const content = fs.readFileSync(filePath, 'utf8');
+-                const brunoConfig = JSON.parse(content);
+-
+-                name = brunoConfig?.name;
+-              } catch (err) {
+-                console.error(err);
+-              }
+-            }
+-
+-            if (isDotEnvFile(filePath, collectionPath)) {
+-              try {
+-                const content = fs.readFileSync(filePath, 'utf8');
+-                const jsonData = dotenvToJson(content);
+-                variables = {
+-                  ...variables,
+-                  processEnvVariables: {
+-                    ...process.env,
+-                    ...jsonData
+-                  }
+-                };
+-                continue;
+-              } catch (err) {
+-                console.error(err);
+-              }
+-            }
+-
+-            if (isBruEnvironmentConfig(filePath, collectionPath)) {
+-              try {
+-                const bruContent = fs.readFileSync(filePath, 'utf8');
+-                const environmentFilepathBasename = path.basename(filePath);
+-                const environmentName = environmentFilepathBasename.substring(0, environmentFilepathBasename.length - 4);
+-                const data = await parseEnvironment(bruContent);
+-                variables = {
+-                  ...variables,
+-                  envVariables: {
+-                    ...(variables?.envVariables || {}),
+-                    [path.basename(filePath)]: data.variables
+-                  }
+-                };
+-                continue;
+-              } catch (err) {
+-                console.error(err);
+-              }
+-            }
+-
+-            if (isCollectionRootBruFile(filePath, collectionPath)) {
+-              try {
+-                const bruContent = fs.readFileSync(filePath, 'utf8');
+-                const data = await parseCollection(bruContent);
+-                // TODO
+-                continue;
+-              } catch (err) {
+-                console.error(err);
+-              }
+-            }
+-            if (!stats.isDirectory() && path.extname(filePath) === '.bru' && file !== 'folder.bru') {
+-              const bruContent = fs.readFileSync(filePath, 'utf8');
+-              const bruJson = parseRequest(bruContent);
+-
+-              currentDirBruJsons.push({
+-                ...bruJson
+-              });
+-            }
+-          }
+-
+-          bruJsons = bruJsons.concat(currentDirBruJsons);
+-        };
+-
+-        await traverse(dir);
+-        return bruJsons;
+-      };
+-
+-      const orderedFiles = await getFilesInOrder(dir);
+-      return orderedFiles;
+-    };
++  ipcMain.handle('renderer:get-collection-json', (event, collectionPath) => {
++    if (typeof collectionPath !== 'string' || !collectionPath) {
++      throw new Error('collectionPath is required');
++    }
++    if (!fs.existsSync(collectionPath) || !fs.statSync(collectionPath).isDirectory()) {
++      throw new Error(`Collection path does not exist: ${collectionPath}`);
++    }
+ 
+-    const files = await getBruFilesRecursively(collectionPath);
+-    return { name, files, ...variables };
++    return readCollectionForApiSpec(collectionPath);
+   });
+ 
+   ipcMain.handle('renderer:export-collection-zip', async (event, collectionPath, collectionName) => {
+diff --git a/packages/bruno-electron/src/utils/collection-reader.js b/packages/bruno-electron/src/utils/collection-reader.js
+new file mode 100644
+index 00000000000..4c8b4245c13
+--- /dev/null
++++ b/packages/bruno-electron/src/utils/collection-reader.js
+@@ -0,0 +1,142 @@
++const fs = require('node:fs');
++const path = require('node:path');
++const { walk, defaultClassify, resolveDenylist } = require('./mount');
++const { parseRequest, parseEnvironment, parseCollection } = require('@usebruno/filestore');
++const { dotenvToJson } = require('@usebruno/lang');
++const { parseValueByDataType } = require('@usebruno/common/utils');
++const EnvironmentSecretsStore = require('../store/env-secrets');
++const { decryptStringSafe } = require('./encryption');
++
++const environmentSecretsStore = new EnvironmentSecretsStore();
++
++const envHasSecrets = (environment = {}) => (environment.variables || []).some((variable) => variable.secret);
++
++const hydrateEnvironmentSecrets = (collectionPath, environment) => {
++  if (!envHasSecrets(environment)) {
++    return;
++  }
++
++  const envSecrets = environmentSecretsStore.getEnvSecrets(collectionPath, environment);
++  envSecrets.forEach((secret) => {
++    const variable = environment.variables.find((v) => v.name === secret.name && v.secret);
++    if (variable && secret.value) {
++      const decryptionResult = decryptStringSafe(secret.value);
++      variable.value = parseValueByDataType(decryptionResult.value, variable.dataType);
++    }
++  });
++};
++
++const resolveConfigFile = (collectionPath) => {
++  if (fs.existsSync(path.join(collectionPath, 'opencollection.yml'))) return 'opencollection.yml';
++  if (fs.existsSync(path.join(collectionPath, 'bruno.json'))) return 'bruno.json';
++  return null;
++};
++
++const readCollectionConfig = async (collectionPath) => {
++  const configFile = resolveConfigFile(collectionPath);
++  if (!configFile) {
++    throw new Error(`No bruno.json or opencollection.yml found in ${collectionPath}`);
++  }
++
++  const configPath = path.join(collectionPath, configFile);
++  try {
++    if (configFile === 'opencollection.yml') {
++      const parsed = await parseCollection(fs.readFileSync(configPath, 'utf8'), { format: 'yml' });
++      return { configFile, brunoConfig: parsed?.brunoConfig || null, configParsed: true };
++    }
++    return { configFile, brunoConfig: JSON.parse(fs.readFileSync(configPath, 'utf8')), configParsed: true };
++  } catch (err) {
++    console.error(`Failed to parse ${configFile}:`, err);
++    return { configFile, brunoConfig: null, configParsed: false };
++  }
++};
++
++const readCollectionForApiSpec = async (collectionPath) => {
++  const { configFile, brunoConfig, configParsed } = await readCollectionConfig(collectionPath);
++
++  const requests = [];
++  const envVariables = {};
++  const collectionVariables = {};
++  const skipped = [];
++  let processEnvVariables;
++
++  const markSkipped = (relativePath) => {
++    if (!skipped.includes(relativePath)) {
++      skipped.push(relativePath);
++    }
++  };
++
++  if (!configParsed) {
++    markSkipped(configFile);
++  }
++
++  const collect = async (label, relativePath, read) => {
++    try {
++      await read();
++    } catch (err) {
++      console.error(`Failed to parse ${label} ${relativePath}:`, err);
++      markSkipped(relativePath);
++    }
++  };
++
++  for (const { relativePath, absolutePath } of walk(collectionPath, resolveDenylist(brunoConfig?.ignore))) {
++    const basename = path.basename(relativePath);
++
++    if (basename === '.env' && path.dirname(relativePath) === '.') {
++      try {
++        processEnvVariables = dotenvToJson(fs.readFileSync(absolutePath, 'utf8'));
++      } catch (err) {
++        console.error(err);
++      }
++      continue;
++    }
++
++    const classification = defaultClassify(relativePath);
++    if (!classification) continue;
++    const { format, type } = classification;
++
++    switch (type) {
++      case 'request':
++        await collect('request', relativePath, async () => {
++          const item = await parseRequest(fs.readFileSync(absolutePath, 'utf8'), { format });
++          requests.push({ ...item, pathname: absolutePath, depth: relativePath.split(path.sep).filter(Boolean).length });
++        });
++        break;
++
++      case 'environment':
++        await collect('environment', relativePath, async () => {
++          const environment = await parseEnvironment(fs.readFileSync(absolutePath, 'utf8'), { format });
++          const environmentName = basename.replace(/\.(bru|ya?ml)$/i, '');
++          environment.name = environmentName;
++          hydrateEnvironmentSecrets(collectionPath, environment);
++          envVariables[environmentName] = environment.variables;
++        });
++        break;
++
++      case 'collection':
++        await collect('collection root', relativePath, async () => {
++          const parsed = await parseCollection(fs.readFileSync(absolutePath, 'utf8'), { format });
++          const collectionRoot = parsed?.collectionRoot || parsed;
++          const collectionRootVars = collectionRoot?.request?.vars?.req || [];
++          collectionRootVars.forEach((variable) => {
++            if (variable.enabled) collectionVariables[variable.name] = variable.value;
++          });
++        });
++        break;
++
++      default:
++        break;
++    }
++  }
++
++  return {
++    configFile,
++    requests,
++    envVariables,
++    processEnvVariables,
++    collectionVariables,
++    skipped
++  };
++};
++
++module.exports = { readCollectionForApiSpec };
+diff --git a/packages/bruno-electron/src/utils/collection-reader.spec.js b/packages/bruno-electron/src/utils/collection-reader.spec.js
+new file mode 100644
+index 00000000000..2d45736b718
+--- /dev/null
++++ b/packages/bruno-electron/src/utils/collection-reader.spec.js
+@@ -0,0 +1,435 @@
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const { stringifyRequest, stringifyEnvironment, stringifyCollection } = require('@usebruno/filestore');
++
++const mockGetEnvSecrets = jest.fn(() => []);
++
++jest.mock('../store/env-secrets', () =>
++  jest.fn().mockImplementation(() => ({ getEnvSecrets: (...args) => mockGetEnvSecrets(...args) }))
++);
++
++jest.mock('./encryption', () => ({
++  decryptStringSafe: (value) => ({ value: String(value).replace(/^encrypted:/, '') })
++}));
++
++const { readCollectionForApiSpec } = require('./collection-reader');
++
++const httpItem = (name, url) => ({
++  type: 'http-request',
++  name,
++  seq: 1,
++  request: { method: 'GET', url, headers: [], params: [], body: { mode: 'none' }, auth: { mode: 'none' } }
++});
++
++const gqlItem = (name, url, query) => ({
++  type: 'graphql-request',
++  name,
++  seq: 1,
++  request: { method: 'POST', url, headers: [], params: [], body: { mode: 'graphql', graphql: { query, variables: '' } }, auth: { mode: 'none' } }
++});
++
++const envObj = (name, variables) => ({ name, variables });
++
++const tmpDirs = [];
++const mkTmp = (tag) => {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `apispec-${tag}-`));
++  tmpDirs.push(dir);
++  return dir;
++};
++const writeFile = (dir, rel, content) => {
++  const full = path.join(dir, rel);
++  fs.mkdirSync(path.dirname(full), { recursive: true });
++  fs.writeFileSync(full, content);
++};
++
++const mkCollection = (tag) => {
++  const dir = mkTmp(tag);
++  writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'MyCollection' }));
++  return dir;
++};
++
++afterAll(() => {
++  tmpDirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
++});
++
++beforeEach(() => {
++  mockGetEnvSecrets.mockReset();
++  mockGetEnvSecrets.mockReturnValue([]);
++});
++
++describe.each(['bru', 'yml'])('readCollectionForApiSpec: %s collections', (format) => {
++  const ext = format === 'yml' ? 'yml' : 'bru';
++  let result;
++
++  beforeAll(async () => {
++    const dir = mkTmp(format);
++    if (format === 'yml') {
++      writeFile(dir, 'opencollection.yml', stringifyCollection({}, { name: 'MyCollection', version: '1' }));
++    } else {
++      writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'MyCollection' }));
++    }
++    writeFile(dir, `GetUsers.${ext}`, stringifyRequest(httpItem('GetUsers', 'https://api.test/users'), { format }));
++    writeFile(dir, path.join('FolderA', `GetPosts.${ext}`), stringifyRequest(httpItem('GetPosts', 'https://api.test/posts'), { format }));
++    writeFile(dir, path.join('FolderA', `GqlUsers.${ext}`), stringifyRequest(gqlItem('GqlUsers', 'https://api.test/graphql', '{ users { id } }'), { format }));
++    writeFile(dir, path.join('environments', `Local.${ext}`), stringifyEnvironment(envObj('Local', [{ name: 'baseUrl', value: 'https://local.test', enabled: true, secret: false, type: 'text' }]), { format }));
++    writeFile(dir, path.join('environments', `Prod.${ext}`), stringifyEnvironment(envObj('Prod', [{ name: 'baseUrl', value: 'https://prod.test', enabled: true, secret: false, type: 'text' }]), { format }));
++    result = await readCollectionForApiSpec(dir);
++  });
++
++  it('reads every http and graphql request, including nested folders', () => {
++    const byName = Object.fromEntries(result.requests.map((f) => [f.name, f.type]));
++    expect(byName).toEqual({ GetUsers: 'http-request', GetPosts: 'http-request', GqlUsers: 'graphql-request' });
++  });
++
++  it('sets pathname and depth so folder tags/operationIds match the in-app export', () => {
++    const byName = Object.fromEntries(result.requests.map((f) => [f.name, f]));
++    expect(byName.GetUsers.depth).toBe(1);
++    expect(byName.GetPosts.depth).toBe(2);
++    expect(byName.GqlUsers.depth).toBe(2);
++    expect(path.isAbsolute(byName.GetUsers.pathname)).toBe(true);
++    expect(byName.GetUsers.pathname.endsWith(`GetUsers.${ext}`)).toBe(true);
++  });
++
++  it('keeps the graphql query intact in the parsed request body', () => {
++    const gql = result.requests.find((f) => f.name === 'GqlUsers');
++    expect(gql.request.body.mode).toBe('graphql');
++    expect(gql.request.body.graphql.query).toContain('users');
++  });
++
++  it('loads every environment with its own variables', () => {
++    expect(Object.keys(result.envVariables).sort()).toEqual(['Local', 'Prod']);
++    const local = result.envVariables.Local.find((v) => v.name === 'baseUrl');
++    expect(local.value).toBe('https://local.test');
++    const prod = result.envVariables.Prod.find((v) => v.name === 'baseUrl');
++    expect(prod.value).toBe('https://prod.test');
++  });
++});
++
++describe('readCollectionForApiSpec: robustness', () => {
++  it('skips an unparseable request file instead of failing the whole load, and reports it in skipped', async () => {
++    const dir = mkCollection('bad');
++    writeFile(dir, 'Good.bru', stringifyRequest(httpItem('Good', 'https://api.test/ok'), { format: 'bru' }));
++    writeFile(dir, 'Broken.bru', 'not valid bru at all {{{{');
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.requests.map((f) => f.name)).toEqual(['Good']);
++    expect(result.skipped).toEqual(['Broken.bru']);
++  });
++
++  it('rejects when a directory inside the collection cannot be read, so the load error is surfaced', async () => {
++    const dir = mkCollection('noaccess');
++    writeFile(dir, 'GetUsers.bru', stringifyRequest(httpItem('GetUsers', 'https://api.test/ok'), { format: 'bru' }));
++    writeFile(dir, path.join('locked', 'Hidden.bru'), stringifyRequest(httpItem('Hidden', 'https://api.test/hidden'), { format: 'bru' }));
++    const lockedDir = path.join(dir, 'locked');
++    const realReaddir = fs.readdirSync;
++    const spy = jest.spyOn(fs, 'readdirSync').mockImplementation((p, opts) => {
++      if (p === lockedDir) {
++        const err = new Error('EACCES: permission denied');
++        err.code = 'EACCES';
++        throw err;
++      }
++      return realReaddir(p, opts);
++    });
++    try {
++      await expect(readCollectionForApiSpec(dir)).rejects.toThrow('EACCES');
++    } finally {
++      spy.mockRestore();
++    }
++  });
++
++  it('rejects when the collection root itself cannot be read, instead of returning an empty result', async () => {
++    const dir = mkCollection('noaccess-root');
++    writeFile(dir, 'GetUsers.bru', stringifyRequest(httpItem('GetUsers', 'https://api.test/ok'), { format: 'bru' }));
++    const realReaddir = fs.readdirSync;
++    const spy = jest.spyOn(fs, 'readdirSync').mockImplementation((p, opts) => {
++      if (p === dir) {
++        const err = new Error('EACCES: permission denied');
++        err.code = 'EACCES';
++        throw err;
++      }
++      return realReaddir(p, opts);
++    });
++    try {
++      await expect(readCollectionForApiSpec(dir)).rejects.toThrow('EACCES');
++    } finally {
++      spy.mockRestore();
++    }
++  });
++
++  it('reports a malformed bru environment in skipped instead of raising an unhandled promise rejection', async () => {
++    const dir = mkCollection('bad-env');
++    writeFile(dir, path.join('environments', 'Broken.bru'), '@@@ not valid bru @@@\n');
++    writeFile(dir, path.join('environments', 'Good.bru'), stringifyEnvironment(envObj('Good', [{ name: 'baseUrl', value: 'https://x', enabled: true, secret: false, type: 'text' }]), { format: 'bru' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(Object.keys(result.envVariables)).toEqual(['Good']);
++    expect(result.skipped).toEqual([path.join('environments', 'Broken.bru')]);
++  });
++
++  it('reads .env into processEnvVariables', async () => {
++    const dir = mkCollection('dotenv');
++    writeFile(dir, '.env', 'API_TOKEN=secret123\n');
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.processEnvVariables.API_TOKEN).toBe('secret123');
++  });
++
++  it('hands back only the values from the collection\'s own .env, so nothing from the machine running Bruno can be written into a spec that gets shared', async () => {
++    const dir = mkCollection('dotenv-scope');
++    writeFile(dir, '.env', 'API_TOKEN=secret123\n');
++    process.env.BRUNO_SPEC_LEAK_CHECK = 'machine-secret';
++
++    try {
++      const result = await readCollectionForApiSpec(dir);
++
++      expect(result.processEnvVariables).toEqual({ API_TOKEN: 'secret123' });
++      expect(result.processEnvVariables.BRUNO_SPEC_LEAK_CHECK).toBeUndefined();
++    } finally {
++      delete process.env.BRUNO_SPEC_LEAK_CHECK;
++    }
++  });
++
++  it.each(['bru', 'yml'])('%s: a secret with nothing stored for it comes back empty, since the environment file never holds the value itself', async (format) => {
++    const ext = format === 'yml' ? 'yml' : 'bru';
++    const dir = mkCollection(`secret-${format}`);
++    writeFile(
++      dir,
++      path.join('environments', `Local.${ext}`),
++      stringifyEnvironment(
++        envObj('Local', [
++          { name: 'token', value: '', enabled: true, secret: true, type: 'text' },
++          { name: 'baseUrl', value: 'https://local.test', enabled: true, secret: false, type: 'text' }
++        ]),
++        { format }
++      )
++    );
++
++    const result = await readCollectionForApiSpec(dir);
++    const byName = Object.fromEntries(result.envVariables.Local.map((v) => [v.name, v.value]));
++
++    expect(byName.token).toBe('');
++    expect(byName.baseUrl).toBe('https://local.test');
++  });
++
++  it.each(['bru', 'yml'])('%s: fills a secret in from the store, so a spec built here resolves the same value as one shared from an open collection', async (format) => {
++    const ext = format === 'yml' ? 'yml' : 'bru';
++    const dir = mkCollection(`secret-stored-${format}`);
++    mockGetEnvSecrets.mockReturnValue([{ name: 'token', value: 'encrypted:s3cr3t' }]);
++    writeFile(
++      dir,
++      path.join('environments', `Local.${ext}`),
++      stringifyEnvironment(
++        envObj('Local', [
++          { name: 'token', value: '', enabled: true, secret: true, type: 'text' },
++          { name: 'baseUrl', value: 'https://local.test', enabled: true, secret: false, type: 'text' }
++        ]),
++        { format }
++      )
++    );
++
++    const result = await readCollectionForApiSpec(dir);
++    const byName = Object.fromEntries(result.envVariables.Local.map((v) => [v.name, v.value]));
++
++    expect(byName.token).toBe('s3cr3t');
++    expect(byName.baseUrl).toBe('https://local.test');
++  });
++
++  it('looks the secrets up by the collection path and the environment name the file is saved under', async () => {
++    const dir = mkCollection('secret-lookup');
++    writeFile(
++      dir,
++      path.join('environments', 'Staging.bru'),
++      stringifyEnvironment(
++        envObj('Staging', [{ name: 'token', value: '', enabled: true, secret: true, type: 'text' }]),
++        { format: 'bru' }
++      )
++    );
++
++    await readCollectionForApiSpec(dir);
++
++    expect(mockGetEnvSecrets).toHaveBeenCalledWith(dir, expect.objectContaining({ name: 'Staging' }));
++  });
++
++  it('leaves the environment alone when it holds no secrets, so the store is never consulted', async () => {
++    const dir = mkCollection('secret-none');
++    writeFile(
++      dir,
++      path.join('environments', 'Local.bru'),
++      stringifyEnvironment(
++        envObj('Local', [{ name: 'baseUrl', value: 'https://local.test', enabled: true, secret: false, type: 'text' }]),
++        { format: 'bru' }
++      )
++    );
++
++    await readCollectionForApiSpec(dir);
++
++    expect(mockGetEnvSecrets).not.toHaveBeenCalled();
++  });
++
++  it.each(['bru', 'yml'])('%s: marks which variables are secret, so the caller can tell a secret environment apart', async (format) => {
++    const ext = format === 'yml' ? 'yml' : 'bru';
++    const dir = mkCollection(`secret-flag-${format}`);
++    writeFile(
++      dir,
++      path.join('environments', `Local.${ext}`),
++      stringifyEnvironment(
++        envObj('Local', [
++          { name: 'token', value: '', enabled: true, secret: true, type: 'text' },
++          { name: 'baseUrl', value: 'https://x', enabled: true, secret: false, type: 'text' }
++        ]),
++        { format }
++      )
++    );
++
++    const result = await readCollectionForApiSpec(dir);
++    const byName = Object.fromEntries(result.envVariables.Local.map((v) => [v.name, v.secret]));
++
++    expect(byName).toEqual({ token: true, baseUrl: false });
++  });
++});
++
++describe('readCollectionForApiSpec: yml collection config (opencollection.yml)', () => {
++  it('honors the ignore patterns from opencollection.yml for a yml collection', async () => {
++    const dir = mkTmp('ocignore');
++    writeFile(dir, 'opencollection.yml', stringifyCollection({}, { name: 'YmlColl', version: '1', ignore: ['drafts/**'] }));
++    writeFile(dir, 'GetUsers.yml', stringifyRequest(httpItem('GetUsers', 'https://api.test/users'), { format: 'yml' }));
++    writeFile(dir, path.join('drafts', 'Scratch.yml'), stringifyRequest(httpItem('Scratch', 'https://api.test/scratch'), { format: 'yml' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.requests.map((f) => f.name)).toEqual(['GetUsers']);
++  });
++});
++
++describe('readCollectionForApiSpec: .yaml extension environments', () => {
++  it('handles a .yaml extension too, storing the environment under its name', async () => {
++    const dir = mkCollection('yaml-env');
++    writeFile(dir, path.join('environments', 'Local.yaml'), stringifyEnvironment(envObj('Local', [{ name: 'baseUrl', value: 'https://local.test', enabled: true, secret: false, type: 'text' }]), { format: 'yml' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(Object.keys(result.envVariables)).toEqual(['Local']);
++  });
++});
++
++describe('readCollectionForApiSpec: collection-level variables', () => {
++  it('extracts enabled collection variables from the collection root so the exporter can resolve them', async () => {
++    const dir = mkTmp('collvars');
++    writeFile(dir, 'opencollection.yml', stringifyCollection(
++      { request: { vars: { req: [{ name: 'baseUrl', value: 'https://coll.test', enabled: true, type: 'text' }] } } },
++      { name: 'C', version: '1' }
++    ));
++    writeFile(dir, 'GetUsers.yml', stringifyRequest(httpItem('GetUsers', '{{baseUrl}}/users'), { format: 'yml' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.collectionVariables).toEqual({ baseUrl: 'https://coll.test' });
++    expect(result.requests.map((f) => f.name)).toEqual(['GetUsers']);
++  });
++
++  it('extracts collection variables from a bru collection root, which parses to a different shape than yml', async () => {
++    const dir = mkTmp('collvars-bru');
++    writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'BruColl' }));
++    writeFile(dir, 'collection.bru', 'vars:pre-request {\n  baseUrl: https://coll.test\n}\n');
++    writeFile(dir, 'GetUsers.bru', stringifyRequest(httpItem('GetUsers', '{{baseUrl}}/users'), { format: 'bru' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.collectionVariables).toEqual({ baseUrl: 'https://coll.test' });
++    expect(result.requests.map((f) => f.name)).toEqual(['GetUsers']);
++  });
++
++  it('leaves out disabled collection variables', async () => {
++    const dir = mkTmp('collvars-disabled');
++    writeFile(dir, 'opencollection.yml', stringifyCollection(
++      { request: { vars: { req: [
++        { name: 'baseUrl', value: 'https://coll.test', enabled: true, type: 'text' },
++        { name: 'oldUrl', value: 'https://old.test', enabled: false, type: 'text' }
++      ] } } },
++      { name: 'C', version: '1' }
++    ));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.collectionVariables).toEqual({ baseUrl: 'https://coll.test' });
++  });
++});
++
++describe('readCollectionForApiSpec: config edge cases', () => {
++  it('prefers opencollection.yml over bruno.json when both exist', async () => {
++    const dir = mkTmp('both-configs');
++    writeFile(dir, 'opencollection.yml', stringifyCollection({}, { name: 'FromYml', version: '1' }));
++    writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'FromJson' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.configFile).toBe('opencollection.yml');
++  });
++
++  it('still loads requests when opencollection.yml is malformed, and reports the config as skipped', async () => {
++    const dir = mkTmp('bad-config');
++    writeFile(dir, 'opencollection.yml', ':: not valid yaml ::\n\t');
++    writeFile(dir, 'GetUsers.yml', stringifyRequest(httpItem('GetUsers', 'https://api.test/users'), { format: 'yml' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.requests.map((f) => f.name)).toEqual(['GetUsers']);
++    expect(result.skipped).toEqual(['opencollection.yml']);
++  });
++
++  it('reports a malformed bruno.json as skipped, since its ignore patterns are lost', async () => {
++    const dir = mkTmp('bad-json');
++    writeFile(dir, 'bruno.json', '{ not valid json');
++    writeFile(dir, 'GetUsers.bru', stringifyRequest(httpItem('GetUsers', 'https://api.test/users'), { format: 'bru' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.skipped).toEqual(['bruno.json']);
++    expect(result.requests.map((f) => f.name)).toEqual(['GetUsers']);
++  });
++
++  it('leaves skipped empty when the config is fine but carries no collection config', async () => {
++    const dir = mkTmp('ok-config');
++    writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'Fine' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.skipped).toEqual([]);
++  });
++
++  it('reports a malformed collection root in skipped so the missing collection variables are surfaced', async () => {
++    const dir = mkTmp('bad-root');
++    writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'BruColl' }));
++    writeFile(dir, 'collection.bru', 'vars:pre-request {{{ broken');
++    writeFile(dir, 'GetUsers.bru', stringifyRequest(httpItem('GetUsers', '{{baseUrl}}/users'), { format: 'bru' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.skipped).toEqual(['collection.bru']);
++    expect(result.collectionVariables).toEqual({});
++    expect(result.requests.map((f) => f.name)).toEqual(['GetUsers']);
++  });
++
++  it('reads a real collection that has no requests in it and simply finds nothing to export', async () => {
++    const dir = mkTmp('empty');
++    writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'Empty' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.requests).toEqual([]);
++    expect(result.envVariables).toEqual({});
++    expect(result.collectionVariables).toEqual({});
++    expect(result.skipped).toEqual([]);
++  });
++});
++
++describe('readCollectionForApiSpec: folders that are not Bruno collections', () => {
++  it('refuses a folder that does not contain a Bruno collection file', async () => {
++    const dir = mkTmp('not-a-collection');
++    writeFile(dir, 'readme.txt', 'i am not a collection');
++    await expect(readCollectionForApiSpec(dir)).rejects.toThrow('No bruno.json or opencollection.yml found');
++  });
++
++  it('refuses a completely empty folder', async () => {
++    await expect(readCollectionForApiSpec(mkTmp('bare'))).rejects.toThrow('No bruno.json or opencollection.yml found');
++  });
++
++  it('refuses a folder that does not exist, rather than pretending the collection was empty', async () => {
++    const missing = path.join(mkTmp('missing'), 'gone');
++    await expect(readCollectionForApiSpec(missing)).rejects.toThrow('No bruno.json or opencollection.yml found');
++  });
++
++  it('says which Bruno collection file it found, so the app can tell a real collection from any other folder', async () => {
++    const ymlDir = mkTmp('marker-yml');
++    writeFile(ymlDir, 'opencollection.yml', stringifyCollection({}, { name: 'FromYml', version: '1' }));
++    expect((await readCollectionForApiSpec(ymlDir)).configFile).toBe('opencollection.yml');
++
++    const jsonDir = mkTmp('marker-json');
++    writeFile(jsonDir, 'bruno.json', JSON.stringify({ version: '1', name: 'FromJson' }));
++    expect((await readCollectionForApiSpec(jsonDir)).configFile).toBe('bruno.json');
++  });
++
++  it('accepts a collection that uses the older bruno.json file', async () => {
++    const dir = mkTmp('json-only');
++    writeFile(dir, 'bruno.json', JSON.stringify({ version: '1', name: 'JsonOnly' }));
++    writeFile(dir, 'GetUsers.bru', stringifyRequest(httpItem('GetUsers', 'https://api.test/ok'), { format: 'bru' }));
++    const result = await readCollectionForApiSpec(dir);
++    expect(result.requests.map((f) => f.name)).toEqual(['GetUsers']);
++  });
++});

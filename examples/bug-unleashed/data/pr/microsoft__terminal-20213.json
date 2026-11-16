@@ -1,0 +1,6 @@
+{
+  "title": "sixel: prevent allocating an absurd amount of memory or writing OOB",
+  "body": "This commit implements two fixes for the integer overflow/out-of-bounds write reported in #20149.\r\n\r\nFirst, it catches any exception generated in sixel char processing (which will prevent `out_of_memory` or `bad_alloc` from being ignored sight-unseen, and will prevent the consumption of further DCS content).\r\n\r\nSecond, it prevents us from allocating memory for an image which will never be displayed (because it exceeds the height of the display.)\r\n\r\nThis supersedes prior work in #20153 for the same issues.\r\n\r\nCloses #20149\r\nCloses #20153",
+  "head_sha": "06824c0ae4b3ac63845d51db91dfaaa5905fa4f7",
+  "base_sha": "3e3b3ad883d134bdab26850d42e2a8308da40086"
+}

@@ -1,0 +1,589 @@
+diff --git a/routers/api/v1/org/team.go b/routers/api/v1/org/team.go
+index f15196e484b6d..5d64a9164aac2 100644
+--- a/routers/api/v1/org/team.go
++++ b/routers/api/v1/org/team.go
+@@ -682,6 +682,22 @@ func getRepositoryByParams(ctx *context.APIContext) *repo_model.Repository {
+ 	return repo
+ }
+ 
++func canChangeTeamRepository(ctx *context.APIContext) bool {
++	if ctx.Org.Organization.RepoAdminChangeTeamAccess {
++		return true
++	}
++	isOwner, err := ctx.Org.Organization.IsOwnedBy(ctx, ctx.Doer.ID)
++	if err != nil {
++		ctx.APIErrorInternal(err)
++		return false
++	}
++	if !isOwner {
++		ctx.APIError(http.StatusForbidden, "user is nor repo admin nor owner")
++		return false
++	}
++	return true
++}
++
+ // AddTeamRepository api for adding a repository to a team
+ func AddTeamRepository(ctx *context.APIContext) {
+ 	// swagger:operation PUT /teams/{id}/repos/{org}/{repo} organization orgAddTeamRepository
+@@ -718,6 +734,9 @@ func AddTeamRepository(ctx *context.APIContext) {
+ 	if ctx.Written() {
+ 		return
+ 	}
++	if !canChangeTeamRepository(ctx) {
++		return
++	}
+ 	if access, err := access_model.AccessLevel(ctx, ctx.Doer, repo); err != nil {
+ 		ctx.APIErrorInternal(err)
+ 		return
+@@ -770,6 +789,9 @@ func RemoveTeamRepository(ctx *context.APIContext) {
+ 	if ctx.Written() {
+ 		return
+ 	}
++	if !canChangeTeamRepository(ctx) {
++		return
++	}
+ 	if access, err := access_model.AccessLevel(ctx, ctx.Doer, repo); err != nil {
+ 		ctx.APIErrorInternal(err)
+ 		return
+diff --git a/routers/api/v1/repo/issue_tracked_time.go b/routers/api/v1/repo/issue_tracked_time.go
+index ff723e679ff29..a635d951fbf99 100644
+--- a/routers/api/v1/repo/issue_tracked_time.go
++++ b/routers/api/v1/repo/issue_tracked_time.go
+@@ -9,6 +9,7 @@ import (
+ 
+ 	"gitea.dev/models/db"
+ 	issues_model "gitea.dev/models/issues"
++	access_model "gitea.dev/models/perm/access"
+ 	"gitea.dev/models/unit"
+ 	user_model "gitea.dev/models/user"
+ 	api "gitea.dev/modules/structs"
+@@ -132,11 +133,33 @@ func ListTrackedTimes(ctx *context.APIContext) {
+ 		ctx.APIErrorInternal(err)
+ 		return
+ 	}
++	trackedTimes, err = filterTrackedTimesByAccess(ctx, trackedTimes)
++	if err != nil {
++		ctx.APIErrorInternal(err)
++		return
++	}
+ 
+ 	ctx.SetTotalCountHeader(count)
+ 	ctx.JSON(http.StatusOK, convert.ToTrackedTimeList(ctx, ctx.Doer, trackedTimes))
+ }
+ 
++func filterTrackedTimesByAccess(ctx *context.APIContext, trackedTimes issues_model.TrackedTimeList) (issues_model.TrackedTimeList, error) {
++	filtered := make(issues_model.TrackedTimeList, 0, len(trackedTimes))
++	for _, trackedTime := range trackedTimes {
++		if trackedTime.Issue == nil || trackedTime.Issue.Repo == nil {
++			continue
++		}
++		permission, err := access_model.GetIndividualUserRepoPermission(ctx, trackedTime.Issue.Repo, ctx.Doer)
++		if err != nil {
++			return nil, err
++		}
++		if permission.HasAnyUnitAccessOrPublicAccess() {
++			filtered = append(filtered, trackedTime)
++		}
++	}
++	return filtered, nil
++}
++
+ // AddTime add time manual to the given issue
+ func AddTime(ctx *context.APIContext) {
+ 	// swagger:operation Post /repos/{owner}/{repo}/issues/{index}/times issue issueAddTime
+@@ -542,6 +565,11 @@ func ListTrackedTimesByRepository(ctx *context.APIContext) {
+ 		ctx.APIErrorInternal(err)
+ 		return
+ 	}
++	trackedTimes, err = filterTrackedTimesByAccess(ctx, trackedTimes)
++	if err != nil {
++		ctx.APIErrorInternal(err)
++		return
++	}
+ 
+ 	ctx.SetTotalCountHeader(count)
+ 	ctx.JSON(http.StatusOK, convert.ToTrackedTimeList(ctx, ctx.Doer, trackedTimes))
+@@ -604,6 +632,11 @@ func ListMyTrackedTimes(ctx *context.APIContext) {
+ 		ctx.APIErrorInternal(err)
+ 		return
+ 	}
++	trackedTimes, err = filterTrackedTimesByAccess(ctx, trackedTimes)
++	if err != nil {
++		ctx.APIErrorInternal(err)
++		return
++	}
+ 
+ 	ctx.SetTotalCountHeader(count)
+ 	ctx.JSON(http.StatusOK, convert.ToTrackedTimeList(ctx, ctx.Doer, trackedTimes))
+diff --git a/routers/api/v1/user/star.go b/routers/api/v1/user/star.go
+index c097117d1b2fa..146973021a59b 100644
+--- a/routers/api/v1/user/star.go
++++ b/routers/api/v1/user/star.go
+@@ -33,13 +33,16 @@ func getStarredRepos(ctx *context.APIContext, user *user_model.User, private boo
+ 		return nil, err
+ 	}
+ 
+-	repos := make([]*api.Repository, len(starredRepos))
+-	for i, starred := range starredRepos {
++	repos := make([]*api.Repository, 0, len(starredRepos))
++	for _, starred := range starredRepos {
+ 		permission, err := access_model.GetIndividualUserRepoPermission(ctx, starred, user)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-		repos[i] = convert.ToRepo(ctx, starred, permission)
++		if !permission.HasAnyUnitAccessOrPublicAccess() {
++			continue
++		}
++		repos = append(repos, convert.ToRepo(ctx, starred, permission))
+ 	}
+ 	return repos, nil
+ }
+diff --git a/routers/web/repo/issue_dependency.go b/routers/web/repo/issue_dependency.go
+index 78437b3736d62..7570147fc4f43 100644
+--- a/routers/web/repo/issue_dependency.go
++++ b/routers/web/repo/issue_dependency.go
+@@ -130,6 +130,25 @@ func RemoveDependency(ctx *context.Context) {
+ 		return
+ 	}
+ 
++	// Existing cross-repo dependencies must remain removable even when
++	// AllowCrossRepositoryDependencies is disabled, so only enforce that the
++	// doer can read the dependency's repository.
++	if issue.RepoID != dep.RepoID {
++		if err := dep.LoadRepo(ctx); err != nil {
++			ctx.ServerError("loadRepo", err)
++			return
++		}
++		depRepoPerm, err := access_model.GetDoerRepoPermission(ctx, dep.Repo, ctx.Doer)
++		if err != nil {
++			ctx.ServerError("GetDoerRepoPermission", err)
++			return
++		}
++		if !depRepoPerm.CanReadIssuesOrPulls(dep.IsPull) {
++			ctx.Redirect(issue.Link())
++			return
++		}
++	}
++
+ 	if err = issues_model.RemoveIssueDependency(ctx, ctx.Doer, issue, dep, depType); err != nil {
+ 		if issues_model.IsErrDependencyNotExists(err) {
+ 			ctx.Flash.Error(ctx.Tr("repo.issues.dependency.add_error_dep_not_exist"))
+diff --git a/routers/web/user/notification.go b/routers/web/user/notification.go
+index 95c66bd2ea9af..b82b32f687ed9 100644
+--- a/routers/web/user/notification.go
++++ b/routers/web/user/notification.go
+@@ -4,6 +4,7 @@
+ package user
+ 
+ import (
++	stdCtx "context"
+ 	"fmt"
+ 	"net/http"
+ 	"strings"
+@@ -12,8 +13,10 @@ import (
+ 	"gitea.dev/models/db"
+ 	git_model "gitea.dev/models/git"
+ 	issues_model "gitea.dev/models/issues"
++	access_model "gitea.dev/models/perm/access"
+ 	repo_model "gitea.dev/models/repo"
+ 	"gitea.dev/models/unit"
++	user_model "gitea.dev/models/user"
+ 	"gitea.dev/modules/base"
+ 	"gitea.dev/modules/container"
+ 	"gitea.dev/modules/log"
+@@ -97,6 +100,12 @@ func prepareUserNotificationsData(ctx *context.Context) {
+ 		return
+ 	}
+ 	failCount += len(failures)
++	notifications, failures, err = filterNotificationsByRepoAccess(ctx, ctx.Doer, notifications)
++	if err != nil {
++		ctx.ServerError("filterNotificationsByRepoAccess", err)
++		return
++	}
++	failCount += len(failures)
+ 
+ 	failures, err = notifications.LoadIssues(ctx)
+ 	if err != nil {
+@@ -135,6 +144,23 @@ func prepareUserNotificationsData(ctx *context.Context) {
+ 	ctx.Data["Page"] = pager
+ }
+ 
++func filterNotificationsByRepoAccess(ctx stdCtx.Context, doer *user_model.User, notifications activities_model.NotificationList) (activities_model.NotificationList, []int, error) {
++	failures := make([]int, 0)
++	for i, notification := range notifications {
++		if notification.Repository == nil {
++			continue
++		}
++		perm, err := access_model.GetIndividualUserRepoPermission(ctx, notification.Repository, doer)
++		if err != nil {
++			return nil, nil, err
++		}
++		if !perm.HasAnyUnitAccessOrPublicAccess() {
++			failures = append(failures, i)
++		}
++	}
++	return notifications.Without(failures), failures, nil
++}
++
+ // NotificationStatusPost is a route for changing the status of a notification
+ func NotificationStatusPost(ctx *context.Context) {
+ 	notificationID := ctx.FormInt64("notification_id")
+diff --git a/routers/web/user/notification_test.go b/routers/web/user/notification_test.go
+new file mode 100644
+index 0000000000000..b6c060d04c232
+--- /dev/null
++++ b/routers/web/user/notification_test.go
+@@ -0,0 +1,37 @@
++// Copyright 2026 The Gitea Authors. All rights reserved.
++// SPDX-License-Identifier: MIT
++
++package user
++
++import (
++	"testing"
++
++	activities_model "gitea.dev/models/activities"
++	repo_model "gitea.dev/models/repo"
++	"gitea.dev/models/unittest"
++	user_model "gitea.dev/models/user"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestFilterNotificationsByRepoAccess(t *testing.T) {
++	require.NoError(t, unittest.LoadFixtures())
++
++	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 40})
++	inaccessibleRepo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
++	require.True(t, inaccessibleRepo.IsPrivate)
++	accessibleRepo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
++
++	notifications := activities_model.NotificationList{
++		{ID: 1, Repository: inaccessibleRepo},
++		{ID: 2, Repository: accessibleRepo},
++	}
++
++	filtered, failures, err := filterNotificationsByRepoAccess(t.Context(), doer, notifications)
++	require.NoError(t, err)
++
++	assert.Equal(t, []int{0}, failures)
++	require.Len(t, filtered, 1)
++	assert.EqualValues(t, 2, filtered[0].ID)
++}
+diff --git a/services/migrations/common.go b/services/migrations/common.go
+index e9895d00c2b94..ba809e4045e0d 100644
+--- a/services/migrations/common.go
++++ b/services/migrations/common.go
+@@ -22,6 +22,9 @@ func WarnAndNotice(fmtStr string, args ...any) {
+ }
+ 
+ func hasBaseURL(toCheck, baseURL string) bool {
++	if baseURL == "" {
++		return false
++	}
+ 	if len(baseURL) > 0 && baseURL[len(baseURL)-1] != '/' {
+ 		baseURL += "/"
+ 	}
+diff --git a/services/migrations/migrate.go b/services/migrations/migrate.go
+index 90b98b531bdee..5c3318e507e47 100644
+--- a/services/migrations/migrate.go
++++ b/services/migrations/migrate.go
+@@ -87,15 +87,14 @@ func IsMigrateURLAllowed(remoteURL string, doer *user_model.User) error {
+ }
+ 
+ func checkByAllowBlockList(hostName string, addrList []net.IP) error {
+-	var ipAllowed bool
++	ipAllowed := len(addrList) > 0
+ 	var ipBlocked bool
+ 	for _, addr := range addrList {
+-		ipAllowed = ipAllowed || allowList.MatchIPAddr(addr)
++		ipAllowed = ipAllowed && allowList.MatchIPAddr(addr)
+ 		ipBlocked = ipBlocked || blockList.MatchIPAddr(addr)
+ 	}
+-	var blockedError error
+ 	if blockList.MatchHostName(hostName) || ipBlocked {
+-		blockedError = &git.ErrInvalidCloneAddr{Host: hostName, IsPermissionDenied: true}
++		return &git.ErrInvalidCloneAddr{Host: hostName, IsPermissionDenied: true}
+ 	}
+ 	// if we have an allow-list, check the allow-list before return to get the more accurate error
+ 	if !allowList.IsEmpty() {
+@@ -104,7 +103,7 @@ func checkByAllowBlockList(hostName string, addrList []net.IP) error {
+ 		}
+ 	}
+ 	// otherwise, we always follow the blocked list
+-	return blockedError
++	return nil
+ }
+ 
+ // MigrateRepository migrate repository according MigrateOptions
+@@ -524,9 +523,10 @@ func Init() error {
+ 	if setting.Migrations.AllowLocalNetworks {
+ 		allowList.AppendBuiltin(hostmatcher.MatchBuiltinPrivate)
+ 		allowList.AppendBuiltin(hostmatcher.MatchBuiltinLoopback)
++	} else {
++		blockList.AppendBuiltin(hostmatcher.MatchBuiltinPrivate)
++		blockList.AppendBuiltin(hostmatcher.MatchBuiltinLoopback)
+ 	}
+-	// TODO: at the moment, if ALLOW_LOCALNETWORKS=false, ALLOWED_DOMAINS=domain.com, and domain.com has IP 127.0.0.1, then it's still allowed.
+-	// if we want to block such case, the private&loopback should be added to the blockList when ALLOW_LOCALNETWORKS=false
+ 
+ 	return nil
+ }
+diff --git a/services/migrations/migrate_test.go b/services/migrations/migrate_test.go
+index 7c95a488ba336..6903224bf3616 100644
+--- a/services/migrations/migrate_test.go
++++ b/services/migrations/migrate_test.go
+@@ -93,17 +93,19 @@ func TestAllowBlockList(t *testing.T) {
+ 	assert.NoError(t, checkByAllowBlockList("domain.com", []net.IP{net.ParseIP("1.2.3.4")}))
+ 	assert.NoError(t, checkByAllowBlockList("domain.com", []net.IP{net.ParseIP("127.0.0.1")}))
+ 
+-	// allow wildcard, block some subdomains. if the domain name is allowed, then the local network check is skipped
++	// allow wildcard, block some subdomains. every resolved address must still be allowed.
+ 	init("*.domain.com", "blocked.domain.com", false)
+ 	assert.NoError(t, checkByAllowBlockList("sub.domain.com", []net.IP{net.ParseIP("1.2.3.4")}))
+-	assert.NoError(t, checkByAllowBlockList("sub.domain.com", []net.IP{net.ParseIP("127.0.0.1")}))
++	assert.Error(t, checkByAllowBlockList("sub.domain.com", []net.IP{net.ParseIP("127.0.0.1")}))
++	assert.Error(t, checkByAllowBlockList("sub.domain.com", []net.IP{net.ParseIP("1.2.3.4"), net.ParseIP("127.0.0.1")}))
+ 	assert.Error(t, checkByAllowBlockList("blocked.domain.com", []net.IP{net.ParseIP("1.2.3.4")}))
+ 	assert.Error(t, checkByAllowBlockList("sub.other.com", []net.IP{net.ParseIP("1.2.3.4")}))
+ 
+-	// allow wildcard (it could lead to SSRF in production)
++	// allow wildcard still follows the local network policy for resolved addresses.
+ 	init("*", "", false)
+ 	assert.NoError(t, checkByAllowBlockList("domain.com", []net.IP{net.ParseIP("1.2.3.4")}))
+-	assert.NoError(t, checkByAllowBlockList("domain.com", []net.IP{net.ParseIP("127.0.0.1")}))
++	assert.Error(t, checkByAllowBlockList("domain.com", []net.IP{net.ParseIP("127.0.0.1")}))
++	assert.Error(t, checkByAllowBlockList("domain.com", []net.IP{net.ParseIP("1.2.3.4"), net.ParseIP("127.0.0.1")}))
+ 
+ 	// local network can still be blocked
+ 	init("*", "127.0.0.*", false)
+diff --git a/services/migrations/restore.go b/services/migrations/restore.go
+index e7bde418c8292..a07c4d96b5765 100644
+--- a/services/migrations/restore.go
++++ b/services/migrations/restore.go
+@@ -239,7 +239,7 @@ func (r *RepositoryRestorer) GetPullRequests(_ context.Context, page, perPage in
+ 		if pr.PatchURL != "" {
+ 			pr.PatchURL = "file://" + util.FilePathJoinAbs(r.baseDir, pr.PatchURL)
+ 		}
+-		CheckAndEnsureSafePR(pr, "", r)
++		CheckAndEnsureSafePR(pr, "file://"+r.baseDir, r)
+ 	}
+ 	return pulls, true, nil
+ }
+diff --git a/services/migrations/restore_test.go b/services/migrations/restore_test.go
+index 4346fc71ae848..21cba5e3496b6 100644
+--- a/services/migrations/restore_test.go
++++ b/services/migrations/restore_test.go
+@@ -45,3 +45,30 @@ func TestRepositoryRestorer_GetReleases_LocalFileInclusion(t *testing.T) {
+ 	assert.Equal(t, "file://"+filepath.Join(baseDir, "good.txt"), optional.FromPtr(assets[0].DownloadURL).Value())
+ 	assert.Equal(t, "file://"+filepath.Join(baseDir, "etc/passwd"), optional.FromPtr(assets[1].DownloadURL).Value())
+ }
++
++func TestRepositoryRestorer_GetPullRequestsStripsUnsafeCloneURL(t *testing.T) {
++	baseDir := t.TempDir()
++	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "change.patch"), []byte("patch"), 0o644))
++
++	pullRequestYML := `
++- number: 1
++  patch_url: change.patch
++  head:
++    clone_url: http://127.0.0.1/private.git
++    ref: feature
++  base:
++    ref: main
++`
++	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "pull_request.yml"), []byte(pullRequestYML), 0o644))
++
++	r, err := NewRepositoryRestorer(t.Context(), baseDir, "owner", "repo", false)
++	require.NoError(t, err)
++
++	pulls, _, err := r.GetPullRequests(t.Context(), 1, 10)
++	require.NoError(t, err)
++	require.Len(t, pulls, 1)
++
++	assert.Equal(t, "file://"+filepath.Join(baseDir, "change.patch"), pulls[0].PatchURL)
++	assert.Empty(t, pulls[0].Head.CloneURL)
++	assert.True(t, pulls[0].EnsuredSafe)
++}
+diff --git a/tests/integration/api_issue_dependency_test.go b/tests/integration/api_issue_dependency_test.go
+index a6a9be34bcea9..45ffcd0ee447d 100644
+--- a/tests/integration/api_issue_dependency_test.go
++++ b/tests/integration/api_issue_dependency_test.go
+@@ -6,6 +6,7 @@ package integration
+ import (
+ 	"fmt"
+ 	"net/http"
++	"strconv"
+ 	"testing"
+ 
+ 	auth_model "gitea.dev/models/auth"
+@@ -150,3 +151,47 @@ func TestAPIDeleteIssueDependencyCrossRepoPermission(t *testing.T) {
+ 		DependencyID: dependencyIssue.ID,
+ 	})
+ }
++
++func TestWebDeleteIssueDependencyCrossRepoPermission(t *testing.T) {
++	defer tests.PrepareTestEnv(t)()
++
++	targetRepo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
++	targetIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{RepoID: targetRepo.ID, Index: 1})
++	dependencyRepo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
++	assert.True(t, dependencyRepo.IsPrivate)
++	dependencyIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{RepoID: dependencyRepo.ID, Index: 1})
++
++	enableRepoDependencies(t, targetIssue.RepoID)
++	enableRepoDependencies(t, dependencyRepo.ID)
++
++	user1 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
++	assert.NoError(t, issues_model.CreateIssueDependency(t.Context(), user1, targetIssue, dependencyIssue))
++
++	user40 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 40})
++	assert.NoError(t, repo_service.AddOrUpdateCollaborator(t.Context(), targetRepo, user40, perm.AccessModeWrite))
++
++	session := loginUser(t, user40.Name)
++	req := NewRequestWithValues(t, "POST", fmt.Sprintf("/user2/repo1/issues/%d/dependency/delete", targetIssue.Index), map[string]string{
++		"removeDependencyID": strconv.FormatInt(dependencyIssue.ID, 10),
++		"dependencyType":     "blockedBy",
++	})
++	session.MakeRequest(t, req, http.StatusSeeOther)
++
++	unittest.AssertExistsAndLoadBean(t, &issues_model.IssueDependency{
++		IssueID:      targetIssue.ID,
++		DependencyID: dependencyIssue.ID,
++	})
++
++	assert.NoError(t, repo_service.AddOrUpdateCollaborator(t.Context(), dependencyRepo, user40, perm.AccessModeRead))
++
++	req = NewRequestWithValues(t, "POST", fmt.Sprintf("/user2/repo1/issues/%d/dependency/delete", targetIssue.Index), map[string]string{
++		"removeDependencyID": strconv.FormatInt(dependencyIssue.ID, 10),
++		"dependencyType":     "blockedBy",
++	})
++	session.MakeRequest(t, req, http.StatusSeeOther)
++
++	unittest.AssertNotExistsBean(t, &issues_model.IssueDependency{
++		IssueID:      targetIssue.ID,
++		DependencyID: dependencyIssue.ID,
++	})
++}
+diff --git a/tests/integration/api_issue_tracked_time_test.go b/tests/integration/api_issue_tracked_time_test.go
+index 0ae8a858ac144..44e47763b7417 100644
+--- a/tests/integration/api_issue_tracked_time_test.go
++++ b/tests/integration/api_issue_tracked_time_test.go
+@@ -11,10 +11,13 @@ import (
+ 
+ 	auth_model "gitea.dev/models/auth"
+ 	issues_model "gitea.dev/models/issues"
++	"gitea.dev/models/perm"
++	repo_model "gitea.dev/models/repo"
+ 	"gitea.dev/models/unittest"
+ 	user_model "gitea.dev/models/user"
+ 	"gitea.dev/modules/json"
+ 	api "gitea.dev/modules/structs"
++	repo_service "gitea.dev/services/repository"
+ 	"gitea.dev/tests"
+ 
+ 	"github.com/stretchr/testify/assert"
+@@ -100,6 +103,30 @@ func TestAPIGetTrackedTimesNonExistentUserFilter(t *testing.T) {
+ 	})
+ }
+ 
++func TestAPIUserTrackedTimesOmitsInaccessiblePrivateIssues(t *testing.T) {
++	defer tests.PrepareTestEnv(t)()
++
++	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 40})
++	privateRepo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
++	assert.True(t, privateRepo.IsPrivate)
++	issue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{RepoID: privateRepo.ID})
++	assert.NoError(t, repo_service.AddOrUpdateCollaborator(t.Context(), privateRepo, user, perm.AccessModeRead))
++	_, err := issues_model.AddTime(t.Context(), user, issue, 60, time.Time{})
++	assert.NoError(t, err)
++	assert.NoError(t, repo_service.DeleteCollaboration(t.Context(), privateRepo, user))
++
++	token := getUserToken(t, user.Name, auth_model.AccessTokenScopeReadUser)
++	req := NewRequest(t, "GET", "/api/v1/user/times").AddTokenAuth(token)
++	resp := MakeRequest(t, req, http.StatusOK)
++
++	trackedTimes := DecodeJSON(t, resp, api.TrackedTimeList{})
++	for _, trackedTime := range trackedTimes {
++		if assert.NotNil(t, trackedTime.Issue) {
++			assert.NotEqual(t, issue.ID, trackedTime.Issue.ID)
++		}
++	}
++}
++
+ func TestAPIDeleteTrackedTime(t *testing.T) {
+ 	defer tests.PrepareTestEnv(t)()
+ 
+diff --git a/tests/integration/api_team_test.go b/tests/integration/api_team_test.go
+index 08dd53e82ffbe..3ad28be1805f3 100644
+--- a/tests/integration/api_team_test.go
++++ b/tests/integration/api_team_test.go
+@@ -20,6 +20,7 @@ import (
+ 	"gitea.dev/modules/structs"
+ 	api "gitea.dev/modules/structs"
+ 	"gitea.dev/services/convert"
++	repo_service "gitea.dev/services/repository"
+ 	"gitea.dev/tests"
+ 
+ 	"github.com/stretchr/testify/assert"
+@@ -306,6 +307,30 @@ func TestAPIGetTeamRepo(t *testing.T) {
+ 	MakeRequest(t, req, http.StatusNotFound)
+ }
+ 
++func TestAPIAddRemoveTeamRepositoryRequiresOrgOwnerOrSetting(t *testing.T) {
++	defer tests.PrepareTestEnv(t)()
++
++	team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 12})
++	org := unittest.AssertExistsAndLoadBean(t, &organization.Organization{ID: team.OrgID})
++	assert.False(t, org.RepoAdminChangeTeamAccess)
++	targetRepo := unittest.AssertExistsAndLoadBean(t, &repo.Repository{ID: 32, OwnerID: org.ID})
++	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28})
++	assert.NoError(t, repo_service.AddOrUpdateCollaborator(t.Context(), targetRepo, user, perm.AccessModeAdmin))
++
++	token := getUserToken(t, user.Name, auth_model.AccessTokenScopeWriteOrganization)
++	url := fmt.Sprintf("/api/v1/teams/%d/repos/%s", team.ID, targetRepo.FullName())
++
++	req := NewRequest(t, "PUT", url).AddTokenAuth(token)
++	MakeRequest(t, req, http.StatusForbidden)
++	unittest.AssertNotExistsBean(t, &organization.TeamRepo{TeamID: team.ID, RepoID: targetRepo.ID})
++
++	assert.NoError(t, db.Insert(t.Context(), &organization.TeamRepo{OrgID: org.ID, TeamID: team.ID, RepoID: targetRepo.ID}))
++
++	req = NewRequest(t, "DELETE", url).AddTokenAuth(token)
++	MakeRequest(t, req, http.StatusForbidden)
++	unittest.AssertExistsAndLoadBean(t, &organization.TeamRepo{TeamID: team.ID, RepoID: targetRepo.ID})
++}
++
+ func TestAPITeamVisibilityAccess(t *testing.T) {
+ 	defer tests.PrepareTestEnv(t)()
+ 	insertTestTeam := func(t *testing.T, orgID int64, name string, visibility structs.VisibleType) *organization.Team {
+diff --git a/tests/integration/api_user_star_test.go b/tests/integration/api_user_star_test.go
+index 8976a7669aa13..7ea7f9f971528 100644
+--- a/tests/integration/api_user_star_test.go
++++ b/tests/integration/api_user_star_test.go
+@@ -224,3 +224,23 @@ func TestAPIStarPublicOnly(t *testing.T) {
+ 	require.Len(t, repos, 1)
+ 	assert.Equal(t, "user5/repo4", repos[0].FullName)
+ }
++
++func TestAPIStarredReposOmitsInaccessiblePrivateRepos(t *testing.T) {
++	defer tests.PrepareTestEnv(t)()
++
++	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 40})
++	privateRepo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
++	assert.True(t, privateRepo.IsPrivate)
++	assert.NoError(t, repo_service.AddOrUpdateCollaborator(t.Context(), privateRepo, user, perm.AccessModeRead))
++	assert.NoError(t, repo_model.StarRepo(t.Context(), user, privateRepo, true))
++	assert.NoError(t, repo_service.DeleteCollaboration(t.Context(), privateRepo, user))
++
++	token := getUserToken(t, user.Name, auth_model.AccessTokenScopeReadUser, auth_model.AccessTokenScopeReadRepository)
++	req := NewRequest(t, "GET", "/api/v1/user/starred").AddTokenAuth(token)
++	resp := MakeRequest(t, req, http.StatusOK)
++
++	repos := DecodeJSON(t, resp, []api.Repository{})
++	for _, repo := range repos {
++		assert.NotEqual(t, privateRepo.FullName(), repo.FullName)
++	}
++}

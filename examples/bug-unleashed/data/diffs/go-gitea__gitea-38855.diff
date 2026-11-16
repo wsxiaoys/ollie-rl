@@ -1,0 +1,1043 @@
+diff --git a/custom/conf/app.example.ini b/custom/conf/app.example.ini
+index a0019b2d5a488..9ede26ec0c1b4 100644
+--- a/custom/conf/app.example.ini
++++ b/custom/conf/app.example.ini
+@@ -2288,6 +2288,18 @@ LEVEL = Info
+ ;RUN_AT_START = true
+ ;SCHEDULE = @midnight
+ 
++;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
++;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
++;; Delete action runs older than RUN_RETENTION_DAYS
++;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
++;[cron.cleanup_action_runs]
++;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
++;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
++;; Deletes nothing while RUN_RETENTION_DAYS is 0
++;ENABLED = true
++;RUN_AT_START = false
++;SCHEDULE = @midnight
++
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ ;; Clean-up deleted branches
+@@ -3008,16 +3020,20 @@ LEVEL = Info
+ ;;
+ ;; Default platform to get action plugins, `github` for `https://github.com`, `self` for the current Gitea instance.
+ ;DEFAULT_ACTIONS_URL = github
+-;; Logs retention time in days. Old logs will be deleted after this period.
+-;LOG_RETENTION_DAYS = 365
+ ;; Log compression type, `none` for no compression, `zstd` for zstd compression.
+ ;; Other compression types like `gzip` are NOT supported, since seekable stream is required for log view.
+ ;; It's always recommended to use compression when using local disk as log storage if CPU or memory is not a bottleneck.
+ ;; And for object storage services like S3, which is billed for requests, it would cause extra 2 times of get requests for each log view.
+ ;; But it will save storage space and network bandwidth, so it's still recommended to use compression.
+ ;LOG_COMPRESSION = zstd
+-;; Default artifact retention time in days. Artifacts could have their own retention periods by setting the `retention-days` option in `actions/upload-artifact` step.
++;; Days to keep logs. Old logs will be deleted after this period. 0 means keep forever.
++;LOG_RETENTION_DAYS = 365
++;; Days to keep artifacts. Old artifacts will be deleted after this period. 0 means keep forever.
++;; Changes only apply to newly uploaded artifacts, existing ones keep the expiry stored when they were uploaded.
++;; Artifacts could have their own retention periods by setting the `retention-days` option in `actions/upload-artifact` step.
+ ;ARTIFACT_RETENTION_DAYS = 90
++;; Days to keep completed runs. Old runs and everything under them will be deleted after this period. 0 means keep forever.
++;RUN_RETENTION_DAYS = 400
+ ;; Timeout to stop the task which have running status, but haven't been updated for a long time
+ ;ZOMBIE_TASK_TIMEOUT = 10m
+ ;; Timeout to stop the tasks which have running status and continuous updates, but don't end for a long time
+diff --git a/models/actions/artifact.go b/models/actions/artifact.go
+index de95d72d3a484..442c36d875d1b 100644
+--- a/models/actions/artifact.go
++++ b/models/actions/artifact.go
+@@ -8,13 +8,12 @@ package actions
+ 
+ import (
+ 	"context"
+-	"errors"
+ 	"slices"
+-	"time"
+ 
+ 	"gitea.dev/models/db"
++	"gitea.dev/modules/optional"
++	"gitea.dev/modules/setting"
+ 	"gitea.dev/modules/timeutil"
+-	"gitea.dev/modules/util"
+ 
+ 	"xorm.io/builder"
+ )
+@@ -23,12 +22,12 @@ import (
+ type ArtifactStatus int64
+ 
+ const (
+-	ArtifactStatusUploadPending   ArtifactStatus = iota + 1 // 1， ArtifactStatusUploadPending is the status of an artifact upload that is pending
+-	ArtifactStatusUploadConfirmed                           // 2， ArtifactStatusUploadConfirmed is the status of an artifact upload that is confirmed
+-	ArtifactStatusUploadError                               // 3， ArtifactStatusUploadError is the status of an artifact upload that is errored
+-	ArtifactStatusExpired                                   // 4, ArtifactStatusExpired is the status of an artifact that is expired
+-	ArtifactStatusPendingDeletion                           // 5, ArtifactStatusPendingDeletion is the status of an artifact that is pending deletion
+-	ArtifactStatusDeleted                                   // 6, ArtifactStatusDeleted is the status of an artifact that is deleted
++	ArtifactStatusUploadPending ArtifactStatus = iota + 1
++	ArtifactStatusUploadConfirmed
++	ArtifactStatusUploadError // unused, kept so the numbering below stays stable
++	ArtifactStatusExpired
++	ArtifactStatusPendingDeletion
++	ArtifactStatusDeleted
+ )
+ 
+ func (status ArtifactStatus) ToString() string {
+@@ -87,15 +86,36 @@ type ActionArtifact struct {
+ 	Status       ArtifactStatus     `xorm:"index"`                                 // The status of the artifact, uploading, expired or need-delete
+ 	CreatedUnix  timeutil.TimeStamp `xorm:"created"`
+ 	UpdatedUnix  timeutil.TimeStamp `xorm:"updated index"`
+-	ExpiredUnix  timeutil.TimeStamp `xorm:"index"` // The time when the artifact will be expired
++	ExpiredUnix  timeutil.TimeStamp `xorm:"index"` // 0 means the artifact is kept forever
+ }
+ 
+-func CreateArtifact(ctx context.Context, t *ActionTask, artifactName, artifactPath string, expiredDays int64) (*ActionArtifact, error) {
++const artifactKeepForever timeutil.TimeStamp = 0
++
++func artifactExpiry(requested optional.Option[timeutil.TimeStamp]) timeutil.TimeStamp {
++	if requested.Has() {
++		return max(requested.Value(), artifactKeepForever+1)
++	}
++	if setting.Actions.ArtifactRetentionDays <= 0 {
++		return artifactKeepForever
++	}
++	return timeutil.TimeStampNow().Add(timeutil.Day * setting.Actions.ArtifactRetentionDays)
++}
++
++// CreateArtifact returns the artifact for the name and path, creating it on first upload and refreshing its expiry either way.
++func CreateArtifact(ctx context.Context, t *ActionTask, artifactName, artifactPath string, expiry optional.Option[timeutil.TimeStamp]) (*ActionArtifact, error) {
+ 	if err := t.LoadJob(ctx); err != nil {
+ 		return nil, err
+ 	}
+-	artifact, err := getArtifactByNameAndPath(ctx, t.Job.RunID, t.Job.RunAttemptID, artifactName, artifactPath)
+-	if errors.Is(err, util.ErrNotExist) {
++	expiredUnix := artifactExpiry(expiry)
++
++	artifact, exist, err := db.Get[ActionArtifact](ctx, builder.Eq{
++		"run_id": t.Job.RunID, "run_attempt_id": t.Job.RunAttemptID,
++		"artifact_name": artifactName, "artifact_path": artifactPath,
++	})
++	if err != nil {
++		return nil, err
++	}
++	if !exist {
+ 		artifact := &ActionArtifact{
+ 			ArtifactName: artifactName,
+ 			ArtifactPath: artifactPath,
+@@ -106,40 +126,24 @@ func CreateArtifact(ctx context.Context, t *ActionTask, artifactName, artifactPa
+ 			OwnerID:      t.OwnerID,
+ 			CommitSHA:    t.CommitSHA,
+ 			Status:       ArtifactStatusUploadPending,
+-			ExpiredUnix:  timeutil.TimeStamp(time.Now().Unix() + timeutil.Day*expiredDays),
++			ExpiredUnix:  expiredUnix,
+ 		}
+ 		if _, err := db.GetEngine(ctx).Insert(artifact); err != nil {
+ 			return nil, err
+ 		}
+ 		return artifact, nil
+-	} else if err != nil {
+-		return nil, err
+ 	}
+ 
+-	if _, err := db.GetEngine(ctx).ID(artifact.ID).Cols("expired_unix").Update(&ActionArtifact{
+-		ExpiredUnix: timeutil.TimeStamp(time.Now().Unix() + timeutil.Day*expiredDays),
+-	}); err != nil {
++	artifact.ExpiredUnix = expiredUnix
++	if err := UpdateArtifact(ctx, artifact, "expired_unix"); err != nil {
+ 		return nil, err
+ 	}
+ 
+ 	return artifact, nil
+ }
+ 
+-func getArtifactByNameAndPath(ctx context.Context, runID, runAttemptID int64, name, fpath string) (*ActionArtifact, error) {
+-	var art ActionArtifact
+-	has, err := db.GetEngine(ctx).Where("run_id = ? AND run_attempt_id = ? AND artifact_name = ? AND artifact_path = ?", runID, runAttemptID, name, fpath).Get(&art)
+-	if err != nil {
+-		return nil, err
+-	} else if !has {
+-		return nil, util.ErrNotExist
+-	}
+-	return &art, nil
+-}
+-
+-// UpdateArtifactByID updates an artifact by id
+-func UpdateArtifactByID(ctx context.Context, id int64, art *ActionArtifact) error {
+-	art.ID = id
+-	_, err := db.GetEngine(ctx).ID(id).AllCols().Update(art)
++func UpdateArtifact(ctx context.Context, art *ActionArtifact, cols ...string) error {
++	_, err := db.GetEngine(ctx).ID(art.ID).Cols(cols...).Update(art)
+ 	return err
+ }
+ 
+@@ -149,7 +153,7 @@ type FindArtifactsOptions struct {
+ 	RunID                int64
+ 	RunAttemptIDs        []int64 // empty means every attempt; pass 0 to target legacy artifacts, which have run_attempt_id=0
+ 	ArtifactName         string
+-	Status               int
++	Status               ArtifactStatus
+ 	FinalizedArtifactsV4 bool
+ }
+ 
+@@ -229,7 +233,7 @@ func ListUploadedArtifactsMetaByRunAttempt(ctx context.Context, repoID, runID, r
+ func ListNeedExpiredArtifacts(ctx context.Context) ([]*ActionArtifact, error) {
+ 	arts := make([]*ActionArtifact, 0, 10)
+ 	return arts, db.GetEngine(ctx).
+-		Where("expired_unix < ? AND status = ?", timeutil.TimeStamp(time.Now().Unix()), ArtifactStatusUploadConfirmed).Find(&arts)
++		Where("expired_unix > ? AND expired_unix < ? AND status = ?", artifactKeepForever, timeutil.TimeStampNow(), ArtifactStatusUploadConfirmed).Find(&arts)
+ }
+ 
+ // ListPendingDeleteArtifacts returns all artifacts in pending-delete status.
+@@ -240,23 +244,24 @@ func ListPendingDeleteArtifacts(ctx context.Context, limit int) ([]*ActionArtifa
+ 		Where("status = ?", ArtifactStatusPendingDeletion).Limit(limit).Find(&arts)
+ }
+ 
+-// SetArtifactExpired sets an artifact to expired
+-func SetArtifactExpired(ctx context.Context, artifactID int64) error {
+-	_, err := db.GetEngine(ctx).Where("id=? AND status = ?", artifactID, ArtifactStatusUploadConfirmed).Cols("status").Update(&ActionArtifact{Status: ArtifactStatusExpired})
++func setConfirmedArtifactsStatus(ctx context.Context, status ArtifactStatus, cond builder.Cond) error {
++	_, err := db.GetEngine(ctx).Where(cond).And(builder.Eq{"status": ArtifactStatusUploadConfirmed}).
++		Cols("status").Update(&ActionArtifact{Status: status})
+ 	return err
+ }
+ 
+-// SetArtifactNeedDeleteByID sets an artifact to need-delete by ID, cron job will delete it.
++func SetArtifactExpired(ctx context.Context, artifactID int64) error {
++	return setConfirmedArtifactsStatus(ctx, ArtifactStatusExpired, builder.Eq{"id": artifactID})
++}
++
+ func SetArtifactNeedDeleteByID(ctx context.Context, artifactID int64) error {
+-	_, err := db.GetEngine(ctx).Where("id=? AND status = ?", artifactID, ArtifactStatusUploadConfirmed).Cols("status").Update(&ActionArtifact{Status: ArtifactStatusPendingDeletion})
+-	return err
++	return setConfirmedArtifactsStatus(ctx, ArtifactStatusPendingDeletion, builder.Eq{"id": artifactID})
+ }
+ 
+-// SetArtifactNeedDeleteByRunAttempt sets an artifact to need-delete in a run attempt, cron job will delete it.
+ // runAttemptID may be 0 for legacy artifacts created before ActionRunAttempt existed.
+ func SetArtifactNeedDeleteByRunAttempt(ctx context.Context, runID, runAttemptID int64, name string) error {
+-	_, err := db.GetEngine(ctx).Where("run_id=? AND run_attempt_id=? AND artifact_name=? AND status = ?", runID, runAttemptID, name, ArtifactStatusUploadConfirmed).Cols("status").Update(&ActionArtifact{Status: ArtifactStatusPendingDeletion})
+-	return err
++	return setConfirmedArtifactsStatus(ctx, ArtifactStatusPendingDeletion,
++		builder.Eq{"run_id": runID, "run_attempt_id": runAttemptID, "artifact_name": name})
+ }
+ 
+ // GetArtifactsByRunAttemptAndName returns all artifacts with the given name in the specified run attempt.
+@@ -269,8 +274,6 @@ func GetArtifactsByRunAttemptAndName(ctx context.Context, runID, runAttemptID in
+ 		Find(&arts)
+ }
+ 
+-// SetArtifactDeleted sets an artifact to deleted
+ func SetArtifactDeleted(ctx context.Context, artifactID int64) error {
+-	_, err := db.GetEngine(ctx).ID(artifactID).Cols("status").Update(&ActionArtifact{Status: ArtifactStatusDeleted})
+-	return err
++	return UpdateArtifact(ctx, &ActionArtifact{ID: artifactID, Status: ArtifactStatusDeleted}, "status")
+ }
+diff --git a/models/actions/run_list.go b/models/actions/run_list.go
+index c71e393db9faa..b752f25b0d1f5 100644
+--- a/models/actions/run_list.go
++++ b/models/actions/run_list.go
+@@ -11,6 +11,7 @@ import (
+ 	user_model "gitea.dev/models/user"
+ 	"gitea.dev/modules/container"
+ 	"gitea.dev/modules/optional"
++	"gitea.dev/modules/timeutil"
+ 	"gitea.dev/modules/translation"
+ 	webhook_module "gitea.dev/modules/webhook"
+ 
+@@ -203,3 +204,14 @@ func GetActors(ctx context.Context, repoID int64) ([]*user_model.User, error) {
+ 		OrderBy(user_model.GetOrderByName()).
+ 		Find(&actors)
+ }
++
++// FindOldestRuns returns up to limit runs in the given statuses created before olderThan, lowest id first.
++func FindOldestRuns(ctx context.Context, statuses []Status, olderThan timeutil.TimeStamp, limit int) ([]*ActionRun, error) {
++	runs := make([]*ActionRun, 0, limit)
++	return runs, db.GetEngine(ctx).
++		Where(builder.In("`action_run`.status", statuses)).
++		And(builder.Lt{"`action_run`.created": olderThan}).
++		OrderBy("`action_run`.`id` ASC").
++		Limit(limit).
++		Find(&runs)
++}
+diff --git a/modules/setting/actions.go b/modules/setting/actions.go
+index 6043d53ae50c3..c811de29a9042 100644
+--- a/modules/setting/actions.go
++++ b/modules/setting/actions.go
+@@ -12,9 +12,14 @@ import (
+ 	"gitea.dev/modules/log"
+ )
+ 
+-const defaultMaxRerunAttempts = 50
+-
+-const defaultMaxConcurrentTaskPicks = 16
++const (
++	// some of the values are from GitHub defaults
++	defaultMaxRerunAttempts       = 50
++	defaultMaxConcurrentTaskPicks = 16
++	defaultArtifactRetentionDays  = 90
++	defaultLogRetentionDays       = 365
++	defaultRunRetentionDays       = 400
++)
+ 
+ // Actions settings
+ var (
+@@ -25,6 +30,7 @@ var (
+ 		LogCompression        logCompression    `ini:"LOG_COMPRESSION"`
+ 		ArtifactStorage       *Storage          // how the created artifacts should be stored
+ 		ArtifactRetentionDays int64             `ini:"ARTIFACT_RETENTION_DAYS"`
++		RunRetentionDays      int64             `ini:"RUN_RETENTION_DAYS"`
+ 		DefaultActionsURL     defaultActionsURL `ini:"DEFAULT_ACTIONS_URL"`
+ 		ZombieTaskTimeout     time.Duration     `ini:"ZOMBIE_TASK_TIMEOUT"`
+ 		EndlessTaskTimeout    time.Duration     `ini:"ENDLESS_TASK_TIMEOUT"`
+@@ -45,6 +51,9 @@ var (
+ 		ScopedWorkflowDirs:     []string{".gitea/scoped_workflows"},
+ 		MaxRerunAttempts:       defaultMaxRerunAttempts,
+ 		MaxConcurrentTaskPicks: defaultMaxConcurrentTaskPicks,
++		LogRetentionDays:       defaultLogRetentionDays,
++		ArtifactRetentionDays:  defaultArtifactRetentionDays,
++		RunRetentionDays:       defaultRunRetentionDays,
+ 	}
+ )
+ 
+@@ -110,10 +119,6 @@ func loadActionsFrom(rootCfg ConfigProvider) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	// default to 1 year
+-	if Actions.LogRetentionDays <= 0 {
+-		Actions.LogRetentionDays = 365
+-	}
+ 
+ 	actionsSec, _ := rootCfg.GetSection("actions.artifacts")
+ 
+@@ -122,23 +127,10 @@ func loadActionsFrom(rootCfg ConfigProvider) error {
+ 		return err
+ 	}
+ 
+-	// default to 90 days in Github Actions
+-	if Actions.ArtifactRetentionDays <= 0 {
+-		Actions.ArtifactRetentionDays = 90
+-	}
+-
+ 	Actions.ZombieTaskTimeout = sec.Key("ZOMBIE_TASK_TIMEOUT").MustDuration(10 * time.Minute)
+ 	Actions.EndlessTaskTimeout = sec.Key("ENDLESS_TASK_TIMEOUT").MustDuration(3 * time.Hour)
+ 	Actions.AbandonedJobTimeout = sec.Key("ABANDONED_JOB_TIMEOUT").MustDuration(24 * time.Hour)
+ 
+-	if Actions.MaxRerunAttempts <= 0 {
+-		Actions.MaxRerunAttempts = defaultMaxRerunAttempts
+-	}
+-
+-	if Actions.MaxConcurrentTaskPicks <= 0 {
+-		Actions.MaxConcurrentTaskPicks = defaultMaxConcurrentTaskPicks
+-	}
+-
+ 	if !Actions.LogCompression.IsValid() {
+ 		return fmt.Errorf("invalid [actions] LOG_COMPRESSION: %q", Actions.LogCompression)
+ 	}
+diff --git a/options/locale/locale_en-US.json b/options/locale/locale_en-US.json
+index 8cad6905e7ce6..a0b0b3eb5bcbe 100644
+--- a/options/locale/locale_en-US.json
++++ b/options/locale/locale_en-US.json
+@@ -2997,6 +2997,7 @@
+   "admin.dashboard.cleanup_hook_task_table": "Clean up hook_task table",
+   "admin.dashboard.cleanup_packages": "Clean up expired packages",
+   "admin.dashboard.cleanup_actions": "Clean up expired actions' resources",
++  "admin.dashboard.cleanup_action_runs": "Delete action runs older than retention period",
+   "admin.dashboard.server_uptime": "Server Uptime",
+   "admin.dashboard.current_goroutine": "Current Goroutines",
+   "admin.dashboard.current_memory_usage": "Current Memory Usage",
+diff --git a/routers/api/actions/artifacts.go b/routers/api/actions/artifacts.go
+index ac6f6d1dc4e8d..c9890072032ed 100644
+--- a/routers/api/actions/artifacts.go
++++ b/routers/api/actions/artifacts.go
+@@ -75,9 +75,11 @@ import (
+ 	"gitea.dev/modules/httplib"
+ 	"gitea.dev/modules/json"
+ 	"gitea.dev/modules/log"
++	"gitea.dev/modules/optional"
+ 	"gitea.dev/modules/reqctx"
+ 	"gitea.dev/modules/setting"
+ 	"gitea.dev/modules/storage"
++	"gitea.dev/modules/timeutil"
+ 	"gitea.dev/modules/util"
+ 	"gitea.dev/modules/web"
+ 	web_types "gitea.dev/modules/web/types"
+@@ -245,25 +247,12 @@ func (ar artifactRoutes) uploadArtifact(ctx *ArtifactContext) {
+ 		return
+ 	}
+ 
+-	// get upload file size
+ 	fileRealTotalSize := getUploadFileSize(ctx)
+-
+-	// get artifact retention days
+-	expiredDays := setting.Actions.ArtifactRetentionDays
+-	if queryRetentionDays := ctx.Req.URL.Query().Get("retentionDays"); queryRetentionDays != "" {
+-		var err error
+-		expiredDays, err = strconv.ParseInt(queryRetentionDays, 10, 64)
+-		if err != nil {
+-			log.Error("Error parse retention days: %v", err)
+-			ctx.HTTPError(http.StatusBadRequest, "Error parse retention days")
+-			return
+-		}
++	var expiry optional.Option[timeutil.TimeStamp]
++	if days := ctx.FormOptionalInt64("retentionDays"); days.Has() {
++		expiry = optional.Some(timeutil.TimeStampNow().Add(timeutil.Day * days.Value()))
+ 	}
+-	log.Debug("[artifact] upload chunk, name: %s, path: %s, size: %d, retention days: %d",
+-		artifactName, artifactPath, fileRealTotalSize, expiredDays)
+-
+-	// create or get artifact with name and path
+-	artifact, err := actions.CreateArtifact(ctx, task, artifactName, artifactPath, expiredDays)
++	artifact, err := actions.CreateArtifact(ctx, task, artifactName, artifactPath, expiry)
+ 	if err != nil {
+ 		log.Error("Error create or get artifact: %v", err)
+ 		ctx.HTTPError(http.StatusInternalServerError, "Error create or get artifact")
+@@ -288,7 +277,7 @@ func (ar artifactRoutes) uploadArtifact(ctx *ArtifactContext) {
+ 		artifact.FileSize = fileRealTotalSize
+ 		artifact.FileCompressedSize = chunksTotalSize
+ 		artifact.ContentEncodingOrType = ctx.Req.Header.Get("Content-Encoding")
+-		if err := actions.UpdateArtifactByID(ctx, artifact.ID, artifact); err != nil {
++		if err := actions.UpdateArtifact(ctx, artifact, "file_size", "file_compressed_size", "content_encoding"); err != nil {
+ 			log.Error("Error update artifact: %v", err)
+ 			ctx.HTTPError(http.StatusInternalServerError, "Error update artifact")
+ 			return
+@@ -349,7 +338,7 @@ func (ar artifactRoutes) listArtifacts(ctx *ArtifactContext) {
+ 	artifacts, err := actions.FindReadableArtifacts(ctx, actions.FindArtifactsOptions{
+ 		RunID:         runID,
+ 		RunAttemptIDs: attemptIDs,
+-		Status:        int(actions.ArtifactStatusUploadConfirmed),
++		Status:        actions.ArtifactStatusUploadConfirmed,
+ 	})
+ 	if err != nil {
+ 		log.Error("Error getting artifacts: %v", err)
+@@ -421,7 +410,7 @@ func (ar artifactRoutes) getDownloadArtifactURL(ctx *ArtifactContext) {
+ 		RunID:         runID,
+ 		RunAttemptIDs: attemptIDs,
+ 		ArtifactName:  itemPath,
+-		Status:        int(actions.ArtifactStatusUploadConfirmed),
++		Status:        actions.ArtifactStatusUploadConfirmed,
+ 	})
+ 	if err != nil {
+ 		log.Error("Error getting artifacts: %v", err)
+diff --git a/routers/api/actions/artifacts_chunks.go b/routers/api/actions/artifacts_chunks.go
+index 1f9b3e86c2837..51098c86f4243 100644
+--- a/routers/api/actions/artifacts_chunks.go
++++ b/routers/api/actions/artifacts_chunks.go
+@@ -279,9 +279,18 @@ func mergeChunksForRun(ctx *ArtifactContext, st storage.ObjectStorage, runID, ru
+ 			log.Debug("artifact %d chunks not found", art.ID)
+ 			continue
+ 		}
+-		if err := mergeChunksForArtifact(ctx, chunks, st, art, ""); err != nil {
++		storagePath, err := mergeChunksForArtifact(chunks, st, art, "")
++		if err != nil {
+ 			return err
+ 		}
++		if storagePath == "" {
++			continue
++		}
++		art.StoragePath = storagePath
++		art.Status = actions.ArtifactStatusUploadConfirmed
++		if err := actions.UpdateArtifact(ctx, art, "storage_path", "status"); err != nil {
++			return fmt.Errorf("update artifact error: %v", err)
++		}
+ 	}
+ 	return nil
+ }
+@@ -297,7 +306,9 @@ func generateArtifactStoragePath(artifact *actions.ActionArtifact) string {
+ 	return fmt.Sprintf("%d/%d/%d.%s", artifact.RunID%255, artifact.ID%255, time.Now().UnixNano(), extension)
+ }
+ 
+-func mergeChunksForArtifact(ctx *ArtifactContext, chunks []*chunkFileItem, st storage.ObjectStorage, artifact *actions.ActionArtifact, checksum string) error {
++// mergeChunksForArtifact merges the uploaded chunks into one stored object and returns its path.
++// An empty path means the chunks are not complete yet and nothing was merged.
++func mergeChunksForArtifact(chunks []*chunkFileItem, st storage.ObjectStorage, artifact *actions.ActionArtifact, checksum string) (string, error) {
+ 	sort.Slice(chunks, func(i, j int) bool {
+ 		return chunks[i].Start < chunks[j].Start
+ 	})
+@@ -316,7 +327,7 @@ func mergeChunksForArtifact(ctx *ArtifactContext, chunks []*chunkFileItem, st st
+ 	// if the last chunk.End + 1 is not equal to chunk.ChunkLength, means chunks are not uploaded completely
+ 	if startAt+1 != artifact.FileCompressedSize {
+ 		log.Debug("[artifact] chunks are not uploaded completely, artifact_id: %d", artifact.ID)
+-		return nil
++		return "", nil
+ 	}
+ 	// use multiReader
+ 	readers := make([]io.Reader, 0, len(allChunks))
+@@ -331,7 +342,7 @@ func mergeChunksForArtifact(ctx *ArtifactContext, chunks []*chunkFileItem, st st
+ 		var readCloser io.ReadCloser
+ 		var err error
+ 		if readCloser, err = st.Open(c.Path); err != nil {
+-			return fmt.Errorf("open chunk error: %v, %s", err, c.Path)
++			return "", fmt.Errorf("open chunk error: %v, %s", err, c.Path)
+ 		}
+ 		readers = append(readers, readCloser)
+ 	}
+@@ -351,10 +362,10 @@ func mergeChunksForArtifact(ctx *ArtifactContext, chunks []*chunkFileItem, st st
+ 	storagePath := generateArtifactStoragePath(artifact)
+ 	written, err := st.Save(storagePath, mergedReader, artifact.FileCompressedSize)
+ 	if err != nil {
+-		return fmt.Errorf("save merged file error: %v", err)
++		return "", fmt.Errorf("save merged file error: %v", err)
+ 	}
+ 	if written != artifact.FileCompressedSize {
+-		return errors.New("merged file size is not equal to chunk length")
++		return "", errors.New("merged file size is not equal to chunk length")
+ 	}
+ 
+ 	defer func() {
+@@ -371,7 +382,7 @@ func mergeChunksForArtifact(ctx *ArtifactContext, chunks []*chunkFileItem, st st
+ 		rawChecksum := hashSha256.Sum(nil)
+ 		actualChecksum := hex.EncodeToString(rawChecksum)
+ 		if !strings.HasSuffix(checksum, actualChecksum) {
+-			return fmt.Errorf("update artifact error checksum is invalid %v vs %v", checksum, actualChecksum)
++			return "", fmt.Errorf("update artifact error checksum is invalid %v vs %v", checksum, actualChecksum)
+ 		}
+ 	}
+ 
+@@ -384,11 +395,5 @@ func mergeChunksForArtifact(ctx *ArtifactContext, chunks []*chunkFileItem, st st
+ 		}
+ 	}
+ 
+-	artifact.StoragePath = storagePath
+-	artifact.Status = actions.ArtifactStatusUploadConfirmed
+-	if err := actions.UpdateArtifactByID(ctx, artifact.ID, artifact); err != nil {
+-		return fmt.Errorf("update artifact error: %v", err)
+-	}
+-
+-	return nil
++	return storagePath, nil
+ }
+diff --git a/routers/api/actions/artifactsv4.go b/routers/api/actions/artifactsv4.go
+index 0fc95cfbec9b4..65cc92cfaa531 100644
+--- a/routers/api/actions/artifactsv4.go
++++ b/routers/api/actions/artifactsv4.go
+@@ -107,8 +107,10 @@ import (
+ 	actions_module "gitea.dev/modules/actions"
+ 	"gitea.dev/modules/httplib"
+ 	"gitea.dev/modules/log"
++	"gitea.dev/modules/optional"
+ 	"gitea.dev/modules/setting"
+ 	"gitea.dev/modules/storage"
++	"gitea.dev/modules/timeutil"
+ 	"gitea.dev/modules/util"
+ 	"gitea.dev/modules/web"
+ 	"gitea.dev/services/actions"
+@@ -332,9 +334,9 @@ func (r *artifactV4Routes) createArtifact(ctx *ArtifactContext) {
+ 
+ 	artifactName := req.Name
+ 
+-	retentionDays := setting.Actions.ArtifactRetentionDays
++	var expiry optional.Option[timeutil.TimeStamp]
+ 	if req.ExpiresAt != nil {
+-		retentionDays = int64(time.Until(req.ExpiresAt.AsTime()).Hours() / 24)
++		expiry = optional.Some(timeutil.TimeStamp(req.ExpiresAt.AsTime().Unix()))
+ 	}
+ 	encoding := req.GetMimeType().GetValue()
+ 	// Validate media type
+@@ -347,7 +349,7 @@ func (r *artifactV4Routes) createArtifact(ctx *ArtifactContext) {
+ 		fileName = artifactName + ".zip"
+ 	}
+ 	// create or get artifact with name and path
+-	artifact, err := actions_model.CreateArtifact(ctx, ctx.ActionTask, artifactName, fileName, retentionDays)
++	artifact, err := actions_model.CreateArtifact(ctx, ctx.ActionTask, artifactName, fileName, expiry)
+ 	if err != nil {
+ 		log.Error("Error create or get artifact: %v", err)
+ 		ctx.HTTPError(http.StatusInternalServerError, "Error create or get artifact")
+@@ -383,7 +385,8 @@ func (r *artifactV4Routes) createArtifact(ctx *ArtifactContext) {
+ 		}
+ 	}
+ 
+-	if err := actions_model.UpdateArtifactByID(ctx, artifact.ID, artifact); err != nil {
++	if err := actions_model.UpdateArtifact(ctx, artifact,
++		"content_encoding", "file_size", "file_compressed_size", "storage_path", "status"); err != nil {
+ 		log.Error("Error UpdateArtifactByID: %v", err)
+ 		ctx.HTTPError(http.StatusInternalServerError, "Error UpdateArtifactByID")
+ 		return
+@@ -418,7 +421,7 @@ func (r *artifactV4Routes) uploadArtifact(ctx *ArtifactContext) {
+ 			}
+ 			artifact.FileCompressedSize += uploadedLength
+ 			artifact.FileSize += uploadedLength
+-			if err := actions_model.UpdateArtifactByID(ctx, artifact.ID, artifact); err != nil {
++			if err := actions_model.UpdateArtifact(ctx, artifact, "file_size", "file_compressed_size"); err != nil {
+ 				log.Error("Error UpdateArtifactByID: %v", err)
+ 				ctx.HTTPError(http.StatusInternalServerError, "Error UpdateArtifactByID")
+ 				return
+@@ -450,10 +453,6 @@ type BlockList struct {
+ 	Latest []string `xml:"Latest"`
+ }
+ 
+-type Latest struct {
+-	Value string `xml:",chardata"`
+-}
+-
+ func (r *artifactV4Routes) readBlockList(runID, artifactID int64) (*BlockList, error) {
+ 	blockListName := fmt.Sprintf("%s/%d-%d-blocklist", makeTmpPathNameV4(runID), runID, artifactID)
+ 	s, err := r.fs.Open(blockListName)
+@@ -531,11 +530,24 @@ func (r *artifactV4Routes) finalizeDefaultArtifact(ctx *ArtifactContext, req *Fi
+ 		return
+ 	}
+ 
+-	if err := mergeChunksForArtifact(ctx, chunks, r.fs, artifact, req.GetHash().GetValue()); err != nil {
++	storagePath, err := mergeChunksForArtifact(chunks, r.fs, artifact, req.GetHash().GetValue())
++	if err != nil {
+ 		log.Error("Error merge chunks: %v", err)
+ 		ctx.HTTPError(http.StatusInternalServerError, "Error merge chunks")
+ 		return
+ 	}
++	if storagePath == "" {
++		return
++	}
++
++	artifact.StoragePath = storagePath
++	artifact.Status = actions_model.ArtifactStatusUploadConfirmed
++	if err := actions_model.UpdateArtifact(ctx, artifact,
++		"storage_path", "status", "file_size", "file_compressed_size"); err != nil {
++		log.Error("Error UpdateArtifact: %v", err)
++		ctx.HTTPError(http.StatusInternalServerError, "Error UpdateArtifact")
++		return
++	}
+ }
+ 
+ func (r *artifactV4Routes) finalizeAzureServeDirect(ctx *ArtifactContext, req *FinalizeArtifactRequest, artifact *actions_model.ActionArtifact) {
+@@ -583,7 +595,7 @@ func (r *artifactV4Routes) finalizeAzureServeDirect(ctx *ArtifactContext, req *F
+ 	artifact.FileSize = actualLength
+ 	artifact.FileCompressedSize = actualLength
+ 	artifact.Status = actions_model.ArtifactStatusUploadConfirmed
+-	if err := actions_model.UpdateArtifactByID(ctx, artifact.ID, artifact); err != nil {
++	if err := actions_model.UpdateArtifact(ctx, artifact, "file_size", "file_compressed_size", "status"); err != nil {
+ 		log.Error("Error UpdateArtifactByID: %v", err)
+ 		ctx.HTTPError(http.StatusInternalServerError, "Error UpdateArtifactByID")
+ 		return
+@@ -608,7 +620,7 @@ func (r *artifactV4Routes) listArtifacts(ctx *ArtifactContext) {
+ 	artifacts, err := actions_model.FindReadableArtifacts(ctx, actions_model.FindArtifactsOptions{
+ 		RunID:                runID,
+ 		RunAttemptIDs:        attemptIDs,
+-		Status:               int(actions_model.ArtifactStatusUploadConfirmed),
++		Status:               actions_model.ArtifactStatusUploadConfirmed,
+ 		FinalizedArtifactsV4: true,
+ 	})
+ 	if err != nil {
+diff --git a/services/actions/cleanup.go b/services/actions/cleanup.go
+index 6220a81dc81d2..7c2fedc7e65d6 100644
+--- a/services/actions/cleanup.go
++++ b/services/actions/cleanup.go
+@@ -5,7 +5,6 @@ package actions
+ 
+ import (
+ 	"context"
+-	"errors"
+ 	"fmt"
+ 	"time"
+ 
+@@ -54,7 +53,7 @@ func cleanExpiredArtifacts(taskCtx context.Context) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	log.Info("Found %d expired artifacts", len(artifacts))
++	log.Info("Found %d expired Actions artifacts", len(artifacts))
+ 	for _, artifact := range artifacts {
+ 		if err := actions_model.SetArtifactExpired(taskCtx, artifact.ID); err != nil {
+ 			log.Error("Cannot set artifact %d expired: %v", artifact.ID, err)
+@@ -64,7 +63,7 @@ func cleanExpiredArtifacts(taskCtx context.Context) error {
+ 			log.Error("Cannot delete artifact %d: %v", artifact.ID, err)
+ 			// go on
+ 		}
+-		log.Info("Artifact %d is deleted (due to expiration)", artifact.ID)
++		log.Info("Actions artifact %d is deleted (due to expiration)", artifact.ID)
+ 	}
+ 	return nil
+ }
+@@ -78,7 +77,7 @@ func cleanNeedDeleteArtifacts(taskCtx context.Context) error {
+ 		if err != nil {
+ 			return err
+ 		}
+-		log.Info("Found %d artifacts pending deletion", len(artifacts))
++		log.Info("Found %d Actions artifacts pending deletion", len(artifacts))
+ 		for _, artifact := range artifacts {
+ 			if err := actions_model.SetArtifactDeleted(taskCtx, artifact.ID); err != nil {
+ 				log.Error("Cannot set artifact %d deleted: %v", artifact.ID, err)
+@@ -88,10 +87,10 @@ func cleanNeedDeleteArtifacts(taskCtx context.Context) error {
+ 				log.Error("Cannot delete artifact %d: %v", artifact.ID, err)
+ 				// go on
+ 			}
+-			log.Info("Artifact %d is deleted (due to pending deletion)", artifact.ID)
++			log.Info("Actions artifact %d is deleted (due to pending deletion)", artifact.ID)
+ 		}
+ 		if len(artifacts) < deleteArtifactBatchSize {
+-			log.Debug("No more artifacts pending deletion")
++			log.Debug("No more Actions artifacts pending deletion")
+ 			break
+ 		}
+ 	}
+@@ -109,6 +108,10 @@ func removeTaskLog(ctx context.Context, task *actions_model.ActionTask) {
+ 
+ // CleanupExpiredLogs removes logs which are older than the configured retention time
+ func CleanupExpiredLogs(ctx context.Context) error {
++	if setting.Actions.LogRetentionDays <= 0 {
++		return nil
++	}
++
+ 	olderThan := timeutil.TimeStampNow().AddDuration(-time.Duration(setting.Actions.LogRetentionDays) * 24 * time.Hour)
+ 
+ 	count := 0
+@@ -134,7 +137,7 @@ func CleanupExpiredLogs(ctx context.Context) error {
+ 		}
+ 	}
+ 
+-	log.Info("Removed %d logs", count)
++	log.Info("Removed %d expired Actions logs", count)
+ 	return nil
+ }
+ 
+@@ -146,13 +149,8 @@ func CleanupEphemeralRunners(ctx context.Context) error {
+ 		Where(builder.Eq{"`action_runner`.`ephemeral`": true}).
+ 		And(builder.NotIn("`action_task`.`status`", actions_model.StatusWaiting, actions_model.StatusRunning, actions_model.StatusBlocked, actions_model.StatusCancelling))
+ 	b := builder.Delete(builder.In("id", subQuery)).From("`action_runner`")
+-	res, err := db.GetEngine(ctx).Exec(b)
+-	if err != nil {
+-		return fmt.Errorf("find runners: %w", err)
+-	}
+-	affected, _ := res.RowsAffected()
+-	log.Info("Removed %d runners", affected)
+-	return nil
++	_, err := db.GetEngine(ctx).Exec(b)
++	return err
+ }
+ 
+ // CleanupEphemeralRunnersByPickedTaskOfRepo removes all ephemeral runners that have active/finished tasks on the given repository
+@@ -162,19 +160,15 @@ func CleanupEphemeralRunnersByPickedTaskOfRepo(ctx context.Context, repoID int64
+ 		Join("INNER", "`action_task`", "`action_task`.`runner_id` = `action_runner`.`id`").
+ 		Where(builder.And(builder.Eq{"`action_runner`.`ephemeral`": true}, builder.Eq{"`action_task`.`repo_id`": repoID}))
+ 	b := builder.Delete(builder.In("id", subQuery)).From("`action_runner`")
+-	res, err := db.GetEngine(ctx).Exec(b)
+-	if err != nil {
+-		return fmt.Errorf("find runners: %w", err)
+-	}
+-	affected, _ := res.RowsAffected()
+-	log.Info("Removed %d runners", affected)
+-	return nil
++	_, err := db.GetEngine(ctx).Exec(b)
++	return err
+ }
+ 
+ // DeleteRun deletes workflow run, including all logs and artifacts.
+ func DeleteRun(ctx context.Context, run *actions_model.ActionRun) error {
+ 	if !run.Status.IsDone() {
+-		return errors.New("run is not done")
++		// callers guarantee a terminal status, but in production delete it anyway
++		setting.PanicInDevOrTesting("DeleteRun called on non-terminal run %d with status %s", run.ID, run.Status)
+ 	}
+ 
+ 	repoID := run.RepoID
+@@ -262,9 +256,70 @@ func DeleteRun(ctx context.Context, run *actions_model.ActionRun) error {
+ 	}
+ 	for _, art := range artifacts {
+ 		if err := storage.ActionsArtifacts.Delete(art.StoragePath); err != nil {
++			// don't return any error since the database records have been deleted
+ 			log.Error("remove artifact file %q: %v", art.StoragePath, err)
+ 		}
+ 	}
+ 
+ 	return nil
+ }
++
++var cleanupOldRunsBatchSize = 50
++
++// CleanupOldRuns deletes completed runs older than RUN_RETENTION_DAYS, along with everything under them.
++func CleanupOldRuns(ctx context.Context) error {
++	if setting.Actions.RunRetentionDays <= 0 {
++		return nil
++	}
++
++	olderThan := timeutil.TimeStampNow().AddDuration(-time.Duration(setting.Actions.RunRetentionDays) * 24 * time.Hour)
++
++	doneStatuses := []actions_model.Status{
++		actions_model.StatusSuccess,
++		actions_model.StatusFailure,
++		actions_model.StatusCancelled,
++		actions_model.StatusSkipped,
++	}
++
++	total, err := cleanupOldRuns(ctx, olderThan, doneStatuses, DeleteRun)
++	if err != nil {
++		return err
++	}
++
++	log.Info("Deleted %d old Actions runs before %s", total, olderThan.Format(time.RFC3339))
++	return nil
++}
++
++func cleanupOldRuns(ctx context.Context, olderThan timeutil.TimeStamp, doneStatuses []actions_model.Status, deleteRun func(context.Context, *actions_model.ActionRun) error) (int, error) {
++	total := 0
++	failed := container.Set[int64]{} // skipping these stops the outer loop refetching them forever
++	for {
++		runs, err := actions_model.FindOldestRuns(ctx, doneStatuses, olderThan, cleanupOldRunsBatchSize)
++		if err != nil {
++			return total, fmt.Errorf("FindOldestRuns: %w", err)
++		}
++
++		realDeleted := 0
++		for _, run := range runs {
++			if failed.Contains(run.ID) {
++				continue
++			}
++			if err := deleteRun(ctx, run); err != nil {
++				setting.PanicInDevOrTesting("failed to delete old action run %d: %v", run.ID, err)
++				failed.Add(run.ID)
++				continue
++			}
++			total++
++			realDeleted++
++			log.Trace("Deleted old action run %d (created at %s)", run.ID, run.Created.AsTime())
++		}
++
++		if realDeleted == 0 {
++			if len(runs) != 0 {
++				log.Error("Too many actions runs are unable to delete, please figure out and fix the failures")
++			}
++			break
++		}
++	}
++	return total, nil
++}
+diff --git a/services/actions/cleanup_test.go b/services/actions/cleanup_test.go
+new file mode 100644
+index 0000000000000..d8a65db689a69
+--- /dev/null
++++ b/services/actions/cleanup_test.go
+@@ -0,0 +1,150 @@
++// Copyright 2026 The Gitea Authors. All rights reserved.
++// SPDX-License-Identifier: MIT
++
++package actions
++
++import (
++	"context"
++	"errors"
++	"testing"
++	"time"
++
++	actions_model "gitea.dev/models/actions"
++	"gitea.dev/models/db"
++	repo_model "gitea.dev/models/repo"
++	"gitea.dev/models/unittest"
++	"gitea.dev/modules/container"
++	"gitea.dev/modules/optional"
++	"gitea.dev/modules/setting"
++	"gitea.dev/modules/test"
++	"gitea.dev/modules/timeutil"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func insertCleanupRun(t *testing.T, index int64, status actions_model.Status, created timeutil.TimeStamp) *actions_model.ActionRun {
++	t.Helper()
++	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
++	run := &actions_model.ActionRun{
++		Title: "cleanup-run", RepoID: repo.ID, OwnerID: repo.OwnerID, WorkflowID: "test.yaml", Index: index,
++		TriggerUserID: 1, Ref: "refs/heads/main",
++		CommitSHA: "c2d72f548424103f01ee1dc02889c1e2bff816b0", Event: "push", TriggerEvent: "push",
++		Status: status,
++	}
++	require.NoError(t, db.Insert(t.Context(), run))
++	// XORM's "created" tag ignores explicit updates to the column even with NoAutoTime, so backdate it with raw SQL.
++	_, err := db.GetEngine(t.Context()).Exec("UPDATE action_run SET created = ? WHERE id = ?", created, run.ID)
++	require.NoError(t, err)
++	return run
++}
++
++func deleteAllRuns(t *testing.T) {
++	t.Helper()
++	_, err := db.GetEngine(t.Context()).Exec("DELETE FROM action_run")
++	require.NoError(t, err)
++}
++
++func TestCleanupOldRuns(t *testing.T) {
++	require.NoError(t, unittest.PrepareTestDatabase())
++	defer test.MockVariableValue(&setting.Actions.RunRetentionDays, 30)()
++
++	now := timeutil.TimeStampNow()
++	old := now.AddDuration(-40 * 24 * time.Hour)
++	deleteAllRuns(t)
++
++	t.Run("disabled retention is a no-op", func(t *testing.T) {
++		defer test.MockVariableValue(&setting.Actions.RunRetentionDays, 0)()
++		run := insertCleanupRun(t, 2001, actions_model.StatusSuccess, old)
++		require.NoError(t, CleanupOldRuns(t.Context()))
++		unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: run.ID})
++	})
++
++	t.Run("deletes old done runs, keeps recent and in-progress runs", func(t *testing.T) {
++		defer test.MockVariableValue(&cleanupOldRunsBatchSize, 3)() // also test the batch
++		oldSuccess := insertCleanupRun(t, 2002, actions_model.StatusSuccess, old)
++		oldFailure := insertCleanupRun(t, 2003, actions_model.StatusFailure, old)
++		recent := insertCleanupRun(t, 2004, actions_model.StatusSuccess, now.AddDuration(-24*time.Hour))
++		oldRunning := insertCleanupRun(t, 2005, actions_model.StatusRunning, old)
++		oldCanceled := insertCleanupRun(t, 2006, actions_model.StatusCancelled, old)
++		oldSkipped := insertCleanupRun(t, 2007, actions_model.StatusSkipped, old)
++
++		require.NoError(t, CleanupOldRuns(t.Context()))
++
++		unittest.AssertNotExistsBean(t, &actions_model.ActionRun{ID: oldSuccess.ID})
++		unittest.AssertNotExistsBean(t, &actions_model.ActionRun{ID: oldFailure.ID})
++		unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: recent.ID})
++		unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: oldRunning.ID})
++		unittest.AssertNotExistsBean(t, &actions_model.ActionRun{ID: oldCanceled.ID})
++		unittest.AssertNotExistsBean(t, &actions_model.ActionRun{ID: oldSkipped.ID})
++	})
++	t.Run("error during deleting", func(t *testing.T) {
++		defer test.MockVariableValue(&cleanupOldRunsBatchSize, 3)()
++		defer test.MockVariableValue(&setting.IsInTesting, false)() // skip the panic
++		deleteAllRuns(t)
++
++		for i := range int64(6) {
++			insertCleanupRun(t, 3000+i, actions_model.StatusSuccess, old)
++		}
++		var deletedIndices []int64
++		deleteRun := func(ctx context.Context, run *actions_model.ActionRun) error {
++			if run.Index%2 == 0 {
++				return errors.New("some error")
++			}
++			deletedIndices = append(deletedIndices, run.Index)
++			_, err := db.DeleteByID[actions_model.ActionRun](ctx, run.ID)
++			return err
++		}
++		total, err := cleanupOldRuns(t.Context(), now, []actions_model.Status{actions_model.StatusSuccess}, deleteRun)
++		require.NoError(t, err)
++		// 3000/3002/3004 keep failing and fill up the batch, so the loop stops after 3001 and 3003
++		assert.Equal(t, 2, total)
++		assert.Equal(t, []int64{3001, 3003}, deletedIndices)
++	})
++}
++
++func TestCleanupRetentionZeroKeepsForever(t *testing.T) {
++	require.NoError(t, unittest.PrepareTestDatabase())
++	defer test.MockVariableValue(&setting.Actions.LogRetentionDays, 0)()
++	defer test.MockVariableValue(&setting.Actions.ArtifactRetentionDays, 0)()
++
++	liveLogs := unittest.Cond("stopped > 0 AND log_expired = ?", false)
++
++	t.Run("logs", func(t *testing.T) {
++		before := unittest.GetCount(t, &actions_model.ActionTask{}, liveLogs)
++		require.Positive(t, before)
++		require.NoError(t, CleanupExpiredLogs(t.Context()))
++		assert.Equal(t, before, unittest.GetCount(t, &actions_model.ActionTask{}, liveLogs))
++	})
++
++	t.Run("artifacts", func(t *testing.T) {
++		task := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionTask{ID: 47})
++		art, err := actions_model.CreateArtifact(t.Context(), task, "never-expires", "a.txt", optional.None[timeutil.TimeStamp]())
++		require.NoError(t, err)
++		assert.Zero(t, art.ExpiredUnix)
++
++		// a workflow-requested expiry is honored, only the instance default may mean never
++		asked, err := actions_model.CreateArtifact(t.Context(), task, "client-asked", "b.txt", optional.Some(timeutil.TimeStampNow()))
++		require.NoError(t, err)
++		assert.Positive(t, asked.ExpiredUnix)
++
++		// re-uploading refreshes the expiry and returns it
++		reuploaded, err := actions_model.CreateArtifact(t.Context(), task, "client-asked", "b.txt", optional.None[timeutil.TimeStamp]())
++		require.NoError(t, err)
++		assert.Zero(t, reuploaded.ExpiredUnix)
++
++		// a past expiry must stay reapable, not land on the sentinel
++		past, err := actions_model.CreateArtifact(t.Context(), task, "long-gone", "c.txt", optional.Some(timeutil.TimeStamp(-1000)))
++		require.NoError(t, err)
++		assert.Positive(t, past.ExpiredUnix)
++
++		_, err = db.GetEngine(t.Context()).In("id", art.ID, past.ID).Cols("status").
++			Update(&actions_model.ActionArtifact{Status: actions_model.ArtifactStatusUploadConfirmed})
++		require.NoError(t, err)
++		expiring, err := actions_model.ListNeedExpiredArtifacts(t.Context())
++		require.NoError(t, err)
++		ids := container.FilterSlice(expiring, func(a *actions_model.ActionArtifact) (int64, bool) { return a.ID, true })
++		assert.NotContains(t, ids, art.ID)
++		assert.Contains(t, ids, past.ID)
++	})
++}
+diff --git a/services/actions/task.go b/services/actions/task.go
+index 45bfdfcf9a6fe..e63a0ff466076 100644
+--- a/services/actions/task.go
++++ b/services/actions/task.go
+@@ -28,7 +28,7 @@ var (
+ 
+ func taskPickLimiter() chan struct{} {
+ 	taskPickSemOnce.Do(func() {
+-		taskPickSem = make(chan struct{}, setting.Actions.MaxConcurrentTaskPicks)
++		taskPickSem = make(chan struct{}, max(1, setting.Actions.MaxConcurrentTaskPicks))
+ 	})
+ 	return taskPickSem
+ }
+diff --git a/services/context/base_form.go b/services/context/base_form.go
+index c6a70991297c1..840a78f117fd7 100644
+--- a/services/context/base_form.go
++++ b/services/context/base_form.go
+@@ -69,12 +69,20 @@ func (b *Base) FormBool(key string) bool {
+ // FormOptionalBool returns an optional.Some(true) or optional.Some(false) if the value
+ // for the provided key exists in the form else it returns optional.None[bool]()
+ func (b *Base) FormOptionalBool(key string) optional.Option[bool] {
+-	value := b.Req.FormValue(key)
+-	if len(value) == 0 {
++	s := b.Req.FormValue(key)
++	if s == "" {
+ 		return optional.None[bool]()
+ 	}
+-	s := b.Req.FormValue(key)
+ 	v, _ := strconv.ParseBool(s)
+ 	v = v || strings.EqualFold(s, "on")
+ 	return optional.Some(v)
+ }
++
++func (b *Base) FormOptionalInt64(key string) optional.Option[int64] {
++	s := b.Req.FormValue(key)
++	v, err := strconv.ParseInt(s, 10, 64)
++	if s == "" || err != nil {
++		return optional.None[int64]()
++	}
++	return optional.Some(v)
++}
+diff --git a/services/cron/tasks_actions.go b/services/cron/tasks_actions.go
+index 0f5851babf9ab..ebaa34060b4db 100644
+--- a/services/cron/tasks_actions.go
++++ b/services/cron/tasks_actions.go
+@@ -20,6 +20,7 @@ func initActionsTasks() {
+ 	registerCancelAbandonedJobs()
+ 	registerScheduleTasks()
+ 	registerActionsCleanup()
++	registerCleanupActionRuns()
+ }
+ 
+ func registerStopZombieTasks() {
+@@ -74,3 +75,13 @@ func registerActionsCleanup() {
+ 		return actions_service.Cleanup(ctx)
+ 	})
+ }
++
++func registerCleanupActionRuns() {
++	RegisterTaskFatal("cleanup_action_runs", &BaseConfig{
++		Enabled:    true,
++		RunAtStart: false,
++		Schedule:   "@midnight",
++	}, func(ctx context.Context, _ *user_model.User, _ *BaseConfig) error {
++		return actions_service.CleanupOldRuns(ctx)
++	})
++}
+diff --git a/tests/integration/api_admin_test.go b/tests/integration/api_admin_test.go
+index b4d1bcee8a011..0d23ff248b494 100644
+--- a/tests/integration/api_admin_test.go
++++ b/tests/integration/api_admin_test.go
+@@ -289,10 +289,10 @@ func TestAPICron(t *testing.T) {
+ 			AddTokenAuth(token)
+ 		resp := MakeRequest(t, req, http.StatusOK)
+ 
+-		assert.Equal(t, "29", resp.Header().Get("X-Total-Count"))
++		assert.Equal(t, "30", resp.Header().Get("X-Total-Count"))
+ 
+ 		crons := DecodeJSON(t, resp, []api.Cron{})
+-		assert.Len(t, crons, 29)
++		assert.Len(t, crons, 30)
+ 	})
+ 
+ 	t.Run("Execute", func(t *testing.T) {

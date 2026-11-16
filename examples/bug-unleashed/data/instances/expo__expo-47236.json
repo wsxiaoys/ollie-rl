@@ -1,0 +1,16 @@
+{
+  "case_id": "expo__expo-47236",
+  "repo": "expo/expo",
+  "pr": 47236,
+  "title": "[ui][ios] Fix ListItem leading/trailing slot stretching fixed-size RN views",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "expo__expo-47236",
+  "target": null,
+  "siblings": [],
+  "head_sha": "58c4ea9fea433c2f6fc5e6055e36fa33c87f2b95",
+  "base_sha": "874ddfc86c0bdaeeb43f56b4386d271ba869ad47",
+  "snapshot": "repos/expo__expo/58c4ea9fea433c2f6fc5e6055e36fa33c87f2b95",
+  "diff": "diffs/expo__expo-47236.diff"
+}

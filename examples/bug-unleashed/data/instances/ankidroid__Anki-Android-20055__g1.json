@@ -1,0 +1,26 @@
+{
+  "case_id": "ankidroid__Anki-Android-20055",
+  "repo": "ankidroid/Anki-Android",
+  "pr": 20055,
+  "title": "fix(study-screen): streamline actions",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ankidroid__Anki-Android-20055__g1",
+  "target": {
+    "gid": "ankidroid__Anki-Android-20055#g1",
+    "summary": "Auto-advance actions invoke showAnswerInternal, answerCardInternal, and buryCard directly rather than dispatching through executeAction. This bypasses actionsMutex, causing auto-advance actions to run concurrently and out of order with other reviewer actions.",
+    "paths": [
+      "AnkiDroid/src/main/java/com/ichi2/anki/ui/windows/reviewer/ReviewerViewModel.kt"
+    ],
+    "notes": [
+      "faulty calls invoke internal actions directly instead of routing through executeAction, bypassing actionsMutex",
+      "definition of the method whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "b4df43ee48a97148e8dc11dd2327cfba31ea9067",
+  "base_sha": "5746fafd55e48d137d50e939930d7725518c396c",
+  "snapshot": "repos/ankidroid__Anki-Android/b4df43ee48a97148e8dc11dd2327cfba31ea9067",
+  "diff": "diffs/ankidroid__Anki-Android-20055.diff"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "feat: Support extract variable in macro call",
+  "body": "Implement based first and last token mappings\n\nExample\n---\n```rust\nmacro_rules! foo {\n    (= $($t:tt)*) => { $($t)* };\n}\n\nfn main() {\n    let x = foo!(= $02 + 3$0 + 4);\n}\n```\n\n**Before this PR**\n\nAssist not applicable\n\n**After this PR**\n\n```rust\nmacro_rules! foo {\n    (= $($t:tt)*) => { $($t)* };\n}\n\nfn main() {\n    let $0var_name = 2+3;\n    let x = foo!(= var_name + 4);\n}\n```\n",
+  "head_sha": "144cce8a76950e767a8f65bbd35d72dae6f81050",
+  "base_sha": "f53911152a931648119710cbadb3244603343dfd"
+}

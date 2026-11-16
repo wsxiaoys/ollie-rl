@@ -1,0 +1,29 @@
+{
+  "case_id": "grafana__grafana-117757",
+  "repo": "grafana/grafana",
+  "pr": 117757,
+  "title": "Plugins: Allow to set multiple plugin directories to load",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "grafana__grafana-117757__g1",
+  "target": {
+    "gid": "grafana__grafana-117757#g1",
+    "summary": "DirAsLocalSources returns an error and an empty slice if reading any single plugin directory fails. This halts directory traversal and prevents plugins in any remaining directories from being loaded.",
+    "paths": [
+      "pkg/plugins/manager/sources/source_local_disk.go",
+      "pkg/services/pluginsintegration/pluginsources/pluginsources.go",
+      "pkg/services/pluginsintegration/renderer/renderer.go"
+    ],
+    "notes": [
+      "faulty statement: returns an error and aborts immediately when reading a plugin directory fails",
+      "definition of the function whose behavior is wrong",
+      "call site relying on DirAsLocalSources"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5f13f80c7f47ed773de7aa849b34388b8f6939d8",
+  "base_sha": "d09ca204b912dd27778e7fa351f13ba995836239",
+  "snapshot": "repos/grafana__grafana/5f13f80c7f47ed773de7aa849b34388b8f6939d8",
+  "diff": "diffs/grafana__grafana-117757.diff"
+}

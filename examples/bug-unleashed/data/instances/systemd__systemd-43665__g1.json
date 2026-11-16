@@ -1,0 +1,26 @@
+{
+  "case_id": "systemd__systemd-43665",
+  "repo": "systemd/systemd",
+  "pr": 43665,
+  "title": "sysupdate: by default, when writing verity sig partition, zero fill till end of partition",
+  "language": "C",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "systemd__systemd-43665__g1",
+  "target": {
+    "gid": "systemd__systemd-43665#g1",
+    "summary": "When BLKZEROOUT fails with EBUSY (which occurs when dirty pages cannot be invalidated, such as when another partition on the device is in use), blockdev_zero_out() fails immediately instead of falling back to writing zeroes manually. This causes the zeroing operation to abort unexpectedly on active block devices.",
+    "paths": [
+      "src/shared/blockdev-util.c"
+    ],
+    "notes": [
+      "faulty error check that returns immediately on EBUSY instead of falling back to writing zeroes manually",
+      "definition of blockdev_zero_out whose error handling behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "d3b6d765a5b320d6d864591c6a7b87e1047d0c78",
+  "base_sha": "c673d9985dedccafc1a67d17d50ad42318d4c254",
+  "snapshot": "repos/systemd__systemd/d3b6d765a5b320d6d864591c6a7b87e1047d0c78",
+  "diff": "diffs/systemd__systemd-43665.diff"
+}

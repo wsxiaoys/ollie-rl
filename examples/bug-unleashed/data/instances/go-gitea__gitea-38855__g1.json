@@ -1,0 +1,31 @@
+{
+  "case_id": "go-gitea__gitea-38855",
+  "repo": "go-gitea/gitea",
+  "pr": 38855,
+  "title": "feat(actions)!: add RUN_RETENTION_DAYS to delete old action runs",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "go-gitea__gitea-38855__g1",
+  "target": {
+    "gid": "go-gitea__gitea-38855#g1",
+    "summary": "artifactExpiry returns client-requested expiration timestamps without clamping them against setting.Actions.ArtifactRetentionDays or the server's clock. As a result, workflows can bypass configured artifact retention limits, and runner clock skew can cause artifacts to expire prematurely.",
+    "paths": [
+      "models/actions/artifact.go",
+      "routers/api/actions/artifacts.go",
+      "routers/api/actions/artifactsv4.go"
+    ],
+    "notes": [
+      "faulty return statement that does not clamp requested expiry against retention limit or server clock",
+      "definition of artifactExpiry",
+      "call site calling artifactExpiry in CreateArtifact",
+      "call site producing expiry from unvalidated client ExpiresAt and passing to CreateArtifact",
+      "call site producing expiry from form retentionDays and passing to CreateArtifact"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "654a3db59001005be8d657cadbb0e59a057e92e6",
+  "base_sha": "e6af4c341ca84242ab11fec0b46ceb3e2c8f5eca",
+  "snapshot": "repos/go-gitea__gitea/654a3db59001005be8d657cadbb0e59a057e92e6",
+  "diff": "diffs/go-gitea__gitea-38855.diff"
+}

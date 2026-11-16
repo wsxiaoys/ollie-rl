@@ -1,0 +1,6 @@
+{
+  "title": "model :support Gemma4 DSpark draft backbone",
+  "body": "## Overview\r\n\r\nAdds GGUF conversion and runtime support for Gemma 4 DSpark drafts, including full attention and SWA1024.\r\n\r\n- Adds the Gemma 4 attention, normalization, embedding scaling and RoPE handling to the existing DFlash graph.\r\n- Preserves the draft’s own embeddings and output head, including tied weights.\r\n- Uses the existing DSpark speculative decoding flow.\r\n\r\n\r\n## Additional information\r\nTested GPU inference with both full-attention and SWA1024 Gemma DSpark drafts. Both generated accepted draft tokens.\r\n\r\n## Requirements\r\n\r\n- I have read and agree with the [contributing guidelines](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md)\r\n- AI usage disclosure: Yes, I used AI to help write code and understand codebase.\r\n",
+  "head_sha": "37e1e3781933cde684443c8785dae94d68796725",
+  "base_sha": "7ab4ee7baad2d920464cbacfad4f4b07cf111fd2"
+}

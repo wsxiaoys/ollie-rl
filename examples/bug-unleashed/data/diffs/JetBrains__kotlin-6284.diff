@@ -1,0 +1,692 @@
+diff --git a/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/JvmSymbols.kt b/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/JvmSymbols.kt
+index 6d8c0189d94bb4..87aacbb83a0a7e 100644
+--- a/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/JvmSymbols.kt
++++ b/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/JvmSymbols.kt
+@@ -33,6 +33,7 @@ import org.jetbrains.kotlin.ir.types.*
+ import org.jetbrains.kotlin.ir.util.*
+ import org.jetbrains.kotlin.load.java.JvmAnnotationNames
+ import org.jetbrains.kotlin.name.FqName
++import org.jetbrains.kotlin.name.JvmStandardClassIds
+ import org.jetbrains.kotlin.name.JvmStandardClassIds.JVM_EXPOSE_BOXED_ANNOTATION_FQ_NAME
+ import org.jetbrains.kotlin.name.Name
+ import org.jetbrains.kotlin.name.StandardClassIds
+@@ -485,7 +486,7 @@ class JvmSymbols(
+         }
+     }
+ 
+-    val boxingConstructorMarkerClass: IrClassSymbol = createClass(FqName("kotlin.jvm.internal.BoxingConstructorMarker"))
++    val boxingConstructorMarkerClass: IrClassSymbol = createClass(JvmStandardClassIds.JVM_EXPOSE_BOXED_NON_EXPOSED_CONSTRUCTOR_MARKER_FQ_NAME)
+ 
+     private data class PropertyReferenceKey(
+         val mutable: Boolean,
+diff --git a/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/MemoizedInlineClassReplacements.kt b/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/MemoizedInlineClassReplacements.kt
+index 25a6281d2f3ebd..30343d38380259 100644
+--- a/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/MemoizedInlineClassReplacements.kt
++++ b/compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/MemoizedInlineClassReplacements.kt
+@@ -286,6 +286,8 @@ class MemoizedInlineClassReplacements(
+             isPrimary = constructor.isPrimary
+         }.apply {
+             parent = constructor.parent
++            metadata = constructor.metadata
++            constructor.metadata = null
+             copyFunctionSignatureFrom(constructor)
+             annotations = constructor.annotations.withoutJvmExposeBoxedAnnotation()
+             body = constructor.body?.patchDeclarationParents(this)
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructor.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructor.kt
+new file mode 100644
+index 00000000000000..67d76db11fc507
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructor.kt
+@@ -0,0 +1,25 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// JVM_EXPOSE_BOXED
++
++package test
++
++import kotlin.reflect.full.primaryConstructor
++import kotlin.reflect.jvm.javaConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder(id: Id)
++
++fun box(): String {
++    // Keep reflection behavior the same for exposed and non-exposed inline constructors.
++    val idCtor = Id::class.primaryConstructor!!.javaConstructor
++    if (idCtor.toString() != "null") return "FAIL 1: $idCtor"
++
++    // For ordinary class constructors we still use non-exposed one,
++    // since this is the constructor, which is called from Kotlin code
++    val holderCtor = Holder::class.primaryConstructor!!.javaConstructor
++    if (holderCtor.toString() != "public test.Holder(java.lang.String,kotlin.jvm.internal.BoxingConstructorMarker,kotlin.jvm.internal.DefaultConstructorMarker)") return "FAIL 3: $holderCtor"
++    return "OK"
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorBound.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorBound.kt
+new file mode 100644
+index 00000000000000..7928eb29923513
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorBound.kt
+@@ -0,0 +1,18 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// JVM_EXPOSE_BOXED
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Outer {
++    inner class Holder(val id: Id)
++}
++
++fun box(): String {
++    return (Outer()::Holder).call(Id("OK")).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCall.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCall.kt
+new file mode 100644
+index 00000000000000..0b6d959bc17e09
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCall.kt
+@@ -0,0 +1,16 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// JVM_EXPOSE_BOXED
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder(val id: Id)
++
++fun box(): String {
++    return Holder::class.primaryConstructor!!.call(Id("OK")).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCallBy.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCallBy.kt
+new file mode 100644
+index 00000000000000..7b499eae04a8de
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCallBy.kt
+@@ -0,0 +1,22 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// JVM_EXPOSE_BOXED
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder(val id: Id = Id("OK"))
++
++class NoDefault(val id: Id)
++
++fun box(): String {
++    val ctor = Holder::class.primaryConstructor!!
++    if (ctor.callBy(emptyMap()).id.value != "OK") return "FAIL 1: ${ctor.callBy(emptyMap()).id.value}"
++    if (ctor.callBy(mapOf(ctor.parameters.single() to Id("OK"))).id.value != "OK") return "FAIL 2: ${ctor.callBy(mapOf(ctor.parameters.single() to Id("OK"))).id.value}"
++    val ndCtor = NoDefault::class.primaryConstructor!!
++    return ndCtor.callBy(mapOf(ndCtor.parameters.single() to Id("OK"))).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCallK1.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCallK1.kt
+new file mode 100644
+index 00000000000000..d26f3804a6609c
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorCallK1.kt
+@@ -0,0 +1,17 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// JVM_EXPOSE_BOXED
++// USE_LEGACY_REFLECTION_IMPLEMENTATION
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder(val id: Id)
++
++fun box(): String {
++    return Holder::class.primaryConstructor!!.call(Id("OK")).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorDefault32.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorDefault32.kt
+new file mode 100644
+index 00000000000000..2567cd9203abd5
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/constructorDefault32.kt
+@@ -0,0 +1,49 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// JVM_EXPOSE_BOXED
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder(
++    val p00: Id = Id("00"),
++    val p01: Id = Id("01"),
++    val p02: Id = Id("02"),
++    val p03: Id = Id("03"),
++    val p04: Id = Id("04"),
++    val p05: Id = Id("05"),
++    val p06: Id = Id("06"),
++    val p07: Id = Id("07"),
++    val p08: Id = Id("08"),
++    val p09: Id = Id("09"),
++    val p10: Id = Id("10"),
++    val p11: Id = Id("11"),
++    val p12: Id = Id("12"),
++    val p13: Id = Id("13"),
++    val p14: Id = Id("14"),
++    val p15: Id = Id("15"),
++    val p16: Id = Id("16"),
++    val p17: Id = Id("17"),
++    val p18: Id = Id("18"),
++    val p19: Id = Id("19"),
++    val p20: Id = Id("20"),
++    val p21: Id = Id("21"),
++    val p22: Id = Id("22"),
++    val p23: Id = Id("23"),
++    val p24: Id = Id("24"),
++    val p25: Id = Id("25"),
++    val p26: Id = Id("26"),
++    val p27: Id = Id("27"),
++    val p28: Id = Id("28"),
++    val p29: Id = Id("29"),
++    val p30: Id = Id("30"),
++    val p31: Id = Id("OK"),
++)
++
++fun box(): String {
++    return Holder::class.primaryConstructor!!.callBy(emptyMap()).p31.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/method.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/method.kt
+new file mode 100644
+index 00000000000000..01e1685695416a
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/directive/reflect/method.kt
+@@ -0,0 +1,18 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// JVM_EXPOSE_BOXED
++
++package test
++
++import kotlin.reflect.jvm.javaMethod
++
++@JvmInline
++value class Id(val value: String) {
++    fun ok(): String = ""
++}
++
++fun box(): String {
++    val method = Id::ok.javaMethod
++    if (method.toString() != "public static final java.lang.String test.Id.ok-impl(java.lang.String)") return method.toString()
++    return "OK"
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructor.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructor.kt
+new file mode 100644
+index 00000000000000..89ff1cc867ba01
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructor.kt
+@@ -0,0 +1,36 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++package test
++
++import kotlin.reflect.full.primaryConstructor
++import kotlin.reflect.jvm.javaConstructor
++
++@JvmInline
++value class Id @JvmExposeBoxed constructor(val value: String)
++
++@JvmInline
++value class NonExposed(val value: String)
++
++class Holder @JvmExposeBoxed constructor(id: Id)
++
++class NonExposedHolder(id: Id)
++
++fun box(): String {
++    // Keep reflection behavior the same for exposed and non-exposed inline constructors.
++    val idCtor = Id::class.primaryConstructor!!.javaConstructor
++    if (idCtor.toString() != "null") return "FAIL 1: $idCtor"
++
++    val nonExposedCtor = NonExposed::class.primaryConstructor!!.javaConstructor
++    if (nonExposedCtor.toString() != "null") return "FAIL 2: $nonExposedCtor"
++
++    // For ordinary class constructors we still use non-exposed one,
++    // since this is the constructor, which is called from Kotlin code
++    val holderCtor = Holder::class.primaryConstructor!!.javaConstructor
++    if (holderCtor.toString() != "public test.Holder(java.lang.String,kotlin.jvm.internal.BoxingConstructorMarker,kotlin.jvm.internal.DefaultConstructorMarker)") return "FAIL 3: $holderCtor"
++    val neHolderCtor = NonExposedHolder::class.primaryConstructor!!.javaConstructor
++    if (neHolderCtor.toString() != "public test.NonExposedHolder(java.lang.String,kotlin.jvm.internal.DefaultConstructorMarker)") return "FAIL 4: $neHolderCtor"
++    return "OK"
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorBound.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorBound.kt
+new file mode 100644
+index 00000000000000..6d0368890cd42b
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorBound.kt
+@@ -0,0 +1,17 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Outer {
++    inner class Holder @JvmExposeBoxed constructor(val id: Id)
++}
++
++fun box(): String {
++    return (Outer()::Holder).call(Id("OK")).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCall.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCall.kt
+new file mode 100644
+index 00000000000000..15f62cb8e321ea
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCall.kt
+@@ -0,0 +1,15 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder @JvmExposeBoxed constructor(val id: Id)
++
++fun box(): String {
++    return Holder::class.primaryConstructor!!.call(Id("OK")).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCallBy.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCallBy.kt
+new file mode 100644
+index 00000000000000..0f2b2f66df238c
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCallBy.kt
+@@ -0,0 +1,21 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder @JvmExposeBoxed constructor(val id: Id = Id("OK"))
++
++class NoDefault @JvmExposeBoxed constructor(val id: Id)
++
++fun box(): String {
++    val ctor = Holder::class.primaryConstructor!!
++    if (ctor.callBy(emptyMap()).id.value != "OK") return "FAIL 1: ${ctor.callBy(emptyMap()).id.value}"
++    if (ctor.callBy(mapOf(ctor.parameters.single() to Id("OK"))).id.value != "OK") return "FAIL 2: ${ctor.callBy(mapOf(ctor.parameters.single() to Id("OK"))).id.value}"
++    val ndCtor = NoDefault::class.primaryConstructor!!
++    return ndCtor.callBy(mapOf(ndCtor.parameters.single() to Id("OK"))).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCallK1.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCallK1.kt
+new file mode 100644
+index 00000000000000..6d6dd554eafbd9
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorCallK1.kt
+@@ -0,0 +1,16 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++// USE_LEGACY_REFLECTION_IMPLEMENTATION
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder @JvmExposeBoxed constructor(val id: Id)
++
++fun box(): String {
++    return Holder::class.primaryConstructor!!.call(Id("OK")).id.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorDefault32.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorDefault32.kt
+new file mode 100644
+index 00000000000000..3cd74043a66b80
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/constructorDefault32.kt
+@@ -0,0 +1,48 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++import kotlin.reflect.full.primaryConstructor
++
++@JvmInline
++value class Id(val value: String)
++
++class Holder @JvmExposeBoxed constructor(
++    val p00: Id = Id("00"),
++    val p01: Id = Id("01"),
++    val p02: Id = Id("02"),
++    val p03: Id = Id("03"),
++    val p04: Id = Id("04"),
++    val p05: Id = Id("05"),
++    val p06: Id = Id("06"),
++    val p07: Id = Id("07"),
++    val p08: Id = Id("08"),
++    val p09: Id = Id("09"),
++    val p10: Id = Id("10"),
++    val p11: Id = Id("11"),
++    val p12: Id = Id("12"),
++    val p13: Id = Id("13"),
++    val p14: Id = Id("14"),
++    val p15: Id = Id("15"),
++    val p16: Id = Id("16"),
++    val p17: Id = Id("17"),
++    val p18: Id = Id("18"),
++    val p19: Id = Id("19"),
++    val p20: Id = Id("20"),
++    val p21: Id = Id("21"),
++    val p22: Id = Id("22"),
++    val p23: Id = Id("23"),
++    val p24: Id = Id("24"),
++    val p25: Id = Id("25"),
++    val p26: Id = Id("26"),
++    val p27: Id = Id("27"),
++    val p28: Id = Id("28"),
++    val p29: Id = Id("29"),
++    val p30: Id = Id("30"),
++    val p31: Id = Id("OK"),
++)
++
++fun box(): String {
++    return Holder::class.primaryConstructor!!.callBy(emptyMap()).p31.value
++}
+diff --git a/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/method.kt b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/method.kt
+new file mode 100644
+index 00000000000000..0e6ebd881ba5fd
+--- /dev/null
++++ b/compiler/testData/codegen/boxJvm/inlineClasses/jvmExposeBoxed/reflect/method.kt
+@@ -0,0 +1,23 @@
++// WITH_REFLECT
++// TARGET_BACKEND: JVM
++
++@file:OptIn(ExperimentalStdlibApi::class)
++
++package test
++
++import kotlin.reflect.jvm.javaMethod
++
++@JvmInline
++value class Id(val value: String) {
++    @JvmExposeBoxed
++    fun ok(): String = ""
++}
++
++fun box(): String {
++    val method = Id::ok.javaMethod
++    // No change here - the reflection points to the same function as if there is no exposed version.
++    // Unlike constructor, it is OK, since the function is not restricted to be called only from
++    // inline class generated methods, like 'box-impl'.
++    if (method.toString() != "public static final java.lang.String test.Id.ok-impl(java.lang.String)") return method.toString()
++    return "OK"
++}
+diff --git a/core/compiler.common.jvm/src/org/jetbrains/kotlin/name/JvmStandardClassIds.kt b/core/compiler.common.jvm/src/org/jetbrains/kotlin/name/JvmStandardClassIds.kt
+index 6712366284c4be..561137238c7f9e 100644
+--- a/core/compiler.common.jvm/src/org/jetbrains/kotlin/name/JvmStandardClassIds.kt
++++ b/core/compiler.common.jvm/src/org/jetbrains/kotlin/name/JvmStandardClassIds.kt
+@@ -19,6 +19,8 @@ object JvmStandardClassIds {
+     val JVM_EXPOSE_BOXED_ANNOTATION_FQ_NAME = FqName("kotlin.jvm.JvmExposeBoxed")
+     val JVM_EXPOSE_BOXED_ANNOTATION_CLASS_ID = ClassId.topLevel(JVM_EXPOSE_BOXED_ANNOTATION_FQ_NAME)
+ 
++    val JVM_EXPOSE_BOXED_NON_EXPOSED_CONSTRUCTOR_MARKER_FQ_NAME = FqName("kotlin.jvm.internal.BoxingConstructorMarker")
++
+     val JVM_MULTIFILE_CLASS: FqName = FqName("kotlin.jvm.JvmMultifileClass")
+     val JVM_MULTIFILE_CLASS_ID: ClassId = ClassId.topLevel(JVM_MULTIFILE_CLASS)
+     val JVM_MULTIFILE_CLASS_SHORT = JVM_MULTIFILE_CLASS.shortName().asString()
+diff --git a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/DescriptorKFunction.kt b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/DescriptorKFunction.kt
+index 2acb885d0c8a2b..5c96dcfb3296f3 100644
+--- a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/DescriptorKFunction.kt
++++ b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/DescriptorKFunction.kt
+@@ -19,6 +19,7 @@ package kotlin.reflect.jvm.internal
+ import org.jetbrains.kotlin.descriptors.ClassDescriptor
+ import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
+ import org.jetbrains.kotlin.descriptors.FunctionDescriptor
++import org.jetbrains.kotlin.name.JvmStandardClassIds
+ import org.jetbrains.kotlin.resolve.isInlineClassType
+ import org.jetbrains.kotlin.resolve.jvm.shouldHideConstructorDueToValueClassTypeValueParameters
+ import java.lang.reflect.Constructor
+@@ -214,9 +215,12 @@ internal class DescriptorKFunction private constructor(
+     ): CallerImpl<Constructor<*>> {
+         return if (!isDefault && shouldHideConstructorDueToValueClassTypeValueParameters(descriptor)) {
+             if (isBound)
+-                CallerImpl.AccessorForHiddenBoundConstructor(member, boundReceiver)
++                CallerImpl.AccessorForHiddenBoundConstructor(
++                    member, boundReceiver,
++                    isNonExposedConstructorOfOrdinaryClassWithInlineClassParameter(member)
++                )
+             else
+-                CallerImpl.AccessorForHiddenConstructor(member)
++                CallerImpl.AccessorForHiddenConstructor(member, isNonExposedConstructorOfOrdinaryClassWithInlineClassParameter(member))
+         } else {
+             if (isBound)
+                 CallerImpl.BoundConstructor(member, boundReceiver)
+@@ -261,3 +265,8 @@ internal class DescriptorKFunction private constructor(
+     override fun toString(): String =
+         ReflectionObjectRenderer.renderFunction(this)
+ }
++
++internal fun isNonExposedConstructorOfOrdinaryClassWithInlineClassParameter(member: Constructor<*>): Boolean =
++    member.parameterTypes.any {
++        it.name == JvmStandardClassIds.JVM_EXPOSE_BOXED_NON_EXPOSED_CONSTRUCTOR_MARKER_FQ_NAME.asString()
++    }
+diff --git a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/KotlinKFunction.kt b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/KotlinKFunction.kt
+index bb5d1743f4f2fe..ff41baf95d98d1 100644
+--- a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/KotlinKFunction.kt
++++ b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/KotlinKFunction.kt
+@@ -130,9 +130,12 @@ internal abstract class KotlinKFunction(
+     private fun createConstructorCaller(member: Constructor<*>, isDefault: Boolean): CallerImpl<Constructor<*>> {
+         return if (!isDefault && this is KotlinKConstructor && shouldHideConstructorDueToValueClassTypeValueParameters(this)) {
+             if (isBound)
+-                CallerImpl.AccessorForHiddenBoundConstructor(member, boundReceiver)
++                CallerImpl.AccessorForHiddenBoundConstructor(
++                    member, boundReceiver,
++                    isNonExposedConstructorOfOrdinaryClassWithInlineClassParameter(member)
++                )
+             else
+-                CallerImpl.AccessorForHiddenConstructor(member)
++                CallerImpl.AccessorForHiddenConstructor(member, isNonExposedConstructorOfOrdinaryClassWithInlineClassParameter(member))
+         } else {
+             if (isBound)
+                 CallerImpl.BoundConstructor(member, boundReceiver)
+diff --git a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/ReflectKCallable.kt b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/ReflectKCallable.kt
+index 699f444e80a973..b539af32c8453e 100644
+--- a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/ReflectKCallable.kt
++++ b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/ReflectKCallable.kt
+@@ -5,6 +5,7 @@
+ 
+ package kotlin.reflect.jvm.internal
+ 
++import java.lang.reflect.Constructor
+ import kotlin.coroutines.Continuation
+ import kotlin.jvm.internal.CallableReference
+ import kotlin.metadata.Modality
+@@ -91,9 +92,15 @@ private fun Any?.coerceToExpectedReceiverType(callable: ReflectKCallable<*>): An
+ 
+ internal fun ReflectKCallable<*>.computeAbsentArguments(): Array<Any?> {
+     val parameters = parameters
+-    val parameterSize = parameters.size + (if (isSuspend) 1 else 0)
+ 
+-    val parametersWithAllocatedBitInMask = parameters.count { it.kind == KParameter.Kind.VALUE || it.kind == KParameter.Kind.CONTEXT }
++    val hasBoxingMarker = isConstructor &&
++            ((caller.member as? Constructor<*>)?.let { isNonExposedConstructorOfOrdinaryClassWithInlineClassParameter(it) } == true)
++
++    val parameterSize = parameters.size + (if (isSuspend) 1 else 0) + (if (hasBoxingMarker) 1 else 0)
++
++    val parametersWithAllocatedBitInMask =
++        parameters.count { it.kind == KParameter.Kind.VALUE || it.kind == KParameter.Kind.CONTEXT } +
++                (if (hasBoxingMarker) 1 else 0)
+     val maskSize = (parametersWithAllocatedBitInMask + Integer.SIZE - 1) / Integer.SIZE
+ 
+     // Array containing the actual function arguments, masks, and +1 for DefaultConstructorMarker or MethodHandle.
+@@ -128,11 +135,18 @@ internal fun <R> ReflectKCallable<R>.callDefaultMethod(args: Map<KParameter, Any
+         }
+     }
+ 
+-    val parameterSize = parameters.size + (if (isSuspend) 1 else 0)
++    val regularParameterSize = parameters.size + if (isSuspend) 1 else 0
++
++    val hasBoxingMarker = isConstructor &&
++            ((caller.member as? Constructor<*>)?.let { isNonExposedConstructorOfOrdinaryClassWithInlineClassParameter(it) } == true)
++
++    val defaultParameterSize = regularParameterSize + (if (hasBoxingMarker) 1 else 0)
+ 
+     val arguments = getAbsentArguments().apply {
+         if (isSuspend) {
+             this[parameters.size] = continuationArgument
++        } else if (hasBoxingMarker) {
++            this[parameters.size] = null
+         }
+     }
+ 
+@@ -145,7 +159,7 @@ internal fun <R> ReflectKCallable<R>.callDefaultMethod(args: Map<KParameter, Any
+                 arguments[parameter.index] = args[parameter]
+             }
+             parameter.isOptional -> {
+-                val maskIndex = parameterSize + (valueParameterIndex / Integer.SIZE)
++                val maskIndex = defaultParameterSize + (valueParameterIndex / Integer.SIZE)
+                 arguments[maskIndex] = (arguments[maskIndex] as Int) or (1 shl (valueParameterIndex % Integer.SIZE))
+                 anyOptional = true
+             }
+@@ -162,7 +176,7 @@ internal fun <R> ReflectKCallable<R>.callDefaultMethod(args: Map<KParameter, Any
+     if (!anyOptional) {
+         @Suppress("UNCHECKED_CAST")
+         return reflectionCall {
+-            caller.call(arguments.copyOf(parameterSize)) as R
++            caller.call(arguments.copyOf(regularParameterSize)) as R
+         }
+     }
+ 
+diff --git a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/CallerImpl.kt b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/CallerImpl.kt
+index bd1e9f8545ec9d..39204430045e13 100644
+--- a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/CallerImpl.kt
++++ b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/CallerImpl.kt
+@@ -51,27 +51,37 @@ internal sealed class CallerImpl<out M : Member>(
+     }
+ 
+     class AccessorForHiddenConstructor(
+-        constructor: ReflectConstructor<*>
++        constructor: ReflectConstructor<*>,
++        private val hasBoxingMarker: Boolean,
+     ) : CallerImpl<ReflectConstructor<*>>(
+         constructor, constructor.declaringClass,
+-        constructor.genericParameterTypes.dropLast()
++        constructor.genericParameterTypes.dropLast(if (hasBoxingMarker) 2 else 1)
+     ) {
+         override fun call(args: Array<*>): Any? {
+             checkArguments(args)
+-            return member.newInstance(*args, null)
++            return if (hasBoxingMarker) {
++                member.newInstance(*args, null, null)
++            } else {
++                member.newInstance(*args, null)
++            }
+         }
+     }
+ 
+     class AccessorForHiddenBoundConstructor(
+         constructor: ReflectConstructor<*>,
+-        private val boundReceiver: Any?
++        private val boundReceiver: Any?,
++        private val hasBoxingMarker: Boolean,
+     ) : CallerImpl<ReflectConstructor<*>>(
+         constructor, constructor.declaringClass,
+-        constructor.genericParameterTypes.dropFirstAndLast()
++        constructor.genericParameterTypes.dropFirstAndLast(if (hasBoxingMarker) 2 else 1)
+     ), BoundCaller {
+         override fun call(args: Array<*>): Any? {
+             checkArguments(args)
+-            return member.newInstance(boundReceiver, *args, null)
++            return if (hasBoxingMarker) {
++                member.newInstance(boundReceiver, *args, null, null)
++            } else {
++                member.newInstance(boundReceiver, *args, null)
++            }
+         }
+     }
+ 
+@@ -246,11 +256,11 @@ internal sealed class CallerImpl<out M : Member>(
+             if (size <= 1) emptyArray() else copyOfRange(1, size) as Array<T>
+ 
+         @Suppress("UNCHECKED_CAST")
+-        inline fun <reified T> Array<out T>.dropLast(): Array<T> =
+-            if (size <= 1) emptyArray() else copyOfRange(0, size - 1) as Array<T>
++        inline fun <reified T> Array<out T>.dropLast(amountToDrop: Int): Array<T> =
++            if (size <= amountToDrop) emptyArray() else copyOfRange(0, size - amountToDrop) as Array<T>
+ 
+         @Suppress("UNCHECKED_CAST")
+-        inline fun <reified T> Array<out T>.dropFirstAndLast(): Array<T> =
+-            if (size <= 2) emptyArray() else copyOfRange(1, size - 1) as Array<T>
++        inline fun <reified T> Array<out T>.dropFirstAndLast(amountToDropLast: Int): Array<T> =
++            if (size <= 1 + amountToDropLast) emptyArray() else copyOfRange(1, size - amountToDropLast) as Array<T>
+     }
+ }
+diff --git a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/ValueClassAwareCaller.kt b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/ValueClassAwareCaller.kt
+index dd94376c86e80b..71deccbdc0fae1 100644
+--- a/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/ValueClassAwareCaller.kt
++++ b/core/reflection.jvm/src/kotlin/reflect/jvm/internal/calls/ValueClassAwareCaller.kt
+@@ -6,6 +6,7 @@
+ package kotlin.reflect.jvm.internal.calls
+ 
+ import org.jetbrains.kotlin.load.java.JvmAbi
++import org.jetbrains.kotlin.name.JvmStandardClassIds
+ import java.lang.reflect.Member
+ import java.lang.reflect.Method
+ import java.lang.reflect.Type
+@@ -92,12 +93,18 @@ internal class ValueClassAwareCaller<out M : Member?>(
+             kotlinParameterTypes.size
+         }
+ 
++        val boxingMarkerCount = caller.parameterTypes.count {
++            it is Class<*> && it.name == JvmStandardClassIds.JVM_EXPOSE_BOXED_NON_EXPOSED_CONSTRUCTOR_MARKER_FQ_NAME.asString()
++        }
++
+         // If the default argument is set,
+         // (paramsWithAllocatedDefaultMaskBitsCount + Int.SIZE_BITS - 1) / Int.SIZE_BITS masks and one marker are added to the end of the argument.
++        // BoxingConstructorMarker is counted towards default parameter bits.
+         val extraArgumentsTail =
+-            (if (isDefault) ((paramsWithAllocatedDefaultMaskBitsCount + Int.SIZE_BITS - 1) / Int.SIZE_BITS) + 1 else 0) +
++            (if (isDefault) ((paramsWithAllocatedDefaultMaskBitsCount + boxingMarkerCount + Int.SIZE_BITS - 1) / Int.SIZE_BITS) + 1 else 0) +
+                     (if (callable is ReflectKFunction && callable.isSuspend) 1 else 0)
+-        val expectedArgsSize = kotlinParameterTypes.size + shift + extraArgumentsTail
++
++        val expectedArgsSize = kotlinParameterTypes.size + shift + extraArgumentsTail + boxingMarkerCount
+         checkParametersSize(expectedArgsSize, callable, isDefault)
+ 
+         // maxOf is needed because in case of a bound top level extension, shift can be -1 (see above). But in that case, we need not unbox

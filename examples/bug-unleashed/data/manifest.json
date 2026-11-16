@@ -1,0 +1,20 @@
+{
+  "generatedAt": "2026-11-11",
+  "cases": 200,
+  "examples": 201,
+  "splits": {
+    "val": {
+      "repos": 12,
+      "bug": 27,
+      "clean": 6
+    },
+    "train": {
+      "repos": 53,
+      "bug": 139,
+      "clean": 29
+    }
+  },
+  "snapshots": true,
+  "prepared_repos": 65,
+  "failures": []
+}

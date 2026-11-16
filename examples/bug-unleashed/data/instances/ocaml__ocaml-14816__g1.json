@@ -1,0 +1,29 @@
+{
+  "case_id": "ocaml__ocaml-14816",
+  "repo": "ocaml/ocaml",
+  "pr": 14816,
+  "title": "Make caml_darken do cmpxchg on lazy/forcing header words",
+  "language": "C",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ocaml__ocaml-14816__g1",
+  "target": {
+    "gid": "ocaml__ocaml-14816#g1",
+    "summary": "The condition checking for lazy and forcing blocks requires both `Lazy_tag` and `Forcing_tag` simultaneously (`&&`), which can never be satisfied. Consequently, `mark_header` never executes the compare-and-exchange branch, allowing concurrent header updates to lazy or forcing blocks to be overwritten with relaxed stores and leading to heap corruption or crashes.",
+    "paths": [
+      "runtime/major_gc.c"
+    ],
+    "notes": [
+      "faulty condition requiring both Lazy_tag and Forcing_tag with && instead of ||",
+      "definition of mark_header function whose behavior is wrong",
+      "call site in caml_darken relying on mark_header to atomically mark lazy/forcing headers",
+      "call site in mark_slice_darken relying on mark_header",
+      "call site in do_some_marking relying on mark_header"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ab64b665c040442e7753857bb40de4b267af13fb",
+  "base_sha": "a4a0d59df82e7e11db8f20aff268b2a7e7a079e1",
+  "snapshot": "repos/ocaml__ocaml/ab64b665c040442e7753857bb40de4b267af13fb",
+  "diff": "diffs/ocaml__ocaml-14816.diff"
+}

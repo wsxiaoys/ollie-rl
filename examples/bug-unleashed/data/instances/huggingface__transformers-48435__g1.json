@@ -1,0 +1,26 @@
+{
+  "case_id": "huggingface__transformers-48435",
+  "repo": "huggingface/transformers",
+  "pr": 48435,
+  "title": "Allow nested rope params for tiny models",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "huggingface__transformers-48435__g1",
+  "target": {
+    "gid": "huggingface__transformers-48435#g1",
+    "summary": "Using `isdisjoint` to detect nested `rope_parameters` treats any dictionary that contains at least one layer-type key as nested. When a checkpoint defines shared non-dictionary parameters alongside layer types, `validate_rope` assumes all top-level entries are nested configuration dictionaries and crashes with an `AttributeError`.",
+    "paths": [
+      "src/transformers/modeling_rope_utils.py"
+    ],
+    "notes": [
+      "faulty statement using isdisjoint to classify rope_parameters as nested when any layer-type key matches",
+      "same faulty isdisjoint check in validate_rope causing AttributeError on shared non-dictionary parameters"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "1c065700a7126ec099a504024e0f3ea912ca5a16",
+  "base_sha": "c119ec3cc37ab69642f39cca2de4187714002b08",
+  "snapshot": "repos/huggingface__transformers/1c065700a7126ec099a504024e0f3ea912ca5a16",
+  "diff": "diffs/huggingface__transformers-48435.diff"
+}

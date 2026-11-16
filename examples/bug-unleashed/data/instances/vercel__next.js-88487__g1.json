@@ -1,0 +1,29 @@
+{
+  "case_id": "vercel__next.js-88487",
+  "repo": "vercel/next.js",
+  "pr": 88487,
+  "title": "Turbopack: retain loader tree order for metadata",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "vercel__next.js-88487__g1",
+  "target": {
+    "gid": "vercel__next.js-88487#g1",
+    "summary": "Metadata modules are imported eagerly using top-level synchronous `require()` calls instead of lazily with `() => require()`, causing runtime failures when dynamic metadata routes depend on asynchronous modules or use top-level await.",
+    "paths": [
+      "crates/next-core/src/app_page_loader_tree.rs",
+      "packages/next/src/lib/metadata/resolve-metadata.ts"
+    ],
+    "notes": [
+      "faulty statement: imports metadata module synchronously using require instead of a lazy loader function",
+      "copy of the same faulty pattern: imports static metadata module synchronously using require",
+      "copy of the same faulty pattern: imports metadata alt text module synchronously using require",
+      "call site relying on eagerly required metadata module instead of lazy loader function"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5d70ae5e9c14677394e37d4d66c8af85f4dc6a90",
+  "base_sha": "a43b362eee9156371ba768bda247f3dd1dff60a7",
+  "snapshot": "repos/vercel__next.js/5d70ae5e9c14677394e37d4d66c8af85f4dc6a90",
+  "diff": "diffs/vercel__next.js-88487.diff"
+}

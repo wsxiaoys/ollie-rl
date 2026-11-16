@@ -1,0 +1,25 @@
+{
+  "case_id": "scala__scala3-25880",
+  "repo": "scala/scala3",
+  "pr": 25880,
+  "title": "Generic signature fixes",
+  "language": "Scala",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "scala__scala3-25880__g1",
+  "target": {
+    "gid": "scala__scala3-25880#g1",
+    "summary": "isPrimitiveValueType fails to recognize AnyVal wrapper classes around singleton types, resulting in compiler crashes in genBcode.",
+    "paths": [
+      "compiler/src/dotty/tools/dotc/core/TypeUtils.scala"
+    ],
+    "notes": [
+      "faulty implementation of isPrimitiveValueType"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c1fb78679538539ed62481309c7c96ea3ffdadae",
+  "base_sha": "cf3cc7a841c83cfe946f742e235741b22a40b8d9",
+  "snapshot": "repos/scala__scala3/c1fb78679538539ed62481309c7c96ea3ffdadae",
+  "diff": "diffs/scala__scala3-25880.diff"
+}

@@ -1,0 +1,25 @@
+{
+  "case_id": "electron__electron-52133",
+  "repo": "electron/electron",
+  "pr": 52133,
+  "title": "fix: inherit iframe sandbox flags in windows opened on the OpenURL navigation path",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "electron__electron-52133__g1",
+  "target": {
+    "gid": "electron__electron-52133#g1",
+    "summary": "The `initiator->GetParent()` check restricts sandbox enforcement to child frames, skipping top-level frames. Consequently, windows opened via `OpenURLFromTab` from a sandboxed top-level frame fail to inherit the opener's sandbox restrictions and can bypass popup blocking.",
+    "paths": [
+      "shell/browser/api/electron_api_web_contents.cc"
+    ],
+    "notes": [
+      "faulty condition checking for parent frame, skipping top-level sandboxed frames"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "463abf12a93c772a58ec2eb7c2fd92c5629d65f7",
+  "base_sha": "1f56fef05c0cb794042099e8d00add19eabde3c1",
+  "snapshot": "repos/electron__electron/463abf12a93c772a58ec2eb7c2fd92c5629d65f7",
+  "diff": "diffs/electron__electron-52133.diff"
+}

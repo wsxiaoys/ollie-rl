@@ -1,0 +1,509 @@
+diff --git a/lib/msf/core/db_manager/import/marshal_validator.rb b/lib/msf/core/db_manager/import/marshal_validator.rb
+new file mode 100644
+index 0000000000000..6888d49537b03
+--- /dev/null
++++ b/lib/msf/core/db_manager/import/marshal_validator.rb
+@@ -0,0 +1,219 @@
++# frozen_string_literal: true
++
++require 'set'
++
++module Msf
++  class DBManager
++    module Import
++      # Raised when the Marshal stream validator detects an unsafe type
++      # byte that would trigger class instantiation during deserialization.
++      class MarshalValidationError < StandardError; end
++
++      # Walks a Marshal byte stream structurally, reading type bytes only in
++      # type positions and skipping over data payloads. Rejects any stream
++      # that attempts to instantiate a named class (object, struct, custom
++      # marshal, module extension, etc.).
++      #
++      # This runs BEFORE Marshal.load so no objects are ever instantiated
++      # from an unsafe payload.
++      #
++      # Reference: https://ruby-doc.org/3.3/Marshal.html
++      # Reference: https://github.com/ruby/ruby/blob/master/doc/marshal/marshal.md
++      class MarshalValidator
++        # Type bytes that always instantiate named classes — unconditionally blocked.
++        UNSAFE_TYPES = Set.new(%w[o c m C S e U d].map(&:ord)).freeze
++
++        # Default classes permitted for the 'u' (_dump/_load) serialization type.
++        DEFAULT_PERMITTED_CLASSES = %w[].freeze
++
++        # @param data [String] raw Marshal binary data
++        # @param permitted_classes [Array<String>] class names allowed for
++        #   _dump/_load ('u') deserialization. Defaults to {DEFAULT_PERMITTED_CLASSES}.
++        def initialize(data, permitted_classes: DEFAULT_PERMITTED_CLASSES)
++          @bytes = data.bytes
++          @pos = 0
++          @permitted_classes = Set.new(permitted_classes)
++        end
++
++        # Validate the entire stream. Raises MarshalValidationError if unsafe.
++        # @return [true]
++        def validate!
++          read_version
++          validate_value
++          true
++        end
++
++        # Convenience method: validate and then load.
++        # @param data [String] raw Marshal binary data
++        # @param permitted_classes [Array<String>] class names allowed for
++        #   _dump/_load ('u') deserialization. Defaults to {DEFAULT_PERMITTED_CLASSES}.
++        # @return [Object] the deserialized object (only primitives + permitted classes)
++        # @raise [MarshalValidationError] if the payload contains disallowed class references
++        def self.safe_load(data, permitted_classes: DEFAULT_PERMITTED_CLASSES)
++          new(data, permitted_classes: permitted_classes).validate!
++          Marshal.load(data)
++        end
++
++        # Check whether the given data starts with the Marshal 4.8 version
++        # header, indicating it is a Marshal-serialized payload.
++        #
++        # @param data [String] raw binary data
++        # @return [Boolean]
++        def self.marshalled_data?(data)
++          data.length >= 2 && data.getbyte(0) == 4 && data.getbyte(1) == 8
++        end
++
++        private
++
++        def read_byte
++          raise MarshalValidationError, "Unexpected end of Marshal stream at offset #{@pos}" if @pos >= @bytes.length
++
++          b = @bytes[@pos]
++          @pos += 1
++          b
++        end
++
++        def read_version
++          major = read_byte
++          minor = read_byte
++          unless major == 4 && minor == 8
++            raise MarshalValidationError, "Unsupported Marshal version #{major}.#{minor}"
++          end
++        end
++
++        # Read a Marshal-encoded integer (used for lengths, counts, etc.)
++        # This follows Ruby's Marshal integer encoding scheme.
++        def read_marshal_int
++          c = read_byte
++          c = (c ^ 256) - 256 if c > 127 # sign-extend
++
++          if c == 0
++            0
++          elsif c > 0 && c <= 4
++            # c bytes follow, little-endian positive
++            n = 0
++            c.times { |i| n |= read_byte << (8 * i) }
++            n
++          elsif c >= -4 && c < 0
++            # -c bytes follow, little-endian negative
++            n = -1
++            (-c).times { |i| n &= ~(0xff << (8 * i)); n |= read_byte << (8 * i) }
++            n
++          else
++            # Small integer: encoded directly
++            c > 0 ? c - 5 : c + 5
++          end
++        end
++
++        # Skip n raw bytes (used to skip over string/symbol content)
++        def skip_bytes(count)
++          raise MarshalValidationError, "Unexpected end of Marshal stream at offset #{@pos}" if @pos + count > @bytes.length
++
++          @pos += count
++        end
++
++        # Read a class/module name from the stream. In Marshal format,
++        # class names are encoded as symbols (`:` or `;` back-reference).
++        # @return [String] the class name
++        def read_class_name
++          type = read_byte
++          case type
++          when 0x3A # ':' — Symbol (inline)
++            len = read_marshal_int
++            name_bytes = @bytes[@pos, len]
++            raise MarshalValidationError, "Unexpected end of Marshal stream reading class name at offset #{@pos}" if name_bytes.nil? || name_bytes.length < len
++
++            @pos += len
++            (@symbol_cache ||= []) << name_bytes.pack('C*')
++            @symbol_cache.last
++          when 0x3B # ';' — Symbol link (back-reference)
++            idx = read_marshal_int
++            cached = (@symbol_cache ||= [])[idx]
++            raise MarshalValidationError, "Invalid symbol back-reference #{idx} at offset #{@pos}" unless cached
++
++            cached
++          else
++            raise MarshalValidationError,
++                  "Expected symbol for class name but got 0x#{type.to_s(16)} at offset #{@pos - 1}"
++          end
++        end
++
++        # Validate a single value at the current position.
++        def validate_value
++          type = read_byte
++
++          if UNSAFE_TYPES.include?(type)
++            raise MarshalValidationError,
++                  "Unsafe Marshal type byte 0x#{type.to_s(16)} (#{type.chr.inspect}) " \
++                  "at offset #{@pos - 1} — refusing to deserialize"
++          end
++
++          case type
++          when 0x30 # '0' — nil
++            # no data
++          when 0x54 # 'T' — true
++            # no data
++          when 0x46 # 'F' — false
++            # no data
++          when 0x69 # 'i' — Integer (Fixnum)
++            read_marshal_int
++          when 0x6C # 'l' — Integer (Bignum)
++            read_byte # sign byte (+/-)
++            len = read_marshal_int # number of 16-bit shorts
++            skip_bytes(len * 2)
++          when 0x66 # 'f' — Float
++            len = read_marshal_int
++            skip_bytes(len)
++          when 0x3A # ':' — Symbol
++            len = read_marshal_int
++            skip_bytes(len)
++          when 0x3B # ';' — Symbol link (back-reference)
++            read_marshal_int
++          when 0x22 # '"' — String (raw, no instance vars)
++            len = read_marshal_int
++            skip_bytes(len)
++          when 0x49 # 'I' — Instance variables wrapper
++            validate_value # the wrapped object
++            num_ivars = read_marshal_int
++            num_ivars.times do
++              validate_value # ivar name (symbol)
++              validate_value # ivar value
++            end
++          when 0x5B # '[' — Array
++            count = read_marshal_int
++            count.times { validate_value }
++          when 0x7B # '{' — Hash
++            count = read_marshal_int
++            count.times do
++              validate_value # key
++              validate_value # value
++            end
++          when 0x7D # '}' — Hash with default
++            count = read_marshal_int
++            count.times do
++              validate_value # key
++              validate_value # value
++            end
++            validate_value # default value
++          when 0x40 # '@' — Object link (back-reference)
++            read_marshal_int
++          when 0x75 # 'u' — _dump/_load custom serialization
++            class_name = read_class_name
++            unless @permitted_classes.include?(class_name)
++              raise MarshalValidationError,
++                    "Unsafe Marshal _dump/_load class '#{class_name}' " \
++                    "at offset #{@pos} — refusing to deserialize"
++            end
++            # Skip the _dump data payload
++            len = read_marshal_int
++            skip_bytes(len)
++          else
++            raise MarshalValidationError,
++                  "Unknown Marshal type byte 0x#{type.to_s(16)} (#{type.chr.inspect}) " \
++                  "at offset #{@pos - 1} — refusing to deserialize"
++          end
++        end
++      end
++    end
++  end
++end
+diff --git a/lib/msf/core/db_manager/import/metasploit_framework.rb b/lib/msf/core/db_manager/import/metasploit_framework.rb
+index fb2c1f3e700d5..1cd0627cfe2ec 100644
+--- a/lib/msf/core/db_manager/import/metasploit_framework.rb
++++ b/lib/msf/core/db_manager/import/metasploit_framework.rb
+@@ -1,3 +1,5 @@
++require 'msf/core/db_manager/import/marshal_validator'
++
+ module Msf::DBManager::Import::MetasploitFramework
+   autoload :Credential, 'msf/core/db_manager/import/metasploit_framework/credential'
+   autoload :XML, 'msf/core/db_manager/import/metasploit_framework/xml'
+@@ -20,13 +22,23 @@ def unserialize_object(xml_elem, allow_yaml = false)
+     return nil if (string.empty? || string.nil?)
+ 
+     begin
++
+       # Validate that it is properly formed base64 first
+       if string.gsub(/\s+/, '') =~ /^([a-z0-9A-Z\+\/=]+)$/
+-        Marshal.load($1.unpack("m")[0])
++        marshalled_data = $1.unpack("m")[0]
++
++        # Only attempt Marshal deserialization if the decoded data
++        # starts with the Marshal version header (4.8). Otherwise
++        # treat it as a plain string that happened to be base64-like.
++        if Msf::DBManager::Import::MarshalValidator.marshalled_data?(marshalled_data)
++          Msf::DBManager::Import::MarshalValidator.safe_load(marshalled_data, permitted_classes: %w[Time])
++        else
++          string
++        end
+       else
+         if allow_yaml
+           begin
+-            YAML.load(string)
++            YAML.safe_load(string, permitted_classes: MetasploitDataModels::YAML::PERMITTED_CLASSES)
+           rescue
+             dlog("Badly formatted YAML: '#{string}'")
+             string
+@@ -35,9 +47,19 @@ def unserialize_object(xml_elem, allow_yaml = false)
+           string
+         end
+       end
++    rescue Msf::DBManager::Import::MarshalValidationError => e
++      # Marshal validation failure indicates a potentially tampered export
++      # file — abort the entire import rather than silently continuing.
++      elem_name = xml_elem.respond_to?(:name) ? xml_elem.name : 'unknown'
++      elem_path = xml_elem.respond_to?(:path) ? xml_elem.path : elem_name
++      preview = string.length > 80 ? "#{string[0, 80]}..." : string
++      raise Msf::DBImportError,
++            "Unsafe deserialization blocked in <#{elem_name}> (#{elem_path}): " \
++            "#{e.message} — base64 value: #{preview}"
+     rescue ::Exception => e
++      dlog("Failed to unserialize object: #{e.class} #{e.message}")
+       if allow_yaml
+-        YAML.load(string) rescue string
++        YAML.safe_load(string, permitted_classes: MetasploitDataModels::YAML::PERMITTED_CLASSES) rescue string
+       else
+         string
+       end
+diff --git a/lib/rex/parser/burp_session_document.rb b/lib/rex/parser/burp_session_document.rb
+index 316a6ebdb66df..a3d655d434a96 100644
+--- a/lib/rex/parser/burp_session_document.rb
++++ b/lib/rex/parser/burp_session_document.rb
+@@ -223,7 +223,7 @@ def collect_response
+       return unless in_item
+       return unless has_text
+       response_text = @text.dup
+-      response_header_text,response_body_text = response_text.split(/\r*\n\r*\n/n,2)
++      response_header_text,response_body_text = response_text.split(/\r*\n\r*\n/,2)
+       return unless response_header_text
+       response_header = Rex::Proto::Http::Packet::Header.new
+       response_header.from_s response_header_text
+diff --git a/spec/lib/msf/core/db_manager/import/marshal_validator_spec.rb b/spec/lib/msf/core/db_manager/import/marshal_validator_spec.rb
+new file mode 100644
+index 0000000000000..873d990c6e0b2
+--- /dev/null
++++ b/spec/lib/msf/core/db_manager/import/marshal_validator_spec.rb
+@@ -0,0 +1,208 @@
++# frozen_string_literal: true
++
++require 'spec_helper'
++require 'msf/core/db_manager/import/marshal_validator'
++
++RSpec.describe Msf::DBManager::Import::MarshalValidator do
++  let(:validation_error) { Msf::DBManager::Import::MarshalValidationError }
++
++  describe '.safe_load' do
++    context 'with safe primitive types' do
++      it 'loads nil' do
++        expect(described_class.safe_load(Marshal.dump(nil))).to be_nil
++      end
++
++      it 'loads true' do
++        expect(described_class.safe_load(Marshal.dump(true))).to eq true
++      end
++
++      it 'loads false' do
++        expect(described_class.safe_load(Marshal.dump(false))).to eq false
++      end
++
++      it 'loads a small positive integer' do
++        expect(described_class.safe_load(Marshal.dump(42))).to eq 42
++      end
++
++      it 'loads zero' do
++        expect(described_class.safe_load(Marshal.dump(0))).to eq 0
++      end
++
++      it 'loads a negative integer' do
++        expect(described_class.safe_load(Marshal.dump(-7))).to eq(-7)
++      end
++
++      it 'loads a large integer (Bignum)' do
++        big = 2**64
++        expect(described_class.safe_load(Marshal.dump(big))).to eq big
++      end
++
++      it 'loads a float' do
++        expect(described_class.safe_load(Marshal.dump(3.14))).to eq 3.14
++      end
++
++      it 'loads a symbol' do
++        expect(described_class.safe_load(Marshal.dump(:hello))).to eq :hello
++      end
++
++      it 'loads a string' do
++        expect(described_class.safe_load(Marshal.dump("hello"))).to eq "hello"
++      end
++
++      it 'loads a string containing bytes that match unsafe type indicators' do
++        expect(described_class.safe_load(Marshal.dump("object class module"))).to eq "object class module"
++      end
++    end
++
++    context 'with permitted _dump/_load classes' do
++      it 'loads a Time instance when Time is permitted' do
++        time = Time.new(2025, 6, 15, 12, 30, 0, "+00:00")
++        result = described_class.safe_load(Marshal.dump(time), permitted_classes: %w[Time])
++        expect(result).to be_a(Time)
++        expect(result.to_i).to eq time.to_i
++      end
++
++      it 'loads a Time inside a hash when Time is permitted' do
++        time = Time.now
++        data = { "created_at" => time, "name" => "test" }
++        result = described_class.safe_load(Marshal.dump(data), permitted_classes: %w[Time])
++        expect(result["created_at"].to_i).to eq time.to_i
++        expect(result["name"]).to eq "test"
++      end
++
++      it 'loads a Time inside an array when Time is permitted' do
++        time = Time.now
++        result = described_class.safe_load(Marshal.dump([time, "hello"]), permitted_classes: %w[Time])
++        expect(result[0].to_i).to eq time.to_i
++        expect(result[1]).to eq "hello"
++      end
++
++      it 'rejects a Time instance when no classes are permitted' do
++        time = Time.now
++        expect {
++          described_class.safe_load(Marshal.dump(time))
++        }.to raise_error(validation_error, /Unsafe Marshal _dump\/_load class 'Time'/)
++      end
++
++      it 'rejects a Time inside a hash when no classes are permitted' do
++        data = { "created_at" => Time.now }
++        expect {
++          described_class.safe_load(Marshal.dump(data))
++        }.to raise_error(validation_error, /Unsafe Marshal _dump\/_load class 'Time'/)
++      end
++    end
++
++    context 'with safe compound types' do
++      it 'loads an empty array' do
++        expect(described_class.safe_load(Marshal.dump([]))).to eq []
++      end
++
++      it 'loads an array of strings' do
++        expect(described_class.safe_load(Marshal.dump(["hello", "world"]))).to eq ["hello", "world"]
++      end
++
++      it 'loads an empty hash' do
++        expect(described_class.safe_load(Marshal.dump({}))).to eq({})
++      end
++
++      it 'loads a hash with string keys and values' do
++        data = { "hello" => "world", "foo" => "bar" }
++        expect(described_class.safe_load(Marshal.dump(data))).to eq data
++      end
++
++      it 'loads a hash with symbol keys' do
++        data = { hello: "world", foo: "bar" }
++        expect(described_class.safe_load(Marshal.dump(data))).to eq data
++      end
++
++      it 'loads nested hashes and arrays' do
++        data = {
++          "hosts" => [
++            { "address" => "192.0.2.1", "ports" => [22, 80, 443] },
++            { "address" => "192.0.2.2", "ports" => [] }
++          ],
++          "count" => 2,
++          "active" => true
++        }
++        expect(described_class.safe_load(Marshal.dump(data))).to eq data
++      end
++
++      it 'loads deeply nested structures' do
++        data = { "a" => { "b" => { "c" => { "d" => [1, [2, [3]]] } } } }
++        expect(described_class.safe_load(Marshal.dump(data))).to eq data
++      end
++
++      it 'loads mixed-type arrays' do
++        data = [1, "two", :three, 4.0, true, false, nil]
++        expect(described_class.safe_load(Marshal.dump(data))).to eq data
++      end
++    end
++
++    context 'with unsafe types' do
++      it 'rejects an arbitrary object instance' do
++        data = Marshal.dump(Object.new)
++        expect { described_class.safe_load(data) }.to raise_error(validation_error, /Unsafe Marshal type byte/)
++      end
++
++      it 'rejects a Struct instance' do
++        TestStruct = Struct.new(:x) unless defined?(TestStruct)
++        data = Marshal.dump(TestStruct.new(1))
++        expect { described_class.safe_load(data) }.to raise_error(validation_error, /Unsafe Marshal type byte/)
++      end
++
++      it 'rejects an object nested inside an array' do
++        data = Marshal.dump([Object.new])
++        expect { described_class.safe_load(data) }.to raise_error(validation_error, /Unsafe Marshal type byte/)
++      end
++
++      it 'rejects an object nested inside a hash value' do
++        data = Marshal.dump({ "key" => Object.new })
++        expect { described_class.safe_load(data) }.to raise_error(validation_error, /Unsafe Marshal type byte/)
++      end
++
++      it 'rejects an object nested inside a hash key' do
++        data = Marshal.dump({ Object.new => "value" })
++        expect { described_class.safe_load(data) }.to raise_error(validation_error, /Unsafe Marshal type byte/)
++      end
++
++      it 'rejects a class reference' do
++        data = Marshal.dump(String)
++        expect { described_class.safe_load(data) }.to raise_error(validation_error, /Unsafe Marshal type byte/)
++      end
++
++      it 'rejects a module reference' do
++        data = Marshal.dump(Kernel)
++        expect { described_class.safe_load(data) }.to raise_error(validation_error, /Unsafe Marshal type byte/)
++      end
++    end
++
++    context 'with malformed data' do
++      it 'rejects an empty string' do
++        expect { described_class.safe_load("") }.to raise_error(validation_error)
++      end
++
++      it 'rejects a truncated stream' do
++        data = Marshal.dump("hello")
++        expect { described_class.safe_load(data[0..3]) }.to raise_error(validation_error)
++      end
++
++      it 'rejects an unsupported Marshal version' do
++        data = Marshal.dump("hello")
++        bad = "\x05\x09" + data[2..]
++        expect { described_class.safe_load(bad) }.to raise_error(validation_error, /Unsupported Marshal version/)
++      end
++    end
++  end
++
++  describe '#validate!' do
++    it 'returns true for safe data' do
++      data = Marshal.dump({ "key" => [1, 2, 3] })
++      expect(described_class.new(data).validate!).to eq true
++    end
++
++    it 'raises for unsafe data' do
++      data = Marshal.dump(Object.new)
++      expect { described_class.new(data).validate! }.to raise_error(validation_error)
++    end
++  end
++end

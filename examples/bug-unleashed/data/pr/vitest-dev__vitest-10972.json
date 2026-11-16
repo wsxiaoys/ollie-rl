@@ -1,0 +1,6 @@
+{
+  "title": "fix(mocker): restrict redirect mocks to the fs allowlist",
+  "body": "Resolve a redirect mock's target against Vite's file-serving allowlist (`server.fs`) before registering it, so a redirect can't point outside the served roots.\n\nAlso adds `registerWebSocketEvents` to `interceptorPlugin`; browser mode disables it and registers mocks through the authenticated RPC instead.",
+  "head_sha": "e211a56d848e9563fbad77545b6ab9788aee1dec",
+  "base_sha": "5622f0959bcbccb9fe4757dc3bb694153998be65"
+}

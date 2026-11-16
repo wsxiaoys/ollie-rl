@@ -1,0 +1,16 @@
+{
+  "case_id": "elastic__eui-9685",
+  "repo": "elastic/eui",
+  "pr": 9685,
+  "title": "[EuiDatePicker] Prevent `onChange` from firing out-of-bounds dates on month/year navigation",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "elastic__eui-9685",
+  "target": null,
+  "siblings": [],
+  "head_sha": "a7731bc12e62865021e4fb7595b847d996f2df7e",
+  "base_sha": "3886a10b1c9f3f9d168db0be28420080ab5c17f8",
+  "snapshot": "repos/elastic__eui/a7731bc12e62865021e4fb7595b847d996f2df7e",
+  "diff": "diffs/elastic__eui-9685.diff"
+}

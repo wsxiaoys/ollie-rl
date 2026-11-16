@@ -1,0 +1,28 @@
+{
+  "case_id": "microsoft__playwright-41571",
+  "repo": "microsoft/playwright",
+  "pr": 41571,
+  "title": "fix(tsconfig): fail loudly when extends/references can't be resolved",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "microsoft__playwright-41571__g1",
+  "target": {
+    "gid": "microsoft__playwright-41571#g1",
+    "summary": "Throwing an error when a referenced tsconfig file cannot be resolved locally breaks valid configurations that rely on TypeScript's full resolution algorithm (such as package exports, node_modules walk-up, or directory project references).",
+    "paths": [
+      "packages/playwright/src/transform/tsconfig-loader.ts"
+    ],
+    "notes": [
+      "faulty throw when resolvedConfigFile does not exist",
+      "definition of resolveConfigFile",
+      "call site resolving extends config",
+      "call site resolving references config"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "f6c8b66e5224b72b9fedf89fb9512efe029c1775",
+  "base_sha": "72fc4f78cca7f421f28a55d7d213d18a47f4cf8f",
+  "snapshot": "repos/microsoft__playwright/f6c8b66e5224b72b9fedf89fb9512efe029c1775",
+  "diff": "diffs/microsoft__playwright-41571.diff"
+}

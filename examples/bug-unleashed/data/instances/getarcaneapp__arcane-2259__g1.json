@@ -1,0 +1,29 @@
+{
+  "case_id": "getarcaneapp__arcane-2259",
+  "repo": "getarcaneapp/arcane",
+  "pr": 2259,
+  "title": "fix: lazy load project file contents on demand",
+  "language": "Svelte",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "getarcaneapp__arcane-2259__g1",
+  "target": {
+    "gid": "getarcaneapp__arcane-2259#g1",
+    "summary": "GetProjectFileContent returns include file contents parsed from the compose file without verifying that the resolved path resides within the project directory. If a compose file specifies include paths outside the project root, users can read arbitrary host files.",
+    "paths": [
+      "backend/internal/huma/handlers/projects.go",
+      "backend/internal/services/project_service.go",
+      "backend/pkg/projects/includes.go"
+    ],
+    "notes": [
+      "faulty statement returning include file content without verifying the path is inside the project directory",
+      "call site invoking GetProjectFileContent",
+      "implementation of the helper that reads include file content without path validation"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "8ab45a8c5053d1aa8ce33b073330936be9093935",
+  "base_sha": "a66d6593d4a4c5ee2c404e4097b82d69d7fe6389",
+  "snapshot": "repos/getarcaneapp__arcane/8ab45a8c5053d1aa8ce33b073330936be9093935",
+  "diff": "diffs/getarcaneapp__arcane-2259.diff"
+}

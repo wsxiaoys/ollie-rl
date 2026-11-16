@@ -1,0 +1,267 @@
+diff --git a/discovery/oci/oci.go b/discovery/oci/oci.go
+index 26cf82eb312..dded5c70957 100644
+--- a/discovery/oci/oci.go
++++ b/discovery/oci/oci.go
+@@ -22,6 +22,7 @@ import (
+ 	"net"
+ 	"net/http"
+ 	"os"
++	"sort"
+ 	"strconv"
+ 	"strings"
+ 	"time"
+@@ -58,6 +59,8 @@ const (
+ 	ociLabelVnicID             = ociLabel + "vnic_id"
+ 	ociLabelPrivateIP          = ociLabel + "private_ip"
+ 	ociLabelPublicIP           = ociLabel + "public_ip"
++	ociLabelIPv6Addresses      = ociLabel + "ipv6_addresses"
++	ociLabelHostnameLabel      = ociLabel + "hostname_label"
+ 	ociLabelFreeformTagPrefix  = ociLabel + "tag_"
+ 	ociLabelDefinedTagPrefix   = ociLabel + "defined_tag_"
+ )
+@@ -562,7 +565,7 @@ func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
+ 				continue
+ 			}
+ 
+-			if vnics.primary.privateIP == "" && vnics.primary.publicIP == "" {
++			if vnics.primary.privateIP == "" && vnics.primary.publicIP == "" && len(vnics.primary.ipv6Addresses) == 0 {
+ 				d.logger.Debug("OCI SD skipping instance with no usable IP address",
+ 					"instance_id", *inst.Id)
+ 				continue
+@@ -580,9 +583,11 @@ func (d *Discovery) refresh(ctx context.Context) ([]*targetgroup.Group, error) {
+ // vnicInfo is the subset of a single OCI VNIC that the SD exposes through
+ // meta labels.
+ type vnicInfo struct {
+-	id        string
+-	privateIP string
+-	publicIP  string
++	id            string
++	privateIP     string
++	publicIP      string
++	ipv6Addresses []string
++	hostnameLabel string
+ }
+ 
+ // instanceVnics holds the primary VNIC resolved for one compute instance. The
+@@ -614,10 +619,16 @@ func (d *Discovery) resolveVnics(ctx context.Context, inst *core.Instance) (inst
+ 			continue
+ 		}
+ 		if vnic.IsPrimary != nil && *vnic.IsPrimary {
++			// OCI does not guarantee a stable order for Ipv6Addresses, so sort
++			// a copy to keep the emitted label deterministic across refreshes.
++			ipv6 := append([]string(nil), vnic.Ipv6Addresses...)
++			sort.Strings(ipv6)
+ 			out.primary = vnicInfo{
+-				id:        stringVal(vnic.Id),
+-				privateIP: stringVal(vnic.PrivateIp),
+-				publicIP:  stringVal(vnic.PublicIp),
++				id:            stringVal(vnic.Id),
++				privateIP:     stringVal(vnic.PrivateIp),
++				publicIP:      stringVal(vnic.PublicIp),
++				ipv6Addresses: ipv6,
++				hostnameLabel: stringVal(vnic.HostnameLabel),
+ 			}
+ 			break
+ 		}
+@@ -632,6 +643,12 @@ func instanceLabels(inst *core.Instance, vnics instanceVnics, tenancy string, po
+ 	if addr == "" {
+ 		addr = vnics.primary.publicIP
+ 	}
++	// Fall back to the primary VNIC's first IPv6 address so IPv6-only
++	// instances get a usable target. The list is sorted, so the choice is
++	// deterministic, and net.JoinHostPort brackets the address.
++	if addr == "" && len(vnics.primary.ipv6Addresses) > 0 {
++		addr = vnics.primary.ipv6Addresses[0]
++	}
+ 
+ 	labels := model.LabelSet{
+ 		model.AddressLabel:         model.LabelValue(net.JoinHostPort(addr, strconv.Itoa(port))),
+@@ -648,6 +665,8 @@ func instanceLabels(inst *core.Instance, vnics instanceVnics, tenancy string, po
+ 		ociLabelVnicID:             model.LabelValue(vnics.primary.id),
+ 		ociLabelPrivateIP:          model.LabelValue(vnics.primary.privateIP),
+ 		ociLabelPublicIP:           model.LabelValue(vnics.primary.publicIP),
++		ociLabelHostnameLabel:      model.LabelValue(vnics.primary.hostnameLabel),
++		ociLabelIPv6Addresses:      model.LabelValue(joinIPv6(vnics.primary.ipv6Addresses)),
+ 	}
+ 
+ 	for k, v := range inst.FreeformTags {
+@@ -701,6 +720,17 @@ func stringifyDefinedTag(v any) (string, bool) {
+ 	}
+ }
+ 
++// joinIPv6 renders the primary VNIC's IPv6 addresses as a single label value,
++// wrapping the list with commas so a relabel regex can match a whole address
++// with `.*,addr,.*`. A comma cannot appear in an IPv6 address, so it is a safe
++// separator. An empty list yields an empty label value.
++func joinIPv6(addrs []string) string {
++	if len(addrs) == 0 {
++		return ""
++	}
++	return "," + strings.Join(addrs, ",") + ","
++}
++
+ // stringVal dereferences a *string, returning "" if nil.
+ func stringVal(s *string) string {
+ 	if s == nil {
+diff --git a/discovery/oci/oci_test.go b/discovery/oci/oci_test.go
+index d1c59f73479..b66d9a8aa7d 100644
+--- a/discovery/oci/oci_test.go
++++ b/discovery/oci/oci_test.go
+@@ -279,6 +279,60 @@ func TestInstanceLabels_PortInAddress(t *testing.T) {
+ 	}
+ }
+ 
++func TestInstanceLabels_IPv6AndHostname(t *testing.T) {
++	inst := makeInstance()
++	vnics := instanceVnics{primary: vnicInfo{
++		id:            "ocid1.vnic.oc1..v001",
++		privateIP:     "10.0.0.5",
++		ipv6Addresses: []string{"2001:db8::1", "2001:db8::2"},
++		hostnameLabel: "web-1",
++	}}
++	labels := instanceLabels(&inst, vnics, testTenancy, 9100)
++
++	require.Equal(t, model.LabelValue(",2001:db8::1,2001:db8::2,"), labels[ociLabelIPv6Addresses])
++	require.Equal(t, model.LabelValue("web-1"), labels[ociLabelHostnameLabel])
++}
++
++func TestInstanceLabels_IPv6AndHostnameEmptyWhenAbsent(t *testing.T) {
++	// Both labels are set unconditionally, empty when the VNIC has no IPv6
++	// address or hostname label.
++	inst := makeInstance()
++	labels := instanceLabels(&inst, primaryOnly("v", "10.0.0.1", ""), "tenancy", 80)
++
++	require.Equal(t, model.LabelValue(""), labels[ociLabelIPv6Addresses])
++	require.Equal(t, model.LabelValue(""), labels[ociLabelHostnameLabel])
++}
++
++func TestJoinIPv6(t *testing.T) {
++	require.Empty(t, joinIPv6(nil))
++	require.Empty(t, joinIPv6([]string{}))
++	require.Equal(t, ",2001:db8::1,", joinIPv6([]string{"2001:db8::1"}))
++	require.Equal(t, ",2001:db8::1,2001:db8::2,", joinIPv6([]string{"2001:db8::1", "2001:db8::2"}))
++}
++
++func TestJoinIPv6_MatchableByRegex(t *testing.T) {
++	// The list is comma-wrapped so a relabel regex can match a whole address
++	// with `.*,addr,.*`, including the first and last entries.
++	value := joinIPv6([]string{"2001:db8::1", "2001:db8::2"})
++	for _, addr := range []string{"2001:db8::1", "2001:db8::2"} {
++		require.Regexp(t, ".*,"+addr+",.*", value)
++	}
++	require.NotRegexp(t, ".*,2001:db8::3,.*", value)
++}
++
++func TestInstanceLabels_IPv6OnlyAddress(t *testing.T) {
++	// With no IPv4 address the target falls back to the first (sorted) IPv6
++	// address, bracketed by net.JoinHostPort.
++	inst := makeInstance()
++	vnics := instanceVnics{primary: vnicInfo{
++		id:            "ocid1.vnic.oc1..v001",
++		ipv6Addresses: []string{"2001:db8::1", "2001:db8::2"},
++	}}
++	labels := instanceLabels(&inst, vnics, testTenancy, 9100)
++
++	require.Equal(t, model.LabelValue("[2001:db8::1]:9100"), labels[model.AddressLabel])
++}
++
+ // ---- refresh ----------------------------------------------------------------
+ 
+ func TestRefresh_SingleInstance(t *testing.T) {
+@@ -301,6 +355,68 @@ func TestRefresh_SingleInstance(t *testing.T) {
+ 	require.Equal(t, model.LabelValue(testTenancy), labels[ociLabelTenancyID])
+ }
+ 
++func TestRefresh_PrimaryVnicIPv6SortedAndHostname(t *testing.T) {
++	// The primary VNIC's IPv6 addresses are exposed sorted for deterministic
++	// output even though OCI returns them in an unspecified order.
++	inst := makeInstance()
++	vnic := &core.Vnic{
++		Id:            strPtr("ocid1.vnic.oc1..v001"),
++		IsPrimary:     boolPtr(true),
++		PrivateIp:     strPtr("10.0.0.5"),
++		Ipv6Addresses: []string{"2001:db8::2", "2001:db8::1"},
++		HostnameLabel: strPtr("web-1"),
++	}
++	d := singleInstanceDiscovery(inst, vnic)
++
++	tgs, err := d.refresh(context.Background())
++	require.NoError(t, err)
++	require.Len(t, tgs, 1)
++	require.Len(t, tgs[0].Targets, 1)
++
++	labels := tgs[0].Targets[0]
++	require.Equal(t, model.LabelValue(",2001:db8::1,2001:db8::2,"), labels[ociLabelIPv6Addresses])
++	require.Equal(t, model.LabelValue("web-1"), labels[ociLabelHostnameLabel])
++}
++
++func TestRefresh_IPv6OnlyInstanceNotSkipped(t *testing.T) {
++	// An IPv6-only primary VNIC (no IPv4 private or public IP) is still
++	// discovered, with its first IPv6 address used as the target address.
++	inst := makeInstance()
++	vnic := &core.Vnic{
++		Id:            strPtr("ocid1.vnic.oc1..v001"),
++		IsPrimary:     boolPtr(true),
++		Ipv6Addresses: []string{"2001:db8::2", "2001:db8::1"},
++	}
++	d := singleInstanceDiscovery(inst, vnic)
++
++	tgs, err := d.refresh(context.Background())
++	require.NoError(t, err)
++	require.Len(t, tgs, 1)
++	require.Len(t, tgs[0].Targets, 1)
++
++	labels := tgs[0].Targets[0]
++	require.Equal(t, model.LabelValue("[2001:db8::1]:9100"), labels[model.AddressLabel])
++	require.Equal(t, model.LabelValue(",2001:db8::1,2001:db8::2,"), labels[ociLabelIPv6Addresses])
++}
++
++func TestResolveVnics_DoesNotMutateSDKSlice(t *testing.T) {
++	// resolveVnics sorts a copy of the VNIC's IPv6 addresses, so the slice
++	// owned by the SDK response is left untouched.
++	inst := makeInstance()
++	orig := []string{"2001:db8::2", "2001:db8::1"}
++	vnic := &core.Vnic{
++		Id:            strPtr("ocid1.vnic.oc1..v001"),
++		IsPrimary:     boolPtr(true),
++		PrivateIp:     strPtr("10.0.0.5"),
++		Ipv6Addresses: orig,
++	}
++	d := singleInstanceDiscovery(inst, vnic)
++
++	_, err := d.refresh(context.Background())
++	require.NoError(t, err)
++	require.Equal(t, []string{"2001:db8::2", "2001:db8::1"}, orig)
++}
++
+ func TestRefresh_ResolvesPrimaryVnicAndStops(t *testing.T) {
+ 	// Only the primary VNIC is resolved: once it is found the walk stops so a
+ 	// multi-VNIC instance does not fan out a GetVnic call per attachment. The
+diff --git a/docs/configuration/configuration.md b/docs/configuration/configuration.md
+index 39646af3c10..94c5a3b1926 100644
+--- a/docs/configuration/configuration.md
++++ b/docs/configuration/configuration.md
+@@ -2944,7 +2944,8 @@ The following meta labels are available on targets during [relabeling](#relabel_
+ 
+ OCI SD configurations allow retrieving scrape targets from Oracle Cloud Infrastructure (OCI)
+ compute instances. The private IP of the primary VNIC is used as the default address.
+-Where no private IP is present, the public IP is used instead.
++Where no private IP is present, the public IP is used instead, and where neither is
++present the first IPv6 address of the primary VNIC is used.
+ 
+ The following OCI IAM policies are required. For API key authentication (user credentials):
+ 
+@@ -2971,11 +2972,13 @@ The following meta labels are available on all targets during
+ * `__meta_oci_compartment_id`: the OCID of the compartment the instance belongs to
+ * `__meta_oci_defined_tag_<namespace>_<key>`: each defined tag of the instance. Scalar values (strings, numbers, booleans) are stringified; non-scalar values are dropped
+ * `__meta_oci_fault_domain`: the fault domain of the instance (e.g. `FAULT-DOMAIN-1`)
++* `__meta_oci_hostname_label`: the hostname label of the primary VNIC, if assigned
+ * `__meta_oci_image_id`: the OCID of the image the instance was launched from
+ * `__meta_oci_instance_id`: the OCID of the instance
+ * `__meta_oci_instance_name`: the display name of the instance
+ * `__meta_oci_instance_shape`: the shape of the instance (e.g. `VM.Standard.E4.Flex`)
+ * `__meta_oci_instance_state`: the lifecycle state of the instance (e.g. `RUNNING`, `STOPPED`, `TERMINATED`). Use relabeling to restrict scraping to states you care about.
++* `__meta_oci_ipv6_addresses`: the IPv6 addresses of the primary VNIC, comma-separated and surrounded by commas (e.g. `,2001:db8::1,2001:db8::2,`); empty when none are assigned
+ * `__meta_oci_private_ip`: the private IP address of the primary VNIC
+ * `__meta_oci_public_ip`: the public IP address of the primary VNIC, if assigned
+ * `__meta_oci_region`: the OCI region identifier (e.g. `us-ashburn-1`)

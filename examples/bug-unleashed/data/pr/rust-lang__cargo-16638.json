@@ -1,0 +1,6 @@
+{
+  "title": "fix(host-config): `host.runner` should not apply to `cargo run`",
+  "body": "### What does this PR try to resolve?\r\n\r\n`host.runner` was incorrectly applied to `cargo run` and other target\r\nprocesses when `-Zhost-config` was enabled but no `--target` flag was\r\nspecified.\r\n\r\nThe root cause was that `target_runner()` used `target_config(kind)`\r\nwhich routes through `host_config` for `CompileKind::Host`. But\r\n`CompileKind::Host` is used for both build scripts and normal binaries\r\nwhen no `--target` is specified.\r\n\r\nFixes https://github.com/rust-lang/cargo/issues/16634\r\n\r\n### How to test and review this PR?\r\n\r\nCommit by commit.\r\n\r\nPlanned to change `host.linker` behavior though that \"bug\" has been there for years.\r\nIt is wiser to make a separate PR.",
+  "head_sha": "c3ac327ec0c189da66a190e90665b946140a5413",
+  "base_sha": "c00a07a8a8f819fe059cc4516a3fbd49e7dbf5c8"
+}

@@ -1,0 +1,25 @@
+{
+  "case_id": "envoyproxy__envoy-47054",
+  "repo": "envoyproxy/envoy",
+  "pr": 47054,
+  "title": "reverse_tunnel: deferred-delete handshake wrappers on listener stop",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "envoyproxy__envoy-47054__g1",
+  "target": {
+    "gid": "envoyproxy__envoy-47054#g1",
+    "summary": "`resetFileEvents()` explicitly calls `connection->close(Network::ConnectionCloseType::NoFlush)` on open handshake connections before invoking `wrapper->shutdown()`, which itself closes the connection. This causes the connection to be closed twice during listener teardown.",
+    "paths": [
+      "source/extensions/bootstrap/reverse_tunnel/downstream_socket_interface/reverse_connection_io_handle.cc"
+    ],
+    "notes": [
+      "redundantly closes the connection before wrapper->shutdown() is called"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a114350684fbcd05a6c44d50d5965cea076874ed",
+  "base_sha": "d1fa4320ad51db52e9ed582ef3837a0e1865c542",
+  "snapshot": "repos/envoyproxy__envoy/a114350684fbcd05a6c44d50d5965cea076874ed",
+  "diff": "diffs/envoyproxy__envoy-47054.diff"
+}

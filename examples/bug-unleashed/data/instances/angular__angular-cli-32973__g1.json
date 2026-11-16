@@ -1,0 +1,25 @@
+{
+  "case_id": "angular__angular-cli-32973",
+  "repo": "angular/angular-cli",
+  "pr": 32973,
+  "title": "feat(@schematics/angular): update ai-config to include Angular MCP server config",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "angular__angular-cli-32973__g1",
+  "target": {
+    "gid": "angular__angular-cli-32973#g1",
+    "summary": "The `claude-code` tool configuration specifies `AGENTS_MD_CFG` instead of generating `CLAUDE.md`. When selecting Claude Code, `AGENTS.md` is generated instead of `CLAUDE.md`, so Claude Code will not automatically recognize project instructions.",
+    "paths": [
+      "packages/schematics/angular/ai-config/index.ts"
+    ],
+    "notes": [
+      "faulty configuration mapping Claude Code to AGENTS_MD_CFG instead of CLAUDE.md"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "0677e32fd8098d079cb16ec7a0638e9899409ac3",
+  "base_sha": "60481e91aa9aa00f96b43cf6b8a269cae6372604",
+  "snapshot": "repos/angular__angular-cli/0677e32fd8098d079cb16ec7a0638e9899409ac3",
+  "diff": "diffs/angular__angular-cli-32973.diff"
+}

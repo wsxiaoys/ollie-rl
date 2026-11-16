@@ -1,0 +1,89 @@
+diff --git a/compiler/src/dotty/tools/dotc/transform/Bridges.scala b/compiler/src/dotty/tools/dotc/transform/Bridges.scala
+index 482e5056fad0..41e674a6b337 100644
+--- a/compiler/src/dotty/tools/dotc/transform/Bridges.scala
++++ b/compiler/src/dotty/tools/dotc/transform/Bridges.scala
+@@ -90,6 +90,13 @@ class Bridges(root: ClassSymbol, thisPhase: DenotTransformer)(using Context) {
+       // A bridge might introduce a classcast exception.
+       // Example where this was observed: run/i12828a.scala and MapView in stdlib213
+       report.log(i"suppress bridge in $root for ${member} in ${member.owner} and ${other.showLocated} since member infos ${site.memberInfo(member)} and ${site.memberInfo(other)} do not match")
++    else if !member.isPublic(using preErasureCtx) && !member.is(Protected) // opt: public or protected are obviously accessible
++        && !member.isAccessibleFrom(root.thisType)(using preErasureCtx)
++    then
++      // Don't generate a bridge that would call an inaccessible method.
++      // This can typically happen with Java package-private methods
++      // when a Scala class in a different package extends the Java class.
++      report.log(i"suppress bridge in $root for inaccessible method ${member.showLocated}")
+     else if !bridgeExists then
+       addBridge(member, other)
+   }
+diff --git a/tests/run/java-package-private-bridge/JavaBase.java b/tests/run/java-package-private-bridge/JavaBase.java
+new file mode 100644
+index 000000000000..4691e6f7126c
+--- /dev/null
++++ b/tests/run/java-package-private-bridge/JavaBase.java
+@@ -0,0 +1,7 @@
++package jpkg;
++
++public class JavaBase {
++    Object packagePrivate() {
++        return "base";
++    }
++}
+diff --git a/tests/run/java-package-private-bridge/JavaChild.java b/tests/run/java-package-private-bridge/JavaChild.java
+new file mode 100644
+index 000000000000..cad821819c90
+--- /dev/null
++++ b/tests/run/java-package-private-bridge/JavaChild.java
+@@ -0,0 +1,8 @@
++package jpkg;
++
++public class JavaChild extends JavaBase {
++    @Override
++    String packagePrivate() {
++        return "child";
++    }
++}
+diff --git a/tests/run/java-package-private-bridge/MyJTable.scala b/tests/run/java-package-private-bridge/MyJTable.scala
+new file mode 100644
+index 000000000000..4729e27135b2
+--- /dev/null
++++ b/tests/run/java-package-private-bridge/MyJTable.scala
+@@ -0,0 +1,3 @@
++package other
++
++class MyJTable extends javax.swing.JTable
+diff --git a/tests/run/java-package-private-bridge/ScalaChild.scala b/tests/run/java-package-private-bridge/ScalaChild.scala
+new file mode 100644
+index 000000000000..d55eac3165eb
+--- /dev/null
++++ b/tests/run/java-package-private-bridge/ScalaChild.scala
+@@ -0,0 +1,3 @@
++package other
++
++class ScalaChild extends jpkg.JavaChild
+diff --git a/tests/run/java-package-private-bridge/Test.scala b/tests/run/java-package-private-bridge/Test.scala
+new file mode 100644
+index 000000000000..7df6b3a2a639
+--- /dev/null
++++ b/tests/run/java-package-private-bridge/Test.scala
+@@ -0,0 +1,20 @@
++// scalajs: --skip
++
++object Test {
++  def main(args: Array[String]): Unit = {
++    val hasBridge1 = classOf[other.ScalaChild].getDeclaredMethods.exists { m =>
++      m.getName == "packagePrivate" &&
++      m.getReturnType == classOf[Object]
++    }
++    assert(!hasBridge1,
++      s"ScalaChild should not have bridge for packagePrivate")
++
++    // JTable case
++    val hasBridge2 = classOf[other.MyJTable].getDeclaredMethods.exists { m =>
++      m.getName == "dropLocationForPoint" &&
++      m.getReturnType == classOf[javax.swing.TransferHandler.DropLocation]
++    }
++    assert(!hasBridge2,
++      s"MyJTable should not have bridge for dropLocationForPoint")
++  }
++}

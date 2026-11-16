@@ -1,0 +1,567 @@
+diff --git a/packages/browser/src/node/projectParent.ts b/packages/browser/src/node/projectParent.ts
+index a345aeaffd18..22c4c6ca096e 100644
+--- a/packages/browser/src/node/projectParent.ts
++++ b/packages/browser/src/node/projectParent.ts
+@@ -11,10 +11,10 @@ import type {
+   Vitest,
+ } from 'vitest/node'
+ import type { BrowserServerState } from './state'
+-import { readFileSync } from 'node:fs'
+ import { readFile } from 'node:fs/promises'
+ import { parseErrorStacktrace, parseStacktrace } from '@vitest/utils/source-map'
+-import { dirname, join, resolve } from 'pathe'
++import { extractSourcemapFromFile } from '@vitest/utils/source-map/node'
++import { join, resolve } from 'pathe'
+ import { BrowserServerCDPHandler } from './cdp'
+ import builtinCommands from './commands/index'
+ import { distRoot } from './constants'
+@@ -61,19 +61,17 @@ export class ParentBrowserProject {
+         if (this.sourceMapCache.has(id)) {
+           return this.sourceMapCache.get(id)
+         }
++
+         const result = this.vite.moduleGraph.getModuleById(id)?.transformResult
+-        // this can happen for bundled dependencies in node_modules/.vite
++        // handle non-inline source map such as pre-bundled deps in node_modules/.vite
+         if (result && !result.map) {
+-          const sourceMapUrl = this.retrieveSourceMapURL(result.code)
+-          if (!sourceMapUrl) {
+-            return null
+-          }
+-          const filepathDir = dirname(id)
+-          const sourceMapPath = resolve(filepathDir, sourceMapUrl)
+-          const map = JSON.parse(readFileSync(sourceMapPath, 'utf-8'))
+-          this.sourceMapCache.set(id, map)
+-          return map
++          const filePath = id.split('?')[0]
++          const extracted = extractSourcemapFromFile(result.code, filePath)
++          this.sourceMapCache.set(id, extracted?.map)
++          return extracted?.map
+         }
++
++        this.sourceMapCache.set(id, result?.map)
+         return result?.map
+       },
+       getUrlId: (id) => {
+@@ -262,20 +260,4 @@ export class ParentBrowserProject {
+     const decodedTestFile = decodeURIComponent(testFile)
+     return { sessionId, testFile: decodedTestFile }
+   }
+-
+-  private retrieveSourceMapURL(source: string): string | null {
+-    const re
+-      = /\/\/[@#]\s*sourceMappingURL=([^\s'"]+)\s*$|\/\*[@#]\s*sourceMappingURL=[^\s*'"]+\s*\*\/\s*$/gm
+-    // Keep executing the search to find the *last* sourceMappingURL to avoid
+-    // picking up sourceMappingURLs from comments, strings, etc.
+-    let lastMatch, match
+-    // eslint-disable-next-line no-cond-assign
+-    while ((match = re.exec(source))) {
+-      lastMatch = match
+-    }
+-    if (!lastMatch) {
+-      return null
+-    }
+-    return lastMatch[1]
+-  }
+ }
+diff --git a/packages/browser/src/node/rpc.ts b/packages/browser/src/node/rpc.ts
+index 1733afd9e26e..6325f16a95b2 100644
+--- a/packages/browser/src/node/rpc.ts
++++ b/packages/browser/src/node/rpc.ts
+@@ -6,12 +6,13 @@ import type { WebSocket } from 'ws'
+ import type { WebSocketBrowserEvents, WebSocketBrowserHandlers } from '../types'
+ import type { ParentBrowserProject } from './projectParent'
+ import type { BrowserServerState } from './state'
+-import { existsSync, promises as fs, readFileSync } from 'node:fs'
++import { existsSync, promises as fs } from 'node:fs'
+ import { AutomockedModule, AutospiedModule, ManualMockedModule, RedirectedModule } from '@vitest/mocker'
+ import { ServerMockResolver } from '@vitest/mocker/node'
++import { extractSourcemapFromFile } from '@vitest/utils/source-map/node'
+ import { createBirpc } from 'birpc'
+ import { parse, stringify } from 'flatted'
+-import { dirname, join, resolve } from 'pathe'
++import { dirname, join } from 'pathe'
+ import { createDebugger, isFileLoadingAllowed, isValidApiRequest } from 'vitest/node'
+ import { WebSocketServer } from 'ws'
+ 
+@@ -244,21 +245,11 @@ export function setupBrowserRpc(globalServer: ParentBrowserProject, defaultMocke
+         getBrowserFileSourceMap(id) {
+           const mod = globalServer.vite.moduleGraph.getModuleById(id)
+           const result = mod?.transformResult
+-          // this can happen for bundled dependencies in node_modules/.vite
++          // handle non-inline source map such as pre-bundled deps in node_modules/.vite
+           if (result && !result.map) {
+-            const sourceMapUrl = retrieveSourceMapURL(result.code)
+-            if (!sourceMapUrl) {
+-              return null
+-            }
+-            const filepathDir = dirname(id)
+-            const sourceMapPath = resolve(filepathDir, sourceMapUrl)
+-            try {
+-              const map = JSON.parse(readFileSync(sourceMapPath, 'utf-8'))
+-              return map
+-            }
+-            catch {
+-              return null
+-            }
++            const filePath = id.split('?')[0]
++            const extracted = extractSourcemapFromFile(result.code, filePath)
++            return extracted?.map
+           }
+           return result?.map
+         },
+@@ -410,21 +401,6 @@ export function setupBrowserRpc(globalServer: ParentBrowserProject, defaultMocke
+   }
+ }
+ 
+-function retrieveSourceMapURL(source: string): string | null {
+-  const re = /\/\/[@#]\s*sourceMappingURL=([^\s'"]+)\s*$|\/\*[@#]\s*sourceMappingURL=[^\s*'"]+\s*\*\/\s*$/gm
+-  // keep executing the search to find the *last* sourceMappingURL to avoid
+-  // picking up sourceMappingURLs from comments, strings, etc.
+-  let lastMatch, match
+-  // eslint-disable-next-line no-cond-assign
+-  while ((match = re.exec(source))) {
+-    lastMatch = match
+-  }
+-  if (!lastMatch) {
+-    return null
+-  }
+-  return lastMatch[1]
+-}
+-
+ // Serialization support utils.
+ function cloneByOwnProperties(value: any) {
+   // Clones the value's properties into a new Object. The simpler approach of
+diff --git a/packages/utils/package.json b/packages/utils/package.json
+index 41c553e3452b..ad208dd235b8 100644
+--- a/packages/utils/package.json
++++ b/packages/utils/package.json
+@@ -56,6 +56,10 @@
+       "types": "./dist/source-map.d.ts",
+       "default": "./dist/source-map.js"
+     },
++    "./source-map/node": {
++      "types": "./dist/source-map/node.d.ts",
++      "default": "./dist/source-map/node.js"
++    },
+     "./serialize": {
+       "types": "./dist/serialize.d.ts",
+       "default": "./dist/serialize.js"
+@@ -69,6 +73,9 @@
+     "*": {
+       "source-map": [
+         "dist/source-map.d.ts"
++      ],
++      "source-map/node": [
++        "dist/source-map/node.d.ts"
+       ]
+     }
+   },
+@@ -82,10 +89,12 @@
+   },
+   "dependencies": {
+     "@vitest/pretty-format": "workspace:*",
++    "convert-source-map": "^2.0.0",
+     "tinyrainbow": "catalog:"
+   },
+   "devDependencies": {
+     "@jridgewell/trace-mapping": "catalog:",
++    "@types/convert-source-map": "^2.0.3",
+     "@types/estree": "catalog:",
+     "diff-sequences": "^29.6.3",
+     "loupe": "^3.2.1"
+diff --git a/packages/utils/rollup.config.js b/packages/utils/rollup.config.js
+index 12858672ff21..773ea72346d2 100644
+--- a/packages/utils/rollup.config.js
++++ b/packages/utils/rollup.config.js
+@@ -15,6 +15,7 @@ const entries = {
+   'diff': 'src/diff/index.ts',
+   'error': 'src/error.ts',
+   'source-map': 'src/source-map.ts',
++  'source-map/node': 'src/source-map/node.ts',
+   'types': 'src/types.ts',
+   'constants': 'src/constants.ts',
+   'offset': 'src/offset.ts',
+diff --git a/packages/utils/src/source-map/node.ts b/packages/utils/src/source-map/node.ts
+new file mode 100644
+index 000000000000..cb6a342a3924
+--- /dev/null
++++ b/packages/utils/src/source-map/node.ts
+@@ -0,0 +1,35 @@
++import { existsSync, readFileSync } from 'node:fs'
++import path from 'node:path'
++import convertSourceMap from 'convert-source-map'
++
++interface ExtractedSourceMap {
++  map: any
++}
++
++// based on vite
++// https://github.com/vitejs/vite/blob/84079a84ad94de4c1ef4f1bdb2ab448ff2c01196/packages/vite/src/node/server/sourcemap.ts#L149
++export function extractSourcemapFromFile(
++  code: string,
++  filePath: string,
++): ExtractedSourceMap | undefined {
++  const map = (
++    convertSourceMap.fromSource(code)
++    || convertSourceMap.fromMapFileSource(
++      code,
++      createConvertSourceMapReadMap(filePath),
++    )
++  )?.toObject()
++  return map ? { map } : undefined
++}
++
++function createConvertSourceMapReadMap(originalFileName: string) {
++  return (filename: string) => {
++    // convertSourceMap can detect invalid filename from comments.
++    // fallback to empty source map to avoid errors.
++    const targetPath = path.resolve(path.dirname(originalFileName), filename)
++    if (existsSync(targetPath)) {
++      return readFileSync(targetPath, 'utf-8')
++    }
++    return '{}'
++  }
++}
+diff --git a/packages/vitest/LICENSE.md b/packages/vitest/LICENSE.md
+index 89e5dd9cfbcd..d2883c9b3d11 100644
+--- a/packages/vitest/LICENSE.md
++++ b/packages/vitest/LICENSE.md
+@@ -316,37 +316,6 @@ Repository: egoist/cac
+ 
+ ---------------------------------------
+ 
+-## convert-source-map
+-License: MIT
+-By: Thorsten Lorenz
+-Repository: git://github.com/thlorenz/convert-source-map.git
+-
+-> Copyright 2013 Thorsten Lorenz. 
+-> All rights reserved.
+->
+-> Permission is hereby granted, free of charge, to any person
+-> obtaining a copy of this software and associated documentation
+-> files (the "Software"), to deal in the Software without
+-> restriction, including without limitation the rights to use,
+-> copy, modify, merge, publish, distribute, sublicense, and/or sell
+-> copies of the Software, and to permit persons to whom the
+-> Software is furnished to do so, subject to the following
+-> conditions:
+->
+-> The above copyright notice and this permission notice shall be
+-> included in all copies or substantial portions of the Software.
+->
+-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+-> EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+-> OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+-> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+-> HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+-> WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+-> FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+-> OTHER DEALINGS IN THE SOFTWARE.
+-
+----------------------------------------
+-
+ ## empathic
+ License: MIT
+ By: Luke Edwards
+diff --git a/packages/vitest/package.json b/packages/vitest/package.json
+index 213600198642..f8314726b20e 100644
+--- a/packages/vitest/package.json
++++ b/packages/vitest/package.json
+@@ -202,7 +202,6 @@
+     "@jridgewell/trace-mapping": "catalog:",
+     "@opentelemetry/api": "^1.9.0",
+     "@sinonjs/fake-timers": "15.0.0",
+-    "@types/convert-source-map": "^2.0.3",
+     "@types/estree": "catalog:",
+     "@types/istanbul-lib-coverage": "catalog:",
+     "@types/istanbul-reports": "catalog:",
+@@ -215,7 +214,6 @@
+     "acorn-walk": "catalog:",
+     "birpc": "catalog:",
+     "cac": "catalog:",
+-    "convert-source-map": "^2.0.0",
+     "empathic": "^2.0.0",
+     "flatted": "catalog:",
+     "happy-dom": "^20.6.3",
+diff --git a/packages/vitest/src/node/test-run.ts b/packages/vitest/src/node/test-run.ts
+index cef2910b122d..b7af9c65f0f3 100644
+--- a/packages/vitest/src/node/test-run.ts
++++ b/packages/vitest/src/node/test-run.ts
+@@ -7,7 +7,6 @@ import type {
+ } from '@vitest/runner'
+ import type { TaskEventData, TestArtifact } from '@vitest/runner/types/tasks'
+ import type { SerializedError } from '@vitest/utils'
+-import type { SourceMap } from 'rollup'
+ import type { UserConsoleLog } from '../types/general'
+ import type { Vitest } from './core'
+ import type { TestProject } from './project'
+@@ -18,11 +17,10 @@ import assert from 'node:assert'
+ import { createHash } from 'node:crypto'
+ import { existsSync, readFileSync } from 'node:fs'
+ import { copyFile, mkdir, writeFile } from 'node:fs/promises'
+-import path from 'node:path'
+ import { isPrimitive } from '@vitest/utils/helpers'
+ import { serializeValue } from '@vitest/utils/serialize'
+ import { parseErrorStacktrace } from '@vitest/utils/source-map'
+-import convertSourceMap from 'convert-source-map'
++import { extractSourcemapFromFile } from '@vitest/utils/source-map/node'
+ import mime from 'mime/lite'
+ import { basename, extname, resolve } from 'pathe'
+ 
+@@ -182,7 +180,7 @@ export class TestRun {
+               if (!mod?.transformResult && existsSync(file)) {
+                 const code = readFileSync(file, 'utf-8')
+                 const result = extractSourcemapFromFile(code, file)
+-                return result
++                return result?.map
+               }
+             },
+           })
+@@ -313,31 +311,3 @@ function sanitizeFilePath(s: string): string {
+   // eslint-disable-next-line no-control-regex
+   return s.replace(/[\x00-\x2C\x2E\x2F\x3A-\x40\x5B-\x60\x7B-\x7F]+/g, '-')
+ }
+-
+-// based on vite
+-// https://github.com/vitejs/vite/blob/84079a84ad94de4c1ef4f1bdb2ab448ff2c01196/packages/vite/src/node/server/sourcemap.ts#L149
+-function extractSourcemapFromFile(
+-  code: string,
+-  filePath: string,
+-): SourceMap | undefined {
+-  const map = (
+-    convertSourceMap.fromSource(code)
+-    || (convertSourceMap.fromMapFileSource(
+-      code,
+-      createConvertSourceMapReadMap(filePath),
+-    ))
+-  )?.toObject()
+-  return map
+-}
+-
+-function createConvertSourceMapReadMap(originalFileName: string) {
+-  return (filename: string) => {
+-    // convertSourceMap can detect invalid filename from comments.
+-    // fallback to empty source map to avoid errors.
+-    const targetPath = path.resolve(path.dirname(originalFileName), filename)
+-    if (existsSync(targetPath)) {
+-      return readFileSync(targetPath, 'utf-8')
+-    }
+-    return '{}'
+-  }
+-}
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index f6d5261529d9..2ea0cc597694 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -959,6 +959,9 @@ importers:
+       '@vitest/pretty-format':
+         specifier: workspace:*
+         version: link:../pretty-format
++      convert-source-map:
++        specifier: ^2.0.0
++        version: 2.0.0
+       tinyrainbow:
+         specifier: 'catalog:'
+         version: 3.0.3
+@@ -966,6 +969,9 @@ importers:
+       '@jridgewell/trace-mapping':
+         specifier: 'catalog:'
+         version: 0.3.31
++      '@types/convert-source-map':
++        specifier: ^2.0.3
++        version: 2.0.3
+       '@types/estree':
+         specifier: 'catalog:'
+         version: 1.0.8
+@@ -1069,9 +1075,6 @@ importers:
+       '@sinonjs/fake-timers':
+         specifier: 15.0.0
+         version: 15.0.0(patch_hash=8f3309cba0158608885141fb640e96b064570f7399136966ff13523bdaf678b2)
+-      '@types/convert-source-map':
+-        specifier: ^2.0.3
+-        version: 2.0.3
+       '@types/estree':
+         specifier: 'catalog:'
+         version: 1.0.8
+@@ -1108,9 +1111,6 @@ importers:
+       cac:
+         specifier: 'catalog:'
+         version: 6.7.14(patch_hash=a8f0f3517a47ce716ed90c0cfe6ae382ab763b021a664ada2a608477d0621588)
+-      convert-source-map:
+-        specifier: ^2.0.0
+-        version: 2.0.0
+       empathic:
+         specifier: ^2.0.0
+         version: 2.0.0
+@@ -1209,6 +1209,9 @@ importers:
+       react-dom:
+         specifier: ^19.2.4
+         version: 19.2.4(react@19.2.4)
++      test-dep-error:
++        specifier: file:./deps/test-dep-error
++        version: file:test/browser/deps/test-dep-error
+       tinyexec:
+         specifier: 'catalog:'
+         version: 1.0.2
+@@ -9377,6 +9380,9 @@ packages:
+   test-dep-conditions@file:test/config/deps/test-dep-conditions:
+     resolution: {directory: test/config/deps/test-dep-conditions, type: directory}
+ 
++  test-dep-error@file:test/browser/deps/test-dep-error:
++    resolution: {directory: test/browser/deps/test-dep-error, type: directory}
++
+   text-decoder@1.1.1:
+     resolution: {integrity: sha512-8zll7REEv4GDD3x4/0pW+ppIxSNs7H1J10IKFZsuOMscumCdM2a+toDGLPA3T+1+fLBql4zbt5z83GEQGGV5VA==}
+ 
+@@ -18519,6 +18525,8 @@ snapshots:
+     dependencies:
+       test-dep-conditions-indirect: file:test/config/deps/test-dep-conditions-indirect
+ 
++  test-dep-error@file:test/browser/deps/test-dep-error: {}
++
+   text-decoder@1.1.1:
+     dependencies:
+       b4a: 1.6.4
+diff --git a/test/browser/deps/test-dep-error/index.js b/test/browser/deps/test-dep-error/index.js
+new file mode 100644
+index 000000000000..a4df650578f2
+--- /dev/null
++++ b/test/browser/deps/test-dep-error/index.js
+@@ -0,0 +1,3 @@
++export function throwDepError() {
++  throw new Error('this is test dependency error')
++}
+diff --git a/test/browser/deps/test-dep-error/package.json b/test/browser/deps/test-dep-error/package.json
+new file mode 100644
+index 000000000000..a63ecab97f12
+--- /dev/null
++++ b/test/browser/deps/test-dep-error/package.json
+@@ -0,0 +1,6 @@
++{
++  "name": "test-dep-error",
++  "type": "module",
++  "version": "0.0.0",
++  "exports": "./index.js"
++}
+diff --git a/test/browser/fixtures/error-in-dep/basic.test.ts b/test/browser/fixtures/error-in-dep/basic.test.ts
+new file mode 100644
+index 000000000000..100e68eec208
+--- /dev/null
++++ b/test/browser/fixtures/error-in-dep/basic.test.ts
+@@ -0,0 +1,6 @@
++import { throwDepError } from 'test-dep-error'
++import { test } from 'vitest'
++
++test('fail', () => {
++  throwDepError()
++})
+diff --git a/test/browser/fixtures/error-in-dep/vitest.config.ts b/test/browser/fixtures/error-in-dep/vitest.config.ts
+new file mode 100644
+index 000000000000..c18ee6c09bbd
+--- /dev/null
++++ b/test/browser/fixtures/error-in-dep/vitest.config.ts
+@@ -0,0 +1,15 @@
++import { fileURLToPath } from 'node:url'
++import { defineConfig } from 'vitest/config'
++import { instances, provider } from '../../settings'
++
++export default defineConfig({
++  cacheDir: fileURLToPath(new URL('./node_modules/.vite', import.meta.url)),
++  test: {
++    browser: {
++      enabled: true,
++      provider,
++      instances,
++      headless: true,
++    },
++  },
++})
+diff --git a/test/browser/package.json b/test/browser/package.json
+index 815016d24ddb..cdf5888d720f 100644
+--- a/test/browser/package.json
++++ b/test/browser/package.json
+@@ -41,6 +41,7 @@
+     "playwright": "^1.58.2",
+     "react": "^19.2.4",
+     "react-dom": "^19.2.4",
++    "test-dep-error": "file:./deps/test-dep-error",
+     "tinyexec": "catalog:",
+     "url": "^0.11.4",
+     "vitest": "workspace:*",
+diff --git a/test/browser/specs/errors.test.ts b/test/browser/specs/errors.test.ts
+index baa85179a8e8..b2e28b5ea09f 100644
+--- a/test/browser/specs/errors.test.ts
++++ b/test/browser/specs/errors.test.ts
+@@ -1,4 +1,6 @@
++import path from 'pathe'
+ import { expect, test } from 'vitest'
++import { buildTestProjectTree } from '../../test-utils'
+ import { instances, runBrowserTests, runInlineBrowserTests } from './utils'
+ 
+ test('prints correct unhandled error stack', async () => {
+@@ -136,3 +138,63 @@ test('cannot use fs commands if write is disabled', async () => {
+     'Cannot record attachments ("/artifact-attachment.txt") because file writing is disabled, removing attachments from artifact "my-custom".',
+   )
+ })
++
++test('prints source-mapped stack for optimized dependency', async () => {
++  const { results, ctx } = await runBrowserTests({
++    root: './fixtures/error-in-dep',
++  })
++
++  const projectTree = buildTestProjectTree(results, (testCase) => {
++    const result = testCase.result()
++    return result.errors.map((e) => {
++      const stacks = e.stacks.map((s) => {
++        const normalizedFile = path
++          .relative(ctx.config.root, s.file)
++          .replace(
++            /node_modules[\\/]\.pnpm[\\/][^\\/\n]+[\\/]node_modules[\\/]/g,
++            'node_modules/.pnpm/<normalized>/node_modules/',
++          )
++        return `${s.method} at ${normalizedFile}:${s.line}:${s.column}`
++      })
++      return ({ message: e.message, stacks })
++    })
++  })
++  expect(Object.keys(projectTree).sort()).toEqual(instances.map(i => i.browser).sort())
++
++  for (const [name, tree] of Object.entries(projectTree)) {
++    if (name === 'webkit') {
++      expect(tree).toMatchInlineSnapshot(`
++        {
++          "basic.test.ts": {
++            "fail": [
++              {
++                "message": "this is test dependency error",
++                "stacks": [
++                  "throwDepError at ../../../../node_modules/.pnpm/<normalized>/node_modules/test-dep-error/index.js:2:18",
++                  " at basic.test.ts:5:16",
++                ],
++              },
++            ],
++          },
++        }
++      `)
++    }
++    else {
++      expect(tree).toMatchInlineSnapshot(`
++        {
++          "basic.test.ts": {
++            "fail": [
++              {
++                "message": "this is test dependency error",
++                "stacks": [
++                  "throwDepError at ../../../../node_modules/.pnpm/<normalized>/node_modules/test-dep-error/index.js:2:8",
++                  " at basic.test.ts:5:2",
++                ],
++              },
++            ],
++          },
++        }
++      `)
++    }
++  }
++})

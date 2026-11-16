@@ -1,0 +1,28 @@
+{
+  "case_id": "bevyengine__bevy-22559",
+  "repo": "bevyengine/bevy",
+  "pr": 22559,
+  "title": "Add buffer reuse and copy on resize.",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "bevyengine__bevy-22559__g1",
+  "target": {
+    "gid": "bevyengine__bevy-22559#g1",
+    "summary": "In `prepare_asset`, buffer reuse checks `prev.buffer_descriptor == source_asset.buffer_description` without accounting for the actual CPU data length in `source_asset.data`. If CPU data size changes or does not match the descriptor size, a buffer of mismatched size is reused, causing `write_buffer` to trigger a GPU validation crash.",
+    "paths": [
+      "crates/bevy_render/src/storage.rs"
+    ],
+    "notes": [
+      "faulty check comparing buffer descriptors instead of CPU data size before buffer reuse",
+      "stores unadjusted buffer descriptor rather than descriptor with actual CPU data size",
+      "call site where CPU data is written into the reused buffer of potentially mismatched size",
+      "definition of the prepare_asset method whose buffer reuse logic is faulty"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "2e89e11109d3189b7e18c578f8a44cc27da5141e",
+  "base_sha": "487d9729c83324b591cfcc218c10b1d0457f53e5",
+  "snapshot": "repos/bevyengine__bevy/2e89e11109d3189b7e18c578f8a44cc27da5141e",
+  "diff": "diffs/bevyengine__bevy-22559.diff"
+}

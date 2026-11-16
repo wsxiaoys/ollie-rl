@@ -1,0 +1,6 @@
+{
+  "title": "Add basic mypy type checking for vec types",
+  "body": "Check that item type is valid, and infer `i64` as the type of `len(<vec>)`. `vec` types only support specific simple item types that are quick to type check at runtime.\r\n\r\nRelated issue: https://github.com/mypyc/mypyc/issues/840",
+  "head_sha": "9a83a4d4bdfb6c4936fd96fd2b702431821b4721",
+  "base_sha": "61ffa6583c7c85027f32654c55ea4cf149de0c32"
+}

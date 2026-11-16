@@ -1,0 +1,25 @@
+{
+  "case_id": "python__mypy-20862",
+  "repo": "python/mypy",
+  "pr": 20862,
+  "title": "Do not repor trivial narrowing as a change in binder",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "python__mypy-20862__g1",
+  "target": {
+    "gid": "python__mypy-20862#g1",
+    "summary": "In `update_from_options()`, processing multiple variables can reset `changed` to `False` in the `else` branch when a subsequent variable without a current value matches its declared type. Consequently, the binder can fail to report a change even when an earlier variable's type was updated.",
+    "paths": [
+      "mypy/binder.py"
+    ],
+    "notes": [
+      "faulty branch overwriting changed even if an earlier variable set it to True"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "a065525a974070db34075dd501ae2a147b750eb3",
+  "base_sha": "fae0084aa4533211b8ecacb467e8e5253ac96932",
+  "snapshot": "repos/python__mypy/a065525a974070db34075dd501ae2a147b750eb3",
+  "diff": "diffs/python__mypy-20862.diff"
+}

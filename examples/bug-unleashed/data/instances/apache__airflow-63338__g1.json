@@ -1,0 +1,25 @@
+{
+  "case_id": "apache__airflow-63338",
+  "repo": "apache/airflow",
+  "pr": 63338,
+  "title": "Add additional permission check in asset materialization",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "apache__airflow-63338__g1",
+  "target": {
+    "gid": "apache__airflow-63338#g1",
+    "summary": "`DagDetails` is constructed without `team_name` when checking DAG authorization in `materialize_asset`. When using a team-aware auth manager, authorization for team-scoped DAGs evaluates against global DAG permissions instead of team-scoped permissions, improperly denying authorized team members.",
+    "paths": [
+      "airflow-core/src/airflow/api_fastapi/core_api/routes/public/assets.py"
+    ],
+    "notes": [
+      "DagDetails constructed without team_name in the DAG authorization check"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c0d5a86242ff70310d6bc5300f80d2a21ffd7966",
+  "base_sha": "6e8eb4ef9e33ce9b916aadad712433e9d4a372d7",
+  "snapshot": "repos/apache__airflow/c0d5a86242ff70310d6bc5300f80d2a21ffd7966",
+  "diff": "diffs/apache__airflow-63338.diff"
+}

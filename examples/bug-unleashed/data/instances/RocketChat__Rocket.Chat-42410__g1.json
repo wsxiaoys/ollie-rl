@@ -1,0 +1,27 @@
+{
+  "case_id": "RocketChat__Rocket.Chat-42410",
+  "repo": "RocketChat/Rocket.Chat",
+  "pr": 42410,
+  "title": "fix: retention policy never prunes rooms with a large backlog",
+  "language": "TypeScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "RocketChat__Rocket.Chat-42410__g1",
+  "target": {
+    "gid": "RocketChat__Rocket.Chat-42410#g1",
+    "summary": "During history cleanup, cleanRoomHistory broadcasts notify.deleteMessageBulk and deletes read receipts for all message IDs in batch rather than only the messages actually removed. If a message in the batch is pinned or receives a thread reply after selection and is spared from deletion, it remains in the room with its read receipts permanently deleted and clients falsely notified of its deletion.",
+    "paths": [
+      "apps/meteor/server/lib/rooms/cleanRoomHistory.ts",
+      "packages/models/src/models/Messages.ts"
+    ],
+    "notes": [
+      "faulty broadcast and read receipt removal using the full batch instead of only deleted message IDs",
+      "helper method re-filters messages during deletion but only returns count instead of which message IDs were deleted"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "2ea65836cff6001f319a0effb4b575c08aaf9642",
+  "base_sha": "869adc8916d51498d0477efec85101776f01825b",
+  "snapshot": "repos/RocketChat__Rocket.Chat/2ea65836cff6001f319a0effb4b575c08aaf9642",
+  "diff": "diffs/RocketChat__Rocket.Chat-42410.diff"
+}

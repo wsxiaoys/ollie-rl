@@ -1,0 +1,26 @@
+{
+  "case_id": "JetBrains__kotlin-6736",
+  "repo": "JetBrains/kotlin",
+  "pr": 6736,
+  "title": "[Build] Use published marks in another place more",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "JetBrains__kotlin-6736__g1",
+  "target": {
+    "gid": "JetBrains__kotlin-6736#g1",
+    "summary": "In dependsOnKotlinGradlePluginPublish, the dependencies are configured using the \"localPublishedMark\" configuration instead of \"publishedMark\". Consequently, tasks depending on this helper wire to publishToMavenLocal instead of publish, breaking downstream tasks including compiler distribution and IDE Maven artifact builds.",
+    "paths": [
+      "repo/gradle-build-conventions/buildsrc-compat/src/main/kotlin/tasks.kt"
+    ],
+    "notes": [
+      "faulty statement: configuring dependencies with localPublishedMark instead of publishedMark",
+      "definition of the function whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "d3833453afe3f0e9ea9d83ff56031782e41db457",
+  "base_sha": "20b8d834a6410bfd03a1c6a7c8c33e1441f6985c",
+  "snapshot": "repos/JetBrains__kotlin/d3833453afe3f0e9ea9d83ff56031782e41db457",
+  "diff": "diffs/JetBrains__kotlin-6736.diff"
+}

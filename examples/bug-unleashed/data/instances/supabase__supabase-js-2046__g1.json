@@ -1,0 +1,28 @@
+{
+  "case_id": "supabase__supabase-js-2046",
+  "repo": "supabase/supabase-js",
+  "pr": 2046,
+  "title": "feat(supabase): add missing HTTP headers for client platform and runtime detection",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "supabase__supabase-js-2046__g1",
+  "target": {
+    "gid": "supabase__supabase-js-2046#g1",
+    "summary": "Directly accessing Node.js process globals and statically calling require('os') in client detection functions triggers build failures and static analysis errors in bundlers and edge runtimes like Next.js.",
+    "paths": [
+      "packages/core/supabase-js/src/lib/constants.ts"
+    ],
+    "notes": [
+      "Direct process access in getClientPlatform causes static analysis errors in bundlers",
+      "Direct process access and static require('os') in getClientPlatformVersion trigger build failures",
+      "Direct process access in getClientRuntime causes static analysis warnings in bundlers",
+      "Direct process access in getClientRuntimeVersion causes static analysis warnings in bundlers"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "7fbec0d3751519f70ac9a88da943e76601637e20",
+  "base_sha": "188b83f58fc03e9aa151e1e62c7794e9477c41cc",
+  "snapshot": "repos/supabase__supabase-js/7fbec0d3751519f70ac9a88da943e76601637e20",
+  "diff": "diffs/supabase__supabase-js-2046.diff"
+}

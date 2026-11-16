@@ -1,0 +1,31 @@
+{
+  "case_id": "openai__openai-go-828",
+  "repo": "openai/openai-go",
+  "pr": 828,
+  "title": "fix: bound retry and polling delays",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "openai__openai-go-828__g1",
+  "target": {
+    "gid": "openai__openai-go-828#g1",
+    "summary": "Server-directed retry delays from Retry-After headers are clamped to DefaultMaxServerDelay (8 seconds). When a server requests a delay longer than 8 seconds, the client retries prematurely before the server-specified wait duration has elapsed.",
+    "paths": [
+      "internal/requestconfig/requestconfig.go"
+    ],
+    "notes": [
+      "faulty statement clamping numeric Retry-After header to maxDelay",
+      "faulty statement clamping custom date Retry-After header to maxDelay",
+      "definition of parseRetryAfterHeader defaulting maxDelay to DefaultMaxServerDelay",
+      "initialization of RequestConfig setting MaxRetryDelay to DefaultMaxServerDelay",
+      "definition of retryDelay calling parseRetryAfterHeader",
+      "call site invoking WaitForDelay with retryDelay",
+      "definition of DefaultMaxServerDelay setting the 8-second ceiling"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5cf9c29979e6c0082d431ebed4301aa0494f504c",
+  "base_sha": "9898c93f05d4a618b7ecc41b7359e084f9f95799",
+  "snapshot": "repos/openai__openai-go/5cf9c29979e6c0082d431ebed4301aa0494f504c",
+  "diff": "diffs/openai__openai-go-828.diff"
+}

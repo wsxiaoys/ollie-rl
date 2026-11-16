@@ -1,0 +1,26 @@
+{
+  "case_id": "indico__indico-7365",
+  "repo": "indico/indico",
+  "pr": 7365,
+  "title": "Fix LaTeX regexps",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "indico__indico-7365__g1",
+  "target": {
+    "gid": "indico__indico-7365#g1",
+    "summary": "Matching only the literal '^^5c' fails to recognize other valid TeX-encoded backslashes (such as '^^^^005c' or zero-padded variants), causing them to be improperly escaped in text mode and allowing unsafe commands using alternative encodings to bypass sanitize_mathmode.",
+    "paths": [
+      "indico/util/mdx_latex.py"
+    ],
+    "notes": [
+      "Added mapping only matches the literal '^^5c' instead of all TeX-encoded backslash variants in text mode",
+      "Regex only matches the literal '^^5c' instead of all TeX-encoded backslash variants in sanitize_mathmode"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "d62be248e65747d0074316465e40ded591d5fe27",
+  "base_sha": "f903fa8d610ab0857b68207fc50a43844a1c7654",
+  "snapshot": "repos/indico__indico/d62be248e65747d0074316465e40ded591d5fe27",
+  "diff": "diffs/indico__indico-7365.diff"
+}

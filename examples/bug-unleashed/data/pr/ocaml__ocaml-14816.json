@@ -1,0 +1,6 @@
+{
+  "title": "Make caml_darken do cmpxchg on lazy/forcing header words",
+  "body": "This is oxcaml/oxcaml#6109\r\n\r\nWhen marking Lazy/Forcing blocks, we may race with some other domain updating the header, so we must do an atomic compare/exchange on the header. We already do this in `do_some_marking` (which does almost all marking); this PR brings `caml_darken` into line.\r\nIt's moderately difficult to write a test to cause a problem here.",
+  "head_sha": "ab64b665c040442e7753857bb40de4b267af13fb",
+  "base_sha": "a4a0d59df82e7e11db8f20aff268b2a7e7a079e1"
+}

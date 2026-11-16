@@ -1,0 +1,27 @@
+{
+  "case_id": "mozilla__pdf.js-21681",
+  "repo": "mozilla/pdf.js",
+  "pr": 21681,
+  "title": "Add helper methods for populating `dateActionsCache`/`scandCache` in the `src/scripting_api/util.js` file",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mozilla__pdf.js-21681__g1",
+  "target": {
+    "gid": "mozilla__pdf.js-21681#g1",
+    "summary": "The cached RegExp object is created with the global ('g') flag. Because the regex instance is reused across repeated util.scand calls with the same format, stateful lastIndex tracking causes subsequent matches to fail and fall back to date guessing.",
+    "paths": [
+      "src/scripting_api/util.js"
+    ],
+    "notes": [
+      "faulty statement creating and returning a cached RegExp with the global flag",
+      "definition of #createScandData which creates and returns the faulty regex",
+      "call site retrieving and executing the cached regex across repeated calls"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "59cd4568b29aba53a11f2240518d356db3042361",
+  "base_sha": "5f181fd8b0db777e18566bf1972848d700f0b44d",
+  "snapshot": "repos/mozilla__pdf.js/59cd4568b29aba53a11f2240518d356db3042361",
+  "diff": "diffs/mozilla__pdf.js-21681.diff"
+}

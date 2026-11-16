@@ -1,0 +1,76 @@
+diff --git a/packages/expo-ui/CHANGELOG.md b/packages/expo-ui/CHANGELOG.md
+index a50a3c8228d3ca..ef0cb167991f83 100644
+--- a/packages/expo-ui/CHANGELOG.md
++++ b/packages/expo-ui/CHANGELOG.md
+@@ -35,6 +35,7 @@
+ 
+ ### 🐛 Bug fixes
+ 
++- [iOS] Fix universal `ListItem` stretching a fixed-size raw RN view in its leading/trailing slot to fill the row instead of honoring its size, matching Android. ([#46883](https://github.com/expo/expo/issues/46883) by [@david-videau-ortega](https://github.com/david-videau-ortega)) ([#47236](https://github.com/expo/expo/pull/47236) by [@nishan](https://github.com/intergalacticspacehighway))
+ - [Android] Fix the `@expo-ui/community/datetime-picker` dialog ignoring `minimumDate`/`maximumDate` for its year range, so the calendar and year picker no longer always span 1900–2100. ([#47206](https://github.com/expo/expo/issues/47206) by [@vioodle](https://github.com/vioodle)) ([#47213](https://github.com/expo/expo/pull/47213) by [@nishan](https://github.com/intergalacticspacehighway))
+ - [iOS][Android] Fix a scrollable (e.g. `FlatList`) inside `@expo/ui/community/bottom-sheet` not scrolling when the `<BottomSheet>` is mounted inside another same-orientation list (such as a `FlatList` header). ([#47197](https://github.com/expo/expo/pull/47197) by [@nishan](https://github.com/intergalacticspacehighway))
+ - [iOS] Fix the `community/datetime-picker` field collapsing to zero width — invisible and untappable — when its parent doesn't stretch it (e.g. `alignItems: 'center'`). ([#47033](https://github.com/expo/expo/pull/47033) by [@nishan](https://github.com/intergalacticspacehighway))
+diff --git a/packages/expo-ui/ios/RNHostView.swift b/packages/expo-ui/ios/RNHostView.swift
+index f8cba36a3bd002..3ce63ab1605c35 100644
+--- a/packages/expo-ui/ios/RNHostView.swift
++++ b/packages/expo-ui/ios/RNHostView.swift
+@@ -19,6 +19,11 @@ struct RNHostView: ExpoSwiftUI.View {
+       .onAppear {
+         ExpoUITouchHandlerHelper.createAndAttachTouchHandler(for: childUIView)
+       }
++    } else if props.matchContents {
++      // No hosted UIView (a pure SwiftUI child, e.g. Text/Image). Render it at its
++      // natural size instead of falling into the fill branch below, which would
++      // stretch a self-sizing SwiftUI view to fill its container.
++      Children()
+     } else {
+       Children()
+         .frame(maxWidth: .infinity, maxHeight: .infinity)
+diff --git a/packages/expo-ui/src/universal/ListItem/ListItem.ios.tsx b/packages/expo-ui/src/universal/ListItem/ListItem.ios.tsx
+index db06487424b7ad..dba6773dc19217 100644
+--- a/packages/expo-ui/src/universal/ListItem/ListItem.ios.tsx
++++ b/packages/expo-ui/src/universal/ListItem/ListItem.ios.tsx
+@@ -1,6 +1,6 @@
+-import { Button, HStack, Spacer, Text, VStack } from '@expo/ui/swift-ui';
++import { Button, HStack, RNHostView, Spacer, Text, VStack } from '@expo/ui/swift-ui';
+ import { buttonStyle, contentShape, foregroundStyle, shapes } from '@expo/ui/swift-ui/modifiers';
+-import { Children, type ReactNode } from 'react';
++import { Children, isValidElement, type ReactNode } from 'react';
+ 
+ import { extractListItemSlots } from './ListItemSlots';
+ import type { ListItemProps } from './types';
+@@ -22,6 +22,16 @@ function renderSupporting(node: ReactNode): ReactNode {
+   return node;
+ }
+ 
++// A raw RN view (e.g. `<View style={{ width: 20, height: 20 }} />`) has no intrinsic size, so when
++// embedded directly in the SwiftUI row it stretches to fill the available space instead of honoring
++// its layout size. Wrap each accessory in `RNHostView matchContents` so SwiftUI pins it to the RN
++// content's measured size. SwiftUI-native content (e.g. `Text`/`Image`) renders at its natural size.
++function renderAccessory(node: ReactNode): ReactNode {
++  const wrapped = wrapStrings(node);
++  if (!isValidElement(wrapped)) return wrapped;
++  return <RNHostView matchContents>{wrapped}</RNHostView>;
++}
++
+ /**
+  * iOS implementation of `ListItem`.
+  * Wraps a plain SwiftUI `Button` and applies `contentShape(.rectangle())` so the full row rectangle registers taps, including the gap between slots.
+@@ -42,14 +52,14 @@ export function ListItem(props: ListItemProps) {
+ 
+   return (
+     <Button onPress={onPress} modifiers={[buttonStyle('plain')]} testID={testID}>
+-      <HStack alignment="center" spacing={12} modifiers={[contentShape(shapes.rectangle())]}>
+-        {wrapStrings(leading)}
++      <HStack spacing={12} modifiers={[contentShape(shapes.rectangle())]}>
++        {renderAccessory(leading)}
+         <VStack alignment="leading" spacing={2}>
+           <>{wrapStrings(slots.headline)}</>
+           {supporting != null ? renderSupporting(supporting) : null}
+         </VStack>
+         <Spacer />
+-        {wrapStrings(trailing)}
++        {renderAccessory(trailing)}
+       </HStack>
+     </Button>
+   );

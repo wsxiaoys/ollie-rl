@@ -1,0 +1,25 @@
+{
+  "case_id": "microsoft__terminal-20052",
+  "repo": "microsoft/terminal",
+  "pr": 20052,
+  "title": "Fix various KKP encoding issues",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "microsoft__terminal-20052__g1",
+  "target": {
+    "gid": "microsoft__terminal-20052#g1",
+    "summary": "Key repeat events are suppressed when Kitty Keyboard Protocol is active and KittyKeyboardProtocolFlags::ReportEventTypes is clear. ReportEventTypes does not control key auto-repeat, causing repeated key presses to be dropped instead of respecting Mode::AutoRepeat.",
+    "paths": [
+      "src/terminal/input/terminalInput.cpp"
+    ],
+    "notes": [
+      "faulty condition suppressing key repeats when KKP is active and ReportEventTypes is clear"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9354b5c7f6536316dc32251e55ef284be285512d",
+  "base_sha": "eeb9f7a805420291c30b323e1c5187bcf392496e",
+  "snapshot": "repos/microsoft__terminal/9354b5c7f6536316dc32251e55ef284be285512d",
+  "diff": "diffs/microsoft__terminal-20052.diff"
+}

@@ -1,0 +1,16 @@
+{
+  "case_id": "ChromeDevTools__chrome-devtools-mcp-2221",
+  "repo": "ChromeDevTools/chrome-devtools-mcp",
+  "pr": 2221,
+  "title": "fix(network): keep redirect chain order consistent between text and JSON",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "ChromeDevTools__chrome-devtools-mcp-2221",
+  "target": null,
+  "siblings": [],
+  "head_sha": "3fa836c9dddb77c32a4a2452e3a82f2be3d1e01e",
+  "base_sha": "08c234ea4b14b0ba0906deeca396873614a8c063",
+  "snapshot": "repos/ChromeDevTools__chrome-devtools-mcp/3fa836c9dddb77c32a4a2452e3a82f2be3d1e01e",
+  "diff": "diffs/ChromeDevTools__chrome-devtools-mcp-2221.diff"
+}

@@ -1,0 +1,102 @@
+diff --git a/muted-tests.yml b/muted-tests.yml
+index f368d08bde8e3..2f9b949b80fc1 100644
+--- a/muted-tests.yml
++++ b/muted-tests.yml
+@@ -707,9 +707,6 @@ tests:
+ - class: org.elasticsearch.xpack.esql.qa.mixed.MixedClusterEsqlSpecIT
+   method: test {csv-spec:date_range.rangeWithinPointMultiValueSomeMatch}
+   issue: https://github.com/elastic/elasticsearch/issues/152267
+-- class: org.elasticsearch.search.basic.SearchDuringRollingRestartIT
+-  method: testSearchesSurviveRollingRestart
+-  issue: https://github.com/elastic/elasticsearch/issues/151828
+ - class: org.elasticsearch.xpack.esql.expression.function.scalar.spatial.StDifferenceTests
+   method: testFold {TestCase=geo_shape and geo_shape}
+   issue: https://github.com/elastic/elasticsearch/issues/152281
+diff --git a/server/src/main/java/org/elasticsearch/search/internal/ReaderContext.java b/server/src/main/java/org/elasticsearch/search/internal/ReaderContext.java
+index bf15159442ee1..b88099b8ede7c 100644
+--- a/server/src/main/java/org/elasticsearch/search/internal/ReaderContext.java
++++ b/server/src/main/java/org/elasticsearch/search/internal/ReaderContext.java
+@@ -17,6 +17,7 @@
+ import org.elasticsearch.index.engine.Engine;
+ import org.elasticsearch.index.shard.IndexShard;
+ import org.elasticsearch.search.RescoreDocIds;
++import org.elasticsearch.search.SearchContextMissingException;
+ import org.elasticsearch.search.dfs.AggregatedDfs;
+ import org.elasticsearch.transport.TransportRequest;
+ 
+@@ -135,7 +136,9 @@ public long keepAlive() {
+      * <code>keepAliveInMillis</code>.
+      */
+     public Releasable markAsUsed(long keepAliveInMillis) {
+-        refCounted.incRef();
++        if (refCounted.tryIncRef() == false) {
++            throw new SearchContextMissingException(id);
++        }
+         tryUpdateKeepAlive(keepAliveInMillis);
+         return Releasables.releaseOnce(() -> {
+             this.lastAccessTime.accumulateAndGet(nowInMillis(), Math::max);
+diff --git a/server/src/test/java/org/elasticsearch/search/internal/ReaderContextTests.java b/server/src/test/java/org/elasticsearch/search/internal/ReaderContextTests.java
+new file mode 100644
+index 0000000000000..c9ac5c06cabb8
+--- /dev/null
++++ b/server/src/test/java/org/elasticsearch/search/internal/ReaderContextTests.java
+@@ -0,0 +1,59 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the "Elastic License
++ * 2.0", the "GNU Affero General Public License v3.0 only", and the "Server Side
++ * Public License v 1"; you may not use this file except in compliance with, at
++ * your election, the "Elastic License 2.0", the "GNU Affero General Public
++ * License v3.0 only", or the "Server Side Public License, v 1".
++ */
++
++package org.elasticsearch.search.internal;
++
++import org.elasticsearch.core.Releasable;
++import org.elasticsearch.index.shard.IndexShard;
++import org.elasticsearch.index.shard.IndexShardTestCase;
++import org.elasticsearch.search.SearchContextMissingException;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
++import static org.hamcrest.Matchers.empty;
++import static org.hamcrest.Matchers.equalTo;
++
++public class ReaderContextTests extends IndexShardTestCase {
++
++    public void testMarkAsUsedRacesWithClose() throws Exception {
++        IndexShard shard = newShard(true);
++        try {
++            final int racers = between(4, 8);
++            final int rounds = scaledRandomIntBetween(20, 100);
++            for (int round = 0; round < rounds; round++) {
++                final var context = newReaderContext(shard, new ShardSearchContextId(randomAlphaOfLength(8), round));
++                final List<Throwable> unexpected = Collections.synchronizedList(new ArrayList<>());
++                startInParallel(racers + 1, taskId -> {
++                    if (taskId == 0) {
++                        context.close();
++                        return;
++                    }
++                    try (Releasable ignored = context.markAsUsed(0L)) {
++                        // won the race; ref acquired and immediately released
++                    } catch (SearchContextMissingException expected) {
++                        // lost the race against close(); this is the expected, recoverable outcome
++                    } catch (Throwable other) {
++                        unexpected.add(other);
++                    }
++                });
++                assertThat("only SearchContextMissingException is allowed under the race", unexpected, empty());
++                SearchContextMissingException e = expectThrows(SearchContextMissingException.class, () -> context.markAsUsed(0L));
++                assertThat(e.contextId(), equalTo(context.id()));
++            }
++        } finally {
++            closeShards(shard);
++        }
++    }
++
++    private static ReaderContext newReaderContext(IndexShard shard, ShardSearchContextId id) {
++        return new ReaderContext(id, null, shard, null, 0L, randomBoolean(), 0L);
++    }
++}

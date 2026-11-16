@@ -1,0 +1,6 @@
+{
+  "title": "Fixed #23424 -- Corrected tokenization of verbatim blocks.",
+  "body": "#### Trac ticket number\r\n<!-- Replace XXXXX with the corresponding Trac ticket number. -->\r\n<!-- Or delete the line and write \"N/A - typo\" for typo fixes. -->\r\n\r\nticket-23424\r\n\r\n#### Branch description\r\n<!-- Provide a concise overview of the issue or rationale behind the proposed changes. Minimum five words. -->\r\n\r\nThis is cherry-picked from https://github.com/django/django/pull/21982 ",
+  "head_sha": "8dd0670301b53752638575c410fba05117378223",
+  "base_sha": "f1d11117c6a3e227ce7cdd263cf0743f0eb73070"
+}

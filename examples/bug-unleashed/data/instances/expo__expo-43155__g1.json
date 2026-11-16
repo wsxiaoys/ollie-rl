@@ -1,0 +1,29 @@
+{
+  "case_id": "expo__expo-43155",
+  "repo": "expo/expo",
+  "pr": 43155,
+  "title": "[dom-webview] add injectedJavaScript and injectedJavaScriptObject support",
+  "language": "Swift",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "expo__expo-43155__g1",
+  "target": {
+    "gid": "expo__expo-43155#g1",
+    "summary": "The JSON source string is interpolated directly inside a JavaScript template literal. When props contain double quotes or escape sequences, template literal evaluation unescapes them and produces invalid JSON, causing JSON.parse in the WebView to fail.",
+    "paths": [
+      "packages/@expo/dom-webview/ios/DomWebView.swift",
+      "packages/@expo/dom-webview/ios/DomWebViewModule.swift"
+    ],
+    "notes": [
+      "faulty statement interpolating the JSON source inside a template literal without escaping",
+      "definition of the method whose behavior is wrong",
+      "site where the faulty script is registered with the userContentController",
+      "call site invoking setInjectedJavaScriptObject"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "2bd4e99d7fd0e8cce786c4bd5f5969d8f50f6da7",
+  "base_sha": "163ecdc0a4839fda3e471ba00e0c9b4a4f685df5",
+  "snapshot": "repos/expo__expo/2bd4e99d7fd0e8cce786c4bd5f5969d8f50f6da7",
+  "diff": "diffs/expo__expo-43155.diff"
+}

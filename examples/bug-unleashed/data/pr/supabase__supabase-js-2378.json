@@ -1,0 +1,6 @@
+{
+  "title": "fix(auth): return null user and session for email_change single-confirmation verifyOtp",
+  "body": "Fixes [#2377](https://github.com/supabase/supabase-js/issues/2377). When secure email change is enabled, gotrue's `POST /verify` returns `{ msg, code }` (200 OK) after the first of two confirmations succeeds. `_sessionResponse` was falling through to a `(data as User)` cast, so `verifyOtp({ type: 'email_change' })` surfaced the message object as `data.user`, contradicting the declared `AuthResponse` type.\n\nThis drops the unsafe fallback in `_sessionResponse` and returns `{ user: null, session: null }` for that branch, then tightens `verifyOtp`'s local `user` annotation to match. Adds unit tests for `_sessionResponse` (session present, single-confirmation, user-without-session) and a mocked-fetch test for `verifyOtp` covering the reported case. No behavior change for any other caller of `_sessionResponse`.",
+  "head_sha": "5b604057aa03a5d93446e46c156f0beea21ea590",
+  "base_sha": "ef339737ed68777c59f79f0cca3051637104a2d1"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "fix(@angular/build): allow any `CHROME_BIN` for vitest playwright provider",
+  "body": "The Playwright browser provider in Vitest now uses the `CHROME_BIN` environment variable as the executable path if it's set, removing the restriction that it must contain 'rules_browsers'.\r\n\r\nThis is useful in CI environments to ensure a specific browser binary is used for testing in CI.\r\n\r\nCloses #32697\r\n",
+  "head_sha": "8892ccfc45050af8867821cddcfd65aaf7783b04",
+  "base_sha": "6034178c5982013a68aa5462460519599c783c33"
+}

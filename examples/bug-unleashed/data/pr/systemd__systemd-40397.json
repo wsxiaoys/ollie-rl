@@ -1,0 +1,6 @@
+{
+  "title": "sd-varlink: ensure that \"any\" actually means \"any but null\"",
+  "body": "The new \"any\" type was implemented by accident that it actually meant \"any but null\" – unless marked as \"any?\" in which case it actually meant truly any, including null. The spec change in\r\nhttps://github.com/varlink/varlink.github.io/pull/43 otoh suggested that \"any\" really means anything, and \"any?\" apparently too.\r\n\r\nI think the implementation in code makes more sense than the spec change however, hence let's add some checks/tests to ensure the behaviour of the code is made explicitly and cared for.\r\n\r\nI will prep a spec change to make the spec follow the code on this too.\r\n\r\nFollow-up for: #39918",
+  "head_sha": "e4114f0d734592b0994ca99510bfa08e4ba56351",
+  "base_sha": "8a5fb3627a1518d2d2ef70919c81448158d64ac0"
+}

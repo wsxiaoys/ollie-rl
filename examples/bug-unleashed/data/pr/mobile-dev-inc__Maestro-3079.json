@@ -1,0 +1,6 @@
+{
+  "title": "Add cross-domain iframe support",
+  "body": "## Proposed changes\r\n\r\nSupport for iframes was added in #3067\r\n\r\nThis change adds support for Maestro reading hierarchy from all iframes, even if they're cross-domain.\r\n\r\nThis change:\r\n* Evaluates whether iframes are cross-domain and so marks them with a custom attribute for later processing\r\n* Uses the chrome debug protocol to switch to iframes and evaluate their content, adding it to the hierarchy\r\n\r\nBecause it's switching frames, it has to assume that not all documents have the debug websocket session.\r\n\r\n## Testing\r\n\r\n```\r\nmaestro test flow.yaml\r\n```\r\nwhere the flow contains an affected site:\r\n```\r\nurl: https://help.sumup.com/\r\n---\r\n- launchApp\r\n- tapOn: \"Accept all cookies\"\r\n- tapOn: Help\r\n- assertVisible: Support Chat\r\n```\r\n\r\n## Issues fixed\r\n\r\nn/a",
+  "head_sha": "155445bdd426b6970a149855797d23ebe6913c07",
+  "base_sha": "43981c067754e60de596afb307d22699fc180fe9"
+}

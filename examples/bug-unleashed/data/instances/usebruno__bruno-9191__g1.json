@@ -1,0 +1,31 @@
+{
+  "case_id": "usebruno__bruno-9191",
+  "repo": "usebruno/bruno",
+  "pr": 9191,
+  "title": "fix(OpenAPI): OpenAPI spec creation not working",
+  "language": "JavaScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "usebruno__bruno-9191__g1",
+  "target": {
+    "gid": "usebruno__bruno-9191#g1",
+    "summary": "buildSpecVariables includes process environment variables and environment variables when generating OpenAPI specifications. When creating an API spec from a collection, secrets and environment variables are interpolated into the output, leaking sensitive credentials into the exported spec.",
+    "paths": [
+      "packages/bruno-app/src/components/Sidebar/ApiSpecs/CreateApiSpec/index.js",
+      "packages/bruno-app/src/utils/common/apiSpec.js",
+      "packages/bruno-electron/src/utils/collection-reader.js"
+    ],
+    "notes": [
+      "faulty function injecting process and environment variables into spec variables",
+      "call site passing process and workspace environment variables to buildSpecVariables",
+      "helper that decrypts stored environment secrets for spec export",
+      "reads .env variables to populate processEnvVariables for spec export",
+      "call site decrypting environment secrets into exported environment variables"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "6aa547e53f92cf0e73c8c9674de186b76c0c6d85",
+  "base_sha": "e2a73c0980425076f44ee1d12485a7b4ce985d85",
+  "snapshot": "repos/usebruno__bruno/6aa547e53f92cf0e73c8c9674de186b76c0c6d85",
+  "diff": "diffs/usebruno__bruno-9191.diff"
+}

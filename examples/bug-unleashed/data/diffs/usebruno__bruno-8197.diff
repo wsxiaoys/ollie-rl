@@ -1,0 +1,330 @@
+diff --git a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/AuthorizationCode/index.js b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/AuthorizationCode/index.js
+index 274b7479b20..f64b4937312 100644
+--- a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/AuthorizationCode/index.js
++++ b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/AuthorizationCode/index.js
+@@ -295,7 +295,7 @@ const OAuth2AuthorizationCode = ({ save, item = {}, request, handleRun, updateAu
+       {
+         tokenPlacement === 'header'
+           ? (
+-              <div className="flex items-center gap-4 w-full" key="input-token-prefix">
++              <div className="flex items-center gap-4 w-full" key="input-token-prefix" data-testid="token-header-prefix">
+                 <label className="block min-w-[140px]">Header Prefix</label>
+                 <div className="single-line-editor-wrapper flex-1">
+                   <SingleLineEditor
+@@ -311,7 +311,7 @@ const OAuth2AuthorizationCode = ({ save, item = {}, request, handleRun, updateAu
+               </div>
+             )
+           : (
+-              <div className="flex items-center gap-4 w-full" key="input-token-query-param-key">
++              <div className="flex items-center gap-4 w-full" key="input-token-query-param-key" data-testid="token-query-param-key">
+                 <label className="block min-w-[140px]">Query Param Key</label>
+                 <div className="single-line-editor-wrapper flex-1">
+                   <SingleLineEditor
+diff --git a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/ClientCredentials/index.js b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/ClientCredentials/index.js
+index 48e01ae0781..7444b256e91 100644
+--- a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/ClientCredentials/index.js
++++ b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/ClientCredentials/index.js
+@@ -185,7 +185,7 @@ const OAuth2ClientCredentials = ({ save, item = {}, request, handleRun, updateAu
+       {
+         tokenPlacement === 'header'
+           ? (
+-              <div className="flex items-center gap-4 w-full" key="input-token-prefix">
++              <div className="flex items-center gap-4 w-full" key="input-token-prefix" data-testid="token-header-prefix">
+                 <label className="block min-w-[140px]">Header Prefix</label>
+                 <div className="single-line-editor-wrapper flex-1">
+                   <SingleLineEditor
+@@ -201,7 +201,7 @@ const OAuth2ClientCredentials = ({ save, item = {}, request, handleRun, updateAu
+               </div>
+             )
+           : (
+-              <div className="flex items-center gap-4 w-full" key="input-token-query-param-key">
++              <div className="flex items-center gap-4 w-full" key="input-token-query-param-key" data-testid="token-query-param-key">
+                 <label className="block min-w-[140px]">Query Param Key</label>
+                 <div className="single-line-editor-wrapper flex-1">
+                   <SingleLineEditor
+diff --git a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/Implicit/index.js b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/Implicit/index.js
+index 807a255f885..d4bcdb8d91e 100644
+--- a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/Implicit/index.js
++++ b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/Implicit/index.js
+@@ -229,7 +229,7 @@ const OAuth2Implicit = ({ save, item = {}, request, handleRun, updateAuth, colle
+       </div>
+ 
+       {tokenPlacement == 'header' ? (
+-        <div className="flex items-center gap-4 w-full" key="input-token-header-prefix">
++        <div className="flex items-center gap-4 w-full" key="input-token-header-prefix" data-testid="token-header-prefix">
+           <label className="block min-w-[140px]">Header Prefix</label>
+           <div className="oauth2-input-wrapper flex-1">
+             <SingleLineEditor
+@@ -245,7 +245,7 @@ const OAuth2Implicit = ({ save, item = {}, request, handleRun, updateAuth, colle
+           </div>
+         </div>
+       ) : (
+-        <div className="flex items-center gap-4 w-full" key="input-token-query-key">
++        <div className="flex items-center gap-4 w-full" key="input-token-query-key" data-testid="token-query-param-key">
+           <label className="block min-w-[140px]">URL Query Key</label>
+           <div className="oauth2-input-wrapper flex-1">
+             <SingleLineEditor
+diff --git a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/PasswordCredentials/index.js b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/PasswordCredentials/index.js
+index ab3adfd8ef8..11360a245a1 100644
+--- a/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/PasswordCredentials/index.js
++++ b/packages/bruno-app/src/components/RequestPane/Auth/OAuth2/PasswordCredentials/index.js
+@@ -189,7 +189,7 @@ const OAuth2PasswordCredentials = ({ save, item = {}, request, handleRun, update
+       {
+         tokenPlacement === 'header'
+           ? (
+-              <div className="flex items-center gap-4 w-full" key="input-token-prefix">
++              <div className="flex items-center gap-4 w-full" key="input-token-prefix" data-testid="token-header-prefix">
+                 <label className="block min-w-[140px]">Header Prefix</label>
+                 <div className="single-line-editor-wrapper flex-1">
+                   <SingleLineEditor
+@@ -205,7 +205,7 @@ const OAuth2PasswordCredentials = ({ save, item = {}, request, handleRun, update
+               </div>
+             )
+           : (
+-              <div className="flex items-center gap-4 w-full" key="input-token-query-param-key">
++              <div className="flex items-center gap-4 w-full" key="input-token-query-param-key" data-testid="token-query-param-key">
+                 <label className="block min-w-[140px]">Query Param Key</label>
+                 <div className="single-line-editor-wrapper flex-1">
+                   <SingleLineEditor
+diff --git a/packages/bruno-converters/src/postman/postman-to-bruno.js b/packages/bruno-converters/src/postman/postman-to-bruno.js
+index 1e3c7b00125..8027c181bfb 100644
+--- a/packages/bruno-converters/src/postman/postman-to-bruno.js
++++ b/packages/bruno-converters/src/postman/postman-to-bruno.js
+@@ -325,6 +325,8 @@ export const processAuth = (auth, requestObject, isCollection = false) => {
+         scope: findValueUsingKey('scope'),
+         state: findValueUsingKey('state'),
+         tokenPlacement: findValueUsingKey('addTokenTo') === 'header' ? 'header' : 'url',
++        tokenHeaderPrefix: findValueUsingKey('headerPrefix'),
++        tokenQueryKey: 'access_token',
+         credentialsPlacement: findValueUsingKey('client_authentication') === 'body' ? 'body' : 'basic_auth_header'
+       };
+ 
+diff --git a/packages/bruno-converters/tests/postman/postman-to-bruno/process-auth.spec.js b/packages/bruno-converters/tests/postman/postman-to-bruno/process-auth.spec.js
+index cd04fd95230..ddfae151148 100644
+--- a/packages/bruno-converters/tests/postman/postman-to-bruno/process-auth.spec.js
++++ b/packages/bruno-converters/tests/postman/postman-to-bruno/process-auth.spec.js
+@@ -278,6 +278,8 @@ describe('processAuth', () => {
+       state: 'test-state',
+       pkce: false,
+       tokenPlacement: 'header',
++      tokenHeaderPrefix: '',
++      tokenQueryKey: 'access_token',
+       credentialsPlacement: 'body'
+     });
+   });
+@@ -312,6 +314,8 @@ describe('processAuth', () => {
+       scope: 'test-scope',
+       state: 'test-state',
+       tokenPlacement: 'header',
++      tokenHeaderPrefix: '',
++      tokenQueryKey: 'access_token',
+       credentialsPlacement: 'body'
+     });
+   });
+@@ -342,6 +346,8 @@ describe('processAuth', () => {
+       scope: 'test-scope',
+       state: 'test-state',
+       tokenPlacement: 'header',
++      tokenHeaderPrefix: '',
++      tokenQueryKey: 'access_token',
+       credentialsPlacement: 'body'
+     });
+   });
+@@ -362,6 +368,8 @@ describe('processAuth', () => {
+       scope: '',
+       state: '',
+       tokenPlacement: 'url',
++      tokenHeaderPrefix: '',
++      tokenQueryKey: 'access_token',
+       credentialsPlacement: 'basic_auth_header'
+     });
+   });
+@@ -381,6 +389,8 @@ describe('processAuth', () => {
+       scope: '',
+       state: '',
+       tokenPlacement: 'url',
++      tokenHeaderPrefix: '',
++      tokenQueryKey: 'access_token',
+       credentialsPlacement: 'basic_auth_header'
+     });
+   });
+@@ -416,6 +426,8 @@ describe('processAuth', () => {
+       state: 'test-state',
+       pkce: true,
+       tokenPlacement: 'header',
++      tokenHeaderPrefix: '',
++      tokenQueryKey: 'access_token',
+       credentialsPlacement: 'body'
+     });
+   });
+@@ -434,6 +446,8 @@ describe('processAuth', () => {
+         scope: 'test-scope',
+         state: 'test-state',
+         addTokenTo: 'header',
++        tokenHeaderPrefix: 'Bearer',
++        tokenQueryKey: '',
+         client_authentication: 'body'
+       }
+     };
+@@ -450,6 +464,8 @@ describe('processAuth', () => {
+       scope: 'test-scope',
+       state: 'test-state',
+       tokenPlacement: 'header',
++      tokenHeaderPrefix: '',
++      tokenQueryKey: 'access_token',
+       credentialsPlacement: 'body'
+     });
+   });
+diff --git a/tests/import/postman/fixtures/postman-import-oauth2-token-placement-collection.json b/tests/import/postman/fixtures/postman-import-oauth2-token-placement-collection.json
+new file mode 100644
+index 00000000000..427cbfa15f3
+--- /dev/null
++++ b/tests/import/postman/fixtures/postman-import-oauth2-token-placement-collection.json
+@@ -0,0 +1,61 @@
++{
++  "info": {
++    "_postman_id": "b1c2d3e4-1111-2222-3333-444455556666",
++    "name": "OAuth2 Token Placement",
++    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
++    "_exporter_id": "54316404"
++  },
++  "item": [
++    {
++      "name": "OAuth2 Token in Header",
++      "request": {
++        "auth": {
++          "type": "oauth2",
++          "oauth2": [
++            { "key": "grant_type", "value": "authorization_code", "type": "string" },
++            { "key": "addTokenTo", "value": "header", "type": "string" },
++            { "key": "headerPrefix", "value": "Bearer", "type": "string" },
++            { "key": "authUrl", "value": "https://example.com/auth", "type": "string" },
++            { "key": "accessTokenUrl", "value": "https://example.com/token", "type": "string" },
++            { "key": "clientId", "value": "client-id", "type": "string" },
++            { "key": "clientSecret", "value": "client-secret", "type": "string" }
++          ]
++        },
++        "method": "GET",
++        "header": [],
++        "url": {
++          "raw": "https://api.com/header",
++          "protocol": "https",
++          "host": ["api", "com"],
++          "path": ["header"]
++        }
++      },
++      "response": []
++    },
++    {
++      "name": "OAuth2 Token in URL",
++      "request": {
++        "auth": {
++          "type": "oauth2",
++          "oauth2": [
++            { "key": "grant_type", "value": "authorization_code", "type": "string" },
++            { "key": "addTokenTo", "value": "queryParams", "type": "string" },
++            { "key": "authUrl", "value": "https://example.com/auth", "type": "string" },
++            { "key": "accessTokenUrl", "value": "https://example.com/token", "type": "string" },
++            { "key": "clientId", "value": "client-id", "type": "string" },
++            { "key": "clientSecret", "value": "client-secret", "type": "string" }
++          ]
++        },
++        "method": "GET",
++        "header": [],
++        "url": {
++          "raw": "https://api.com/url",
++          "protocol": "https",
++          "host": ["api", "com"],
++          "path": ["url"]
++        }
++      },
++      "response": []
++    }
++  ]
++}
+diff --git a/tests/import/postman/import-oauth2-token-placement-collection.spec.ts b/tests/import/postman/import-oauth2-token-placement-collection.spec.ts
+new file mode 100644
+index 00000000000..ca49c3573e8
+--- /dev/null
++++ b/tests/import/postman/import-oauth2-token-placement-collection.spec.ts
+@@ -0,0 +1,65 @@
++import { test, expect } from '../../../playwright';
++import * as path from 'path';
++import { closeAllCollections, openCollection, selectRequestPaneTab } from '../../utils/page';
++import { buildCommonLocators } from '../../utils/page/locators';
++
++test.describe('Import Postman Collection with OAuth2 token placement', () => {
++  test.afterAll(async ({ page }) => {
++    await closeAllCollections(page);
++  });
++
++  test('token placement drives which field is displayed after import', async ({ page, electronApp, createTmpDir }) => {
++    const postmanFile = path.resolve(__dirname, 'fixtures', 'postman-import-oauth2-token-placement-collection.json');
++    const locators = buildCommonLocators(page);
++    const oauth2 = locators.auth.oauth2;
++
++    const importDir = await createTmpDir('imported-collection');
++
++    await electronApp.evaluate(({ dialog }, { importDir }) => {
++      const originalShowOpenDialog = dialog.showOpenDialog;
++      dialog.showOpenDialog = async () => {
++        dialog.showOpenDialog = originalShowOpenDialog;
++        return {
++          canceled: false,
++          filePaths: [importDir]
++        };
++      };
++    }, { importDir });
++
++    await test.step('Import collection', async () => {
++      await locators.plusMenu.button().click();
++      await locators.plusMenu.importCollection().click();
++      const importModal = locators.import.modal();
++      await importModal.waitFor({ state: 'visible' });
++      await locators.import.fileInput().setInputFiles(postmanFile);
++      await locators.import.locationModal().waitFor({ state: 'visible', timeout: 5000 });
++      const locationModal = locators.import.locationModal();
++      await expect(locationModal.getByText('OAuth2 Token Placement')).toBeVisible();
++      await locators.import.browseLink(locationModal).click();
++      await locators.import.importButton(locationModal).click();
++      await locationModal.waitFor({ state: 'hidden' });
++      await openCollection(page, 'OAuth2 Token Placement');
++      await expect(locators.sidebar.collection('OAuth2 Token Placement')).toBeVisible();
++    });
++
++    await test.step('Header placement shows the Header Prefix field, hides the Query Param Key field', async () => {
++      await locators.sidebar.request('OAuth2 Token in Header').click();
++      await expect(locators.request.pane()).toBeVisible();
++      await selectRequestPaneTab(page, 'Auth');
++
++      await expect(oauth2.tokenHeaderPrefixField()).toBeVisible();
++      await expect(oauth2.tokenHeaderPrefixField().locator('.CodeMirror-line')).toHaveText('Bearer');
++      await expect(oauth2.tokenQueryParamKeyField()).toHaveCount(0);
++    });
++
++    await test.step('URL placement shows the Query Param Key field, hides the Header Prefix field', async () => {
++      await locators.sidebar.request('OAuth2 Token in URL').click();
++      await expect(locators.request.pane()).toBeVisible();
++      await selectRequestPaneTab(page, 'Auth');
++
++      await expect(oauth2.tokenQueryParamKeyField()).toBeVisible();
++      await expect(oauth2.tokenQueryParamKeyField().locator('.CodeMirror-line')).toHaveText('access_token');
++      await expect(oauth2.tokenHeaderPrefixField()).toHaveCount(0);
++    });
++  });
++});
+diff --git a/tests/utils/page/locators.ts b/tests/utils/page/locators.ts
+index 512a24b3b8d..4d71614448b 100644
+--- a/tests/utils/page/locators.ts
++++ b/tests/utils/page/locators.ts
+@@ -96,7 +96,9 @@ export const buildCommonLocators = (page: Page) => ({
+       placementLabel: () => page.getByTestId('auth-placement-label')
+     },
+     oauth2: {
+-      grantTypeDropdown: () => page.getByTestId('grant-type-dropdown')
++      grantTypeDropdown: () => page.getByTestId('grant-type-dropdown'),
++      tokenHeaderPrefixField: () => page.getByTestId('token-header-prefix'),
++      tokenQueryParamKeyField: () => page.getByTestId('token-query-param-key')
+     },
+     modeSelector: () => page.getByTestId('auth-mode-selector'),
+     modeLabel: () => page.getByTestId('auth-mode-label'),

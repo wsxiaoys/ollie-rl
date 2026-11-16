@@ -1,0 +1,28 @@
+{
+  "case_id": "angular__angular-cli-33625",
+  "repo": "angular/angular-cli",
+  "pr": 33625,
+  "title": "feat(@angular/build): migrate Angular Linker to oxc-parser and magic-string",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "angular__angular-cli-33625__g1",
+  "target": {
+    "gid": "angular__angular-cli-33625#g1",
+    "summary": "OxcAstHost does not unwrap ParenthesizedExpression AST nodes across its AST query and parsing helper methods. When declaration metadata contains parenthesized expressions, such as arrow functions returning an object literal (() => ({ ... })), the linker fails to recognise expected AST node types and throws a FatalLinkerError.",
+    "paths": [
+      "packages/angular/build/src/tools/angular/linker/oxc-ast-host.ts",
+      "packages/angular/build/src/tools/angular/linker/oxc-linker.ts"
+    ],
+    "notes": [
+      "definition of OxcAstHost which fails to unwrap ParenthesizedExpression AST nodes",
+      "returns function body directly without unwrapping ParenthesizedExpression",
+      "call site using SHARED_AST_HOST to inspect and link partial declarations"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "49dd007a9468631bfc275eb1f4a710d0f3d06723",
+  "base_sha": "5c8a055178aaa184c44242fa8736af9e1a496e75",
+  "snapshot": "repos/angular__angular-cli/49dd007a9468631bfc275eb1f4a710d0f3d06723",
+  "diff": "diffs/angular__angular-cli-33625.diff"
+}

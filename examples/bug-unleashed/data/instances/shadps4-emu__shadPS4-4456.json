@@ -1,0 +1,16 @@
+{
+  "case_id": "shadps4-emu__shadPS4-4456",
+  "repo": "shadps4-emu/shadPS4",
+  "pr": 4456,
+  "title": "Lib.VideoOut: Properly remove events on close",
+  "language": "C++",
+  "split": "val",
+  "kind": "clean",
+  "example_id": "shadps4-emu__shadPS4-4456",
+  "target": null,
+  "siblings": [],
+  "head_sha": "c3abbf63f2ca234b1cda9e7d4b9d8cab81353ec2",
+  "base_sha": "f95edd27e0dde1ea26e94152ac3c6c12ed42ffaf",
+  "snapshot": "repos/shadps4-emu__shadPS4/c3abbf63f2ca234b1cda9e7d4b9d8cab81353ec2",
+  "diff": "diffs/shadps4-emu__shadPS4-4456.diff"
+}

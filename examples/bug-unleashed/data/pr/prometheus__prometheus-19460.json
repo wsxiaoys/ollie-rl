@@ -1,0 +1,6 @@
+{
+  "title": "tsdb: fix gcSeries and mmapHeadChunksInStripe deadlocking",
+  "body": "Closes: https://github.com/prometheus/prometheus/issues/19445\r\n\r\n\r\nThis PR adds two things:\r\n\r\n1. `mmapHeadChunksInStripe` snapshots the series in a `stripe` before calling `mmapSeriesChunks` on them.\r\n2. `gcSeries` calls clears the head chunk of an evicted series via `series.setHeadChunks(nil, 0)`\r\n\r\nWhat it does:\r\n- `mmapHeadChunksInStripe` doesn't hold the stripe's RLock while also acquiring the series lock.\r\n- if a series is evicted after snapshotting and before `mmapSeriesChunks` (which was previously impossible due to stripe lock), then `mmapChunks` will mmap a series with `nil` headchunks. With (2) `gcSeries` setting the head chunk to `nil` the function will now naturally return early instead of creating oprhaned chunk files.\r\n\r\n\r\nThe tests ensure that\r\n- `mmapHeadChunksInStripe` doesn't acquire the stripe and series lock together.\r\n- `gcSeries` clears the head chunk for evicted series.\r\n\r\n```release-notes\r\n[BUGFIX] TSDB: fix potential deadlock between mmapSeriesChunks and gcSeries.\r\n```",
+  "head_sha": "aa96c94f62f769a84d79b23073e13b35f26c3882",
+  "base_sha": "d71c960302501ed81f908f546577b2c3570cc8f1"
+}

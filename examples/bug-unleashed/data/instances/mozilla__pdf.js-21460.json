@@ -1,0 +1,16 @@
+{
+  "case_id": "mozilla__pdf.js-21460",
+  "repo": "mozilla/pdf.js",
+  "pr": 21460,
+  "title": "Check every LinkAnnotation when testing if inferred links overlap (issue 21458)",
+  "language": "JavaScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "mozilla__pdf.js-21460",
+  "target": null,
+  "siblings": [],
+  "head_sha": "cbefb334fdaac75d0aaaf09d7c81674668bca31b",
+  "base_sha": "f0dc2166ab60a1c115de5a12d43aa7f5fcd92f45",
+  "snapshot": "repos/mozilla__pdf.js/cbefb334fdaac75d0aaaf09d7c81674668bca31b",
+  "diff": "diffs/mozilla__pdf.js-21460.diff"
+}

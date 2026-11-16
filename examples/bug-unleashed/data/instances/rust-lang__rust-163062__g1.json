@@ -1,0 +1,25 @@
+{
+  "case_id": "rust-lang__rust-163062",
+  "repo": "rust-lang/rust",
+  "pr": 163062,
+  "title": "Use x30 register name with LLVM 23+",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rust-lang__rust-163062__g1",
+  "target": {
+    "gid": "rust-lang__rust-163062#g1",
+    "summary": "LLVM 23 does not yet recognize `r14` as an inline assembly register name on ARM. Restricting the `{lr}` fallback mapping to LLVM < 23 causes inline assembly referencing `r14` or using `clobber_abi(\"C\")` on 32-bit ARM targets to fail.",
+    "paths": [
+      "compiler/rustc_codegen_llvm/src/asm.rs"
+    ],
+    "notes": [
+      "faulty condition checking LLVM version for ARM r14 mapping"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "3de062444441071db0d1f41cd372dd2875783e0a",
+  "base_sha": "feaadeeaca7db0594da854e7c8c07495341c7439",
+  "snapshot": "repos/rust-lang__rust/3de062444441071db0d1f41cd372dd2875783e0a",
+  "diff": "diffs/rust-lang__rust-163062.diff"
+}

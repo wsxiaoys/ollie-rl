@@ -1,0 +1,28 @@
+{
+  "case_id": "ChromeDevTools__chrome-devtools-mcp-3132",
+  "repo": "ChromeDevTools/chrome-devtools-mcp",
+  "pr": 3132,
+  "title": "fix(pages): report the actual page size after resize_page (#2998)",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ChromeDevTools__chrome-devtools-mcp-3132__g1",
+  "target": {
+    "gid": "ChromeDevTools__chrome-devtools-mcp-3132#g1",
+    "summary": "Querying `Page.getLayoutMetrics` returns stale viewport dimensions when the page is in a background tab because Chrome defers layout until the tab becomes visible. As a result, `resize_page` reports incorrect old dimensions for background tabs even though the window resize succeeded.",
+    "paths": [
+      "src/McpPage.ts",
+      "src/tools/pages.ts"
+    ],
+    "notes": [
+      "faulty call to Page.getLayoutMetrics which returns stale layout data for background tabs",
+      "definition of the method whose behavior is wrong",
+      "call site that relies on the faulty returned dimensions to report clamped page size"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "465f521c109ce449d800cf1dcbb7d38560b02ff7",
+  "base_sha": "bf8c6d9bc70d24523c353f43775a6542a45e8c56",
+  "snapshot": "repos/ChromeDevTools__chrome-devtools-mcp/465f521c109ce449d800cf1dcbb7d38560b02ff7",
+  "diff": "diffs/ChromeDevTools__chrome-devtools-mcp-3132.diff"
+}

@@ -1,0 +1,26 @@
+{
+  "case_id": "python__mypy-20622",
+  "repo": "python/mypy",
+  "pr": 20622,
+  "title": "Fix false negatives in walrus vs inference fallback logic",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "python__mypy-20622__g1",
+  "target": {
+    "gid": "python__mypy-20622#g1",
+    "summary": "Checking `binder_version == self.binder.version` to detect walrus expressions is overly broad, as expressions like ternary operators also modify the binder version during evaluation. This incorrectly disables fallback type inference in an empty context, preventing narrower types from being inferred.",
+    "paths": [
+      "mypy/checker.py"
+    ],
+    "notes": [
+      "faulty condition checking binder version to detect walrus expressions",
+      "recording the initial binder version before evaluating the rvalue"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "5ea65ab28044260e26f97430e0e68936527a94fa",
+  "base_sha": "b5587a383fab59231b571751f4955434b43ba381",
+  "snapshot": "repos/python__mypy/5ea65ab28044260e26f97430e0e68936527a94fa",
+  "diff": "diffs/python__mypy-20622.diff"
+}

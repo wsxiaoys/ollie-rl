@@ -1,0 +1,6 @@
+{
+  "title": "Show favorited inspector properties in their original spot",
+  "body": "Fixes [godotengine/godot-proposals/issues/14982](https://github.com/godotengine/godot-proposals/issues/14982) \r\n\r\nShow favorited properties in their original spot. Changes are synced between both properties. \r\n\r\n~~*The code could be improved. I just copied the existing code that made the original editor property*~~\r\n*I moved duplicated property editor setup code to their own methods*\r\n\r\n<img width=\"1846\" height=\"888\" alt=\"show_favorited_inspector\" src=\"https://github.com/user-attachments/assets/2ab2c1f0-c903-4b89-97d9-8f3feb494126\" />\r\n",
+  "head_sha": "e6c4bb88db0ffc9e4f3b6acefeaaca693e6dd926",
+  "base_sha": "5902d3f370db5905444a01139722a40cb29bb1c4"
+}

@@ -1,0 +1,25 @@
+{
+  "case_id": "grafana__grafana-120923",
+  "repo": "grafana/grafana",
+  "pr": 120923,
+  "title": "i18n: prevents loading of en-US translations",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "grafana__grafana-120923__g1",
+  "target": {
+    "gid": "grafana__grafana-120923#g1",
+    "summary": "Returning an empty object for DEFAULT_LANGUAGE skips loading translation messages, breaking i18next pluralization for default English strings.",
+    "paths": [
+      "public/app/core/internationalization/loadTranslations.ts"
+    ],
+    "notes": [
+      "faulty check skipping loading translations for DEFAULT_LANGUAGE"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "53d9a8b89e342a7281e8bfac3d840bbb9706f63a",
+  "base_sha": "12473fba20ca40b990423db6e8af42edd8bf595b",
+  "snapshot": "repos/grafana__grafana/53d9a8b89e342a7281e8bfac3d840bbb9706f63a",
+  "diff": "diffs/grafana__grafana-120923.diff"
+}

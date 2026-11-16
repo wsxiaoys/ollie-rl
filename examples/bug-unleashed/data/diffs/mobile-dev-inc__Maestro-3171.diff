@@ -1,0 +1,685 @@
+diff --git a/e2e/demo_app/.maestro/webView_chromeDevTools.yaml b/e2e/demo_app/.maestro/webView_chromeDevTools.yaml
+new file mode 100644
+index 0000000000..043fc0e6c8
+--- /dev/null
++++ b/e2e/demo_app/.maestro/webView_chromeDevTools.yaml
+@@ -0,0 +1,13 @@
++appId: com.example.example
++androidWebViewHierarchy: devtools
++tags:
++  - passing
++  - android
++---
++
++- launchApp:
++    clearState: true
++- scrollUntilVisible:
++    element: Webview Test
++- tapOn: Webview Test
++- assertVisible: Swag Labs
+diff --git a/e2e/demo_app/lib/webview.dart b/e2e/demo_app/lib/webview.dart
+index 388e367707..875faa17b9 100644
+--- a/e2e/demo_app/lib/webview.dart
++++ b/e2e/demo_app/lib/webview.dart
+@@ -2,8 +2,10 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file - https://github.com/flutter/packages/blob/main/packages/webview_flutter/webview_flutter/LICENSE
+ 
++import 'package:flutter/foundation.dart';
+ import 'package:flutter/material.dart';
+ import 'package:webview_flutter/webview_flutter.dart';
++import 'package:webview_flutter_android/webview_flutter_android.dart';
+ 
+ class WebViewExample extends StatefulWidget {
+   const WebViewExample({super.key});
+@@ -19,6 +21,10 @@ class _WebViewExampleState extends State<WebViewExample> {
+   void initState() {
+     super.initState();
+ 
++    if (defaultTargetPlatform == TargetPlatform.android) {
++      AndroidWebViewController.enableDebugging(true);
++    }
++
+     controller = WebViewController()
+       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+       ..loadRequest(Uri.parse('https://www.saucedemo.com/'));
+diff --git a/maestro-client/src/main/java/maestro/android/AdbSocketFactory.kt b/maestro-client/src/main/java/maestro/android/AdbSocketFactory.kt
+new file mode 100644
+index 0000000000..562473acc7
+--- /dev/null
++++ b/maestro-client/src/main/java/maestro/android/AdbSocketFactory.kt
+@@ -0,0 +1,113 @@
++package maestro.android
++
++import dadb.AdbStream
++import java.io.FilterOutputStream
++import java.io.InputStream
++import java.io.OutputStream
++import java.net.InetAddress
++import java.net.InetSocketAddress
++import java.net.Socket
++import java.net.SocketAddress
++import java.net.SocketException
++import javax.net.SocketFactory
++
++class AdbSocketFactory(private val opener: (host: String, port: Int) -> AdbStream) : SocketFactory() {
++
++    override fun createSocket(): Socket = AdbSocket(opener)
++
++    override fun createSocket(host: String?, port: Int): Socket =
++        createSocket().apply { connect(InetSocketAddress(host, port)) }
++
++    override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket =
++        createSocket(host, port)
++
++    override fun createSocket(host: InetAddress?, port: Int): Socket =
++        createSocket(host?.hostAddress, port)
++
++    override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket =
++        createSocket(address, port)
++}
++
++private class AdbSocket(private val opener: (host: String, port: Int) -> AdbStream) : Socket() {
++
++    private var stream: AdbStream? = null
++    private var closed = false
++    private var endpoint: InetSocketAddress? = null
++
++    override fun connect(endpoint: SocketAddress, timeout: Int) {
++        if (endpoint !is InetSocketAddress) throw UnsupportedOperationException("Endpoint must be InetSocketAddress")
++        this.endpoint = endpoint
++        stream = opener(endpoint.hostString, endpoint.port)
++    }
++
++    override fun connect(endpoint: SocketAddress) {
++        connect(endpoint, 0)
++    }
++
++    override fun getInputStream(): InputStream {
++        val s = stream ?: throw SocketException("Socket is not connected")
++        return s.source.inputStream()
++    }
++
++    override fun getOutputStream(): OutputStream {
++        val s = stream ?: throw SocketException("Socket is not connected")
++        return object : FilterOutputStream(s.sink.outputStream()) {
++            override fun write(b: ByteArray) {
++                super.write(b)
++                flush()
++            }
++
++            override fun write(b: ByteArray, off: Int, len: Int) {
++                super.write(b, off, len)
++                flush()
++            }
++        }
++    }
++
++    override fun isConnected(): Boolean = stream != null && !closed
++
++    override fun isClosed(): Boolean = closed
++
++    override fun close() {
++        if (closed) return
++        stream?.close()
++        stream = null
++        closed = true
++    }
++
++    // Address/port info (used by gRPC OkHttp transport for logging)
++    override fun getInetAddress(): InetAddress = endpoint?.address ?: InetAddress.getLoopbackAddress()
++    override fun getLocalAddress(): InetAddress = InetAddress.getLoopbackAddress()
++    override fun getPort(): Int = endpoint?.port ?: 0
++    override fun getLocalPort(): Int = 0
++    override fun getRemoteSocketAddress(): SocketAddress = endpoint ?: InetSocketAddress(0)
++    override fun getLocalSocketAddress(): SocketAddress = InetSocketAddress(0)
++    override fun isBound(): Boolean = true
++
++    // No-ops for socket configuration (called by gRPC OkHttp transport)
++    override fun setSoTimeout(timeout: Int) = Unit
++    override fun getSoTimeout(): Int = 0
++    override fun setTcpNoDelay(on: Boolean) = Unit
++    override fun getTcpNoDelay(): Boolean = false
++    override fun setKeepAlive(on: Boolean) = Unit
++    override fun getKeepAlive(): Boolean = false
++    override fun setSoLinger(on: Boolean, linger: Int) = Unit
++    override fun getSoLinger(): Int = -1
++    override fun setSendBufferSize(size: Int) = Unit
++    override fun getSendBufferSize(): Int = 0
++    override fun setReceiveBufferSize(size: Int) = Unit
++    override fun getReceiveBufferSize(): Int = 0
++    override fun setReuseAddress(on: Boolean) = Unit
++    override fun getReuseAddress(): Boolean = false
++    override fun setTrafficClass(tc: Int) = Unit
++    override fun getTrafficClass(): Int = 0
++    override fun setOOBInline(on: Boolean) = Unit
++    override fun getOOBInline(): Boolean = false
++    override fun isInputShutdown() = false
++    override fun isOutputShutdown() = false
++    override fun shutdownInput() = Unit
++    override fun shutdownOutput() = Unit
++    override fun setPerformancePreferences(connectionTime: Int, latency: Int, bandwidth: Int) = Unit
++    override fun sendUrgentData(data: Int) = Unit
++    override fun bind(bindpoint: SocketAddress?) = Unit
++}
+diff --git a/maestro-client/src/main/java/maestro/android/chromedevtools/DadbChromeDevToolsClient.kt b/maestro-client/src/main/java/maestro/android/chromedevtools/DadbChromeDevToolsClient.kt
+index 5bdbee7294..ea4729b7e8 100644
+--- a/maestro-client/src/main/java/maestro/android/chromedevtools/DadbChromeDevToolsClient.kt
++++ b/maestro-client/src/main/java/maestro/android/chromedevtools/DadbChromeDevToolsClient.kt
+@@ -9,7 +9,9 @@ import com.fasterxml.jackson.module.kotlin.readValue
+ import dadb.Dadb
+ import maestro.Maestro
+ import maestro.TreeNode
++import maestro.android.AdbSocketFactory
+ import maestro.utils.HttpClient
++import okhttp3.Dns
+ import okhttp3.HttpUrl
+ import okhttp3.HttpUrl.Companion.toHttpUrl
+ import okhttp3.OkHttpClient
+@@ -68,12 +70,17 @@ private data class DevToolsResponse<T>(
+     val result: T,
+ )
+ 
++private class DummyDns : Dns {
++    override fun lookup(hostname: String) = listOf(java.net.InetAddress.getLoopbackAddress())
++}
++
+ class DadbChromeDevToolsClient(private val dadb: Dadb): Closeable {
+ 
+     private val json = jacksonObjectMapper().configure(FAIL_ON_UNKNOWN_PROPERTIES, false)
+ 
+     private val okhttp = HttpClient.build("DadbChromeDevToolsClient").newBuilder()
+-        .dadb(dadb)
++        .socketFactory(AdbSocketFactory { host, _ -> dadb.open("localabstract:$host") })
++        .dns(DummyDns())
+         .build()
+ 
+     private val script = Maestro::class.java.getResourceAsStream("/maestro-web.js")?.let {
+@@ -119,7 +126,7 @@ class DadbChromeDevToolsClient(private val dadb: Dadb): Closeable {
+     fun <T> makeRequest(resultTypeReference: TypeReference<T>, socketName: String, webSocketDebuggerUrl: String, method: String, params: Any?): T {
+         val request = json.writeValueAsString(mapOf("id" to 1, "method" to method, "params" to params))
+         val url = webSocketDebuggerUrl.replace("ws", "http").toHttpUrl().newBuilder()
+-            .host("localabstract.$socketName.adb")
++            .host(socketName)
+             .build()
+         val response = makeSingleWebsocketRequest(url, request)
+         return try {
+@@ -165,7 +172,7 @@ class DadbChromeDevToolsClient(private val dadb: Dadb): Closeable {
+     }
+ 
+     private fun getWebViewInfos(socketName: String): List<WebViewInfo> {
+-        val url = "http://localabstract.$socketName.adb/json"
++        val url = "http://$socketName/json"
+ 
+         val call = okhttp.newCall(Request.Builder()
+             .url(url)
+diff --git a/maestro-client/src/main/java/maestro/android/chromedevtools/DadbSocket.kt b/maestro-client/src/main/java/maestro/android/chromedevtools/DadbSocket.kt
+deleted file mode 100644
+index fe6921fe83..0000000000
+--- a/maestro-client/src/main/java/maestro/android/chromedevtools/DadbSocket.kt
++++ /dev/null
+@@ -1,241 +0,0 @@
+-package maestro.android.chromedevtools
+-
+-import dadb.AdbStream
+-import dadb.Dadb
+-import okhttp3.Dns
+-import okhttp3.OkHttpClient
+-import java.io.FilterOutputStream
+-import java.io.InputStream
+-import java.io.OutputStream
+-import java.net.InetAddress
+-import java.net.InetSocketAddress
+-import java.net.Socket
+-import java.net.SocketAddress
+-import java.net.SocketException
+-import java.nio.channels.SocketChannel
+-import javax.net.SocketFactory
+-
+-fun OkHttpClient.Builder.dadb(dadb: Dadb): OkHttpClient.Builder {
+-    dns(DadbDns())
+-    socketFactory(DadbSocketFactory(dadb))
+-    return this
+-}
+-
+-class DadbDns : Dns {
+-
+-    override fun lookup(hostname: String): List<InetAddress> {
+-        if (!hostname.endsWith(".adb")) throw IllegalArgumentException("Invalid hostname. Eg. tcp.8000.adb, localabstract.chrome_devtools_remote.adb")
+-        return listOf(InetAddress.getByAddress(hostname, byteArrayOf(0, 0, 0, 0)))
+-    }
+-}
+-
+-class DadbSocketFactory(private val dadb: Dadb) : SocketFactory() {
+-
+-    override fun createSocket(): Socket {
+-        return DadbStreamSocket(dadb)
+-    }
+-
+-    override fun createSocket(host: String?, port: Int): Socket {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun createSocket(
+-        host: String?,
+-        port: Int,
+-        localHost: InetAddress?,
+-        localPort: Int
+-    ): Socket {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun createSocket(host: InetAddress?, port: Int): Socket {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun createSocket(
+-        address: InetAddress?,
+-        port: Int,
+-        localAddress: InetAddress?,
+-        localPort: Int
+-    ): Socket {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-}
+-
+-class DadbStreamSocket(private val dadb: Dadb) : Socket() {
+-
+-    private var closed = false
+-    private var adbStream: AdbStream? = null
+-
+-    override fun getInputStream(): InputStream {
+-        val adbStream = this.adbStream ?: throw SocketException("Socket is not connected")
+-        return adbStream.source.inputStream()
+-    }
+-
+-    override fun getOutputStream(): OutputStream {
+-        val adbStream = this.adbStream ?: throw SocketException("Socket is not connected")
+-        return object : FilterOutputStream(adbStream.sink.outputStream()) {
+-
+-            override fun write(b: ByteArray) {
+-                super.write(b)
+-                flush()
+-            }
+-
+-            override fun write(b: ByteArray, off: Int, len: Int) {
+-                super.write(b, off, len)
+-                flush()
+-            }
+-        }
+-    }
+-
+-    override fun connect(endpoint: SocketAddress, timeout: Int) {
+-        if (endpoint !is InetSocketAddress) throw UnsupportedOperationException("Endpoint must be a InetSocketAddress: $endpoint (${endpoint::class})")
+-        val destination = endpoint.hostName.removeSuffix(".adb").replace(".", ":")
+-        this.adbStream = dadb.open(destination)
+-    }
+-
+-    override fun isClosed() = closed
+-
+-    override fun close() {
+-        if (isClosed()) return
+-        adbStream?.close()
+-        adbStream = null
+-        closed = true
+-    }
+-
+-    override fun setSoTimeout(timeout: Int) = Unit
+-
+-    override fun isInputShutdown() = false
+-
+-    override fun isOutputShutdown() = false
+-
+-
+-    override fun connect(endpoint: SocketAddress?) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun bind(bindpoint: SocketAddress?) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getInetAddress(): InetAddress {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getLocalAddress(): InetAddress {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getPort(): Int {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getLocalPort(): Int {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getRemoteSocketAddress(): SocketAddress {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getLocalSocketAddress(): SocketAddress {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getChannel(): SocketChannel {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setTcpNoDelay(on: Boolean) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getTcpNoDelay(): Boolean {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setSoLinger(on: Boolean, linger: Int) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getSoLinger(): Int {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun sendUrgentData(data: Int) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setOOBInline(on: Boolean) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getOOBInline(): Boolean {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getSoTimeout(): Int {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setSendBufferSize(size: Int) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getSendBufferSize(): Int {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setReceiveBufferSize(size: Int) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getReceiveBufferSize(): Int {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setKeepAlive(on: Boolean) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getKeepAlive(): Boolean {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setTrafficClass(tc: Int) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getTrafficClass(): Int {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setReuseAddress(on: Boolean) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun getReuseAddress(): Boolean {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun shutdownInput() {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun shutdownOutput() {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun isConnected(): Boolean {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun isBound(): Boolean {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-
+-    override fun setPerformancePreferences(connectionTime: Int, latency: Int, bandwidth: Int) {
+-        throw UnsupportedOperationException("Not implemented")
+-    }
+-}
+\ No newline at end of file
+diff --git a/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt b/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt
+index 155744e60d..9dec9cde37 100644
+--- a/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt
++++ b/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt
+@@ -25,7 +25,7 @@ import dadb.AdbShellPacket
+ import dadb.AdbShellResponse
+ import dadb.AdbShellStream
+ import dadb.Dadb
+-import io.grpc.ManagedChannelBuilder
++import io.grpc.okhttp.OkHttpChannelBuilder
+ import io.grpc.Metadata
+ import io.grpc.Status
+ import io.grpc.StatusRuntimeException
+@@ -33,6 +33,7 @@ import maestro.*
+ import maestro.MaestroDriverStartupException.AndroidDriverTimeoutException
+ import maestro.MaestroDriverStartupException.AndroidInstrumentationSetupFailure
+ import maestro.UiElement.Companion.toUiElementOrNull
++import maestro.android.AdbSocketFactory
+ import maestro.android.AndroidAppFiles
+ import maestro.android.AndroidLaunchArguments.toAndroidLaunchArguments
+ import maestro.android.chromedevtools.AndroidWebViewHierarchyClient
+@@ -70,14 +71,14 @@ class AndroidDriver(
+     private val reinstallDriver: Boolean = true,
+     private val metricsProvider: Metrics = MetricsProvider.getInstance(),
+     ) : Driver {
+-    private var portForwarder: AutoCloseable? = null
+     private var open = false
+     private val hostPort: Int = hostPort ?: DefaultDriverHostPort
+ 
+     private val metrics = metricsProvider.withPrefix("maestro.driver").withTags(mapOf("platform" to "android", "emulatorName" to emulatorName))
+ 
+-    private val channel = ManagedChannelBuilder.forAddress("localhost", this.hostPort)
++    private val channel = OkHttpChannelBuilder.forAddress("localhost", this.hostPort)
+         .usePlaintext()
++        .socketFactory(AdbSocketFactory { _, port -> dadb.open("tcp:$port") })
+         .keepAliveTime(2, TimeUnit.MINUTES)
+         .keepAliveTimeout(20, TimeUnit.SECONDS)
+         .keepAliveWithoutCalls(true)
+@@ -100,7 +101,6 @@ class AndroidDriver(
+     }
+ 
+     override fun open() {
+-        allocateForwarder()
+         installMaestroApks()
+         startInstrumentationSession(hostPort)
+ 
+@@ -148,15 +148,6 @@ class AndroidDriver(
+     }
+ 
+ 
+-    private fun allocateForwarder() {
+-        portForwarder?.close()
+-
+-        portForwarder = dadb.tcpForward(
+-            hostPort,
+-            hostPort
+-        )
+-    }
+-
+     private fun awaitLaunch() {
+         val startTime = System.currentTimeMillis()
+ 
+@@ -180,10 +171,6 @@ class AndroidDriver(
+             isLocationMocked = false
+         }
+ 
+-        LOGGER.info("[Start] close port forwarder")
+-        portForwarder?.close()
+-        LOGGER.info("[Done] close port forwarder")
+-
+         LOGGER.info("[Start] Uninstall driver from device")
+         if (reinstallDriver) {
+             uninstallMaestroDriverApp()
+diff --git a/maestro-client/src/test/java/maestro/android/AdbSocketFactoryTest.kt b/maestro-client/src/test/java/maestro/android/AdbSocketFactoryTest.kt
+new file mode 100644
+index 0000000000..6fde213b30
+--- /dev/null
++++ b/maestro-client/src/test/java/maestro/android/AdbSocketFactoryTest.kt
+@@ -0,0 +1,143 @@
++package maestro.android
++
++import com.google.common.truth.Truth.assertThat
++import dadb.AdbStream
++import okio.Buffer
++import org.junit.jupiter.api.Test
++import org.junit.jupiter.api.assertThrows
++import java.net.InetSocketAddress
++import java.net.SocketException
++
++class AdbSocketFactoryTest {
++
++    @Test
++    fun `factory creates a socket that opens an ADB stream on connect`() {
++        var openedHost: String? = null
++        var openedPort: Int? = null
++        val factory = AdbSocketFactory { host, port ->
++            openedHost = host
++            openedPort = port
++            fakeStream()
++        }
++
++        val socket = factory.createSocket()
++        socket.connect(InetSocketAddress("localhost", 8080))
++
++        assertThat(openedHost).isEqualTo("localhost")
++        assertThat(openedPort).isEqualTo(8080)
++    }
++
++    @Test
++    fun `getInputStream reads data from ADB stream`() {
++        val source = Buffer().writeUtf8("hello from device")
++        val socket = connectSocket(source = source)
++
++        val data = socket.getInputStream().bufferedReader().readText()
++
++        assertThat(data).isEqualTo("hello from device")
++    }
++
++    @Test
++    fun `getOutputStream writes data to ADB stream`() {
++        val sink = Buffer()
++        val socket = connectSocket(sink = sink)
++
++        socket.getOutputStream().write("hello to device".toByteArray())
++
++        assertThat(sink.readUtf8()).isEqualTo("hello to device")
++    }
++
++    @Test
++    fun `getInputStream throws when not connected`() {
++        val socket = AdbSocketFactory { _, _ -> fakeStream() }.createSocket()
++
++        assertThrows<SocketException> { socket.getInputStream() }
++    }
++
++    @Test
++    fun `getOutputStream throws when not connected`() {
++        val socket = AdbSocketFactory { _, _ -> fakeStream() }.createSocket()
++
++        assertThrows<SocketException> { socket.getOutputStream() }
++    }
++
++    @Test
++    fun `close closes the underlying ADB stream`() {
++        var streamClosed = false
++        val stream = object : AdbStream {
++            override val source = Buffer()
++            override val sink = Buffer()
++            override fun close() {
++                streamClosed = true
++            }
++        }
++        val socket = AdbSocketFactory { _, _ -> stream }.createSocket()
++        socket.connect(InetSocketAddress("localhost", 8080))
++
++        socket.close()
++
++        assertThat(socket.isClosed).isTrue()
++        assertThat(streamClosed).isTrue()
++    }
++
++    @Test
++    fun `close is idempotent`() {
++        val socket = connectSocket()
++
++        socket.close()
++        socket.close()
++
++        assertThat(socket.isClosed).isTrue()
++    }
++
++    @Test
++    fun `isConnected returns false before connect and true after`() {
++        val socket = AdbSocketFactory { _, _ -> fakeStream() }.createSocket()
++
++        assertThat(socket.isConnected).isFalse()
++
++        socket.connect(InetSocketAddress("localhost", 8080))
++
++        assertThat(socket.isConnected).isTrue()
++    }
++
++    @Test
++    fun `isConnected returns false after close`() {
++        val socket = connectSocket()
++
++        socket.close()
++
++        assertThat(socket.isConnected).isFalse()
++    }
++
++    @Test
++    fun `output stream flushes on each write`() {
++        val sink = Buffer()
++        val socket = connectSocket(sink = sink)
++        val out = socket.getOutputStream()
++
++        out.write("first".toByteArray())
++        assertThat(sink.readUtf8()).isEqualTo("first")
++
++        out.write("second".toByteArray(), 0, 6)
++        assertThat(sink.readUtf8()).isEqualTo("second")
++    }
++
++    private fun fakeStream(
++        source: Buffer = Buffer(),
++        sink: Buffer = Buffer(),
++    ): AdbStream = object : AdbStream {
++        override val source = source
++        override val sink = sink
++        override fun close() {}
++    }
++
++    private fun connectSocket(
++        source: Buffer = Buffer(),
++        sink: Buffer = Buffer(),
++    ): java.net.Socket {
++        val socket = AdbSocketFactory { _, _ -> fakeStream(source, sink) }.createSocket()
++        socket.connect(InetSocketAddress("localhost", 8080))
++        return socket
++    }
++}

@@ -1,0 +1,331 @@
+diff --git a/src/Gui/EditableDatumLabel.cpp b/src/Gui/EditableDatumLabel.cpp
+index 8e4f5b27364d..7f2ddd579bbc 100644
+--- a/src/Gui/EditableDatumLabel.cpp
++++ b/src/Gui/EditableDatumLabel.cpp
+@@ -187,6 +187,18 @@ void EditableDatumLabel::startEdit(double val, QObject* eventFilteringObj, bool
+     value = val;
+     editStartValue = val;
+ 
++    lockIconLabel = new QLabel(spinBox);
++    lockIconLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
++
++    // load icon and scale it to fit in spinbox
++    QPixmap lockIcon = Gui::BitmapFactory().pixmap("Constraint_Lock");
++    const QFontMetrics fm(spinBox->fontMetrics());
++    int iconSize = fm.height();
++    QPixmap scaledIcon
++        = lockIcon.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
++    lockIconLabel->setPixmap(scaledIcon);
++    lockIconLabel->setVisible(false);
++
+     if (eventFilteringObj) {
+         spinBox->installEventFilter(eventFilteringObj);
+     }
+@@ -227,7 +239,7 @@ bool EditableDatumLabel::syncValueFromSpinBox(bool emitParameterUnset)
+ 
+     if (!spinBox->hasValidInput()) {
+         if (emitParameterUnset) {
+-            setLockedAppearance(false);
++            resetLockedState();
+             Q_EMIT parameterUnset();
+         }
+         return false;
+@@ -300,7 +312,7 @@ bool EditableDatumLabel::eventFilter(QObject* watched, QEvent* event)
+             }
+         }
+         else if (this->hasFinishedEditing && keyEvent->key() != Qt::Key_Tab) {
+-            this->setLockedAppearance(false);
++            this->resetLockedState();
+             return false;
+         }
+     }
+@@ -370,10 +382,6 @@ void EditableDatumLabel::setSpinboxValue(double val, const Base::Unit& unit)
+ void EditableDatumLabel::setFocusToSpinbox()
+ {
+     if (!spinBox) {
+-        Base::Console().developerWarning(
+-            "EditableDatumLabel::setFocusToSpinbox",
+-            "Spinbox doesn't exist in"
+-        );
+         return;
+     }
+     if (!spinBox->hasFocus()) {
+@@ -427,20 +435,6 @@ void EditableDatumLabel::positionSpinbox()
+     pxCoord.setX(posX);
+     pxCoord.setY(posY);
+     spinBox->move(pxCoord);
+-
+-    // Update lock icon position inside the spinbox if it exists and is visible
+-    if (lockIconLabel && lockIconLabel->isVisible()) {
+-        const QFontMetrics fm(spinBox->fontMetrics());
+-        int iconSize = fm.height();
+-        int padding = spinBox->getMargin();
+-        QSize spinboxSize = spinBox->size();
+-        lockIconLabel->setGeometry(
+-            spinboxSize.width() - iconSize - padding,
+-            (spinboxSize.height() - iconSize) / 2,
+-            iconSize,
+-            iconSize
+-        );
+-    }
+ }
+ 
+ SbVec3f EditableDatumLabel::getTextCenterPoint() const
+@@ -504,9 +498,16 @@ void EditableDatumLabel::updateGeometry(QLineEdit* edit)
+     if (!spinBox || !edit) {
+         return;
+     }
++    // Workaround: adjustSize() causes the cursor to jump to the end and selections to clear
++    // Save the state beforehand and restore it after the geometry update
+     int pos = edit->cursorPosition();
++    int selStart = edit->selectionStart();
++    int selEnd = edit->selectionEnd();
+     spinBox->adjustSize();
+     edit->setCursorPosition(pos);
++    if (selStart != -1 && selEnd != -1) {
++        edit->setSelection(selStart, selEnd - selStart);
++    }
+ }
+ 
+ // NOLINTNEXTLINE
+@@ -598,49 +599,25 @@ void EditableDatumLabel::setSpinboxVisibleToMouse(bool val)
+ 
+ void EditableDatumLabel::setLockedAppearance(bool locked)
+ {
+-    if (!locked) {
+-        this->hasFinishedEditing = false;
+-    }
+-    if (!spinBox) {
++    if (!spinBox || !lockIconLabel) {
+         return;
+     }
++    spinBox->addIconSpace(locked);
++    lockIconLabel->setVisible(locked);
++    if (auto* edit = spinBox->findChild<QLineEdit*>()) {
++        updateGeometry(edit);
++    }
+     const QFontMetrics fm(spinBox->fontMetrics());
+     int iconSize = fm.height();
+     int padding = spinBox->getMargin();
+-    if (locked) {
+-        spinBox->addIconSpace(true);
+-        spinBox->adjustSize();
+-        // create lock icon label it it doesn't exist, if it does - show it
+-        if (!lockIconLabel) {
+-            lockIconLabel = new QLabel(spinBox);
+-            lockIconLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+-            lockIconLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+-
+-            // load icon and scale it to fit in spinbox
+-            QPixmap lockIcon = Gui::BitmapFactory().pixmap("Constraint_Lock");
+-            QPixmap scaledIcon
+-                = lockIcon.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+-            lockIconLabel->setPixmap(scaledIcon);
+-
+-            // position lock icon inside the spinbox
+-            QSize spinboxSize = spinBox->size();
+-            lockIconLabel->setGeometry(
+-                spinboxSize.width() - iconSize - padding,
+-                (spinboxSize.height() - iconSize) / 2,
+-                iconSize,
+-                iconSize
+-            );
+-        }
+-        lockIconLabel->show();
+-    }
+-    else {
+-        // hide lock icon if it exists for later reuse
+-        if (lockIconLabel) {
+-            lockIconLabel->hide();
+-            spinBox->addIconSpace(false);
+-            spinBox->adjustSize();
+-        }
+-    }
++    // position lock icon inside the spinbox
++    QSize spinboxSize = spinBox->size();
++    lockIconLabel->setGeometry(
++        spinboxSize.width() - iconSize - padding,
++        (spinboxSize.height() - iconSize) / 2,
++        iconSize,
++        iconSize
++    );
+ }
+ 
+ void EditableDatumLabel::resetLockedState()
+diff --git a/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.cpp b/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.cpp
+index fdb331853a7c..420ff6d72c8d 100644
+--- a/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.cpp
++++ b/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.cpp
+@@ -23,14 +23,9 @@
+  ***************************************************************************/
+ 
+ 
+-#include <Inventor/events/SoKeyboardEvent.h>
+ #include <QApplication>
+ #include <QEvent>
+-#include <QRegularExpression>
+-#include <QRegularExpressionMatch>
+-
+-
+-#include "ViewProviderSketch.h"
++#include <QKeyEvent>
+ 
+ #include "DrawSketchKeyboardManager.h"
+ 
+@@ -51,10 +46,6 @@ DrawSketchKeyboardManager::DrawSketchKeyboardManager()
+             keyMode = KeyboardEventHandlingMode::ViewProvider;
+         }
+     }
+-
+-    timer.setSingleShot(true);
+-
+-    QObject::connect(&timer, &QTimer::timeout, [this]() { onTimeOut(); });
+ }
+ 
+ bool DrawSketchKeyboardManager::isMode(KeyboardEventHandlingMode mode)
+@@ -70,59 +61,65 @@ DrawSketchKeyboardManager::KeyboardEventHandlingMode DrawSketchKeyboardManager::
+ bool DrawSketchKeyboardManager::eventFilter(QObject* object, QEvent* event)
+ {
+     Q_UNUSED(object);
+-
+-    if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
+-        /*If a key shortcut is required to work on sketcher when a tool using ui controls is being
+-         * used, then you have to add this key to the below section such that the spinbox doesn't
+-         * keep the keypress event for itself. Note if you want the event to be handled by the
+-         * spinbox too, you can return false.*/
+-
++    if (!vpViewer) {
++        return false;
++    }
++    if (event->type() == QEvent::KeyPress) {
++        // Here we decide if we redirect the input the viewer
+         auto keyEvent = static_cast<QKeyEvent*>(event);
+ 
+-        detectKeyboardEventHandlingMode(keyEvent);  // determine the handler
+-
+-        if (vpViewer && isMode(KeyboardEventHandlingMode::ViewProvider)) {
++        // Pressing Alt/Option sends the keypress to the viewer
++        // without permanently switching the destination (keyMode)
++        bool altPressed = (keyEvent->modifiers() & Qt::AltModifier);
++        if (isMode(KeyboardEventHandlingMode::DSHControl) && altPressed) {
++            // Convert from Alt+Key to just Key For view navigation
++            keyEvent->setModifiers(keyEvent->modifiers() & ~Qt::AltModifier);
+             return QApplication::sendEvent(vpViewer, keyEvent);
+         }
++        const int key = keyEvent->key();
++        if (key == Qt::Key_Enter || key == Qt::Key_Return || key == Qt::Key_Tab) {
++            // This keys switch to camera control but are sent to the widget
++            keyMode = KeyboardEventHandlingMode::ViewProvider;
++            return false;
++        }
++
++        keyMode = detectKeyboardEventHandlingMode(keyEvent);  // determine the handler
+ 
++        if (isMode(KeyboardEventHandlingMode::ViewProvider)) {
++            return QApplication::sendEvent(vpViewer, keyEvent);
++        }
+         return false;  // do not intercept the event and feed it to the widget
+     }
+ 
+     return false;
+ }
+ 
+-void DrawSketchKeyboardManager::detectKeyboardEventHandlingMode(QKeyEvent* keyEvent)
++DrawSketchKeyboardManager::KeyboardEventHandlingMode DrawSketchKeyboardManager::detectKeyboardEventHandlingMode(
++    QKeyEvent* keyEvent
++)
+ {
+-    QRegularExpression rx(QStringLiteral("^[0-9]$"));
+-    auto match = rx.match(keyEvent->text());
+-    if (keyEvent->key() == Qt::Key_Enter || keyEvent->key() == Qt::Key_Return
+-        || keyEvent->key() == Qt::Key_Minus || keyEvent->key() == Qt::Key_Period
+-        || keyEvent->key() == Qt::Key_Comma
+-        || match.hasMatch()
+-        // double check for backspace as there may be windows/unix inconsistencies
+-        || keyEvent->key() == Qt::Key_Backspace || keyEvent->matches(QKeySequence::Backspace)
++    // Detect if the user wants to start editing the input
++
++    if (keyEvent->matches(QKeySequence::Paste)) {
++        return KeyboardEventHandlingMode::DSHControl;
++    }
++    // on Linux you need to use key() for backspace
++    if (keyEvent->key() == Qt::Key_Backspace || keyEvent->matches(QKeySequence::Backspace)
+         || keyEvent->matches(QKeySequence::Delete)) {
+-        keyMode = KeyboardEventHandlingMode::DSHControl;
+-        timer.start(timeOutValue);
++        return KeyboardEventHandlingMode::DSHControl;
+     }
+-}
+-
+-void DrawSketchKeyboardManager::onTimeOut()
+-{
+-    keyMode = KeyboardEventHandlingMode::ViewProvider;
+-}
+-
+-/// sets the timeout to the amount of milliseconds.
+-void DrawSketchKeyboardManager::setTimeOut(int milliseconds)
+-{
+-    timeOutValue = milliseconds;
+-}
+ 
+-// returns the current timeout amount
+-int DrawSketchKeyboardManager::timeOut()
+-{
+-    return timeOutValue;
++    const QString& text = keyEvent->text();
++    if (!text.isEmpty()) {
++        QChar ch = text.front();
++        if (ch.isDigit()) {
++            return KeyboardEventHandlingMode::DSHControl;
++        }
++        if (ch == '-' || ch == '.' || ch == ',') {
++            return KeyboardEventHandlingMode::DSHControl;
++        }
++    }
++    return keyMode;
+ }
+ 
+-
+ #include "moc_DrawSketchKeyboardManager.cpp"
+diff --git a/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.h b/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.h
+index e6742342b4aa..4531054cd7fa 100644
+--- a/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.h
++++ b/src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.h
+@@ -29,8 +29,6 @@
+ #include <QEvent>
+ #include <QKeyEvent>
+ 
+-#include <QTimer>
+-
+ #include <Gui/Application.h>
+ #include <Gui/Document.h>
+ #include <Gui/View3DInventor.h>
+@@ -77,27 +75,14 @@ class DrawSketchKeyboardManager: public QObject
+ 
+     bool eventFilter(QObject* object, QEvent* event);
+ 
+-    /// sets the timeout to the amount of milliseconds.
+-    void setTimeOut(int milliseconds);
+-
+-    // returns the current timeout amount
+-    int timeOut();
+-
+ private:
+     /// This function decides whether events should be send to the ViewProvider
+     /// or to the UI control of DSH.
+-    void detectKeyboardEventHandlingMode(QKeyEvent* keyEvent);
+-
+-    void onTimeOut();
++    KeyboardEventHandlingMode detectKeyboardEventHandlingMode(QKeyEvent* keyEvent);
+ 
+-private:
+     /// Viewer responsible for the active document
+     Gui::View3DInventorViewer* vpViewer = nullptr;
+     KeyboardEventHandlingMode keyMode;
+-
+-    QTimer timer;
+-
+-    int timeOutValue = 2000;
+ };
+ 
+ }  // namespace SketcherGui

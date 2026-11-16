@@ -1,0 +1,16 @@
+{
+  "case_id": "elastic__elasticsearch-152289",
+  "repo": "elastic/elasticsearch",
+  "pr": 152289,
+  "title": "Fix reader context close race in markAsUsed",
+  "language": "Java",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "elastic__elasticsearch-152289",
+  "target": null,
+  "siblings": [],
+  "head_sha": "2b408ccb1b5a336f66c0b98f80802b005af77195",
+  "base_sha": "d6efe5fa86c174764ca1c694fe110553c7500c32",
+  "snapshot": "repos/elastic__elasticsearch/2b408ccb1b5a336f66c0b98f80802b005af77195",
+  "diff": "diffs/elastic__elasticsearch-152289.diff"
+}

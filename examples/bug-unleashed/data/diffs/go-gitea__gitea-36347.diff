@@ -1,0 +1,296 @@
+diff --git a/models/repo/attachment.go b/models/repo/attachment.go
+index 835bee540250d..27856f2d2e2d6 100644
+--- a/models/repo/attachment.go
++++ b/models/repo/attachment.go
+@@ -166,6 +166,11 @@ func GetAttachmentByReleaseIDFileName(ctx context.Context, releaseID int64, file
+ 	return attach, nil
+ }
+ 
++func GetUnlinkedAttachmentsByUserID(ctx context.Context, userID int64) ([]*Attachment, error) {
++	attachments := make([]*Attachment, 0, 10)
++	return attachments, db.GetEngine(ctx).Where("uploader_id = ? AND issue_id = 0 AND release_id = 0 AND comment_id = 0", userID).Find(&attachments)
++}
++
+ // DeleteAttachment deletes the given attachment and optionally the associated file.
+ func DeleteAttachment(ctx context.Context, a *Attachment, remove bool) error {
+ 	_, err := DeleteAttachments(ctx, []*Attachment{a}, remove)
+diff --git a/models/repo/attachment_test.go b/models/repo/attachment_test.go
+index d41008344d5d0..07f4c587a7ab8 100644
+--- a/models/repo/attachment_test.go
++++ b/models/repo/attachment_test.go
+@@ -101,3 +101,19 @@ func TestGetAttachmentsByUUIDs(t *testing.T) {
+ 	assert.Equal(t, int64(1), attachList[0].IssueID)
+ 	assert.Equal(t, int64(5), attachList[1].IssueID)
+ }
++
++func TestGetUnlinkedAttachmentsByUserID(t *testing.T) {
++	assert.NoError(t, unittest.PrepareTestDatabase())
++
++	attachments, err := repo_model.GetUnlinkedAttachmentsByUserID(t.Context(), 8)
++	assert.NoError(t, err)
++	assert.Len(t, attachments, 1)
++	assert.Equal(t, int64(10), attachments[0].ID)
++	assert.Zero(t, attachments[0].IssueID)
++	assert.Zero(t, attachments[0].ReleaseID)
++	assert.Zero(t, attachments[0].CommentID)
++
++	attachments, err = repo_model.GetUnlinkedAttachmentsByUserID(t.Context(), 1)
++	assert.NoError(t, err)
++	assert.Empty(t, attachments)
++}
+diff --git a/models/repo/release.go b/models/repo/release.go
+index 05475899b87ff..68fb6b17245ec 100644
+--- a/models/repo/release.go
++++ b/models/repo/release.go
+@@ -174,6 +174,11 @@ func UpdateReleaseNumCommits(ctx context.Context, rel *Release) error {
+ 
+ // AddReleaseAttachments adds a release attachments
+ func AddReleaseAttachments(ctx context.Context, releaseID int64, attachmentUUIDs []string) (err error) {
++	rel, err := GetReleaseByID(ctx, releaseID)
++	if err != nil {
++		return err
++	}
++
+ 	// Check attachments
+ 	attachments, err := GetAttachmentsByUUIDs(ctx, attachmentUUIDs)
+ 	if err != nil {
+@@ -181,6 +186,10 @@ func AddReleaseAttachments(ctx context.Context, releaseID int64, attachmentUUIDs
+ 	}
+ 
+ 	for i := range attachments {
++		if attachments[i].RepoID != rel.RepoID {
++			return util.NewPermissionDeniedErrorf("attachment belongs to different repository")
++		}
++
+ 		if attachments[i].ReleaseID != 0 {
+ 			return util.NewPermissionDeniedErrorf("release permission denied")
+ 		}
+diff --git a/models/repo/release_test.go b/models/repo/release_test.go
+index 01f0fb3cff78e..8e30e76f490a0 100644
+--- a/models/repo/release_test.go
++++ b/models/repo/release_test.go
+@@ -7,6 +7,7 @@ import (
+ 	"testing"
+ 
+ 	"code.gitea.io/gitea/models/unittest"
++	"code.gitea.io/gitea/modules/util"
+ 
+ 	"github.com/stretchr/testify/assert"
+ )
+@@ -37,3 +38,16 @@ func Test_FindTagsByCommitIDs(t *testing.T) {
+ 	assert.Equal(t, "delete-tag", rels[1].TagName)
+ 	assert.Equal(t, "v1.0", rels[2].TagName)
+ }
++
++func TestAddReleaseAttachmentsRejectsDifferentRepo(t *testing.T) {
++	assert.NoError(t, unittest.PrepareTestDatabase())
++
++	uuid := "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12" // attachment 2 belongs to repo 2
++	err := AddReleaseAttachments(t.Context(), 1, []string{uuid})
++	assert.Error(t, err)
++	assert.ErrorIs(t, err, util.ErrPermissionDenied)
++
++	attach, err := GetAttachmentByUUID(t.Context(), uuid)
++	assert.NoError(t, err)
++	assert.Zero(t, attach.ReleaseID, "attachment should not be linked to release on failure")
++}
+diff --git a/routers/web/repo/attachment.go b/routers/web/repo/attachment.go
+index bff91b51a7b3d..c8501792cee7d 100644
+--- a/routers/web/repo/attachment.go
++++ b/routers/web/repo/attachment.go
+@@ -132,23 +132,40 @@ func ServeAttachment(ctx *context.Context, uuid string) {
+ 		return
+ 	}
+ 
+-	repository, unitType, err := repo_service.LinkedRepository(ctx, attach)
++	// prevent visiting attachment from other repository directly
++	if ctx.Repo.Repository != nil && ctx.Repo.Repository.ID != attach.RepoID {
++		ctx.HTTPError(http.StatusNotFound)
++		return
++	}
++
++	unitType, err := repo_service.GetAttachmentLinkedType(ctx, attach)
+ 	if err != nil {
+-		ctx.ServerError("LinkedRepository", err)
++		ctx.ServerError("GetAttachmentLinkedType", err)
+ 		return
+ 	}
+ 
+-	if repository == nil { // If not linked
++	if unitType == unit.TypeInvalid { // unlinked attachment can only be accessed by the uploader
+ 		if !(ctx.IsSigned && attach.UploaderID == ctx.Doer.ID) { // We block if not the uploader
+ 			ctx.HTTPError(http.StatusNotFound)
+ 			return
+ 		}
+-	} else { // If we have the repository we check access
+-		perm, err := access_model.GetUserRepoPermission(ctx, repository, ctx.Doer)
+-		if err != nil {
+-			ctx.ServerError("GetUserRepoPermission", err)
+-			return
++	} else { // If we have the linked type, we need to check access
++		var perm access_model.Permission
++		if ctx.Repo.Repository == nil {
++			repo, err := repo_model.GetRepositoryByID(ctx, attach.RepoID)
++			if err != nil {
++				ctx.ServerError("GetRepositoryByID", err)
++				return
++			}
++			perm, err = access_model.GetUserRepoPermission(ctx, repo, ctx.Doer)
++			if err != nil {
++				ctx.ServerError("GetUserRepoPermission", err)
++				return
++			}
++		} else {
++			perm = ctx.Repo.Permission
+ 		}
++
+ 		if !perm.CanRead(unitType) {
+ 			ctx.HTTPError(http.StatusNotFound)
+ 			return
+diff --git a/services/repository/repository.go b/services/repository/repository.go
+index 21a75a559f06c..318ab423e5e04 100644
+--- a/services/repository/repository.go
++++ b/services/repository/repository.go
+@@ -221,28 +221,25 @@ func MakeRepoPrivate(ctx context.Context, repo *repo_model.Repository) (err erro
+ 	})
+ }
+ 
+-// LinkedRepository returns the linked repo if any
+-func LinkedRepository(ctx context.Context, a *repo_model.Attachment) (*repo_model.Repository, unit.Type, error) {
++// GetAttachmentLinkedType returns the linked type of attachment if any
++func GetAttachmentLinkedType(ctx context.Context, a *repo_model.Attachment) (unit.Type, error) {
+ 	if a.IssueID != 0 {
+ 		iss, err := issues_model.GetIssueByID(ctx, a.IssueID)
+ 		if err != nil {
+-			return nil, unit.TypeIssues, err
++			return unit.TypeIssues, err
+ 		}
+-		repo, err := repo_model.GetRepositoryByID(ctx, iss.RepoID)
+ 		unitType := unit.TypeIssues
+ 		if iss.IsPull {
+ 			unitType = unit.TypePullRequests
+ 		}
+-		return repo, unitType, err
+-	} else if a.ReleaseID != 0 {
+-		rel, err := repo_model.GetReleaseByID(ctx, a.ReleaseID)
+-		if err != nil {
+-			return nil, unit.TypeReleases, err
+-		}
+-		repo, err := repo_model.GetRepositoryByID(ctx, rel.RepoID)
+-		return repo, unit.TypeReleases, err
++		return unitType, nil
++	}
++
++	if a.ReleaseID != 0 {
++		_, err := repo_model.GetReleaseByID(ctx, a.ReleaseID)
++		return unit.TypeReleases, err
+ 	}
+-	return nil, -1, nil
++	return unit.TypeInvalid, nil
+ }
+ 
+ // CheckDaemonExportOK creates/removes git-daemon-export-ok for git-daemon...
+diff --git a/services/repository/repository_test.go b/services/repository/repository_test.go
+index cf7dd6b7ed7f8..b3447ae166d17 100644
+--- a/services/repository/repository_test.go
++++ b/services/repository/repository_test.go
+@@ -16,28 +16,24 @@ import (
+ 	"github.com/stretchr/testify/require"
+ )
+ 
+-func TestLinkedRepository(t *testing.T) {
++func TestAttachLinkedType(t *testing.T) {
+ 	assert.NoError(t, unittest.PrepareTestDatabase())
+ 	testCases := []struct {
+ 		name             string
+ 		attachID         int64
+-		expectedRepo     *repo_model.Repository
+ 		expectedUnitType unit.Type
+ 	}{
+-		{"LinkedIssue", 1, &repo_model.Repository{ID: 1}, unit.TypeIssues},
+-		{"LinkedComment", 3, &repo_model.Repository{ID: 1}, unit.TypePullRequests},
+-		{"LinkedRelease", 9, &repo_model.Repository{ID: 1}, unit.TypeReleases},
+-		{"Notlinked", 10, nil, -1},
++		{"LinkedIssue", 1, unit.TypeIssues},
++		{"LinkedComment", 3, unit.TypePullRequests},
++		{"LinkedRelease", 9, unit.TypeReleases},
++		{"Notlinked", 10, unit.TypeInvalid},
+ 	}
+ 	for _, tc := range testCases {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			attach, err := repo_model.GetAttachmentByID(t.Context(), tc.attachID)
+ 			assert.NoError(t, err)
+-			repo, unitType, err := LinkedRepository(t.Context(), attach)
++			unitType, err := GetAttachmentLinkedType(t.Context(), attach)
+ 			assert.NoError(t, err)
+-			if tc.expectedRepo != nil {
+-				assert.Equal(t, tc.expectedRepo.ID, repo.ID)
+-			}
+ 			assert.Equal(t, tc.expectedUnitType, unitType)
+ 		})
+ 	}
+diff --git a/services/user/user.go b/services/user/user.go
+index 8e42fa3ccdcac..9b8bcf83c0bc7 100644
+--- a/services/user/user.go
++++ b/services/user/user.go
+@@ -239,6 +239,11 @@ func DeleteUser(ctx context.Context, u *user_model.User, purge bool) error {
+ 		if err := deleteUser(ctx, u, purge); err != nil {
+ 			return fmt.Errorf("DeleteUser: %w", err)
+ 		}
++
++		// Finally delete any unlinked attachments, this will also delete the attached files
++		if err := deleteUserUnlinkedAttachments(ctx, u); err != nil {
++			return fmt.Errorf("deleteUserUnlinkedAttachments: %w", err)
++		}
+ 		return nil
+ 	}); err != nil {
+ 		return err
+@@ -269,6 +274,19 @@ func DeleteUser(ctx context.Context, u *user_model.User, purge bool) error {
+ 	return nil
+ }
+ 
++func deleteUserUnlinkedAttachments(ctx context.Context, u *user_model.User) error {
++	attachments, err := repo_model.GetUnlinkedAttachmentsByUserID(ctx, u.ID)
++	if err != nil {
++		return fmt.Errorf("GetUnlinkedAttachmentsByUserID: %w", err)
++	}
++	for _, attach := range attachments {
++		if err := repo_model.DeleteAttachment(ctx, attach, true); err != nil {
++			return fmt.Errorf("DeleteAttachment ID[%d]: %w", attach.ID, err)
++		}
++	}
++	return nil
++}
++
+ // DeleteInactiveUsers deletes all inactive users and their email addresses.
+ func DeleteInactiveUsers(ctx context.Context, olderThan time.Duration) error {
+ 	inactiveUsers, err := user_model.GetInactiveUsers(ctx, olderThan)
+diff --git a/services/user/user_test.go b/services/user/user_test.go
+index 25e8ee7b2fec1..4d8d448dcd57e 100644
+--- a/services/user/user_test.go
++++ b/services/user/user_test.go
+@@ -63,6 +63,24 @@ func TestDeleteUser(t *testing.T) {
+ 	assert.Error(t, DeleteUser(t.Context(), org, false))
+ }
+ 
++func TestDeleteUserUnlinkedAttachments(t *testing.T) {
++	t.Run("DeleteExisting", func(t *testing.T) {
++		assert.NoError(t, unittest.PrepareTestDatabase())
++		user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 8})
++		unittest.AssertExistsAndLoadBean(t, &repo_model.Attachment{ID: 10})
++
++		assert.NoError(t, deleteUserUnlinkedAttachments(t.Context(), user))
++		unittest.AssertNotExistsBean(t, &repo_model.Attachment{ID: 10})
++	})
++
++	t.Run("NoUnlinkedAttachments", func(t *testing.T) {
++		assert.NoError(t, unittest.PrepareTestDatabase())
++		user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
++
++		assert.NoError(t, deleteUserUnlinkedAttachments(t.Context(), user))
++	})
++}
++
+ func TestPurgeUser(t *testing.T) {
+ 	test := func(userID int64) {
+ 		assert.NoError(t, unittest.PrepareTestDatabase())

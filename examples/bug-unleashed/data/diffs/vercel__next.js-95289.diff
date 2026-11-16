@@ -1,0 +1,229 @@
+diff --git a/packages/next/src/server/request/params.ts b/packages/next/src/server/request/params.ts
+index 2c2f8a291480..ac204bfbf937 100644
+--- a/packages/next/src/server/request/params.ts
++++ b/packages/next/src/server/request/params.ts
+@@ -69,12 +69,6 @@ export function createParamsFromClient(
+           workUnitStore,
+           varyParamsAccumulator
+         )
+-      case 'validation-client':
+-        return createClientParamsInInstantValidation(
+-          underlyingParams,
+-          workStore,
+-          workUnitStore.validationSamples
+-        )
+       case 'cache':
+       case 'private-cache':
+       case 'unstable-cache':
+@@ -89,6 +83,16 @@ export function createParamsFromClient(
+         throw new InvariantError(
+           'createParamsFromClient should not be called inside generateStaticParams.'
+         )
++      case 'validation-client': {
++        if (workUnitStore.validationSamples) {
++          return createClientParamsInInstantValidation(
++            underlyingParams,
++            workStore,
++            workUnitStore.validationSamples
++          )
++        }
++        return makeUntrackedParams(underlyingParams)
++      }
+       case 'request': {
+         if (workUnitStore.validationSamples) {
+           return createClientParamsInInstantValidation(
+diff --git a/packages/next/src/server/request/search-params.ts b/packages/next/src/server/request/search-params.ts
+index c055618e3bb6..211e08ef31f6 100644
+--- a/packages/next/src/server/request/search-params.ts
++++ b/packages/next/src/server/request/search-params.ts
+@@ -62,13 +62,6 @@ export function createSearchParamsFromClient(
+       case 'prerender-ppr':
+       case 'prerender-legacy':
+         return createStaticPrerenderSearchParams(workStore, workUnitStore)
+-      case 'validation-client': {
+-        return createClientSearchParamsInValidation(
+-          underlyingSearchParams,
+-          workStore,
+-          workUnitStore
+-        )
+-      }
+       case 'prerender-runtime':
+         throw new InvariantError(
+           'createSearchParamsFromClient should not be called in a runtime prerender.'
+@@ -83,6 +76,16 @@ export function createSearchParamsFromClient(
+         throw new InvariantError(
+           'createSearchParamsFromClient should not be called inside generateStaticParams.'
+         )
++      case 'validation-client': {
++        if (workUnitStore.validationSamples) {
++          return createClientSearchParamsInValidation(
++            underlyingSearchParams,
++            workStore,
++            workUnitStore
++          )
++        }
++        return makeUntrackedSearchParams(underlyingSearchParams)
++      }
+       case 'request':
+         // Client searchParams are not runtime prefetchable
+         const isRuntimePrefetchable = false
+diff --git a/test/e2e/app-dir/instant-validation/app/shared.tsx b/test/e2e/app-dir/instant-validation/app/shared.tsx
+index 68673871f8ff..1e05a85c9e96 100644
+--- a/test/e2e/app-dir/instant-validation/app/shared.tsx
++++ b/test/e2e/app-dir/instant-validation/app/shared.tsx
+@@ -5,6 +5,7 @@ import { Suspense } from 'react'
+ import { setTimeout } from 'timers/promises'
+ 
+ export function HackilyPreventFullyStaticServerPrerender() {
++  // FIXME(NAR-800)
+   return <Suspense>{connection().then(() => null)}</Suspense>
+ }
+ 
+diff --git a/test/e2e/app-dir/instant-validation/app/suspense-in-root/page.tsx b/test/e2e/app-dir/instant-validation/app/suspense-in-root/page.tsx
+index c210a548d550..11af739a492e 100644
+--- a/test/e2e/app-dir/instant-validation/app/suspense-in-root/page.tsx
++++ b/test/e2e/app-dir/instant-validation/app/suspense-in-root/page.tsx
+@@ -123,6 +123,12 @@ export default async function Page() {
+         <li>
+           <DebugLinks href="/suspense-in-root/static/valid-client-api-in-parent/search-params" />
+         </li>
++        <li>
++          <DebugLinks href="/suspense-in-root/static/valid-client-params/123" />
++        </li>
++        <li>
++          <DebugLinks href="/suspense-in-root/static/valid-client-search-params?query=foo" />
++        </li>
+         <li>
+           <DebugLinks href="/suspense-in-root/static/valid-client-data-does-not-block-validation" />
+         </li>
+diff --git a/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-params/[slug]/layout.tsx b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-params/[slug]/layout.tsx
+new file mode 100644
+index 000000000000..a86533f1a3ff
+--- /dev/null
++++ b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-params/[slug]/layout.tsx
+@@ -0,0 +1,18 @@
++import { Instant } from 'next'
++import { ReactNode } from 'react'
++import { HackilyPreventFullyStaticServerPrerender } from '../../../../shared'
++
++// We need a layout to export an instant config. Client components cannot have one
++export const instant: Instant = {
++  level: 'experimental-error',
++  unstable_samples: [{ params: { slug: '123' } }],
++}
++
++export default function DummyLayout({ children }: { children: ReactNode }) {
++  return (
++    <>
++      <HackilyPreventFullyStaticServerPrerender />
++      {children}
++    </>
++  )
++}
+diff --git a/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-params/[slug]/page.tsx b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-params/[slug]/page.tsx
+new file mode 100644
+index 000000000000..37ebcb461295
+--- /dev/null
++++ b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-params/[slug]/page.tsx
+@@ -0,0 +1,16 @@
++'use client'
++
++import { use } from 'react'
++
++export default function Page({
++  params,
++}: {
++  params: Promise<{ slug: string }>
++}) {
++  const { slug } = use(params)
++  return (
++    <main>
++      <h1>Slug: {slug}</h1>
++    </main>
++  )
++}
+diff --git a/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-search-params/layout.tsx b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-search-params/layout.tsx
+new file mode 100644
+index 000000000000..fe7f28ccc5fa
+--- /dev/null
++++ b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-search-params/layout.tsx
+@@ -0,0 +1,18 @@
++import { Instant } from 'next'
++import { ReactNode } from 'react'
++import { HackilyPreventFullyStaticServerPrerender } from '../../../shared'
++
++// We need a layout to export an instant config. Client components cannot have one
++export const instant: Instant = {
++  level: 'experimental-error',
++  unstable_samples: [{ searchParams: { query: 'foo' } }],
++}
++
++export default function DummyLayout({ children }: { children: ReactNode }) {
++  return (
++    <>
++      <HackilyPreventFullyStaticServerPrerender />
++      {children}
++    </>
++  )
++}
+diff --git a/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-search-params/page.tsx b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-search-params/page.tsx
+new file mode 100644
+index 000000000000..3fc310e6591c
+--- /dev/null
++++ b/test/e2e/app-dir/instant-validation/app/suspense-in-root/static/valid-client-search-params/page.tsx
+@@ -0,0 +1,16 @@
++'use client'
++
++import { use } from 'react'
++
++export default function Page({
++  searchParams,
++}: {
++  searchParams: Promise<Record<string, string | string[]>>
++}) {
++  const { query } = use(searchParams)
++  return (
++    <main>
++      <h1>Query {query}</h1>
++    </main>
++  )
++}
+diff --git a/test/e2e/app-dir/instant-validation/instant-validation.test.ts b/test/e2e/app-dir/instant-validation/instant-validation.test.ts
+index 348446daa3b7..431843adfa49 100644
+--- a/test/e2e/app-dir/instant-validation/instant-validation.test.ts
++++ b/test/e2e/app-dir/instant-validation/instant-validation.test.ts
+@@ -1787,6 +1787,34 @@ describe('instant validation', () => {
+           expectNoBuildValidationErrors(result)
+         }
+       })
++
++      it('valid - unguarded params in client page', async () => {
++        if (isNextDev) {
++          const browser = await navigateTo(
++            '/suspense-in-root/static/valid-client-params/123'
++          )
++          await expectNoDevValidationErrors(browser, await browser.url())
++        } else {
++          const result = await prerender(
++            '/suspense-in-root/static/valid-client-params/[slug]'
++          )
++          expectNoBuildValidationErrors(result)
++        }
++      })
++
++      it('valid - unguarded searchParams in client page', async () => {
++        if (isNextDev) {
++          const browser = await navigateTo(
++            '/suspense-in-root/static/valid-client-search-params?query=foo'
++          )
++          await expectNoDevValidationErrors(browser, await browser.url())
++        } else {
++          const result = await prerender(
++            '/suspense-in-root/static/valid-client-search-params'
++          )
++          expectNoBuildValidationErrors(result)
++        }
++      })
+     })
+ 
+     describe('client errors', () => {

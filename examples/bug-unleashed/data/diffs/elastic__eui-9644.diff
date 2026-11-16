@@ -1,0 +1,1296 @@
+diff --git a/packages/eui/src/components/combo_box/combo_box.stories.tsx b/packages/eui/src/components/combo_box/combo_box.stories.tsx
+index f29d83fcbee2..925bc6b1709b 100644
+--- a/packages/eui/src/components/combo_box/combo_box.stories.tsx
++++ b/packages/eui/src/components/combo_box/combo_box.stories.tsx
+@@ -83,6 +83,53 @@ export const Playground: Story = {
+   render: (args) => <StatefulComboBox {...args} />,
+ };
+ 
++export const MultipleInstances: Story = {
++  tags: ['vrt-only'],
++  parameters: { loki: { skip: true } },
++  render: () => (
++    <>
++      <StatefulComboBox data-test-subj="combo1" options={options} />
++      <StatefulComboBox data-test-subj="combo2" options={options} />
++    </>
++  ),
++};
++
++/**
++ * Used by `@elastic/eui-test-helpers` validation tests to verify
++ * `EuiComboBoxObject` in `singleSelection={{ asPlainText: true }}` mode.
++ * A dedicated story is required because Storybook coerces the URL arg
++ * `singleSelection:asPlainText` to boolean `true` (pill mode), making
++ * proper asPlainText testing impossible via URL args alone.
++ */
++export const AsPlainText: Story = {
++  tags: ['vrt-only'],
++  parameters: { loki: { skip: true } },
++  args: {
++    isClearable: true,
++    selectedOptions: [],
++  },
++  render: ({ isClearable, onCreateOption }) => (
++    <AsPlainTextStatefulWrapper
++      isClearable={isClearable}
++      onCreateOption={onCreateOption}
++    />
++  ),
++};
++
++/**
++ * Used by `@elastic/eui-test-helpers` validation tests to verify that
++ * `clear()` and `setSelectedOptions()` work when the selection contains
++ * options created via `onCreateOption` (not present in the `options` array).
++ */
++export const WithOnCreateOption: Story = {
++  tags: ['vrt-only'],
++  parameters: { loki: { skip: true } },
++  args: {
++    selectedOptions: [],
++  },
++  render: (args) => <StatefulComboBox {...args} onCreateOption={() => {}} />,
++};
++
+ export const WithCustomOptionIds: Story = {
+   parameters: {
+     controls: {
+@@ -393,6 +440,32 @@ const StatefulComboBox = ({
+   );
+ };
+ 
++const AsPlainTextStatefulWrapper = ({
++  isClearable,
++  onCreateOption,
++}: Pick<EuiComboBoxProps<{}>, 'isClearable' | 'onCreateOption'>) => {
++  const [selectedOptions, setSelectedOptions] = useState(
++    [] as NonNullable<EuiComboBoxProps<{}>['selectedOptions']>
++  );
++  const _onCreateOption: EuiComboBoxProps<{}>['onCreateOption'] = (
++    searchValue
++  ) => {
++    setSelectedOptions([{ label: searchValue }]);
++  };
++  return (
++    <EuiComboBox
++      singleSelection={{ asPlainText: true }}
++      options={options}
++      selectedOptions={selectedOptions}
++      onChange={(opts) => setSelectedOptions(opts)}
++      onCreateOption={onCreateOption ? _onCreateOption : undefined}
++      isClearable={isClearable}
++      aria-label="Select an item"
++      data-test-subj="testComboBox"
++    />
++  );
++};
++
+ const StoryCustomMatcher = ({
+   singleSelection,
+   onChange,
+diff --git a/packages/test-helpers/.gitignore b/packages/test-helpers/.gitignore
+new file mode 100644
+index 000000000000..aaa9103e44aa
+--- /dev/null
++++ b/packages/test-helpers/.gitignore
+@@ -0,0 +1,2 @@
++test-results/
++playwright-report/
+diff --git a/packages/test-helpers/CONTRIBUTING.md b/packages/test-helpers/CONTRIBUTING.md
+new file mode 100644
+index 000000000000..8822bfe3ae95
+--- /dev/null
++++ b/packages/test-helpers/CONTRIBUTING.md
+@@ -0,0 +1,96 @@
++# Contributing to `@elastic/eui-test-helpers`
++
++## Scope
++
++**What this library is for:** enabling consumer end-to-end tests to set up and tear down component state reliably, so the test can focus on its actual assertion — not on navigating EUI's DOM.
++
++**What this library is NOT for:** testing EUI component behavior. EUI already has RTL unit tests, Cypress E2E tests, and Loki VRT tests for that. If you want to add a public method specifically to exercise an EUI feature (e.g. "click the clear button to verify `onChange` fires"), that belongs in EUI's own suite. The validation tests here verify that **the helper itself works** — they are not a substitute for EUI's own tests and must not duplicate them.
++
++## Directory structure
++
++```
++src/
++  playwright/
++    base_object.ts                     # shared Playwright base class
++    components/
++      <name>/
++        object.ts                      # Component Object (Playwright)
++        object.spec.ts                 # validation tests — default config
++        object.props.spec.ts           # validation tests — non-default props
++        object.multiple_instances.spec.ts  # optional — multi-instance scoping
++  components/
++    <name>/
++      selectors.ts                     # framework-agnostic test-subj constants
++      README.md                        # component-level API docs
++  storybook.ts                         # framework-agnostic Storybook URL builder
++  selectors.ts                         # package-level generic selectors
++  index.ts                             # public exports
++```
++
++## Design principles
++
++### Minimal public API
++Keep methods `private` until a genuine external use case emerges. More public methods mean more surface to keep stable and more ways for callers to couple to internal EUI DOM details.
++
++### Configuration-agnostic public methods (smart auto-detection)
++Public methods must work across every supported prop configuration without the caller specifying which variant they are in. Probe the DOM to detect configuration and dispatch to the right internal strategy — try not to add a new public method per variant. The caller always writes `await comboBox.clear()`; how it clears is an implementation detail.
++
++### Single source of truth for selectors
++Every `data-test-subj` value and CSS selector lives in `src/components/<name>/selectors.ts`. Never inline test-subject strings in helpers or spec files.
++
++### Read synchronous DOM state — not async side-effects
++Prefer CSS classes set synchronously in EUI's render function over async icon loads (`data-icon-type`), deferred `aria-*` attributes, or animations. Use `expect.poll()` only when unavoidable — and always document why.
++
++### Scoped locators for multi-instance safety
++Scope every locator to `this.root`, never to `page`. For portal elements, use the `${testSubj}-optionsList` pattern to prevent cross-instance bleed.
++
++### Keyboard events scoped to the element
++Use `locator.press()` not `page.keyboard.press()`. Avoid `Escape` — it bubbles to page-level handlers (modals, flyouts). Prefer clicking the toggle button or calling `locator.blur()` to close dropdowns.
++
++### Subclassing readiness
++Declare internal getters `protected` rather than `private` so that subclasses can access them without duplication. EUI's own component hierarchy makes this relevant — `EuiInMemoryTable` builds on `EuiBasicTable` which builds on `EuiTable`; `EuiBetaBadge` builds on `EuiBadge`. A future `EuiInMemoryTableObject` should be able to extend `EuiBasicTableObject` and reuse its locators.
++
++## Adding a new Component Object
++
++1. **Selectors** — add `data-test-subj` constants to `src/components/<name>/selectors.ts`. Never inline test-subj strings anywhere else.
++2. **Object** — add the class in `src/playwright/components/<name>/object.ts`, extending `BaseObject`. Import constants from `selectors.ts`. Keep the public surface minimal; implement detection logic inside public methods rather than exposing variant-specific methods.
++3. **Validation tests** — follow the spec file structure below.
++4. **Re-export** — export the new class from `src/index.ts`.
++5. **Docs** — add a `src/components/<name>/README.md` documenting the public API and auto-detection behavior.
++
++### Spec file structure
++
++One file per concern — either the default behavior or a family of related non-default configurations. Not one file per story, not one file per method.
++
++- `object.spec.ts` — default config only; tests grouped by public method in nested `describe` blocks.
++- `object.props.spec.ts` — all non-default configurations that alter the DOM or interaction model; each configuration gets its own `describe` + `beforeEach`. Can span multiple Storybook stories.
++- `object.multiple_instances.spec.ts` — only when multiple instances can coexist on the same page.
++
++Name instances after the component (`comboBox`, `datePicker`, etc.) and append a number for multi-instance tests (`comboBox1`, `comboBox2`). Use `storyUrl()` from `src/storybook.ts` — never inline `/iframe.html` strings.
++
++## Running validation tests locally
++
++The validation tests run against EUI's Storybook. Start it first:
++
++```shell
++yarn workspace @elastic/eui build:workspaces   # one-time, builds eui-theme-common + eui-theme-borealis
++yarn workspace @elastic/eui start              # starts Storybook on http://localhost:6006
++```
++
++Wait until Storybook finishes compiling. Then, from the repository root:
++
++```shell
++yarn workspace @elastic/eui-test-helpers test
++```
++
++This runs `tsc --noEmit` (type-check) followed by `playwright test`. To run only the Playwright tests, use `test-unit`. On a fresh checkout, install Playwright's browsers once:
++
++```shell
++yarn workspace @elastic/eui-test-helpers exec playwright install chromium
++```
++
++After a failed run, open the HTML report (with traces, screenshots, and the full call log):
++
++```shell
++yarn workspace @elastic/eui-test-helpers show-report
++```
+diff --git a/packages/test-helpers/README.md b/packages/test-helpers/README.md
+index f0a099041efe..cd9f51b575e6 100644
+--- a/packages/test-helpers/README.md
++++ b/packages/test-helpers/README.md
+@@ -20,6 +20,37 @@ This library's versioning is following `@elastic/eui` and must be kept in sync t
+ yarn add --dev @elastic/eui-test-helpers
+ ```
+ 
++## Playwright Component Objects
++
++For Playwright/Scout consumers, this package ships **Component Objects** —
++semantic wrappers around a single Playwright `Locator` that encapsulate
++user-like interactions for a specific EUI component.
++
++```ts
++import { EuiComboBoxObject } from '@elastic/eui-test-helpers';
++
++const comboBox = new EuiComboBoxObject(page, 'dataViewSelector');
++await comboBox.setSelectedOptions(['logs-*']);
++expect(await comboBox.getSelectedOptions()).toEqual(['logs-*']);
++```
++
++Every Component Object constructor takes `(scope, testSubj)`:
++- `scope` — a Playwright `Page` or `Locator` to search within
++- `testSubj` — the `data-test-subj` value you set on the component's root element in your app
++
++`@playwright/test` is declared as a `peerDependency` — consumers provide
++their own version at runtime.
++
++### Available Component Objects
++
++| Component | Documentation |
++|---|---|
++| `EuiComboBoxObject` | [src/components/combo_box/README.md](src/components/combo_box/README.md) |
++
++## Contributing
++
++See [CONTRIBUTING.md](CONTRIBUTING.md) for design principles, directory structure, and how to add new Component Objects.
++
+ [Cypress]: https://github.com/cypress-io/cypress
+ [React Testing Library]: https://github.com/testing-library/react-testing-library
+ [Scout]: https://github.com/elastic/kibana/tree/main/src/platform/packages/shared/kbn-scout
+diff --git a/packages/test-helpers/package.json b/packages/test-helpers/package.json
+index 9e50cf5cedb6..427bbe67649e 100644
+--- a/packages/test-helpers/package.json
++++ b/packages/test-helpers/package.json
+@@ -6,5 +6,23 @@
+     "type": "git",
+     "url": "https://github.com/elastic/eui.git"
+   },
+-  "private": true
++  "private": true,
++  "scripts": {
++    "lint": "tsc --noEmit",
++    "test": "yarn lint && yarn test-unit",
++    "test-unit": "playwright test",
++    "show-report": "playwright show-report"
++  },
++  "peerDependencies": {
++    "@playwright/test": "^1.50.0"
++  },
++  "peerDependenciesMeta": {
++    "@playwright/test": {
++      "optional": true
++    }
++  },
++  "devDependencies": {
++    "@playwright/test": "1.59.1",
++    "typescript": "^5.7.3"
++  }
+ }
+diff --git a/packages/test-helpers/playwright.config.ts b/packages/test-helpers/playwright.config.ts
+new file mode 100644
+index 000000000000..efba2d4318a8
+--- /dev/null
++++ b/packages/test-helpers/playwright.config.ts
+@@ -0,0 +1,37 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++import { defineConfig, devices } from '@playwright/test';
++
++const STORYBOOK_PORT = 6006;
++const STORYBOOK_URL = `http://localhost:${STORYBOOK_PORT}`;
++
++/**
++ * Tests expect Storybook to already be running on `STORYBOOK_PORT`; see the
++ * package README for the local workflow. Defaults track kbn-scout's config
++ * (test-id attribute, timeouts, no auto-retries) for cross-team consistency.
++ */
++export default defineConfig({
++  testDir: './src',
++  testMatch: /.*\.spec\.ts$/,
++  fullyParallel: true,
++  forbidOnly: !!process.env.CI,
++  retries: 0,
++  reporter: process.env.CI ? 'github' : [['list'], ['html', { open: 'never' }]],
++  timeout: 60_000,
++  expect: { timeout: 10_000 },
++  use: {
++    baseURL: STORYBOOK_URL,
++    testIdAttribute: 'data-test-subj',
++    actionTimeout: 10_000,
++    navigationTimeout: 20_000,
++    trace: 'on-first-retry',
++    screenshot: 'only-on-failure',
++  },
++  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
++});
+diff --git a/packages/test-helpers/src/components/combo_box/README.md b/packages/test-helpers/src/components/combo_box/README.md
+new file mode 100644
+index 000000000000..3430f4115981
+--- /dev/null
++++ b/packages/test-helpers/src/components/combo_box/README.md
+@@ -0,0 +1,29 @@
++# EuiComboBoxObject
++
++Playwright Component Object for [EuiComboBox](https://eui.elastic.co/docs/components/forms/selection/combo-box/).
++
++## Usage
++
++```ts
++import { EuiComboBoxObject } from '@elastic/eui-test-helpers';
++
++const comboBox = new EuiComboBoxObject(page, 'myComboBox');
++await comboBox.setSelectedOptions(['Option A', 'Option B']);
++expect(await comboBox.getSelectedOptions()).toEqual(['Option A', 'Option B']);
++```
++
++Set `data-test-subj` on the outer `<EuiComboBox>` wrapper (`.euiComboBox`), not on the inner `comboBoxInput`.
++
++## API
++
++EuiComboBox has two selection modes that affect how the methods behave:
++
++- **Pill mode** — `singleSelection={false}` (default) or `singleSelection={true}`: selected options render as pill elements.
++- **Plain-text mode** — `singleSelection={{ asPlainText: true }}`: the selected option's label appears directly in the search input.
++
++| Method | Description |
++|---|---|
++| `getSelectedOptions()` | Returns selected options as `string[]` of labels. |
++| `setSelectedOptions(labels)` | Accepts an array of label strings. Replaces any existing selection. No-op if already matching. |
++| `clear()` | Clears all selected options. No-op if nothing is selected. |
++
+diff --git a/packages/test-helpers/src/components/combo_box/selectors.ts b/packages/test-helpers/src/components/combo_box/selectors.ts
+index be4dd264051f..5359e4f088b0 100644
+--- a/packages/test-helpers/src/components/combo_box/selectors.ts
++++ b/packages/test-helpers/src/components/combo_box/selectors.ts
+@@ -12,9 +12,9 @@
+  */
+ export const EuiComboBoxSelectors = {
+   /**
+-   * `data-test-subj` identifier of the outer (main) element
++   * `data-test-subj` identifier of the inner input wrapper element
+    */
+-  TEST_SUBJ: 'comboBoxInput',
++  INPUT_WRAPPER_TEST_SUBJ: 'comboBoxInput',
+ 
+   /**
+    * `data-test-subj` identifier of the search input field
+@@ -37,26 +37,56 @@ export const EuiComboBoxSelectors = {
+   CLEAR_BUTTON_TEST_SUBJ: 'comboBoxClearButton',
+ 
+   /**
+-   * `data-test-subj` identifier of all selected options (pills)
++   * CSS selector for the input wrapper in `singleSelection={{ asPlainText: true }}` mode.
++   * Present when the combo renders the selection inside the input instead of as pills.
+    */
+-  SELECTED_OPTIONS_TEST_SUBJ: 'euiComboBoxPill',
++  PLAIN_TEXT_INPUT_WRAP_SELECTOR: '.euiComboBox__inputWrap--plainText',
+ 
+   /**
+-   * CSS selector to find all options (currently rendered on the screen).
++   * `data-test-subj` identifier of selected option pills.
++   * Only present in non-`asPlainText` mode — in `asPlainText` mode the
++   * selection is shown inside the input, not as pills.
++   */
++  PILL_TEST_SUBJ: 'euiComboBoxPill',
++
++  /**
++   * CSS selector for all options in a specific combo box's dropdown.
++   *
++   * `testSubj` is the consumer's `data-test-subj` on `<EuiComboBox>`. EUI
++   * propagates this to the options list as `${testSubj}-optionsList`,
++   * letting us disambiguate when multiple combo boxes coexist on one page.
++   *
++   * To target a specific option by label, compose with Playwright's
++   * `getByTitle` to avoid CSS-injection issues with labels that contain
++   * special characters (`"`, `]`, `\`):
+    *
+-   * Note: Because the list of options might be virtualized, when searching
+-   * for a specific option, type in the searched string into the search input
+-   * before running any assertions to ensure the option is in DOM.
++   * ```ts
++   * page
++   *   .locator(EuiComboBoxSelectors.optionFor(testSubj))
++   *   .and(page.getByTitle(label, { exact: true }))
++   * ```
++   *
++   * Note: the list may be virtualized — type the search string into the
++   * input before asserting on a specific option to ensure it is in DOM.
++   */
++  optionFor: (testSubj: string): string =>
++    `[data-test-subj~="${testSubj}-optionsList"] [role="option"]`,
++
++  /**
++   * CSS selector for all selected options in a specific combo box's dropdown.
++   * See `optionFor` for `testSubj` rationale and label-targeting guidance.
+    */
+-  OPTION: '[data-test-subj="comboBoxOptionsList"] button[role="option"]',
++  selectedOptionFor: (testSubj: string): string =>
++    `[data-test-subj~="${testSubj}-optionsList"] [role="option"][aria-selected="true"]`,
+ 
+   /**
+-   * CSS selector to find all selected options (currently rendered on the screen)
++   * CSS selector for a specific combo box's options list container (the
++   * dropdown portal). Matches whether the list has regular options or an
++   * empty-state entry (e.g. "Add X as a custom option" for `onCreateOption`).
+    *
+-   * Note: Because the list of options might be virtualized, when searching
+-   * for a specific option, type in the searched string into the search input
+-   * before running any assertions to ensure the option is in DOM.
++   * Use this when you only need to wait for the dropdown to open, not when
++   * you need to target a specific option inside it.
+    */
+-  SELECTED_OPTION:
+-    '[data-test-subj="comboBoxOptionsList"] button[role="option"][aria-selected="true"]',
++  optionsListFor: (testSubj: string): string =>
++    `[data-test-subj~="${testSubj}-optionsList"]`,
+ };
+diff --git a/packages/test-helpers/src/index.ts b/packages/test-helpers/src/index.ts
+new file mode 100644
+index 000000000000..e8212ce0c065
+--- /dev/null
++++ b/packages/test-helpers/src/index.ts
+@@ -0,0 +1,10 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++export { BaseObject, type ObjectScope } from './playwright/base_object';
++export { EuiComboBoxObject } from './playwright/components/combo_box/object';
+diff --git a/packages/test-helpers/src/playwright/base_object.ts b/packages/test-helpers/src/playwright/base_object.ts
+new file mode 100644
+index 000000000000..a89ef8c68765
+--- /dev/null
++++ b/packages/test-helpers/src/playwright/base_object.ts
+@@ -0,0 +1,51 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++import type { Locator, Page } from '@playwright/test';
++
++export type ObjectScope = Page | Locator | BaseObject;
++
++/**
++ * Base class for Playwright Component Objects — semantic wrappers around a
++ * single root `Locator` resolved from a `data-test-subj` inside the given
++ * scope. Subclasses compose: pass another Component Object as `scope` to
++ * nest one inside the other's DOM subtree.
++ *
++ * Requires `testIdAttribute: 'data-test-subj'` in the Playwright config.
++ */
++export abstract class BaseObject {
++  /**
++   * Available to subclasses for queries outside `root`'s subtree but within
++   * the original scope (e.g. siblings, related controls).
++   */
++  protected readonly scope: Page | Locator;
++
++  protected readonly root: Locator;
++
++  /**
++   * Retained so subclasses can disambiguate portal-rendered content per
++   * instance — e.g. EUI propagates this as `${testSubj}-optionsList` to a
++   * combo box's options list, letting us scope queries to the right combo
++   * when several exist on a page.
++   */
++  protected readonly testSubj: string;
++
++  constructor(scope: ObjectScope, testSubj: string) {
++    this.scope = scope instanceof BaseObject ? scope.locator : scope;
++    this.root = this.scope.getByTestId(testSubj);
++    this.testSubj = testSubj;
++  }
++
++  /**
++   * Underlying `Locator` — escape hatch for assertions or scoping the
++   * Component Object's API doesn't cover.
++   */
++  get locator(): Locator {
++    return this.root;
++  }
++}
+diff --git a/packages/test-helpers/src/playwright/components/combo_box/object.multiple_instances.spec.ts b/packages/test-helpers/src/playwright/components/combo_box/object.multiple_instances.spec.ts
+new file mode 100644
+index 000000000000..020478744327
+--- /dev/null
++++ b/packages/test-helpers/src/playwright/components/combo_box/object.multiple_instances.spec.ts
+@@ -0,0 +1,49 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++import { test, expect } from '@playwright/test';
++
++import { EuiComboBoxObject } from './object';
++import { storyUrl } from '../../../storybook';
++
++/**
++ * Validates that `EuiComboBoxObject` correctly scopes all locators when
++ * multiple EuiComboBox instances coexist on the same page.
++ *
++ * Kept in a separate spec so Playwright can run this and `object.spec.ts`
++ * in parallel workers.
++ */
++
++test.describe('EuiComboBoxObject — multiple instances', () => {
++  let comboBox1: EuiComboBoxObject;
++  let comboBox2: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(storyUrl('forms-euicombobox--multiple-instances'));
++    comboBox1 = new EuiComboBoxObject(page, 'combo1');
++    comboBox2 = new EuiComboBoxObject(page, 'combo2');
++    await comboBox1.clear();
++    await comboBox2.clear();
++  });
++
++  test('two combo boxes on the same page are operated independently', async () => {
++    // Distinct labels + reverse order so a regression that mis-routed a
++    // selection across combos would surface.
++    await comboBox2.setSelectedOptions(['Item 5']);
++    await comboBox1.setSelectedOptions(['Item 2']);
++
++    expect(await comboBox1.getSelectedOptions()).toEqual(['Item 2']);
++    expect(await comboBox2.getSelectedOptions()).toEqual(['Item 5']);
++
++    // Clearing comboBox1 must not affect comboBox2 — guards the `clearButton`
++    // getter against a page-level scoping regression.
++    await comboBox1.clear();
++    expect(await comboBox1.getSelectedOptions()).toEqual([]);
++    expect(await comboBox2.getSelectedOptions()).toEqual(['Item 5']);
++  });
++});
+diff --git a/packages/test-helpers/src/playwright/components/combo_box/object.props.spec.ts b/packages/test-helpers/src/playwright/components/combo_box/object.props.spec.ts
+new file mode 100644
+index 000000000000..5b5b31c47cf6
+--- /dev/null
++++ b/packages/test-helpers/src/playwright/components/combo_box/object.props.spec.ts
+@@ -0,0 +1,314 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++import type { Page } from '@playwright/test';
++import { test, expect } from '@playwright/test';
++
++import { EuiComboBoxObject } from './object';
++import { EuiComboBoxSelectors } from '../../../components/combo_box/selectors';
++import { storyUrl } from '../../../storybook';
++
++/**
++ * Validates `EuiComboBoxObject` against non-default EuiComboBox prop
++ * configurations that change the DOM structure or interaction model.
++ *
++ * Kept in a separate spec so Playwright runs it in a parallel worker and
++ * each describe block can navigate to its own Storybook URL without
++ * interfering with the default-config tests in `object.spec.ts`.
++ */
++
++const TEST_SUBJ = 'testComboBox';
++
++const playgroundUrl = (extraArgs: string) =>
++  storyUrl('forms-euicombobox--playground', `data-test-subj:${TEST_SUBJ};${extraArgs}`);
++
++const PLAIN_TEXT_STORY_URL = storyUrl('forms-euicombobox--as-plain-text');
++const ON_CREATE_OPTION_STORY_URL = storyUrl(
++  'forms-euicombobox--with-on-create-option',
++  `data-test-subj:${TEST_SUBJ}`
++);
++
++// ---------------------------------------------------------------------------
++// singleSelection={true}  — one pill, no multi-select
++// ---------------------------------------------------------------------------
++
++test.describe('EuiComboBoxObject — singleSelection=true', () => {
++  let comboBox: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(playgroundUrl('singleSelection:true'));
++    await page.getByTestId(TEST_SUBJ).waitFor({ state: 'visible' });
++    comboBox = new EuiComboBoxObject(page, TEST_SUBJ);
++    await comboBox.clear();
++  });
++
++  test('setSelectedOptions selects a single option', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 2']);
++  });
++
++  test('setSelectedOptions replaces the existing single selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.setSelectedOptions(['Item 3']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 3']);
++  });
++
++  test('clear removes the single selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.clear();
++
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// singleSelection={{ asPlainText: true }}  — selection in input, no pills
++// ---------------------------------------------------------------------------
++
++test.describe('EuiComboBoxObject — singleSelection=asPlainText', () => {
++  let comboBox: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(PLAIN_TEXT_STORY_URL);
++    await page.getByTestId(TEST_SUBJ).waitFor({ state: 'visible' });
++    comboBox = new EuiComboBoxObject(page, TEST_SUBJ);
++    await comboBox.clear();
++  });
++
++  test('getSelectedOptions reads the input value when no pills are rendered', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++
++    // asPlainText renders no pills — the input value IS the selection.
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 2']);
++  });
++
++  test('setSelectedOptions replaces the existing plain-text selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.setSelectedOptions(['Item 3']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 3']);
++  });
++
++  test('clear removes the plain-text selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.clear();
++
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++
++  test('getSelectedOptions returns [] when nothing is selected', async () => {
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++
++  test('getSelectedOptions returns [] when text is typed but not confirmed', async ({
++    page,
++  }) => {
++    await page
++      .getByTestId(EuiComboBoxSelectors.SEARCH_INPUT_TEST_SUBJ)
++      .pressSequentially('NonExistent');
++    // Close the dropdown via the toggle button. This sets isListOpen=false while
++    // keeping hasFocus=true (focus stays inside the combo), which is enough for
++    // EUI's markAsInvalid condition to fire — no Escape needed.
++    await page
++      .getByTestId(EuiComboBoxSelectors.OPTIONS_LIST_TOGGLE_BUTTON_TEST_SUBJ)
++      .click();
++    // Waits for React to process the toggle click before reading selection state.
++    await expect(page.getByTestId(TEST_SUBJ)).toHaveClass(/euiComboBox-isInvalid/);
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// isClearable={false}  — no clear button in the DOM
++// ---------------------------------------------------------------------------
++
++test.describe('EuiComboBoxObject — isClearable=false', () => {
++  let comboBox: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(playgroundUrl('isClearable:!false'));
++    await page.getByTestId(TEST_SUBJ).waitFor({ state: 'visible' });
++    comboBox = new EuiComboBoxObject(page, TEST_SUBJ);
++    await comboBox.clear();
++  });
++
++  test('clear removes the selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.clear();
++
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++
++  test('setSelectedOptions replaces the existing selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.setSelectedOptions(['Item 3']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 3']);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// singleSelection={{ asPlainText: true }} + isClearable={false}
++// — no pills, no clear button; input IS the only selection indicator
++// ---------------------------------------------------------------------------
++
++test.describe('EuiComboBoxObject — singleSelection=asPlainText + isClearable=false', () => {
++  let comboBox: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(`${PLAIN_TEXT_STORY_URL}&args=isClearable:!false`);
++    await page.getByTestId(TEST_SUBJ).waitFor({ state: 'visible' });
++    comboBox = new EuiComboBoxObject(page, TEST_SUBJ);
++    await comboBox.clear();
++  });
++
++  test('getSelectedOptions returns [] when nothing is selected', async () => {
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++
++  test('getSelectedOptions returns the selected value', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 2']);
++  });
++
++  test('setSelectedOptions selects an option', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 2']);
++  });
++
++  test('setSelectedOptions replaces the existing selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.setSelectedOptions(['Item 3']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 3']);
++  });
++
++  test('setSelectedOptions is a no-op when the selection already matches', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.setSelectedOptions(['Item 2']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 2']);
++  });
++
++  test('clear removes the selection', async () => {
++    await comboBox.setSelectedOptions(['Item 2']);
++    await comboBox.clear();
++
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// onCreateOption — created options appear as pills (not in the options array);
++// clear() must use clickPillClearButtons, not deselectAllFromDropdown
++// ---------------------------------------------------------------------------
++
++test.describe('EuiComboBoxObject — onCreateOption', () => {
++  let comboBox: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(ON_CREATE_OPTION_STORY_URL);
++    await page.getByTestId(TEST_SUBJ).waitFor({ state: 'visible' });
++    comboBox = new EuiComboBoxObject(page, TEST_SUBJ);
++    await comboBox.clear();
++  });
++
++  test('getSelectedOptions returns the created option label', async ({
++    page,
++  }) => {
++    await createCustomOption(page, TEST_SUBJ, 'Brand new');
++
++    expect(await comboBox.getSelectedOptions()).toContain('Brand new');
++  });
++
++  test('clear removes a created option', async ({ page }) => {
++    await createCustomOption(page, TEST_SUBJ, 'Brand new');
++    await comboBox.clear();
++
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++
++  test('setSelectedOptions replaces a created option with a regular one', async ({
++    page,
++  }) => {
++    await createCustomOption(page, TEST_SUBJ, 'Brand new');
++    await comboBox.setSelectedOptions(['Item 3']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 3']);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// onCreateOption + asPlainText — created option lives in the input;
++// clear() must use deleteSearchInput (Backspace), not deselectAllFromDropdown
++// ---------------------------------------------------------------------------
++
++test.describe('EuiComboBoxObject — onCreateOption + asPlainText', () => {
++  let comboBox: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(`${PLAIN_TEXT_STORY_URL}&args=onCreateOption:!true`);
++    await page.getByTestId(TEST_SUBJ).waitFor({ state: 'visible' });
++    comboBox = new EuiComboBoxObject(page, TEST_SUBJ);
++  });
++
++  test('getSelectedOptions returns the created option label', async ({
++    page,
++  }) => {
++    await createCustomOption(page, TEST_SUBJ, 'Brand new');
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Brand new']);
++  });
++
++  test('clear removes a created option', async ({ page }) => {
++    await createCustomOption(page, TEST_SUBJ, 'Brand new');
++    await comboBox.clear();
++
++    expect(await comboBox.getSelectedOptions()).toEqual([]);
++  });
++
++  test('setSelectedOptions replaces a created option with a regular one', async ({
++    page,
++  }) => {
++    await createCustomOption(page, TEST_SUBJ, 'Brand new');
++    await comboBox.setSelectedOptions(['Item 3']);
++
++    expect(await comboBox.getSelectedOptions()).toEqual(['Item 3']);
++  });
++});
++
++// ---------------------------------------------------------------------------
++// Helpers
++// ---------------------------------------------------------------------------
++
++/**
++ * Types a value not present in the options list and presses Enter to confirm
++ * it as a custom selection. EUI renders an "Add X as a custom option" message
++ * (not a `role="option"` element) when no options match — so Enter is the
++ * correct interaction, not a locator click.
++ */
++async function createCustomOption(
++  page: Page,
++  testSubj: string,
++  label: string
++): Promise<void> {
++  await page
++    .getByTestId(EuiComboBoxSelectors.SEARCH_INPUT_TEST_SUBJ)
++    .fill(label);
++  // Wait for the options list portal to open before pressing Enter.
++  await page
++    .locator(EuiComboBoxSelectors.optionsListFor(testSubj))
++    .waitFor({ state: 'visible' });
++  await page
++    .getByTestId(EuiComboBoxSelectors.SEARCH_INPUT_TEST_SUBJ)
++    .press('Enter');
++}
+diff --git a/packages/test-helpers/src/playwright/components/combo_box/object.spec.ts b/packages/test-helpers/src/playwright/components/combo_box/object.spec.ts
+new file mode 100644
+index 000000000000..77fb9c5e524b
+--- /dev/null
++++ b/packages/test-helpers/src/playwright/components/combo_box/object.spec.ts
+@@ -0,0 +1,87 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++import { test, expect } from '@playwright/test';
++
++import { EuiComboBoxObject } from './object';
++import { storyUrl } from '../../../storybook';
++
++/**
++ * Validates `EuiComboBoxObject` against the live component in EUI Storybook.
++ *
++ * `data-test-subj` is injected via Storybook's `args` URL parameter so the
++ * helper can scope to the outer `.euiComboBox` wrapper — the clear button is
++ * rendered as a sibling of `comboBoxInput`, not a descendant.
++ */
++
++const TEST_SUBJ = 'testComboBox';
++
++const PLAYGROUND_URL = storyUrl(
++  'forms-euicombobox--playground',
++  `data-test-subj:${TEST_SUBJ}`
++);
++
++test.describe('EuiComboBoxObject', () => {
++  let comboBox: EuiComboBoxObject;
++
++  test.beforeEach(async ({ page }) => {
++    await page.goto(PLAYGROUND_URL);
++    await page.getByTestId(TEST_SUBJ).waitFor({ state: 'visible' });
++    comboBox = new EuiComboBoxObject(page, TEST_SUBJ);
++    await comboBox.clear();
++  });
++
++  test.describe('setSelectedOptions', () => {
++    test('sets the selection to the provided labels', async () => {
++      await comboBox.setSelectedOptions(['Item 2']);
++
++      expect(await comboBox.getSelectedOptions()).toEqual(['Item 2']);
++    });
++
++    test('replaces the existing selection', async () => {
++      await comboBox.setSelectedOptions(['Item 1', 'Item 2']);
++      expect(await comboBox.getSelectedOptions()).toEqual(['Item 1', 'Item 2']);
++
++      // Replace, don't add.
++      await comboBox.setSelectedOptions(['Item 3']);
++      expect(await comboBox.getSelectedOptions()).toEqual(['Item 3']);
++    });
++
++    test('is idempotent when the selection already matches', async () => {
++      await comboBox.setSelectedOptions(['Item 1', 'Item 2']);
++
++      await expect(
++        comboBox.setSelectedOptions(['Item 1', 'Item 2'])
++      ).resolves.not.toThrow();
++      expect(await comboBox.getSelectedOptions()).toEqual(['Item 1', 'Item 2']);
++    });
++
++    test('setSelectedOptions([]) clears the selection', async () => {
++      await comboBox.setSelectedOptions(['Item 1', 'Item 2']);
++
++      await comboBox.setSelectedOptions([]);
++
++      expect(await comboBox.getSelectedOptions()).toEqual([]);
++    });
++  });
++
++  test.describe('clear', () => {
++    test('removes all selected options', async () => {
++      await comboBox.setSelectedOptions(['Item 1', 'Item 2']);
++
++      await comboBox.clear();
++
++      expect(await comboBox.getSelectedOptions()).toEqual([]);
++    });
++
++    test('is a no-op when nothing is selected', async () => {
++      await expect(comboBox.clear()).resolves.not.toThrow();
++      expect(await comboBox.getSelectedOptions()).toEqual([]);
++    });
++  });
++});
+diff --git a/packages/test-helpers/src/playwright/components/combo_box/object.ts b/packages/test-helpers/src/playwright/components/combo_box/object.ts
+new file mode 100644
+index 000000000000..8ce9804ea681
+--- /dev/null
++++ b/packages/test-helpers/src/playwright/components/combo_box/object.ts
+@@ -0,0 +1,241 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++import type { Locator } from '@playwright/test';
++import { expect } from '@playwright/test';
++
++import { BaseObject } from '../../base_object';
++import { EuiComboBoxSelectors } from '../../../components/combo_box/selectors';
++
++/**
++ * Playwright Component Object for {@link
++ * https://eui.elastic.co/docs/components/forms/selection/combo-box/ EuiComboBox}.
++ *
++ * `testSubj` must match the `data-test-subj` set by the consumer on the
++ * `<EuiComboBox>` element (the outer `.euiComboBox` wrapper, not the inner
++ * `comboBoxInput`).
++ */
++export class EuiComboBoxObject extends BaseObject {
++  /**
++   * Replace the current selection with `labels`. Set-semantics: order-
++   * independent — already-selected labels are kept, missing ones are added,
++   * extras are removed. No-op if the current selection already matches.
++   *
++   * Throws with a descriptive message if any label never appears in the
++   * dropdown (catches test/data drift early).
++   */
++  async setSelectedOptions(labels: string[]): Promise<void> {
++    // Dedupe while preserving order.
++    const targetLabels = [...new Set(labels)];
++    // `[...arr].sort()` (not `arr.sort()`) — sort mutates in place; the copy
++    // avoids mutating either the consumer's input or our internal state.
++    const sortedTarget = [...targetLabels].sort();
++
++    const sortedCurrent = [...(await this.getSelectedOptions())].sort();
++
++    // Set-equality short-circuit (any order).
++    if (
++      sortedCurrent.length === sortedTarget.length &&
++      sortedCurrent.every((label, i) => label === sortedTarget[i])
++    ) {
++      return;
++    }
++
++    // Naive replace — clear, then add each. A diff-based approach would do
++    // less DOM work but require a per-pill remove primitive we don't ship yet.
++    await this.clear();
++
++    for (const label of targetLabels) {
++      await this.addOption(label);
++    }
++
++    if (targetLabels.length > 0) {
++      // Blur the input to close the dropdown. Using blur() rather than a
++      // keyboard event avoids bubbling Escape to page-level handlers
++      // (modal/flyout close listeners) on the consumer page.
++      await this.searchInput.blur();
++    }
++
++    expect([...(await this.getSelectedOptions())].sort()).toEqual(sortedTarget);
++  }
++
++  /**
++   * Clear all selected options. No-op if nothing is selected.
++   *
++   * Auto-detects the combo box configuration and uses the appropriate strategy:
++   * - Pills present → {@link clickPillClearButtons}
++   * - `asPlainText` with a confirmed input selection → {@link deleteSearchInput}
++   * - Otherwise → {@link deselectAllFromDropdown}
++   *
++   * Use the explicit methods directly when you need full control over the
++   * clearing strategy (e.g. `onCreateOption` with selections not in the
++   * options list).
++   */
++  async clear(): Promise<void> {
++    if ((await this.getSelectedOptions()).length === 0) {
++      return;
++    }
++
++    if (await this.hasPills()) {
++      await this.clickPillClearButtons();
++      return;
++    }
++
++    if (await this.hasConfirmedInputSelection()) {
++      await this.deleteSearchInput();
++      return;
++    }
++
++    await this.deselectAllFromDropdown();
++  }
++
++  /**
++   * Currently selected option labels.
++   *
++   * - Multi-select / `singleSelection=true` → pill texts.
++   * - `singleSelection={{ asPlainText: true }}` → the input value. EUI
++   *   renders no pills in this mode; the input IS the selection display.
++   *   Works correctly with both `isClearable=true` (default) and
++   *   `isClearable=false`.
++   * - Nothing selected → `[]`.
++   */
++  async getSelectedOptions(): Promise<string[]> {
++    if (await this.hasPills()) {
++      return this.pills.allInnerTexts();
++    }
++    if (await this.hasConfirmedInputSelection()) {
++      return [await this.searchInput.inputValue()];
++    }
++    return [];
++  }
++
++  private async hasPills(): Promise<boolean> {
++    return (await this.pills.count()) > 0;
++  }
++
++  /**
++   * Clicks the `×` button on each selected pill individually.
++   * Works regardless of `isClearable` — pill close buttons are always present.
++   * No-op if no pills are rendered.
++   */
++  private async clickPillClearButtons(): Promise<void> {
++    while (await this.hasPills()) {
++      const countBefore = await this.pills.count();
++      await this.pills.first().locator('button').click();
++      await expect(this.pills).not.toHaveCount(countBefore);
++    }
++  }
++
++  /**
++   * Opens the dropdown and clicks each `aria-selected="true"` option to
++   * deselect it. Works for all `isClearable` and `singleSelection`
++   * configurations when the selected options are present in the options list.
++   *
++   * Does not work when the selection was created via `onCreateOption` and the
++   * created option was not added back to the `options` array — use
++   * {@link clickPillClearButtons} instead.
++   */
++  private async deselectAllFromDropdown(): Promise<void> {
++    await this.input.click();
++
++    const selected = this.root
++      .page()
++      .locator(EuiComboBoxSelectors.selectedOptionFor(this.testSubj));
++
++    while ((await selected.count()) > 0) {
++      const countBefore = await selected.count();
++      await selected.first().click();
++      await expect(selected).not.toHaveCount(countBefore);
++    }
++
++    await this.searchInput.blur();
++  }
++
++  private async addOption(label: string): Promise<void> {
++    // Clicking the outer wrapper does not reliably open the dropdown; the
++    // inner `comboBoxInput` element does.
++    await this.input.click();
++
++    // Don't type to filter: EUI only sets an option's `title` while the input
++    // is empty, and the getByTitle match below relies on it. setSelectedOptions
++    // clears the selection first, so the list is unfiltered and every option
++    // renders its title.
++    //
++    // Options list is rendered in a portal outside `this.root`, so locate
++    // from page level. Use .and(getByTitle) rather than embedding the label
++    // in the CSS string — CSS attribute selectors break on labels containing
++    // quotes, brackets, or backslashes. getByTitle alone would search
++    // descendants; .and() intersects so it matches the option element itself.
++    const option = this.root
++      .page()
++      .locator(EuiComboBoxSelectors.optionFor(this.testSubj))
++      .and(this.root.page().getByTitle(label, { exact: true }));
++    await option.waitFor({ state: 'visible' });
++    await option.click();
++  }
++
++  /**
++   * Focuses the search input and presses Backspace to clear the selection.
++   * Only valid in `singleSelection={{ asPlainText: true }}` mode where
++   * {@link hasConfirmedInputSelection} is true — EUI's `onKeyDown` handler
++   * fires `onRemoveOption` when Backspace is pressed with an empty `searchValue`.
++   */
++  private async deleteSearchInput(): Promise<void> {
++    await this.searchInput.press('Backspace');
++    // Backspace triggers onRemoveOption (removes the selection) but the
++    // browser also fires a native input event that sets searchValue to a
++    // partial label string. fill('') cleans that up without restoring the
++    // selection (selectedOptions is already empty at this point).
++    await this.searchInput.fill('');
++    await expect(this.searchInput).toHaveValue('');
++  }
++
++  /**
++   * Returns true when the combo is in `asPlainText` mode and the input
++   * contains a *confirmed* selection (not unconfirmed typed text).
++   *
++   * In `asPlainText` mode the input IS the selection display: EUI renders
++   * the selected option's label directly in the input (no pills). An empty
++   * input means nothing is selected.
++   *
++   * When the user types text that matches no option and blurs (without
++   * `onCreateOption`), EUI marks the combo box invalid by adding
++   * `euiComboBox-isInvalid` to the root element. An invalid combo with a
++   * non-empty input has unconfirmed text, not a confirmed selection.
++   */
++  private async hasConfirmedInputSelection(): Promise<boolean> {
++    if (!(await this.isPlainText())) return false;
++    if (!(await this.searchInput.inputValue())) return false;
++    return !(await this.isMarkedInvalid());
++  }
++
++  private async isMarkedInvalid(): Promise<boolean> {
++    const classes = await this.root.getAttribute('class');
++    return classes?.includes('euiComboBox-isInvalid') ?? false;
++  }
++
++  private get input(): Locator {
++    return this.root.getByTestId(EuiComboBoxSelectors.INPUT_WRAPPER_TEST_SUBJ);
++  }
++
++  private get searchInput(): Locator {
++    return this.root.getByTestId(EuiComboBoxSelectors.SEARCH_INPUT_TEST_SUBJ);
++  }
++
++  private get pills(): Locator {
++    return this.root.getByTestId(EuiComboBoxSelectors.PILL_TEST_SUBJ);
++  }
++
++  private async isPlainText(): Promise<boolean> {
++    return (
++      (await this.root
++        .locator(EuiComboBoxSelectors.PLAIN_TEXT_INPUT_WRAP_SELECTOR)
++        .count()) > 0
++    );
++  }
++}
+diff --git a/packages/test-helpers/src/storybook.ts b/packages/test-helpers/src/storybook.ts
+new file mode 100644
+index 000000000000..1e1c235ecc53
+--- /dev/null
++++ b/packages/test-helpers/src/storybook.ts
+@@ -0,0 +1,16 @@
++/*
++ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
++ * or more contributor license agreements. Licensed under the Elastic License
++ * 2.0 and the Server Side Public License, v 1; you may not use this file except
++ * in compliance with, at your election, the Elastic License 2.0 or the Server
++ * Side Public License, v 1.
++ */
++
++/**
++ * Returns the Storybook iframe URL for a given story ID and optional args.
++ *
++ * @param id - The Storybook story ID (e.g. `'forms-euicombobox--playground'`)
++ * @param args - Optional semicolon-separated Storybook args string (e.g. `'data-test-subj:myCombo;singleSelection:true'`)
++ */
++export const storyUrl = (id: string, args?: string): string =>
++  `/iframe.html?id=${id}&viewMode=story${args ? `&args=${args}` : ''}`;
+diff --git a/packages/test-helpers/tsconfig.json b/packages/test-helpers/tsconfig.json
+new file mode 100644
+index 000000000000..863d821d0cbd
+--- /dev/null
++++ b/packages/test-helpers/tsconfig.json
+@@ -0,0 +1,16 @@
++{
++  "$schema": "https://json.schemastore.org/tsconfig",
++  "compilerOptions": {
++    "rootDir": ".",
++    "target": "ES2020",
++    "module": "ESNext",
++    "lib": ["ESNext", "DOM"],
++    "moduleResolution": "Node",
++    "esModuleInterop": true,
++    "strict": true,
++    "skipLibCheck": true,
++    "noEmit": true
++  },
++  "include": ["src", "playwright.config.ts"],
++  "exclude": ["node_modules"]
++}
+diff --git a/yarn.lock b/yarn.lock
+index e056a835077d..047d20bfb530 100644
+--- a/yarn.lock
++++ b/yarn.lock
+@@ -7133,6 +7133,14 @@ __metadata:
+ "@elastic/eui-test-helpers@workspace:packages/test-helpers":
+   version: 0.0.0-use.local
+   resolution: "@elastic/eui-test-helpers@workspace:packages/test-helpers"
++  dependencies:
++    "@playwright/test": "npm:1.59.1"
++    typescript: "npm:^5.7.3"
++  peerDependencies:
++    "@playwright/test": ^1.50.0
++  peerDependenciesMeta:
++    "@playwright/test":
++      optional: true
+   languageName: unknown
+   linkType: soft
+ 
+@@ -8974,7 +8982,7 @@ __metadata:
+   languageName: node
+   linkType: hard
+ 
+-"@playwright/test@npm:^1.44.0":
++"@playwright/test@npm:1.59.1, @playwright/test@npm:^1.44.0":
+   version: 1.59.1
+   resolution: "@playwright/test@npm:1.59.1"
+   dependencies:

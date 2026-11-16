@@ -1,0 +1,16 @@
+{
+  "case_id": "usebruno__bruno-8197",
+  "repo": "usebruno/bruno",
+  "pr": 8197,
+  "title": "Fix (import): Postman import: OAuth2 tokenPlacement not set correctly, Header Prefix field hidden and value lost",
+  "language": "JavaScript",
+  "split": "val",
+  "kind": "clean",
+  "example_id": "usebruno__bruno-8197",
+  "target": null,
+  "siblings": [],
+  "head_sha": "8acb18f6890efdae2b5bbd4af6a8fb98ae12d009",
+  "base_sha": "377cdb488c75926f6e68a34903c0b972bf35d937",
+  "snapshot": "repos/usebruno__bruno/8acb18f6890efdae2b5bbd4af6a8fb98ae12d009",
+  "diff": "diffs/usebruno__bruno-8197.diff"
+}

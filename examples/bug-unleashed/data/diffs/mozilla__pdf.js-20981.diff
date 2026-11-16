@@ -1,0 +1,1695 @@
+diff --git a/src/display/draw_layer.js b/src/display/draw_layer.js
+index 78b338c6de4b6..1c1aa84117fef 100644
+--- a/src/display/draw_layer.js
++++ b/src/display/draw_layer.js
+@@ -16,6 +16,174 @@
+ import { DOMSVGFactory } from "./svg_factory.js";
+ import { shadow } from "../shared/util.js";
+ 
++/**
++ * @typedef DrawLayerOptions
++ *   Configuration for {@linkcode DrawLayer}.
++ * @property {Object | null} [filterFactory]
++ *   Filter factory used to style selections (optional).
++ * @property {Object | null} [pageColors]
++ *   Page foreground/background colors for HCM (optional).
++ * @property {number} pageIndex
++ *   Zero-based page index.
++ * @property {Element | null} [textLayer]
++ *   Text layer element (optional).
++ */
++
++/**
++ * @typedef EdgeBoundaryResult
++ *   Result of {@linkcode normalizeEdgeBoundary}.
++ * @property {Node} container
++ *   Normalized container.
++ * @property {number} offset
++ *   Normalized offset.
++ */
++
++/**
++ * @typedef SelectionRotatorResult
++ *   Result of {@linkcode SelectionRotator}.
++ * @property {number} x
++ *   Rotated X coordinate.
++ * @property {number} y
++ *   Rotated Y coordinate.
++ * @property {number} width
++ *   Rotated width.
++ * @property {number} height
++ *   Rotated height.
++ */
++
++/**
++ * @callback SelectionRotator
++ *   Rotate the coordinates of a rectangle according to the position of the
++ *   text layer in the viewport.
++ * @param {number} x
++ *   X coordinate.
++ * @param {number} y
++ *   Y coordinate.
++ * @param {number} width
++ *   Width.
++ * @param {number} height
++ *   Height.
++ * @returns {SelectionRotatorResult}
++ *   Rotated coordinates.
++ */
++
++/**
++ * @typedef TextLayerSelectionData
++ *   Data related to the selection for a text layer.
++ * @property {DrawLayer} drawLayer
++ *   Draw layer associated with the text layer.
++ * @property {SVGPathElement | null} [path]
++ *   Node (SVG path element) used to draw the selection.
++ * @property {HTMLDivElement | null} [selectionDiv]
++ *   Node (div element) used to display the selection.
++ */
++
++/**
++ * Compare the document position of two text layers.
++ *
++ * @param {Element} a
++ *   Text layer.
++ * @param {Element} b
++ *   Other text layer.
++ * @returns {-1 | 0 | 1}
++ *    `-1` if the `a` is before `b`, `1` if after, or `0`.
++ */
++function compareTextLayers(a, b) {
++  if (a === b) {
++    return 0;
++  }
++  return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING
++    ? -1
++    : 1;
++}
++
++/**
++ * Find the closest text layer upwards.
++ *
++ * @param {Node | null} node
++ *   Node.
++ * @returns {Element | null}
++ *   Closest ancestral text layer or `null`.
++ */
++function getTextLayer(node) {
++  if (!node) {
++    return null;
++  }
++  if (node.nodeType === Node.ELEMENT_NODE) {
++    return node.closest(".textLayer");
++  }
++  return node.parentElement?.closest(".textLayer") || null;
++}
++
++/**
++ * Compare the position of two points in the document order.
++ *
++ * @param {Node} nodeA
++ *   Node.
++ * @param {number} offsetA
++ *   Offset.
++ * @param {Node} nodeB
++ *   Other node.
++ * @param {number} offsetB
++ *   Other offset.
++ * @returns {boolean | null}
++ *   Whether the first point is before the second one, or `null` if they are
++ *   not comparable.
++ */
++function isPointBefore(nodeA, offsetA, nodeB, offsetB) {
++  if (nodeA === nodeB) {
++    return offsetA <= offsetB;
++  }
++  const relation = nodeA.compareDocumentPosition(nodeB);
++  if (relation & Node.DOCUMENT_POSITION_FOLLOWING) {
++    return true;
++  }
++  if (relation & Node.DOCUMENT_POSITION_PRECEDING) {
++    return false;
++  }
++  return null;
++}
++
++/**
++ * Normalize the position of a boundary point when it's at the end of a text
++ * layer.
++ * In that case, we want to move it to the last valid position within
++ * the text layer, which can be either the end of the last text node or the end
++ * of the last text node before the endOfContent element if it exists.
++ *
++ * @param {Node} container
++ *   Container.
++ * @param {number} offset
++ *   Offset.
++ * @param {Element} textLayer
++ *   Text layer.
++ * @returns {EdgeBoundaryResult | null}
++ *   Normalized position or `null` if the position is not valid.
++ */
++function normalizeEdgeBoundary(container, offset, textLayer) {
++  if (
++    container.nodeType !== Node.ELEMENT_NODE ||
++    !container.classList.contains("textLayer") ||
++    offset !== container.childNodes.length
++  ) {
++    return { container, offset };
++  }
++  let lastNode = container.lastChild;
++  if (
++    lastNode?.nodeType === Node.ELEMENT_NODE &&
++    lastNode.classList.contains("endOfContent")
++  ) {
++    lastNode = lastNode.previousSibling;
++  }
++  if (!lastNode || !textLayer.contains(lastNode)) {
++    return null;
++  }
++  if (lastNode.nodeType === Node.TEXT_NODE) {
++    return { container: lastNode, offset: lastNode.textContent.length };
++  }
++  return { container: lastNode, offset: lastNode.childNodes.length };
++}
++
+ /**
+  * Manage the SVGs drawn on top of the page canvas.
+  * It's important to have them directly on top of the canvas because we want to
+@@ -26,10 +194,97 @@ class DrawLayer {
+ 
+   #mapping = new Map();
+ 
++  /** @type {Element | null} */
++  #textLayer = null;
++
++  /** @type {Object | null} */
++  #filterFactory = null;
++
++  /** @type {Object | null} */
++  #pageColors = null;
++
+   #toUpdate = new Map();
+ 
+   static #id = 0;
+ 
++  static #selectionId = 0;
++
++  /** @type {AbortController | null} */
++  static #selectionChangeAC = null;
++
++  /** @type {Set<HTMLDivElement>} */
++  static #selections = new Set();
++
++  /** @type {boolean} */
++  static #isSelecting = false;
++
++  /** @type {Set<Element>} */
++  static #textLayerSet = new Set();
++
++  /** @type {WeakMap<Element, TextLayerSelectionData>} */
++  static #textLayers = new WeakMap();
++
++  /**
++   * @param {DrawLayerOptions} options
++   *   Configuration.
++   * @returns
++   *   Instance.
++   */
++  constructor({
++    filterFactory = null,
++    pageColors = null,
++    pageIndex,
++    textLayer = null,
++  }) {
++    this.pageIndex = pageIndex;
++    this.#filterFactory = filterFactory;
++    this.#pageColors = pageColors;
++    if (textLayer) {
++      const previousData = DrawLayer.#textLayers.get(textLayer);
++      if (previousData?.selectionDiv) {
++        previousData.selectionDiv.remove();
++        DrawLayer.#selections.delete(previousData.selectionDiv);
++      }
++      DrawLayer.#textLayers.set(textLayer, { drawLayer: this });
++      DrawLayer.#textLayerSet.add(textLayer);
++      this.#textLayer = textLayer;
++      if (DrawLayer.#selectionChangeAC === null) {
++        DrawLayer.#selectionChangeAC = new AbortController();
++        const { signal } = DrawLayer.#selectionChangeAC;
++        document.addEventListener(
++          "selectionchange",
++          DrawLayer.#selectionChange.bind(DrawLayer),
++          { signal }
++        );
++        // Track pointer selection state to preserve selections during
++        // cross-boundary drags.
++        document.addEventListener(
++          "pointerdown",
++          () => {
++            DrawLayer.#isSelecting = true;
++          },
++          { signal }
++        );
++        document.addEventListener(
++          "pointerup",
++          () => {
++            DrawLayer.#isSelecting = false;
++          },
++          { signal }
++        );
++        // If the pointer is released outside the window, we may not get a
++        // corresponding `pointerup` event.
++        window.addEventListener(
++          "blur",
++          () => {
++            DrawLayer.#isSelecting = false;
++          },
++          { signal }
++        );
++      }
++    }
++  }
++
+   setParent(parent) {
+     if (!this.#parent) {
+       this.#parent = parent;
+@@ -47,6 +302,305 @@ class DrawLayer {
+     }
+   }
+ 
++  /**
++   * Clean up the selection for a text layer.
++   *
++   * @param {Element} textLayer
++   *   Text layer.
++   * @returns {undefined}
++   *   Nothing.
++   */
++  static #cleanupTextLayerSelection(textLayer) {
++    const textLayerData = this.#textLayers.get(textLayer);
++    if (!textLayerData?.selectionDiv) {
++      return;
++    }
++    textLayerData.selectionDiv.remove();
++    this.#selections.delete(textLayerData.selectionDiv);
++    textLayerData.selectionDiv = null;
++    textLayerData.path = null;
++  }
++
++  /**
++   * Handle `selectionchange` to update the selection display for text layers.
++   * We want to display the selection in a separate layer on top of the text
++   * layer because the text layer has `mix-blend-mode: multiply` and we want
++   * the selection to have a different blend mode.
++   *
++   * @returns {undefined}
++   *   Nothing.
++   */
++  static #selectionChange() {
++    const selection = document.getSelection();
++    if (!selection || selection.isCollapsed) {
++      for (const root of this.#selections) {
++        root.remove();
++      }
++      this.#selections.clear();
++      return;
++    }
++    /** @type {WeakMap<Node, SelectionRotator>} */
++    const rotators = new WeakMap();
++    /** @type {Array<[Range, Element]>} */
++    const ranges = [];
++    for (let i = 0, ii = selection.rangeCount; i < ii; i++) {
++      const range = selection.getRangeAt(i);
++      if (range.collapsed) {
++        continue;
++      }
++      let { startContainer, startOffset, endContainer, endOffset } = range;
++      let startTextLayer = getTextLayer(startContainer);
++      let endTextLayer = getTextLayer(endContainer);
++      const startMissing = startTextLayer === null;
++      const endMissing = endTextLayer === null;
++
++      // XOR case: exactly one boundary is outside tracked text layers.
++      // In Firefox/Safari this can happen transiently while dragging outside
++      // the page. Preserve the current overlay and exit early.
++      if (this.#isSelecting && startMissing !== endMissing) {
++        return;
++      }
++
++      if (selection.rangeCount === 1) {
++        const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
++        const anchorLayer = getTextLayer(anchorNode);
++        const focusLayer = getTextLayer(focusNode);
++        const anchorBeforeFocus = isPointBefore(
++          anchorNode,
++          anchorOffset,
++          focusNode,
++          focusOffset
++        );
++        if (anchorLayer && focusLayer && anchorBeforeFocus !== null) {
++          if (anchorBeforeFocus) {
++            startContainer = anchorNode;
++            startOffset = anchorOffset;
++            startTextLayer = anchorLayer;
++            endContainer = focusNode;
++            endOffset = focusOffset;
++            endTextLayer = focusLayer;
++          } else {
++            startContainer = focusNode;
++            startOffset = focusOffset;
++            startTextLayer = focusLayer;
++            endContainer = anchorNode;
++            endOffset = anchorOffset;
++            endTextLayer = anchorLayer;
++          }
++        }
++      }
++
++      if (!startTextLayer || !endTextLayer) {
++        // Any remaining partial/outside range can be ignored.
++        continue;
++      }
++      if (endContainer.nodeType === Node.ELEMENT_NODE) {
++        if (endContainer.classList.contains("endOfContent")) {
++          const previousNode = endContainer.previousSibling;
++          if (!previousNode) {
++            continue;
++          }
++          endContainer = previousNode;
++          endOffset =
++            previousNode.nodeType === Node.TEXT_NODE
++              ? previousNode.textContent.length
++              : previousNode.childNodes.length;
++        } else if (
++          endContainer.classList.contains("textLayer") &&
++          endContainer.childNodes.length === endOffset
++        ) {
++          const normalizedEnd = normalizeEdgeBoundary(
++            endContainer,
++            endOffset,
++            endTextLayer
++          );
++          if (!normalizedEnd) {
++            continue;
++          }
++          endContainer = normalizedEnd.container;
++          endOffset = normalizedEnd.offset;
++        }
++      }
++
++      if (startContainer.nodeType === Node.ELEMENT_NODE) {
++        const normalizedStart = normalizeEdgeBoundary(
++          startContainer,
++          startOffset,
++          startTextLayer
++        );
++        if (!normalizedStart) {
++          continue;
++        }
++        startContainer = normalizedStart.container;
++        startOffset = normalizedStart.offset;
++      }
++
++      if (startTextLayer === endTextLayer) {
++        ranges.push([range, startTextLayer]);
++        continue;
++      }
++
++      /** @type {Array<Element>} */
++      let activeTextLayers = [];
++      const orderedTextLayers = [...this.#textLayerSet].sort(compareTextLayers);
++      const startIndex = orderedTextLayers.indexOf(startTextLayer);
++      const endIndex = orderedTextLayers.indexOf(endTextLayer);
++
++      if (startIndex !== -1 && endIndex !== -1) {
++        const [minIndex, maxIndex] =
++          startIndex < endIndex
++            ? [startIndex, endIndex]
++            : [endIndex, startIndex];
++        activeTextLayers = orderedTextLayers.slice(minIndex, maxIndex + 1);
++      } else {
++        // Fallback if a layer is no longer tracked for any reason.
++        for (const textLayer of this.#textLayerSet) {
++          if (range.intersectsNode(textLayer)) {
++            activeTextLayers.push(textLayer);
++          }
++        }
++        if (!activeTextLayers.includes(startTextLayer)) {
++          activeTextLayers.push(startTextLayer);
++        }
++        if (!activeTextLayers.includes(endTextLayer)) {
++          activeTextLayers.push(endTextLayer);
++        }
++        activeTextLayers.sort(compareTextLayers);
++      }
++
++      for (const textLayer of activeTextLayers) {
++        const firstNode = textLayer.firstChild;
++        if (!firstNode) {
++          continue;
++        }
++        const subRange = document.createRange();
++        if (textLayer === startTextLayer) {
++          subRange.setStart(startContainer, startOffset);
++        } else {
++          subRange.setStartBefore(firstNode);
++        }
++
++        if (textLayer === endTextLayer) {
++          subRange.setEnd(endContainer, endOffset);
++        } else {
++          const lastNode = textLayer.lastChild;
++          if (!lastNode) {
++            continue;
++          }
++          if (
++            lastNode.nodeType === Node.ELEMENT_NODE &&
++            lastNode.classList.contains("endOfContent")
++          ) {
++            const lastTextNode = lastNode.previousSibling;
++            if (!lastTextNode) {
++              continue;
++            }
++            subRange.setEndAfter(lastTextNode);
++          } else {
++            subRange.setEndAfter(lastNode);
++          }
++        }
++
++        if (!subRange.collapsed) {
++          ranges.push([subRange, textLayer]);
++        }
++      }
++    }
++
++    /** @type {Set<Element>} */
++    const selectedTextLayers = new Set(ranges.map(range => range[1]));
++
++    for (const textLayer of this.#textLayerSet) {
++      if (!selectedTextLayers.has(textLayer)) {
++        this.#cleanupTextLayerSelection(textLayer);
++      }
++    }
++
++    for (const [range, textLayer] of ranges) {
++      const textLayerData = DrawLayer.#textLayers.get(textLayer);
++      if (!textLayerData) {
++        continue;
++      }
++
++      let rotator = rotators.get(textLayer);
++      if (!rotator) {
++        const clientRect = textLayer.getBoundingClientRect();
++
++        rotator = (x, y, w, h) => ({
++          x: (x - clientRect.x) / clientRect.width,
++          y: (y - clientRect.y) / clientRect.height,
++          width: w / clientRect.width,
++          height: h / clientRect.height,
++        });
++        rotators.set(textLayer, rotator);
++      }
++      /** @type {Array<string>} */
++      const boxes = [];
++      for (let { x, y, width, height } of range.getClientRects()) {
++        if (width === 0 || height === 0) {
++          continue;
++        }
++        ({ x, y, width, height } = rotator(x, y, width, height));
++        if (width === 1 && height === 1) {
++          // The entire page is selected.
++          continue;
++        }
++        boxes.push(`M${x} ${y} h${width} v${height} h-${width} Z`);
++      }
++      if (boxes.length === 0) {
++        continue;
++      }
++      const drawLayer = textLayerData.drawLayer;
++      let div = textLayerData.selectionDiv;
++      let path = textLayerData.path;
++      if (!div) {
++        const clipPathId = `clip_selection_${DrawLayer.#selectionId++}`;
++
++        div = document.createElement("div");
++        div.className = "selection";
++        div.style.clipPath = `url(#${clipPathId})`;
++
++        const selectionStyle = drawLayer.#filterFactory?.createSelectionStyle(
++          drawLayer.#pageColors
++        );
++        if (selectionStyle) {
++          for (const [name, value] of Object.entries(selectionStyle)) {
++            div.style.setProperty(name, value);
++          }
++        }
++
++        const svg = DrawLayer._svgFactory.create(
++          1,
++          1,
++          /* skipDimensions = */ true
++        );
++        svg.setAttribute("aria-hidden", "true");
++        svg.setAttribute("width", "100%");
++        svg.setAttribute("height", "100%");
++
++        const clipPath = DrawLayer._svgFactory.createElement("clipPath");
++        clipPath.setAttribute("id", clipPathId);
++        clipPath.setAttribute("clipPathUnits", "objectBoundingBox");
++
++        path = DrawLayer._svgFactory.createElement("path");
++
++        clipPath.append(path);
++        svg.append(clipPath);
++        div.append(svg);
++
++        textLayerData.path = path;
++        textLayerData.selectionDiv = div;
++      }
++
++      if (!div.parentNode && drawLayer.#parent) {
++        drawLayer.#parent.append(div);
++        this.#selections.add(div);
++      }
++
++      path.setAttribute("d", boxes.join(" "));
++    }
++  }
++
+   static get _svgFactory() {
+     return shadow(this, "_svgFactory", new DOMSVGFactory());
+   }
+@@ -62,7 +616,7 @@ class DrawLayer {
+   #createSVG() {
+     const svg = DrawLayer._svgFactory.create(1, 1, /* skipDimensions = */ true);
+     this.#parent.append(svg);
+-    svg.setAttribute("aria-hidden", true);
++    svg.setAttribute("aria-hidden", "true");
+ 
+     return svg;
+   }
+@@ -239,6 +793,20 @@ class DrawLayer {
+     }
+     this.#mapping.clear();
+     this.#toUpdate.clear();
++    if (this.#textLayer) {
++      const data = DrawLayer.#textLayers.get(this.#textLayer);
++      if (data?.drawLayer === this) {
++        DrawLayer.#cleanupTextLayerSelection(this.#textLayer);
++        DrawLayer.#textLayers.delete(this.#textLayer);
++        DrawLayer.#textLayerSet.delete(this.#textLayer);
++        if (DrawLayer.#textLayerSet.size === 0) {
++          DrawLayer.#selectionChangeAC?.abort();
++          DrawLayer.#selectionChangeAC = null;
++          DrawLayer.#isSelecting = false;
++        }
++      }
++      this.#textLayer = null;
++    }
+   }
+ }
+ 
+diff --git a/src/display/filter_factory.js b/src/display/filter_factory.js
+index 3473d543dc878..f39edfaded81a 100644
+--- a/src/display/filter_factory.js
++++ b/src/display/filter_factory.js
+@@ -13,14 +13,15 @@
+  * limitations under the License.
+  */
+ 
+-import { getRGB, isDataScheme } from "./display_utils.js";
+ import {
++  FeatureTest,
+   SVG_NS,
+   unreachable,
+   updateUrlHash,
+   Util,
+   warn,
+ } from "../shared/util.js";
++import { getRGB, getRGBA, isDataScheme } from "./display_utils.js";
+ 
+ class BaseFilterFactory {
+   constructor() {
+@@ -56,6 +57,36 @@ class BaseFilterFactory {
+     return "none";
+   }
+ 
++  /**
++   * Create a filter for the selection of text, given colors.
++   *
++   * @param {string} fgColor
++   * @param {string} bgColor
++   * @returns {string}
++   */
++  addSelectionHCMFilter(fgColor, bgColor) {
++    return "none";
++  }
++
++  /**
++   * Create a filter for the selection of text.
++   *
++   * @returns {string}
++   */
++  addSelectionFilter() {
++    return "none";
++  }
++
++  /**
++   * @param {Object} [pageColors]
++   * @param {string} [pageColors.background]
++   * @param {string} [pageColors.foreground]
++   * @returns {Record<string, string> | null}
++   */
++  createSelectionStyle(pageColors = null) {
++    return null;
++  }
++
+   destroy(keepHCM = false) {}
+ }
+ 
+@@ -275,6 +306,66 @@ class DOMFilterFactory extends BaseFilterFactory {
+     return info.url;
+   }
+ 
++  /**
++   * Create a filter for the selection of text, given colors.
++   *
++   * @param {string} fgColor
++   * @param {string} bgColor
++   * @returns {string}
++   */
++  addSelectionHCMFilter(fgColor, bgColor) {
++    return this.addHighlightHCMFilter(
++      "selection",
++      fgColor,
++      bgColor,
++      // Background becomes foreground so these are flipped.
++      "HighlightText",
++      "Highlight"
++    );
++  }
++
++  /**
++   * Create a filter for the selection of text.
++   *
++   * @param {string} fgColor
++   * @param {string} bgColor
++   * @returns {string}
++   */
++  addSelectionFilter() {
++    return this.addHighlightHCMFilter(
++      "selection_default",
++      "black",
++      "white",
++      "HighlightText",
++      "Highlight"
++    );
++  }
++
++  /**
++   * @param {Object} [pageColors]
++   * @param {string} [pageColors.background]
++   * @param {string} [pageColors.foreground]
++   * @returns {Record<string, string> | null}
++   */
++  createSelectionStyle(pageColors = null) {
++    const filter = pageColors
++      ? this.addSelectionHCMFilter(pageColors.foreground, pageColors.background)
++      : this.addSelectionFilter();
++
++    // Safari does not supported SVG filters in `backdrop-filter`:
++    // <https://bugs.webkit.org/show_bug.cgi?id=245510>.
++    // Chrome *and* Safari do not use the user’s preferred text selection color.
++    // So this is Firefox-specific for now.
++    if (filter === "none" || !FeatureTest.platform.isFirefox) {
++      return null;
++    }
++
++    return {
++      "backdrop-filter": filter,
++      "background-color": "transparent",
++    };
++  }
++
+   addAlphaFilter(map) {
+     // When a page is zoomed the page is re-drawn but the maps are likely
+     // the same.
+@@ -403,7 +494,7 @@ class DOMFilterFactory extends BaseFilterFactory {
+       0.2126 * bgRGB[0] + 0.7152 * bgRGB[1] + 0.0722 * bgRGB[2]
+     );
+     let [newFgRGB, newBgRGB] = [newFgColor, newBgColor].map(
+-      this.#getRGB.bind(this)
++      this.#getOpaqueTextColor.bind(this)
+     );
+     if (bgGray < fgGray) {
+       [fgGray, bgGray, newFgRGB, newBgRGB] = [
+@@ -545,6 +636,62 @@ class DOMFilterFactory extends BaseFilterFactory {
+     this.#defs.style.color = color;
+     return getRGB(getComputedStyle(this.#defs).getPropertyValue("color"));
+   }
++
++  /**
++   * Get the RGBA channels of a color.
++   *
++   * @param {string} color
++   *   Color in any valid CSS format (such as `x` in `color: x`).
++   * @returns {[number, number, number, number]}
++   *   RGBA values of the color;
++   *   the RGB channels are in the range `[0, 255]`;
++   *   the alpha channel is in the range `[0, 1]`.
++   */
++  #getRGBA(color) {
++    this.#defs.style.color = color;
++    return getRGBA(getComputedStyle(this.#defs).getPropertyValue("color"));
++  }
++
++  /**
++   * Get the opaque text color by, if it has an alpha layer, blending it with
++   * the `Canvas` background.
++   *
++   * @param {string} color
++   *   Color in any valid CSS format (such as `x` in `color: x`).
++   * @returns {[number, number, number]}
++   *   RGB values of the opaque color.
++   */
++  #getOpaqueTextColor(color) {
++    const [r, g, b, alpha] = this.#getRGBA(color);
++
++    if (alpha === 1) {
++      return [r, g, b];
++    }
++
++    const [canvasR, canvasG, canvasB] = this.#getRGB("Canvas");
++
++    return [
++      blend(r, canvasR, alpha),
++      blend(g, canvasG, alpha),
++      blend(b, canvasB, alpha),
++    ];
++  }
++}
++
++/**
++ * Blend a foreground color with a background color using the alpha value.
++ *
++ * @param {number} fg
++ *   Foreground color channel value in the range `[0, 255]`.
++ * @param {number} bg
++ *   Background color channel value in the range `[0, 255]`.
++ * @param {number} alpha
++ *   Alpha value in the range `[0, 1]`.
++ * @returns {number}
++ *   Blended color channel value in the range `[0, 255]`.
++ */
++function blend(fg, bg, alpha) {
++  return Math.round(alpha * fg + (1 - alpha) * bg);
+ }
+ 
+ export { BaseFilterFactory, DOMFilterFactory };
+diff --git a/test/integration/text_layer_spec.mjs b/test/integration/text_layer_spec.mjs
+index 1c64ca2afd8cc..61cea04c962f7 100644
+--- a/test/integration/text_layer_spec.mjs
++++ b/test/integration/text_layer_spec.mjs
+@@ -13,6 +13,10 @@
+  * limitations under the License.
+  */
+ 
++/**
++ * @import { Page } from "puppeteer"
++ */
++
+ import {
+   closePages,
+   closeSinglePage,
+@@ -20,8 +24,29 @@ import {
+   loadAndWait,
+   waitForEvent,
+ } from "./test_utils.mjs";
++import { MathClamp } from "../../src/shared/math_clamp.js";
+ import { startBrowser } from "../test.mjs";
+ 
++/**
++ * @typedef Point
++ * @property {number} x
++ * @property {number} y
++ */
++
++/**
++ * @typedef Rect
++ * @property {number} x
++ * @property {number} y
++ * @property {number} width
++ * @property {number} height
++ */
++
++/**
++ * @typedef SpanInfo
++ * @property {Rect} rect
++ * @property {string} text
++ */
++
+ describe("Text layer", () => {
+   describe("Text selection", () => {
+     // page.mouse.move(x, y, { steps: ... }) doesn't work in Firefox, because
+@@ -59,6 +84,144 @@ describe("Text layer", () => {
+       };
+     }
+ 
++    /**
++     * Pick a point outside the page while remaining inside the viewer.
++     *
++     * @param {Rect} page
++     *   Page rectangle.
++     * @param {Rect} viewer
++     *   Viewer rectangle.
++     * @param {number} preferredY
++     *   Preferred Y coordinate for the pointer target, to avoid unnecessarily
++     *   moving the pointer too far.
++     * @returns {Point}
++     *   Point outside the page bounds but inside the viewer.
++     */
++    function getOutsidePagePosition(page, viewer, preferredY) {
++      // The pointer target must remain inside the visible viewer area;
++      // otherwise Firefox can fail with an out-of-bounds move.
++      const minX = Math.ceil(viewer.x) + 5;
++      const maxX = Math.floor(viewer.x + viewer.width) - 5;
++      const minY = Math.ceil(viewer.y) + 5;
++      const maxY = Math.floor(viewer.y + viewer.height) - 5;
++      const y = MathClamp(minY, Math.round(preferredY), maxY);
++
++      const candidates = [
++        { x: Math.round(page.x + page.width + 20), y },
++        // Prefer below over left: going left retraces through existing text
++        // and shrinks the selection before exiting the page boundary.
++        {
++          x: Math.round(page.x + page.width / 2),
++          y: Math.round(page.y + page.height + 20),
++        },
++        { x: Math.round(page.x - 20), y },
++        {
++          x: Math.round(page.x + page.width / 2),
++          y: Math.round(page.y - 20),
++        },
++      ];
++
++      for (const candidate of candidates) {
++        if (
++          candidate.x >= minX &&
++          candidate.x <= maxX &&
++          candidate.y >= minY &&
++          candidate.y <= maxY
++        ) {
++          return candidate;
++        }
++      }
++
++      // Fallback: still return a safe in-view point if preferred directions
++      // are clipped by the viewport at this scroll position.
++      return { x: maxX, y };
++    }
++
++    /**
++     * Get current selection.
++     *
++     * @param {Page} page
++     * @returns {Promise<string>}
++     */
++    async function getSelectionText(page) {
++      return page.evaluate(
++        () => window.getSelection()?.toString().replaceAll("\r\n", "\n") || ""
++      );
++    }
++
++    /**
++     * Check if the draw layer contains a non-empty selection.
++     *
++     * @param {Page} page
++     * @returns {Promise<boolean>}
++     */
++    async function hasDrawnSelection(page) {
++      return page.evaluate(() => {
++        // If there is no selection, the `div.selection` is removed.
++        for (const path of document.querySelectorAll(
++          ".canvasWrapper .selection svg path"
++        )) {
++          if (path.getAttribute("d")?.trim()) {
++            return true;
++          }
++        }
++        return false;
++      });
++    }
++
++    /**
++     * Get the first non-empty text span on a page.
++     *
++     * @param {Page} page
++     * @param {number} pageNumber
++     * @returns {Promise<SpanInfo | null>}
++     */
++    async function getFirstSpanInfo(page, pageNumber) {
++      await page.waitForSelector(
++        `.page[data-page-number="${pageNumber}"] > .textLayer .endOfContent`
++      );
++      return page.evaluate(number => {
++        for (const el of document.querySelectorAll(
++          `.page[data-page-number="${number}"] > .textLayer span:not(:has(> span))`
++        )) {
++          const text = el.textContent?.trim();
++          if (!text) {
++            continue;
++          }
++          const { x, y, width, height } = el.getBoundingClientRect();
++          return { rect: { x, y, width, height }, text };
++        }
++        return null;
++      }, pageNumber);
++    }
++
++    /**
++     * Get the last non-empty text span on a page.
++     *
++     * @param {Page} page
++     * @param {number} pageNumber
++     * @returns {Promise<SpanInfo | null>}
++     */
++    async function getLastSpanInfo(page, pageNumber) {
++      await page.waitForSelector(
++        `.page[data-page-number="${pageNumber}"] > .textLayer .endOfContent`
++      );
++      return page.evaluate(number => {
++        let last = null;
++        for (const el of document.querySelectorAll(
++          `.page[data-page-number="${number}"] > .textLayer span:not(:has(> span))`
++        )) {
++          const text = el.textContent?.trim();
++          if (!text) {
++            continue;
++          }
++          const { x, y, width, height } = el.getBoundingClientRect();
++          last = { rect: { x, y, width, height }, text };
++        }
++        return last;
++      }, pageNumber);
++    }
++
+     beforeEach(() => {
+       jasmine.addAsyncMatchers({
+         // Check that a page has a selection containing the given text, with
+@@ -67,11 +230,7 @@ describe("Text layer", () => {
+           return {
+             async compare(page, expected) {
+               const TOLERANCE = 10;
+-
+-              const actual = await page.evaluate(() =>
+-                // We need to normalize EOL for Windows
+-                window.getSelection().toString().replaceAll("\r\n", "\n")
+-              );
++              const actual = await getSelectionText(page);
+ 
+               let start, end;
+               if (expected instanceof RegExp) {
+@@ -108,6 +267,275 @@ describe("Text layer", () => {
+     });
+ 
+     describe("using mouse", () => {
++      describe("selection is preserved when dragging outside page bounds", () => {
++        /** @type {Array<[string, Page]>} */
++        let pages;
++
++        beforeEach(async () => {
++          pages = await loadAndWait(
++            "tracemonkey.pdf",
++            `.page[data-page-number = "1"] .endOfContent`,
++            undefined,
++            undefined,
++            (_page, browserName) => ({
++              imagesRightClickMinSize: browserName === "firefox" ? 16 : -1,
++            })
++          );
++        });
++
++        afterEach(async () => {
++          await closePages(pages);
++        });
++
++        it("keeps selection when dragging to another page and then outside", async () => {
++          await Promise.all(
++            pages.map(async ([browserName, page]) => {
++              const scrollTarget = await getSpanRectFromText(
++                page,
++                1,
++                "Unlike method-based dynamic compilers, our dynamic com-"
++              );
++              await page.evaluate(top => {
++                document.getElementById("viewerContainer").scrollTop = top;
++              }, scrollTarget.y - 50);
++
++              const [
++                positionStartPage1,
++                positionStartPage2,
++                positionEndPage2,
++                page2Rect,
++                viewerRect,
++              ] = await Promise.all([
++                getSpanRectFromText(
++                  page,
++                  1,
++                  "Each compiled trace covers one path through the program with"
++                ).then(middlePosition),
++                getSpanRectFromText(
++                  page,
++                  2,
++                  "Hence, recording and compiling a trace"
++                ).then(middlePosition),
++                getSpanRectFromText(
++                  page,
++                  2,
++                  "cache. Alternatively, the VM could simply stop tracing, and give up"
++                ).then(belowEndPosition),
++                page.$eval('.page[data-page-number="2"]', div => {
++                  const { x, y, width, height } = div.getBoundingClientRect();
++                  return { x, y, width, height };
++                }),
++                page.$eval("#viewerContainer", div => {
++                  const { x, y, width, height } = div.getBoundingClientRect();
++                  return { x, y, width, height };
++                }),
++              ]);
++
++              const outsidePage2 = getOutsidePagePosition(
++                page2Rect,
++                viewerRect,
++                positionEndPage2.y
++              );
++
++              await page.mouse.move(positionStartPage1.x, positionStartPage1.y);
++              await page.mouse.down();
++              // First cross into page 2 while still in-bounds so we can verify
++              // the multi-page selection is established before exiting page 2.
++              await moveInSteps(
++                page,
++                positionStartPage1,
++                positionStartPage2,
++                20
++              );
++
++              const selectionBeforeOutside = await getSelectionText(page);
++              expect(selectionBeforeOutside)
++                .withContext(`In ${browserName}, before leaving page 2`)
++                .toMatch(/path through.*Hence, recording/s);
++
++              await moveInSteps(page, positionStartPage2, positionEndPage2, 20);
++              const selectionInsidePage2 = await getSelectionText(page);
++              expect(selectionInsidePage2)
++                .withContext(`In ${browserName}, while still on page 2`)
++                .toMatch(/path through.*Hence, recording and .* tracing/s);
++
++              await moveInSteps(page, positionEndPage2, outsidePage2, 20);
++
++              await page.mouse.up();
++
++              expect(await hasDrawnSelection(page))
++                .withContext(
++                  `In ${browserName}, selection drawn while outside page`
++                )
++                .toBeTrue();
++
++              const selectedText = await getSelectionText(page);
++              expect(selectedText.length)
++                .withContext(
++                  `In ${browserName}, selection not lost after mouseup`
++                )
++                .toBeGreaterThan(10);
++            })
++          );
++        });
++
++        it("keeps selection when dragging outside the current page", async () => {
++          await Promise.all(
++            pages.map(async ([browserName, page]) => {
++              const [positionStart, page1Rect, viewerRect] = await Promise.all([
++                getSpanRectFromText(
++                  page,
++                  1,
++                  "(frequently executed) bytecode sequences, records"
++                ).then(middlePosition),
++                page.$eval('.page[data-page-number="1"]', div => {
++                  const { x, y, width, height } = div.getBoundingClientRect();
++                  return { x, y, width, height };
++                }),
++                page.$eval("#viewerContainer", div => {
++                  const { x, y, width, height } = div.getBoundingClientRect();
++                  return { x, y, width, height };
++                }),
++              ]);
++
++              const outsidePage1 = getOutsidePagePosition(
++                page1Rect,
++                viewerRect,
++                positionStart.y
++              );
++
++              await page.mouse.move(positionStart.x, positionStart.y);
++              await page.mouse.down();
++              await moveInSteps(page, positionStart, outsidePage1, 20);
++
++              await page.mouse.up();
++
++              expect(await hasDrawnSelection(page))
++                .withContext(
++                  `In ${browserName}, selection drawn while outside page`
++                )
++                .toBeTrue();
++
++              const selectedText = await getSelectionText(page);
++              expect(selectedText.length)
++                .withContext(`In ${browserName}`)
++                .toBeGreaterThan(5);
++            })
++          );
++        });
++      });
++
++      describe("selection with tagged PDFs", () => {
++        /** @type {Array<[string, Page]>} */
++        let pages;
++
++        beforeEach(async () => {
++          pages = await loadAndWait(
++            "structure_simple.pdf",
++            `.page[data-page-number = "1"] .endOfContent`,
++            undefined,
++            undefined,
++            (_page, browserName) => ({
++              imagesRightClickMinSize: browserName === "firefox" ? 16 : -1,
++            })
++          );
++        });
++
++        afterEach(async () => {
++          await closePages(pages);
++        });
++
++        it("keeps selection when dragging outside the page", async () => {
++          await Promise.all(
++            pages.map(async ([browserName, page]) => {
++              const [firstSpanInfo, pageRect, viewerRect] = await Promise.all([
++                getFirstSpanInfo(page, 1),
++                page.$eval('.page[data-page-number="1"]', div => {
++                  const { x, y, width, height } = div.getBoundingClientRect();
++                  return { x, y, width, height };
++                }),
++                page.$eval("#viewerContainer", div => {
++                  const { x, y, width, height } = div.getBoundingClientRect();
++                  return { x, y, width, height };
++                }),
++              ]);
++
++              expect(firstSpanInfo)
++                .withContext(`In ${browserName}`)
++                .not.toBeNull();
++
++              const positionStart = middlePosition(firstSpanInfo.rect);
++              const outsidePage = getOutsidePagePosition(
++                pageRect,
++                viewerRect,
++                positionStart.y
++              );
++
++              await page.mouse.move(positionStart.x, positionStart.y);
++              await page.mouse.down();
++              await moveInSteps(page, positionStart, outsidePage, 20);
++
++              await page.mouse.up();
++
++              expect(await hasDrawnSelection(page))
++                .withContext(
++                  `In ${browserName}, selection drawn while outside page`
++                )
++                .toBeTrue();
++
++              const selectedText = await getSelectionText(page);
++              expect(selectedText.length)
++                .withContext(`In ${browserName}`)
++                .toBeGreaterThan(0);
++              expect(selectedText)
++                .withContext(`In ${browserName}`)
++                .toContain(firstSpanInfo.text.slice(0, 1));
++            })
++          );
++        });
++
++        it("doesn't jump when hovering on an empty area", async () => {
++          await Promise.all(
++            pages.map(async ([browserName, page]) => {
++              const [firstSpanInfo, lastSpanInfo] = await Promise.all([
++                getFirstSpanInfo(page, 1),
++                getLastSpanInfo(page, 1),
++              ]);
++
++              expect(firstSpanInfo)
++                .withContext(`In ${browserName}, first span`)
++                .not.toBeNull();
++              expect(lastSpanInfo)
++                .withContext(`In ${browserName}, last span`)
++                .not.toBeNull();
++
++              const positionStart = middlePosition(firstSpanInfo.rect);
++              const positionEnd = belowEndPosition(lastSpanInfo.rect);
++
++              await page.mouse.move(positionStart.x, positionStart.y);
++              await page.mouse.down();
++              // Drag from the first to the last text run to pass through the
++              // tagged content and end in the empty area below the text.
++              await moveInSteps(page, positionStart, positionEnd, 20);
++
++              await page.mouse.up();
++
++              expect(await hasDrawnSelection(page))
++                .withContext(`In ${browserName}, selection drawn in tagged PDF`)
++                .toBeTrue();
++
++              await expectAsync(page)
++                .withContext(`In ${browserName}`)
++                // Selection starts mid-word in Heading 1, so assert the stable
++                // trailing content rather than exact full-line boundaries.
++                .toHaveRoughlySelected(
++                  /ing 1\s+This paragraph 1\.\s+Heading 2\s+This paragraph 2/s
++                );
++            })
++          );
++        });
++      });
++
+       describe("doesn't jump when hovering on an empty area", () => {
+         let pages;
+ 
+@@ -273,7 +701,7 @@ describe("Text layer", () => {
+                 .withContext(`In ${browserName}`)
+                 .toHaveRoughlySelected(
+                   "rs as the railway projects under\n" +
+-                    "development enter the construction phase (estimated at "
++                    "development enter the construction phase (estimated at"
+                 );
+             })
+           );
+@@ -519,9 +947,7 @@ describe("Text layer", () => {
+               );
+               await page.mouse.up();
+ 
+-              const selection = await page.evaluate(() =>
+-                window.getSelection().toString()
+-              );
++              const selection = await getSelectionText(page);
+               expect(selection).withContext(`In ${browserName}`).toEqual("AB");
+ 
+               // The selectionchange handler in TextLayerBuilder walks up
+@@ -541,6 +967,65 @@ describe("Text layer", () => {
+           );
+         });
+       });
++
++      describe("with `enableSelectionRendering` disabled", () => {
++        /** @type {Array<[string, Page]>} */
++        let pages;
++
++        beforeEach(async () => {
++          pages = await loadAndWait(
++            "tracemonkey.pdf",
++            `.page[data-page-number = "1"] .endOfContent`,
++            undefined,
++            undefined,
++            (_page, browserName) => ({
++              enableSelectionRendering: false,
++              imagesRightClickMinSize: browserName === "firefox" ? 16 : -1,
++            })
++          );
++        });
++
++        afterEach(async () => {
++          await closePages(pages);
++        });
++
++        it("does not render a selection overlay in the draw layer", async () => {
++          await Promise.all(
++            pages.map(async ([browserName, page]) => {
++              const [positionStart, positionEnd] = await Promise.all([
++                getSpanRectFromText(
++                  page,
++                  1,
++                  "(frequently executed) bytecode sequences, records"
++                ).then(middlePosition),
++                getSpanRectFromText(
++                  page,
++                  1,
++                  "them, and compiles them to fast native code. We call such a se-"
++                ).then(belowEndPosition),
++              ]);
++
++              await page.mouse.move(positionStart.x, positionStart.y);
++              await page.mouse.down();
++              await moveInSteps(page, positionStart, positionEnd, 20);
++              await page.mouse.up();
++
++              // Text should still be selectable.
++              const selectedText = await getSelectionText(page);
++              expect(selectedText.length)
++                .withContext(`In ${browserName}, text is still selectable`)
++                .toBeGreaterThan(0);
++
++              // But no selection overlay should appear in the draw layer.
++              expect(await hasDrawnSelection(page))
++                .withContext(
++                  `In ${browserName}, no selection drawn when disabled`
++                )
++                .toBeFalse();
++            })
++          );
++        });
++      });
+     });
+ 
+     describe("using selection carets", () => {
+diff --git a/web/annotation_editor_layer_builder.css b/web/annotation_editor_layer_builder.css
+index 72d0222cad6b6..18607072d0904 100644
+--- a/web/annotation_editor_layer_builder.css
++++ b/web/annotation_editor_layer_builder.css
+@@ -285,6 +285,7 @@
+     pointer-events: auto;
+     box-sizing: content-box;
+     padding: var(--editor-toolbar-padding);
++    user-select: none;
+ 
+     position: absolute;
+     inset-inline-end: 0;
+diff --git a/web/app.js b/web/app.js
+index 1260b9d74f403..7b867114419f5 100644
+--- a/web/app.js
++++ b/web/app.js
+@@ -376,6 +376,7 @@ const PDFViewerApplication = {
+         enableNewBadge: x => x === "true",
+         enablePermissions: x => x === "true",
+         enableMerge: x => x === "true",
++        enableSelectionRendering: x => x === "true",
+         enableSplitMerge: x => x === "true",
+         enableUpdatedAddImage: x => x === "true",
+         highlightEditorColors: x => x,
+@@ -578,6 +579,7 @@ const PDFViewerApplication = {
+       enableOptimizedPartialRendering: AppOptions.get(
+         "enableOptimizedPartialRendering"
+       ),
++      enableSelectionRendering: AppOptions.get("enableSelectionRendering"),
+       imagesRightClickMinSize: AppOptions.get("imagesRightClickMinSize"),
+       pageColors,
+       mlManager,
+diff --git a/web/app_options.js b/web/app_options.js
+index 06b9b3dc58543..27f24f2c3ce79 100644
+--- a/web/app_options.js
++++ b/web/app_options.js
+@@ -320,6 +320,11 @@ const defaultOptions = {
+         : "./images/",
+     kind: OptionKind.VIEWER,
+   },
++  enableSelectionRendering: {
++    /** @type {boolean} */
++    value: true,
++    kind: OptionKind.VIEWER + OptionKind.PREFERENCE,
++  },
+   imagesRightClickMinSize: {
+     /** @type {number} */
+     value:
+diff --git a/web/base_pdf_page_view.js b/web/base_pdf_page_view.js
+index b045d08b75f76..9f94884715586 100644
+--- a/web/base_pdf_page_view.js
++++ b/web/base_pdf_page_view.js
+@@ -36,6 +36,8 @@ class BasePDFPageView extends RenderableView {
+ 
+   enableOptimizedPartialRendering = false;
+ 
++  enableSelectionRendering = true;
++
+   imagesRightClickMinSize = -1;
+ 
+   eventBus = null;
+@@ -58,6 +60,7 @@ class BasePDFPageView extends RenderableView {
+     this.renderingQueue = options.renderingQueue;
+     this.enableOptimizedPartialRendering =
+       options.enableOptimizedPartialRendering ?? false;
++    this.enableSelectionRendering = options.enableSelectionRendering !== false;
+     this.imagesRightClickMinSize = options.imagesRightClickMinSize ?? -1;
+     this.minDurationToUpdateCanvas = options.minDurationToUpdateCanvas ?? 500;
+   }
+diff --git a/web/draw_layer_builder.css b/web/draw_layer_builder.css
+index 5ea206ced7657..bee793d114ff5 100644
+--- a/web/draw_layer_builder.css
++++ b/web/draw_layer_builder.css
+@@ -14,6 +14,16 @@
+  */
+ 
+ .canvasWrapper {
++  .selection {
++    position: absolute;
++    top: 0;
++    left: 0;
++    width: 100%;
++    height: 100%;
++    pointer-events: none;
++    background: rgb(0 90 255 / 0.22);
++  }
++
+   svg {
+     transform: none;
+ 
+diff --git a/web/draw_layer_builder.js b/web/draw_layer_builder.js
+index 6fe0729550738..ae2c9335693e3 100644
+--- a/web/draw_layer_builder.js
++++ b/web/draw_layer_builder.js
+@@ -15,6 +15,19 @@
+ 
+ import { DrawLayer } from "pdfjs-lib";
+ 
++/**
++ * @typedef DrawLayerBuilderOptions
++ *   Configuration for {@linkcode DrawLayerBuilder}.
++ * @property {number} pageIndex
++ *   Zero-based page index.
++ * @property {Element | null} [textLayer]
++ *   Text layer element (optional).
++ * @property {Object | null} [filterFactory]
++ *   Filter factory used to style selections (optional).
++ * @property {Object | null} [pageColors]
++ *   Page foreground/background colors for HCM (optional).
++ */
++
+ /**
+  * @typedef {Object} DrawLayerBuilderRenderOptions
+  * @property {string} [intent] - The default value is "display".
+@@ -23,6 +36,19 @@ import { DrawLayer } from "pdfjs-lib";
+ class DrawLayerBuilder {
+   #drawLayer = null;
+ 
++  /**
++   * @param {DrawLayerBuilderOptions} options
++   *   Configuration.
++   * @returns
++   *   Instance.
++   */
++  constructor(options) {
++    this.pageIndex = options.pageIndex;
++    this.textLayer = options.textLayer || null;
++    this.filterFactory = options.filterFactory || null;
++    this.pageColors = options.pageColors || null;
++  }
++
+   /**
+    * @param {DrawLayerBuilderRenderOptions} options
+    * @returns {Promise<void>}
+@@ -31,7 +57,12 @@ class DrawLayerBuilder {
+     if (intent !== "display" || this.#drawLayer || this._cancelled) {
+       return;
+     }
+-    this.#drawLayer = new DrawLayer();
++    this.#drawLayer = new DrawLayer({
++      pageIndex: this.pageIndex,
++      textLayer: this.textLayer,
++      filterFactory: this.filterFactory,
++      pageColors: this.pageColors,
++    });
+   }
+ 
+   cancel() {
+diff --git a/web/pdf_page_view.js b/web/pdf_page_view.js
+index e04788bacf27a..05124fc8f4aba 100644
+--- a/web/pdf_page_view.js
++++ b/web/pdf_page_view.js
+@@ -93,6 +93,9 @@ import { XfaLayerBuilder } from "./xfa_layer_builder.js";
+  * @property {number} [imagesRightClickMinSize] - All images whose width and
+  *  height are at least this value (in pixels) will be lazily inserted in the
+  *  dom to allow right-clicking and saving them. Use `-1` to disable this.
++ * @property {boolean} [enableSelectionRendering] - When enabled, renders text
++ *   selections in the draw layer.
++ *   The default value is `true`.
+  * @property {boolean} [enableOptimizedPartialRendering] - When enabled, PDF
+  *   rendering will keep track of which areas of the page each PDF operation
+  *   affects. Then, when rendering a partial page (if `enableDetailCanvas` is
+@@ -1191,14 +1194,20 @@ class PDFPageView extends BasePDFPageView {
+         }
+       }
+ 
++      this.drawLayer ||= new DrawLayerBuilder({
++        pageIndex: this.id,
++        textLayer: this.enableSelectionRendering ? this.textLayer?.div : null,
++        filterFactory: this.pdfPage?.filterFactory,
++        pageColors: this.pageColors,
++      });
++      await this.#renderDrawLayer();
++      this.drawLayer.setParent(canvasWrapper);
++
+       const { annotationEditorUIManager } = this.#layerProperties;
+ 
+       if (!annotationEditorUIManager) {
+         return;
+       }
+-      this.drawLayer ||= new DrawLayerBuilder();
+-      await this.#renderDrawLayer();
+-      this.drawLayer.setParent(canvasWrapper);
+ 
+       if (
+         this.annotationLayer ||
+diff --git a/web/pdf_viewer.js b/web/pdf_viewer.js
+index 1228a097f6437..11aacbb61b9ca 100644
+--- a/web/pdf_viewer.js
++++ b/web/pdf_viewer.js
+@@ -132,6 +132,9 @@ function isValidAnnotationEditorMode(mode) {
+  *   `maxCanvasDim`, it will draw a second canvas on top of the CSS-zoomed one,
+  *   that only renders the part of the page that is close to the viewport.
+  *   The default value is `true`.
++ * @property {boolean} [enableSelectionRendering] - Enables rendering of text
++ *   selections in the draw layer.
++ *   The default value is `true`.
+  * @property {number} [imagesRightClickMinSize] - All images whose width and
+  *  height are at least this value (in pixels) will be lazily inserted in the
+  *  dom to allow right-clicking and saving them. Use `-1` to disable this.
+@@ -362,6 +365,7 @@ class PDFViewer {
+     this.enableDetailCanvas = options.enableDetailCanvas ?? true;
+     this.enableOptimizedPartialRendering =
+       options.enableOptimizedPartialRendering ?? false;
++    this.enableSelectionRendering = options.enableSelectionRendering !== false;
+     this.imagesRightClickMinSize = options.imagesRightClickMinSize ?? -1;
+     this.l10n = options.l10n;
+     if (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) {
+@@ -457,6 +461,25 @@ class PDFViewer {
+     return this._pages.every(pageView => pageView?.pdfPage);
+   }
+ 
++  /**
++   * Clear text selections within the viewer.
++   */
++  clearSelection() {
++    const selection = document.getSelection();
++    if (!selection || selection.isCollapsed) {
++      return;
++    }
++
++    for (let i = 0, ii = selection.rangeCount; i < ii; i++) {
++      if (selection.getRangeAt(i).intersectsNode(this.viewer)) {
++        // `empty()` is non-standard; `removeAllRanges()` is the standard API.
++        selection.removeAllRanges?.();
++        selection.empty?.();
++        return;
++      }
++    }
++  }
++
+   /**
+    * @type {boolean}
+    */
+@@ -488,6 +511,9 @@ class PDFViewer {
+     if (!this.pdfDocument) {
+       return;
+     }
++    if (this._currentPageNumber !== val) {
++      this.clearSelection();
++    }
+     // The intent can be to just reset a scroll position and/or scale.
+     if (!this._setCurrentPageNumber(val, /* resetCurrentPageView = */ true)) {
+       console.error(`currentPageNumber: "${val}" is not a valid page.`);
+@@ -547,6 +573,9 @@ class PDFViewer {
+         page = i + 1;
+       }
+     }
++    if (this._currentPageNumber !== page) {
++      this.clearSelection();
++    }
+     // The intent can be to just reset a scroll position and/or scale.
+     if (!this._setCurrentPageNumber(page, /* resetCurrentPageView = */ true)) {
+       console.error(`currentPageLabel: "${val}" is not a valid page.`);
+@@ -617,6 +646,7 @@ class PDFViewer {
+     if (this._pagesRotation === rotation) {
+       return; // The rotation didn't change.
+     }
++    this.clearSelection();
+     this._pagesRotation = rotation;
+ 
+     const pageNumber = this._currentPageNumber;
+@@ -1066,6 +1096,7 @@ class PDFViewer {
+             enableDetailCanvas: this.enableDetailCanvas,
+             enableOptimizedPartialRendering:
+               this.enableOptimizedPartialRendering,
++            enableSelectionRendering: this.enableSelectionRendering,
+             imagesRightClickMinSize: this.imagesRightClickMinSize,
+             pageColors,
+             l10n: this.l10n,
+@@ -1488,6 +1519,7 @@ class PDFViewer {
+     newValue,
+     { noScroll = false, preset = false, drawingDelay = -1, origin = null }
+   ) {
++    this.clearSelection();
+     this._currentScaleValue = newValue.toString();
+ 
+     if (this.#isSameScale(newScale)) {
+@@ -2210,6 +2242,7 @@ class PDFViewer {
+     }
+     this._previousScrollMode = this._scrollMode;
+ 
++    this.clearSelection();
+     this._scrollMode = mode;
+     this.eventBus.dispatch("scrollmodechanged", { source: this, mode });
+ 
+@@ -2275,6 +2308,7 @@ class PDFViewer {
+     if (!isValidSpreadMode(mode)) {
+       throw new Error(`Invalid spread mode: ${mode}`);
+     }
++    this.clearSelection();
+     this._spreadMode = mode;
+     this.eventBus.dispatch("spreadmodechanged", { source: this, mode });
+ 
+diff --git a/web/text_layer_builder.css b/web/text_layer_builder.css
+index 98f48921b0495..cadaba76744a3 100644
+--- a/web/text_layer_builder.css
++++ b/web/text_layer_builder.css
+@@ -38,6 +38,7 @@
+     white-space: pre;
+     cursor: text;
+     transform-origin: 0% 0%;
++    user-select: text;
+   }
+ 
+   /* We multiply the font size by --min-font-size, and then scale the text
+@@ -115,12 +116,7 @@
+   }
+ 
+   ::selection {
+-    /* stylelint-disable declaration-block-no-duplicate-properties */
+-    /*#if !MOZCENTRAL*/
+-    background: rgba(0 0 255 / 0.25);
+-    /*#endif*/
+-    /* stylelint-enable declaration-block-no-duplicate-properties */
+-    background: color-mix(in srgb, AccentColor, transparent 75%);
++    background: transparent;
+   }
+ 
+   /* Avoids https://github.com/mozilla/pdf.js/issues/13840 in Chrome */

@@ -1,0 +1,1193 @@
+diff --git a/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountManager.swift b/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountManager.swift
+index df3b72d6cc2a3..a369211fc3258 100644
+--- a/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountManager.swift
++++ b/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountManager.swift
+@@ -21,9 +21,13 @@ open class FxAccountManager: @unchecked Sendable {
+     let accountStorage: KeyChainAccountStorage
+     let config: FxAConfig
+     // FIXME: FXIOS-13501 Unprotected shared mutable state is an error in Swift 6
+-    nonisolated(unsafe) var deviceConfig: DeviceConfig
++    public nonisolated(unsafe) var deviceConfig: DeviceConfig
+     let applicationScopes: [String]
+ 
++    // Serial by default (no .concurrent attribute). All finite state machine (FSM) state
++    // mutations and accountStateSideEffects calls must happen on this queue.
++    let fxaFsmQueue = DispatchQueue(label: "com.mozilla.fxa-mgr-queue")
++
+     // FIXME: FXIOS-13501 Unprotected shared mutable state is an error in Swift 6
+     nonisolated(unsafe) var acct: PersistedFirefoxAccount?
+     var account: PersistedFirefoxAccount? {
+@@ -36,10 +40,11 @@ open class FxAccountManager: @unchecked Sendable {
+         }
+     }
+ 
+-    var state = AccountState.start
++    var state: FxaState = .uninitialized
+     var profile: Profile?
+     var constellation: DeviceConstellation?
+-    var latestOAuthStateParam: String?
++    // Stores the auth type from the processEvent(.completeOAuthFlow) call
++    var pendingAuthType: FxaAuthType?
+ 
+     /// Instantiate the account manager.
+     /// This class is intended to be long-lived within your app.
+@@ -65,16 +70,25 @@ open class FxAccountManager: @unchecked Sendable {
+     /// Note that as a result of this initialization, notifications such as `accountAuthenticated` might be
+     /// fired.
+     public func initialize(completionHandler: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void) {
+-        processEvent(event: .initialize) {
+-            DispatchQueue.main.async { completionHandler(Result.success(())) }
++        fxaFsmQueue.async {
++            if let account = self.tryRestoreAccount() {
++                self.account = account
++            } else {
++                self.account = self.createAccount()
++            }
++            let deviceConfig = DeviceConfig(
++                name: self.deviceConfig.name,
++                deviceType: self.deviceConfig.deviceType,
++                capabilities: self.deviceConfig.capabilities
++            )
++            self.processEvent(.initialize(deviceConfig: deviceConfig))
++            DispatchQueue.main.async { completionHandler(.success(())) }
+         }
+     }
+ 
+     /// Returns true the user is currently logged-in to an account, no matter if they need to reconnect or not.
+     public func hasAccount() -> Bool {
+-        return state == .authenticatedWithProfile ||
+-            state == .authenticatedNoProfile ||
+-            state == .authenticationProblem
++        return state == .connected || state == .authIssues
+     }
+ 
+     /// Resets the inner Persisted Account based on the persisted state
+@@ -90,7 +104,7 @@ open class FxAccountManager: @unchecked Sendable {
+     /// Returns true if the account needs re-authentication.
+     /// Your app should present the option to start a new OAuth flow.
+     public func accountNeedsReauth() -> Bool {
+-        return state == .authenticationProblem
++        return state == .authIssues
+     }
+ 
+     /// Set the user data before completing their authentication
+@@ -114,17 +128,14 @@ open class FxAccountManager: @unchecked Sendable {
+         completionHandler: @escaping @MainActor @Sendable (Result<URL, Error>) -> Void
+     ) {
+         FxALog.info("beginAuthentication")
+-        // FIXME: FXIOS-13501 Unprotected shared mutable state is an error in Swift 6
+-        nonisolated(unsafe) var scopes = scopes
+-        if scopes.isEmpty {
+-            scopes = applicationScopes
+-        }
+-        DispatchQueue.global().async {
+-            let result = self.updatingLatestAuthState { account in
+-                try account.beginOAuthFlow(
+-                    scopes: scopes,
+-                    entrypoint: entrypoint
+-                )
++        fxaFsmQueue.async {
++            let actualScopes = scopes.isEmpty ? self.applicationScopes : scopes
++            self.processEvent(.beginOAuthFlow(scopes: actualScopes, entrypoint: entrypoint))
++            let result: Result<URL, Error>
++            if case let .authenticating(oauthUrl) = self.state, let url = URL(string: oauthUrl) {
++                result = .success(url)
++            } else {
++                result = .failure(FxaError.Other(message: "beginAuthentication: unexpected state \(self.state)"))
+             }
+             DispatchQueue.main.async { completionHandler(result) }
+         }
+@@ -145,38 +156,19 @@ open class FxAccountManager: @unchecked Sendable {
+         scopes: [String] = [],
+         completionHandler: @Sendable @MainActor @escaping (Result<URL, Error>) -> Void
+     ) {
+-        // FIXME: FXIOS-13501 Unprotected shared mutable state is an error in Swift 6
+-        nonisolated(unsafe) var scopes = scopes
+-        if scopes.isEmpty {
+-            scopes = applicationScopes
+-        }
+-        DispatchQueue.global().async {
+-            let result = self.updatingLatestAuthState { account in
+-                try account.beginPairingFlow(
+-                    pairingUrl: pairingUrl,
+-                    scopes: scopes,
+-                    entrypoint: entrypoint
+-                )
++        fxaFsmQueue.async {
++            let actualScopes = scopes.isEmpty ? self.applicationScopes : scopes
++            self.processEvent(.beginPairingFlow(pairingUrl: pairingUrl, scopes: actualScopes, entrypoint: entrypoint))
++            let result: Result<URL, Error>
++            if case let .authenticating(oauthUrl) = self.state, let url = URL(string: oauthUrl) {
++                result = .success(url)
++            } else {
++                result = .failure(FxaError.Other(message: "beginPairingAuthentication: unexpected state \(self.state)"))
+             }
+             DispatchQueue.main.async { completionHandler(result) }
+         }
+     }
+ 
+-    /// Run a "begin authentication" closure, extracting the returned `state` from the returned URL
+-    /// and put it aside for later in `latestOAuthStateParam`.
+-    /// Afterwards, in `finishAuthentication` we ensure that we are
+-    /// finishing the correct (and same) authentication flow.
+-    private func updatingLatestAuthState(_ beginFlowFn: (PersistedFirefoxAccount) throws -> URL) -> Result<URL, Error> {
+-        do {
+-            let url = try beginFlowFn(requireAccount())
+-            let comps = URLComponents(url: url, resolvingAgainstBaseURL: true)
+-            latestOAuthStateParam = comps!.queryItems!.first(where: { $0.name == "state" })!.value
+-            return .success(url)
+-        } catch {
+-            return .failure(error)
+-        }
+-    }
+-
+     /// Finish an authentication flow.
+     ///
+     /// If it succeeds, a `.accountAuthenticated` notification will get fired.
+@@ -184,14 +176,25 @@ open class FxAccountManager: @unchecked Sendable {
+         authData: FxaAuthData,
+         completionHandler: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void
+     ) {
+-        if latestOAuthStateParam == nil {
+-            DispatchQueue.main.async { completionHandler(.failure(FxaError.NoExistingAuthFlow(message: ""))) }
+-        } else if authData.state != latestOAuthStateParam {
+-            DispatchQueue.main.async { completionHandler(.failure(FxaError.WrongAuthFlow(message: ""))) }
+-        } else { /* state == latestAuthState */
+-            processEvent(event: .authenticated(authData: authData)) {
+-                DispatchQueue.main.async { completionHandler(.success(())) }
++        fxaFsmQueue.async {
++            self.pendingAuthType = authData.authType
++            let event = FxaEvent.completeOAuthFlow(code: authData.code, state: authData.state)
++            do {
++                self.state = try self.requireAccount().processEvent(event: event)
++            } catch {
++                // Reset state machine back to .disconnected before reporting failure.
++                self.processEvent(.cancelOAuthFlow)
++                DispatchQueue.main.async { completionHandler(.failure(error)) }
++                return
++            }
++            self.accountStateSideEffects(forState: self.state, via: event)
++            let result: Result<Void, Error>
++            if case .connected = self.state {
++                result = .success(())
++            } else {
++                result = .failure(FxaError.Other(message: "finishAuthentication: unexpected state \(self.state)"))
+             }
++            DispatchQueue.main.async { completionHandler(result) }
+         }
+     }
+ 
+@@ -211,6 +214,17 @@ open class FxAccountManager: @unchecked Sendable {
+         }
+     }
+ 
++    /// Get the device ID registered for this account.
++    /// The device is registered synchronously during `finishAuthentication`, so this is available
++    /// immediately after login without waiting for `DeviceConstellation.refreshState()`.
++    public func getCurrentDeviceId() -> Result<String, Error> {
++        do {
++            return try .success(requireAccount().getCurrentDeviceId())
++        } catch {
++            return .failure(error)
++        }
++    }
++
+     /// Get the session token associated with this account.
+     /// Note that you should have requested the `.session` scope earlier to be able to get this token.
+     public func getSessionToken() -> Result<String, Error> {
+@@ -240,7 +254,21 @@ open class FxAccountManager: @unchecked Sendable {
+         newSessionToken: String,
+         completionHandler: @escaping @MainActor @Sendable () -> Void
+     ) {
+-        processEvent(event: .changedPassword(newSessionToken: newSessionToken)) {
++        fxaFsmQueue.async {
++            do {
++                try self.requireAccount().handleSessionTokenChange(sessionToken: newSessionToken)
++                // handleSessionTokenChange invalidates the old refresh token so the device
++                // record on the server is stale. Re-register the device.
++                self.requireConstellation().initDevice(
++                    name: self.deviceConfig.name,
++                    type: self.deviceConfig.deviceType,
++                    capabilities: self.deviceConfig.capabilities
++                )
++                self.postAuthenticated(authType: .existingAccount)
++                self.refreshProfileAsync(ignoreCache: false)
++            } catch {
++                FxALog.error("Error handling the session token change: \(error)")
++            }
+             DispatchQueue.main.async { completionHandler() }
+         }
+     }
+@@ -298,15 +326,13 @@ open class FxAccountManager: @unchecked Sendable {
+     ///
+     /// If it succeeds, a `.accountProfileUpdate` notification will get fired.
+     public func refreshProfile(ignoreCache: Bool = false) {
+-        processEvent(event: .fetchProfile(ignoreCache: ignoreCache)) {
+-            // Do nothing
+-        }
++        refreshProfileAsync(ignoreCache: ignoreCache)
+     }
+ 
+     /// Get the user profile synchronously. It could be empty
+     /// because of network or authentication problems.
+     public func accountProfile() -> Profile? {
+-        if state == .authenticatedWithProfile || state == .authenticationProblem {
++        if state == .connected || state == .authIssues {
+             return profile
+         }
+         return nil
+@@ -320,7 +346,8 @@ open class FxAccountManager: @unchecked Sendable {
+     /// Log-out from the account.
+     /// The `.accountLoggedOut` notification will also get fired.
+     public func logout(completionHandler: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void) {
+-        processEvent(event: .logout) {
++        fxaFsmQueue.async {
++            self.processEvent(.disconnect)
+             DispatchQueue.main.async { completionHandler(.success(())) }
+         }
+     }
+@@ -336,228 +363,113 @@ open class FxAccountManager: @unchecked Sendable {
+         return try acct.gatherTelemetry()
+     }
+ 
+-    let fxaFsmQueue = DispatchQueue(label: "com.mozilla.fxa-mgr-queue")
+-
+-    func processEvent(event: Event, completionHandler: @Sendable @escaping () -> Void) {
+-        fxaFsmQueue.async {
+-            var toProcess: Event? = event
+-            while let evt = toProcess {
+-                toProcess = nil // Avoid infinite loop if `toProcess` doesn't get replaced.
+-                guard let nextState = FxAccountManager.nextState(state: self.state, event: evt) else {
+-                    FxALog.error("Got invalid event \(evt) for state \(self.state).")
+-                    continue
+-                }
+-                FxALog.debug("Processing event \(evt) for state \(self.state). Next state is \(nextState).")
+-                self.state = nextState
+-                toProcess = self.stateActions(forState: self.state, via: evt)
+-                if let successiveEvent = toProcess {
+-                    FxALog.debug(
+-                        "Ran \(evt) side-effects for state \(self.state), got successive event \(successiveEvent)."
+-                    )
+-                }
+-            }
+-            completionHandler()
++    /// Runs the Rust state machine with the given event and runs side effects for the new state.
++    /// Must be called on `fxaFsmQueue`.
++    func processEvent(_ fxaEvent: FxaEvent) {
++        FxALog.debug("processEvent: event '\(fxaEvent)'")
++        do {
++            state = try requireAccount().processEvent(event: fxaEvent)
++        } catch {
++            FxALog.error("processEvent: Error in processEvent: \(error)")
++            return
+         }
++        FxALog.debug("processEvent: new FxaState '\(state)'")
++        accountStateSideEffects(forState: state, via: fxaEvent)
+     }
+ 
+-    // swiftlint:disable function_body_length
+-    func stateActions(forState: AccountState, via: Event) -> Event? {
++    func accountStateSideEffects(forState: FxaState, via: FxaEvent) {
+         switch forState {
+-        case .start: do {
+-                switch via {
+-                case .initialize: do {
+-                        if let acct = tryRestoreAccount() {
+-                            account = acct
+-                            return .accountRestored
+-                        } else {
+-                            return .accountNotFound
+-                        }
+-                    }
+-                default: return nil
+-                }
+-            }
+-        case .notAuthenticated: do {
+-                switch via {
+-                case .logout: do {
+-                        // Clean up internal account state and destroy the current FxA device record.
+-                        requireAccount().disconnect()
+-                        FxALog.info("Disconnected FxA account")
+-                        profile = nil
+-                        constellation = nil
+-                        accountStorage.clear()
+-                        // If we cannot instantiate FxA something is *really* wrong, crashing is a valid option.
+-                        account = createAccount()
+-                        DispatchQueue.main.async {
+-                            NotificationCenter.default.post(
+-                                name: .accountLoggedOut,
+-                                object: nil
+-                            )
+-                        }
+-                    }
+-                case .accountNotFound: do {
+-                        account = createAccount()
+-                    }
+-                default: break // Do nothing
++        case .disconnected:
++            switch via {
++            case .disconnect:
++                onDisconnected()
++                DispatchQueue.main.async {
++                    NotificationCenter.default.post(name: .accountLoggedOut, object: nil)
+                 }
++            case .beginOAuthFlow, .beginPairingFlow:
++                onDisconnected()
++                // Failed to begin auth, caller receives an error from the nil URL check
++            case .completeOAuthFlow:
++                onDisconnected()
++                pendingAuthType = nil
++                // Failed to complete auth, app will detect via accountNeedsReauth()
++            default: break
+             }
+-        case .authenticatedNoProfile: do {
+-                switch via {
+-                case let .authenticated(authData): do {
+-                        FxALog.info("Registering persistence callback")
+-                        requireAccount().registerPersistCallback(statePersistenceCallback)
+-
+-                        FxALog.debug("Completing oauth flow")
+-                        do {
+-                            try requireAccount().completeOAuthFlow(code: authData.code, state: authData.state)
+-                        } catch {
+-                            // Reasons this can fail:
+-                            // - network errors
+-                            // - unknown auth state
+-                            // - authenticating via web-content; we didn't beginOAuthFlowAsync
+-                            FxALog.error("Error completing OAuth flow: \(error)")
+-                        }
+-
+-                        FxALog.info("Initializing device")
+-                        requireConstellation().initDevice(
+-                            name: deviceConfig.name,
+-                            type: deviceConfig.deviceType,
+-                            capabilities: deviceConfig.capabilities
+-                        )
+ 
+-                        postAuthenticated(authType: authData.authType)
++        case .authenticating:
++            break // No side effects; URL is extracted by the beginAuthentication caller
+ 
+-                        return Event.fetchProfile(ignoreCache: false)
+-                    }
+-                case .accountRestored: do {
+-                        FxALog.info("Registering persistence callback")
+-                        requireAccount().registerPersistCallback(statePersistenceCallback)
++        case .connected:
++            requireAccount().registerPersistCallback(statePersistenceCallback)
++            let authType: FxaAuthType
++            let ignoreCache: Bool
++            switch via {
++            case .initialize:
++                authType = .existingAccount
++                ignoreCache = false
++            case .completeOAuthFlow:
++                authType = pendingAuthType ?? .existingAccount
++                pendingAuthType = nil
++                ignoreCache = true
++            case .checkAuthorizationStatus:
++                // Recovered from auth problem
++                authType = .recovered
++                ignoreCache = true
++            default:
++                return
++            }
++            postAuthenticated(authType: authType)
++            refreshProfileAsync(ignoreCache: ignoreCache)
+ 
+-                        FxALog.info("Ensuring device capabilities...")
+-                        requireConstellation().ensureCapabilities(capabilities: deviceConfig.capabilities)
++        case .authIssues:
++            DispatchQueue.main.async {
++                NotificationCenter.default.post(name: .accountAuthProblems, object: nil)
++            }
+ 
+-                        postAuthenticated(authType: .existingAccount)
++        case .uninitialized:
++            break
++        }
++    }
+ 
+-                        return Event.fetchProfile(ignoreCache: false)
+-                    }
+-                case .recoveredFromAuthenticationProblem: do {
+-                        FxALog.info("Registering persistence callback")
+-                        requireAccount().registerPersistCallback(statePersistenceCallback)
+-
+-                        FxALog.info("Initializing device")
+-                        requireConstellation().initDevice(
+-                            name: deviceConfig.name,
+-                            type: deviceConfig.deviceType,
+-                            capabilities: deviceConfig.capabilities
++    // swiftlint:enable function_body_length
++    private func refreshProfileAsync(ignoreCache: Bool) {
++        DispatchQueue.global().async {
++            do {
++                let profile = try self.requireAccount().getProfile(ignoreCache: ignoreCache)
++                // Write back on fxaFsmQueue so we don't race with onDisconnected(), which clears
++                // self.profile on that same queue. Drop the result if the account was reset
++                // (e.g. logout) while in flight.
++                self.fxaFsmQueue.async {
++                    guard self.state == .connected || self.state == .authIssues else { return }
++                    self.profile = profile
++                    DispatchQueue.main.async {
++                        NotificationCenter.default.post(
++                            name: .accountProfileUpdate,
++                            object: nil,
++                            userInfo: ["profile": profile]
+                         )
+-
+-                        postAuthenticated(authType: .recovered)
+-
+-                        return Event.fetchProfile(ignoreCache: false)
+-                    }
+-                case let .changedPassword(newSessionToken): do {
+-                        do {
+-                            try requireAccount().handleSessionTokenChange(sessionToken: newSessionToken)
+-
+-                            FxALog.info("Initializing device")
+-                            requireConstellation().initDevice(
+-                                name: deviceConfig.name,
+-                                type: deviceConfig.deviceType,
+-                                capabilities: deviceConfig.capabilities
+-                            )
+-
+-                            postAuthenticated(authType: .existingAccount)
+-
+-                            return Event.fetchProfile(ignoreCache: false)
+-                        } catch {
+-                            FxALog.error("Error handling the session token change: \(error)")
+-                        }
+                     }
+-                case let .fetchProfile(ignoreCache): do {
+-                        // Profile fetching and account authentication issues:
+-                        // https://github.com/mozilla/application-services/issues/483
+-                        FxALog.info("Fetching profile...")
+-
+-                        do {
+-                            profile = try requireAccount().getProfile(ignoreCache: ignoreCache)
+-                        } catch {
+-                            return Event.failedToFetchProfile
+-                        }
+-                        return Event.fetchedProfile
+-                    }
+-                default: break // Do nothing
+                 }
+-            }
+-        case .authenticatedWithProfile: do {
+-                switch via {
+-                case .fetchedProfile: do {
+-                        DispatchQueue.main.async {
+-                            NotificationCenter.default.post(
+-                                name: .accountProfileUpdate,
+-                                object: nil,
+-                                userInfo: ["profile": self.profile!]
+-                            )
+-                        }
+-                    }
+-                case let .fetchProfile(refresh): do {
+-                        FxALog.info("Refreshing profile...")
+-                        do {
+-                            profile = try requireAccount().getProfile(ignoreCache: refresh)
+-                        } catch {
+-                            return Event.failedToFetchProfile
+-                        }
+-                        return Event.fetchedProfile
+-                    }
+-                default: break // Do nothing
+-                }
+-            }
+-        case .authenticationProblem:
+-            switch via {
+-            case .authenticationError: do {
+-                    // Somewhere in the system, we've just hit an authentication problem.
+-                    // There are two main causes:
+-                    // 1) an access token we've obtain from fxalib via 'getAccessToken' expired
+-                    // 2) password was changed, or device was revoked
+-                    // We can recover from (1) and test if we're in (2) by asking the fxalib.
+-                    // If it succeeds, then we can go back to whatever
+-                    // state we were in before. Future operations that involve access tokens should
+-                    // succeed.
+-
+-                    func onError() {
+-                        // We are either certainly in the scenario (2), or were unable to determine
+-                        // our connectivity state. Let's assume we need to re-authenticate.
+-                        // This uncertainty about real state means that, hopefully rarely,
+-                        // we will disconnect users that hit transient network errors during
+-                        // an authorization check.
+-                        // See https://github.com/mozilla-mobile/android-components/issues/3347
+-                        FxALog.error("Unable to recover from an auth problem.")
+-                        DispatchQueue.main.async {
+-                            NotificationCenter.default.post(
+-                                name: .accountAuthProblems,
+-                                object: nil
+-                            )
+-                        }
+-                    }
+-
+-                    do {
+-                        let account = requireAccount()
+-                        let info = try account.checkAuthorizationStatus()
+-                        if !info.active {
+-                            onError()
+-                            return nil
+-                        }
+-                        account.clearAccessTokenCache()
+-                        // Make sure we're back on track by re-requesting the profile access token.
+-                        _ = try account.getAccessToken(scope: OAuthScope.profile)
+-                        return .recoveredFromAuthenticationProblem
+-                    } catch {
+-                        onError()
+-                    }
+-                    return nil
+-                }
+-            default: break // Do nothing
++            } catch {
++                FxALog.error("Failed to fetch profile: \(error)")
+             }
+         }
+-        return nil
++    }
++
++    private func onDisconnected() {
++        profile = nil
++        constellation = nil
++        accountStorage.clear()
++        // Replace the persisted account with a fresh one. A freshly created PersistedFirefoxAccount
++        // starts in .uninitialized. Without this call,
++        // subsequent events like .beginOAuthFlow would be rejected by the FSM.
++        account = createAccount()
++        let newDeviceConfig = DeviceConfig(
++            name: deviceConfig.name,
++            deviceType: deviceConfig.deviceType,
++            capabilities: deviceConfig.capabilities
++        )
++        processEvent(.initialize(deviceConfig: newDeviceConfig))
+     }
+ 
+     func createAccount() -> PersistedFirefoxAccount {
+@@ -586,7 +498,9 @@ open class FxAccountManager: @unchecked Sendable {
+     func setupInternalListeners() {
+         // Handle auth exceptions caught in classes that don't hold a reference to the manager.
+         _ = NotificationCenter.default.addObserver(forName: .accountAuthException, object: nil, queue: nil) { _ in
+-            self.processEvent(event: .authenticationError) {}
++            self.fxaFsmQueue.async {
++                self.processEvent(.checkAuthorizationStatus)
++            }
+         }
+         // Reflect updates to the local device to our own in-memory model.
+         _ = NotificationCenter.default.addObserver(
+@@ -597,7 +511,7 @@ open class FxAccountManager: @unchecked Sendable {
+                     self.deviceConfig = DeviceConfig(
+                         name: localDevice.displayName,
+                         // The other properties are likely to not get modified.
+-                        type: self.deviceConfig.deviceType,
++                        deviceType: self.deviceConfig.deviceType,
+                         capabilities: self.deviceConfig.capabilities
+                     )
+                 }
+@@ -618,8 +532,6 @@ open class FxAccountManager: @unchecked Sendable {
+         }
+         preconditionFailure("account must be set (sets constellation).")
+     }
+-
+-    // swiftlint:enable function_body_length
+ }
+ 
+ // swiftlint:enable type_body_length
+diff --git a/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountState.swift b/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountState.swift
+deleted file mode 100644
+index 88e534f064082..0000000000000
+--- a/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/FxAccountState.swift
++++ /dev/null
+@@ -1,80 +0,0 @@
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-import Foundation
+-
+-/**
+- * States of the [FxAccountManager].
+- */
+-enum AccountState {
+-    case start
+-    case notAuthenticated
+-    case authenticationProblem
+-    case authenticatedNoProfile
+-    case authenticatedWithProfile
+-}
+-
+-/**
+- * Base class for [FxAccountManager] state machine events.
+- * Events aren't a simple enum class because we might want to pass data along with some of the events.
+- */
+-enum Event {
+-    case initialize
+-    case accountNotFound
+-    case accountRestored
+-    case changedPassword(newSessionToken: String)
+-    case authenticated(authData: FxaAuthData)
+-    case authenticationError /* (error: AuthException) */
+-    case recoveredFromAuthenticationProblem
+-    case fetchProfile(ignoreCache: Bool)
+-    case fetchedProfile
+-    case failedToFetchProfile
+-    case logout
+-}
+-
+-extension FxAccountManager {
+-    // State transition matrix. Returns nil if there's no transition.
+-    static func nextState(state: AccountState, event: Event) -> AccountState? {
+-        switch state {
+-        case .start:
+-            switch event {
+-            case .initialize: return .start
+-            case .accountNotFound: return .notAuthenticated
+-            case .accountRestored: return .authenticatedNoProfile
+-            default: return nil
+-            }
+-        case .notAuthenticated:
+-            switch event {
+-            case .authenticated: return .authenticatedNoProfile
+-            default: return nil
+-            }
+-        case .authenticatedNoProfile:
+-            switch event {
+-            case .authenticationError: return .authenticationProblem
+-            case .fetchProfile: return .authenticatedNoProfile
+-            case .fetchedProfile: return .authenticatedWithProfile
+-            case .failedToFetchProfile: return .authenticatedNoProfile
+-            case .changedPassword: return .authenticatedNoProfile
+-            case .logout: return .notAuthenticated
+-            default: return nil
+-            }
+-        case .authenticatedWithProfile:
+-            switch event {
+-            case .fetchProfile: return .authenticatedWithProfile
+-            case .fetchedProfile: return .authenticatedWithProfile
+-            case .authenticationError: return .authenticationProblem
+-            case .changedPassword: return .authenticatedNoProfile
+-            case .logout: return .notAuthenticated
+-            default: return nil
+-            }
+-        case .authenticationProblem:
+-            switch event {
+-            case .recoveredFromAuthenticationProblem: return .authenticatedNoProfile
+-            case .authenticated: return .authenticatedNoProfile
+-            case .logout: return .notAuthenticated
+-            default: return nil
+-            }
+-        }
+-    }
+-}
+diff --git a/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/PersistedFirefoxAccount.swift b/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/PersistedFirefoxAccount.swift
+index 83ce3805982e6..852efa45a6c94 100644
+--- a/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/PersistedFirefoxAccount.swift
++++ b/MozillaRustComponents/Sources/MozillaRustComponentsWrapper/FxAClient/PersistedFirefoxAccount.swift
+@@ -104,6 +104,11 @@ class PersistedFirefoxAccount {
+         inner.disconnect()
+     }
+ 
++    func processEvent(event: FxaEvent) throws -> FxaState {
++        defer { tryPersistState() }
++        return try inner.processEvent(event: event)
++    }
++
+     func getProfile(ignoreCache: Bool) throws -> Profile {
+         defer { tryPersistState() }
+         return try notifyAuthErrors {
+diff --git a/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountManagerTests.swift b/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountManagerTests.swift
+index 6caecaac3244f..4b82a5ca92a9a 100644
+--- a/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountManagerTests.swift
++++ b/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountManagerTests.swift
+@@ -7,75 +7,6 @@
+ import XCTest
+ 
+ class FxAccountManagerTests: XCTestCase {
+-    func testStateTransitionsStart() {
+-        let state: AccountState = .start
+-        XCTAssertEqual(.start, FxAccountManager.nextState(state: state, event: .initialize))
+-        XCTAssertEqual(.notAuthenticated, FxAccountManager.nextState(state: state, event: .accountNotFound))
+-        XCTAssertEqual(.authenticatedNoProfile, FxAccountManager.nextState(state: state, event: .accountRestored))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .authenticated(authData: FxaAuthData(code: "foo", state: "bar", actionQueryParam: "bobo"))))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .authenticationError))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .fetchProfile(ignoreCache: false)))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .fetchedProfile))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .failedToFetchProfile))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .logout))
+-    }
+-
+-    func testStateTransitionsNotAuthenticated() {
+-        let state: AccountState = .notAuthenticated
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .initialize))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountNotFound))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountRestored))
+-        XCTAssertEqual(.authenticatedNoProfile, FxAccountManager.nextState(state: state, event: .authenticated(authData: FxaAuthData(code: "foo", state: "bar", actionQueryParam: "bobo"))))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .authenticationError))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .fetchProfile(ignoreCache: false)))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .fetchedProfile))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .failedToFetchProfile))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .logout))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .recoveredFromAuthenticationProblem))
+-    }
+-
+-    func testStateTransitionsAuthenticatedNoProfile() {
+-        let state: AccountState = .authenticatedNoProfile
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .initialize))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountNotFound))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountRestored))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .authenticated(authData: FxaAuthData(code: "foo", state: "bar", actionQueryParam: "bobo"))))
+-        XCTAssertEqual(.authenticationProblem, FxAccountManager.nextState(state: state, event: .authenticationError))
+-        XCTAssertEqual(.authenticatedNoProfile, FxAccountManager.nextState(state: state, event: .fetchProfile(ignoreCache: false)))
+-        XCTAssertEqual(.authenticatedWithProfile, FxAccountManager.nextState(state: state, event: .fetchedProfile))
+-        XCTAssertEqual(.authenticatedNoProfile, FxAccountManager.nextState(state: state, event: .failedToFetchProfile))
+-        XCTAssertEqual(.notAuthenticated, FxAccountManager.nextState(state: state, event: .logout))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .recoveredFromAuthenticationProblem))
+-    }
+-
+-    func testStateTransitionsAuthenticatedWithProfile() {
+-        let state: AccountState = .authenticatedWithProfile
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .initialize))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountNotFound))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountRestored))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .authenticated(authData: FxaAuthData(code: "foo", state: "bar", actionQueryParam: "bobo"))))
+-        XCTAssertEqual(.authenticationProblem, FxAccountManager.nextState(state: state, event: .authenticationError))
+-        XCTAssertEqual(.authenticatedWithProfile, FxAccountManager.nextState(state: state, event: .fetchProfile(ignoreCache: false)))
+-        XCTAssertEqual(.authenticatedWithProfile, FxAccountManager.nextState(state: state, event: .fetchedProfile))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .failedToFetchProfile))
+-        XCTAssertEqual(.notAuthenticated, FxAccountManager.nextState(state: state, event: .logout))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .recoveredFromAuthenticationProblem))
+-    }
+-
+-    func testStateTransitionsAuthenticationProblem() {
+-        let state: AccountState = .authenticationProblem
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .initialize))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountNotFound))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .accountRestored))
+-        XCTAssertEqual(.authenticatedNoProfile, FxAccountManager.nextState(state: state, event: .authenticated(authData: FxaAuthData(code: "foo", state: "bar", actionQueryParam: "bobo"))))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .authenticationError))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .fetchProfile(ignoreCache: false)))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .fetchedProfile))
+-        XCTAssertNil(FxAccountManager.nextState(state: state, event: .failedToFetchProfile))
+-        XCTAssertEqual(.notAuthenticated, FxAccountManager.nextState(state: state, event: .logout))
+-        XCTAssertEqual(.authenticatedNoProfile, FxAccountManager.nextState(state: state, event: .recoveredFromAuthenticationProblem))
+-    }
+-
+     func testAccountNotFound() {
+         let mgr = mockFxAManager()
+ 
+@@ -88,13 +19,18 @@ class FxAccountManagerTests: XCTestCase {
+         let account = mgr.account as! MockFxAccount
+         let constellation = mgr.constellation as! MockDeviceConstellation
+ 
+-        XCTAssertEqual(account.invocations, [])
++        XCTAssertFalse(mgr.hasAccount())
++        XCTAssertEqual(mgr.state, .disconnected)
++        // processEvent should be called, but no device/profile calls
++        XCTAssertTrue(account.invocations.contains(.processEvent))
++        XCTAssertFalse(account.invocations.contains(.getProfile))
+         XCTAssertEqual(constellation.invocations, [])
+     }
+ 
+     func testAccountRestoration() {
+         let mgr = mockFxAManager()
+         let account = MockFxAccount()
++        account.initializeResult = .connected
+         mgr.storedAccount = account
+ 
+         expectation(forNotification: .accountAuthenticated, object: nil, handler: nil)
+@@ -106,66 +42,25 @@ class FxAccountManagerTests: XCTestCase {
+         }
+         waitForExpectations(timeout: 5, handler: nil)
+ 
+-        // Fetch devices is run async, so it could happen after getProfile, hence we don't do a strict
+-        // equality.
+-        XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.registerPersistCallback))
+-        XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.ensureCapabilities))
+-        XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.getProfile))
+-
+-        let constellation = mgr.constellation as! MockDeviceConstellation
+-        XCTAssertEqual(constellation.invocations, [
+-            MockDeviceConstellation.MethodInvocation.ensureCapabilities,
+-            MockDeviceConstellation.MethodInvocation.refreshState,
+-        ])
+-    }
+-
+-    func testAccountRestorationEnsureCapabilitiesNonAuthError() {
+-        class MockAccount: MockFxAccount {
+-            override func ensureCapabilities(supportedCapabilities _: [DeviceCapability]) throws {
+-                throw FxaError.Network(message: "The WiFi cable is detached.")
+-            }
+-        }
+-        let mgr = mockFxAManager()
+-        let account = MockAccount()
+-        mgr.storedAccount = account
+-
+-        expectation(forNotification: .accountAuthenticated, object: nil, handler: nil)
+-        expectation(forNotification: .accountProfileUpdate, object: nil, handler: nil)
+-
+-        let initDone = expectation(description: "Initialization done")
+-        mgr.initialize { _ in
+-            initDone.fulfill()
+-        }
+-        waitForExpectations(timeout: 5, handler: nil)
+-
++        XCTAssertTrue(mgr.hasAccount())
++        XCTAssertEqual(mgr.state, .connected)
+         XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.registerPersistCallback))
+         XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.getProfile))
+ 
+         let constellation = mgr.constellation as! MockDeviceConstellation
++        // initDevice/ensureCapabilities are now handled by the Rust state machine internally;
++        // only refreshState is called from postAuthenticated on the iOS side.
+         XCTAssertEqual(constellation.invocations, [
+-            MockDeviceConstellation.MethodInvocation.ensureCapabilities,
+             MockDeviceConstellation.MethodInvocation.refreshState,
+         ])
+     }
+ 
+-    func testAccountRestorationEnsureCapabilitiesAuthError() {
+-        class MockAccount: MockFxAccount {
+-            override func ensureCapabilities(supportedCapabilities _: [DeviceCapability]) throws {
+-                notifyAuthError()
+-                throw FxaError.Authentication(message: "Your token is expired yo.")
+-            }
+-
+-            override func checkAuthorizationStatus() throws -> AuthorizationInfo {
+-                _ = try super.checkAuthorizationStatus()
+-                return AuthorizationInfo(active: false)
+-            }
+-        }
++    func testAccountRestorationWithAuthIssues() {
+         let mgr = mockFxAManager()
+-        let account = MockAccount()
++        let account = MockFxAccount()
++        account.initializeResult = .authIssues
+         mgr.storedAccount = account
+ 
+-        expectation(forNotification: .accountAuthenticated, object: nil, handler: nil)
+-        expectation(forNotification: .accountProfileUpdate, object: nil, handler: nil)
+         expectation(forNotification: .accountAuthProblems, object: nil, handler: nil)
+ 
+         let initDone = expectation(description: "Initialization done")
+@@ -175,16 +70,7 @@ class FxAccountManagerTests: XCTestCase {
+         waitForExpectations(timeout: 5, handler: nil)
+ 
+         XCTAssertTrue(mgr.accountNeedsReauth())
+-
+-        XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.registerPersistCallback))
+-        XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.getProfile))
+-        XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.checkAuthorizationStatus))
+-
+-        let constellation = mgr.constellation as! MockDeviceConstellation
+-        XCTAssertEqual(constellation.invocations, [
+-            MockDeviceConstellation.MethodInvocation.ensureCapabilities,
+-            MockDeviceConstellation.MethodInvocation.refreshState,
+-        ])
++        XCTAssertEqual(mgr.state, .authIssues)
+     }
+ 
+     func testNewAccountLogIn() {
+@@ -200,6 +86,9 @@ class FxAccountManagerTests: XCTestCase {
+         waitForExpectations(timeout: 5, handler: nil)
+         XCTAssertEqual(authURL, "https://foo.bar/oauth?state=bobo")
+ 
++        expectation(forNotification: .accountAuthenticated, object: nil, handler: nil)
++        expectation(forNotification: .accountProfileUpdate, object: nil, handler: nil)
++
+         let finishAuthDone = expectation(description: "finishAuthDone")
+         mgr.finishAuthentication(authData: FxaAuthData(code: "bobo", state: "bobo", actionQueryParam: "email")) { result in
+             if case .success = result {
+@@ -208,14 +97,17 @@ class FxAccountManagerTests: XCTestCase {
+         }
+         waitForExpectations(timeout: 5, handler: nil)
+ 
++        XCTAssertTrue(mgr.hasAccount())
++        XCTAssertEqual(mgr.state, .connected)
++
+         let account = mgr.account! as! MockFxAccount
+         XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.registerPersistCallback))
+-        XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.initializeDevice))
+         XCTAssertTrue(account.invocations.contains(MockFxAccount.MethodInvocation.getProfile))
+ 
+         let constellation = mgr.constellation as! MockDeviceConstellation
++        // initDevice is now handled by the Rust state machine internally;
++        // only refreshState is called from postAuthenticated on the iOS side.
+         XCTAssertEqual(constellation.invocations, [
+-            MockDeviceConstellation.MethodInvocation.initDevice,
+             MockDeviceConstellation.MethodInvocation.refreshState,
+         ])
+     }
+@@ -233,6 +125,8 @@ class FxAccountManagerTests: XCTestCase {
+         waitForExpectations(timeout: 5, handler: nil)
+         XCTAssertEqual(authURL, "https://foo.bar/oauth?state=bobo")
+ 
++        // The mock simulates Rust's OAuth state validation: wrong state → disconnected.
++        // finishAuthentication returns .failure when the FSM lands in a non-connected state.
+         let finishAuthDone = expectation(description: "finishAuthDone")
+         mgr.finishAuthentication(authData: FxaAuthData(code: "bobo", state: "NOTBOBO", actionQueryParam: "email")) { result in
+             if case .failure = result {
+@@ -240,6 +134,10 @@ class FxAccountManagerTests: XCTestCase {
+             }
+         }
+         waitForExpectations(timeout: 5, handler: nil)
++
++        // State should be disconnected since wrong OAuth state was provided
++        XCTAssertEqual(mgr.state, .disconnected)
++        XCTAssertFalse(mgr.hasAccount())
+     }
+ 
+     func testProfileRecoverableAuthError() {
+@@ -258,9 +156,15 @@ class FxAccountManagerTests: XCTestCase {
+         }
+         let mgr = mockFxAManager()
+         let account = MockAccount()
++        account.initializeResult = .connected
+         mgr.storedAccount = account
+ 
+-        expectation(forNotification: .accountAuthenticated, object: nil, handler: nil)
++        // accountAuthenticated fires twice: once from the initial .initialize path, and again
++        // after the auth error is recovered via .checkAuthorizationStatus.
++        let authExpectation = expectation(forNotification: .accountAuthenticated, object: nil, handler: nil)
++        authExpectation.expectedFulfillmentCount = 2
++        // accountProfileUpdate fires once: the first getProfile call throws (no notification posted),
++        // and only the second successful call fires it.
+         expectation(forNotification: .accountProfileUpdate, object: nil, handler: nil)
+ 
+         let initDone = expectation(description: "Initialization done")
+@@ -271,7 +175,40 @@ class FxAccountManagerTests: XCTestCase {
+ 
+         XCTAssertFalse(mgr.accountNeedsReauth())
+ 
+-        XCTAssertTrue(account.invocations.contains(MockAccount.MethodInvocation.checkAuthorizationStatus))
++        // Read invocations through the same serial queue used for writes to avoid
++        // a potential memory visibility issue on the main test thread.
++        var hasCheckAuthStatus = false
++        queue.sync { hasCheckAuthStatus = account.invocations.contains(.checkAuthorizationStatus) }
++        XCTAssertTrue(hasCheckAuthStatus)
++    }
++
++    func testReLoginAfterLogout() {
++        // Regression test: after logout, onDisconnected() creates a fresh account.
++        // That account must be re-initialized so that beginAuthentication works again.
++        let mgr = mockFxAManager()
++
++        let initDone = expectation(description: "initDone")
++        mgr.initialize { _ in initDone.fulfill() }
++        waitForExpectations(timeout: 5, handler: nil)
++        XCTAssertEqual(mgr.state, .disconnected)
++
++        // Simulate logout
++        let logoutDone = expectation(description: "logoutDone")
++        expectation(forNotification: .accountLoggedOut, object: nil, handler: nil)
++        mgr.logout { _ in logoutDone.fulfill() }
++        waitForExpectations(timeout: 5, handler: nil)
++        XCTAssertEqual(mgr.state, .disconnected)
++
++        // After logout, sign in must still work (account was re-initialized by onDisconnected)
++        let beginAuthDone = expectation(description: "beginAuthDone")
++        nonisolated(unsafe) var authURL: String?
++        mgr.beginAuthentication(entrypoint: "test_re_login_after_logout") { url in
++            authURL = try? url.get().absoluteString
++            beginAuthDone.fulfill()
++        }
++        waitForExpectations(timeout: 5, handler: nil)
++        XCTAssertEqual(authURL, "https://foo.bar/oauth?state=bobo",
++                       "beginAuthentication must succeed after logout — onDisconnected must re-initialize the account")
+     }
+ 
+     func testGetTokenServerEndpointURL() {
+@@ -282,6 +219,7 @@ class FxAccountManagerTests: XCTestCase {
+         }
+         let mgr = mockFxAManager()
+         let account = MockAccount()
++        account.initializeResult = .connected
+         mgr.storedAccount = account
+ 
+         let initDone = expectation(description: "Initialization done")
+diff --git a/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountMocks.swift b/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountMocks.swift
+index 5c11cd781f495..61b01988f5515 100644
+--- a/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountMocks.swift
++++ b/MozillaRustComponents/Tests/MozillaRustComponentsTests/FxAccountMocks.swift
+@@ -20,8 +20,14 @@ class MockFxAccount: PersistedFirefoxAccount {
+         case getAccessToken
+         case initializeDevice
+         case getDevices
++        case processEvent
+     }
+ 
++    /// Controls what state `processEvent(.initialize)` returns.
++    /// Set to `.connected` for a restored account, `.disconnected` for no account,
++    /// `.authIssues` for a restored account with auth problems.
++    var initializeResult: FxaState = .disconnected
++
+     init() {
+         super.init(inner: FirefoxAccount(config: FxaConfig(server: FxaServer.custom(url: ""), clientId: "", redirectUri: "", tokenServerUrlOverride: nil)))
+     }
+@@ -34,6 +40,30 @@ class MockFxAccount: PersistedFirefoxAccount {
+         fatalError("init(config:) has not been implemented")
+     }
+ 
++    override func processEvent(event: FxaEvent) throws -> FxaState {
++        queue.sync { invocations.append(.processEvent) }
++        switch event {
++        case .initialize:
++            return initializeResult
++        case .beginOAuthFlow:
++            return .authenticating(oauthUrl: "https://foo.bar/oauth?state=bobo")
++        case .beginPairingFlow:
++            return .authenticating(oauthUrl: "https://foo.bar/oauth?state=bobo")
++        case let .completeOAuthFlow(_, state):
++            // Simulate Rust's OAuth state validation
++            return state == "bobo" ? .connected : .disconnected
++        case .cancelOAuthFlow:
++            return .disconnected
++        case .checkAuthorizationStatus:
++            let info = try checkAuthorizationStatus()
++            return info.active ? .connected : .authIssues
++        case .disconnect:
++            return .disconnected
++        case .callGetProfile:
++            return .connected
++        }
++    }
++
+     override func initializeDevice(name _: String, deviceType _: DeviceType, supportedCapabilities _: [DeviceCapability]) throws {
+         queue.sync { invocations.append(.initializeDevice) }
+     }
+@@ -79,7 +109,7 @@ class MockFxAccount: PersistedFirefoxAccount {
+ }
+ 
+ final class MockFxAccountManager: FxAccountManager, @unchecked Sendable {
+-    var storedAccount: PersistedFirefoxAccount?
++    var storedAccount: MockFxAccount?
+ 
+     override func createAccount() -> PersistedFirefoxAccount {
+         return MockFxAccount()
+@@ -97,8 +127,6 @@ final class MockFxAccountManager: FxAccountManager, @unchecked Sendable {
+ final class MockDeviceConstellation: DeviceConstellation, @unchecked Sendable {
+     var invocations: [MethodInvocation] = []
+     enum MethodInvocation {
+-        case ensureCapabilities
+-        case initDevice
+         case refreshState
+     }
+ 
+@@ -106,16 +134,6 @@ final class MockDeviceConstellation: DeviceConstellation, @unchecked Sendable {
+         super.init(account: account ?? MockFxAccount())
+     }
+ 
+-    override func initDevice(name: String, type: DeviceType, capabilities: [DeviceCapability]) {
+-        queue.sync { invocations.append(.initDevice) }
+-        super.initDevice(name: name, type: type, capabilities: capabilities)
+-    }
+-
+-    override func ensureCapabilities(capabilities: [DeviceCapability]) {
+-        queue.sync { invocations.append(.ensureCapabilities) }
+-        super.ensureCapabilities(capabilities: capabilities)
+-    }
+-
+     override func refreshState() {
+         queue.sync { invocations.append(.refreshState) }
+         super.refreshState()
+diff --git a/firefox-ios/Client/AccountSyncHandler.swift b/firefox-ios/Client/AccountSyncHandler.swift
+index 5067e6030b371..1d292c953ef41 100644
+--- a/firefox-ios/Client/AccountSyncHandler.swift
++++ b/firefox-ios/Client/AccountSyncHandler.swift
+@@ -32,7 +32,8 @@ final class Debouncer {
+ /// `AccountSyncHandler` exists to observe certain `TabEventLabel` notifications,
+ /// and react accordingly.
+ @MainActor
+-final class AccountSyncHandler: TabEventHandler, Sendable {
++final class AccountSyncHandler: TabEventHandler, Notifiable, Sendable {
++    private let notificationCenter: NotificationProtocol = NotificationCenter.default
+     private let debouncer: Debouncer
+     private let profile: Profile
+     private let logger: Logger
+@@ -63,6 +64,16 @@ final class AccountSyncHandler: TabEventHandler, Sendable {
+         // Other clients only show urls and ordering of tabs, we can ignore everything
+         // else that doesn't modify those attributes
+         register(self, forTabEvents: .didGainFocus, .didClose, .didChangeURL)
++
++        // Upload local tabs immediately after login so other clients see them
++        // without requiring any tab interaction. syncEverything() fires on login
++        // but the Rust TabsStore's local tab list is empty until setLocalTabs()
++        // is called...so we do that here as soon as the account is ready.
++        startObservingNotifications(
++            withNotificationCenter: notificationCenter,
++            forObserver: self,
++            observing: [.accountAuthenticated]
++        )
+     }
+ 
+     // MARK: - Account Server Sync
+@@ -139,3 +150,15 @@ final class AccountSyncHandler: TabEventHandler, Sendable {
+         }
+     }
+ }
++
++// MARK: - Notifiable
++extension AccountSyncHandler {
++    nonisolated func handleNotifications(_ notification: Notification) {
++        switch notification.name {
++        case .accountAuthenticated:
++            ensureMainThread { self.storeTabs() }
++        default:
++            break
++        }
++    }
++}
+diff --git a/firefox-ios/Providers/RustSyncManager.swift b/firefox-ios/Providers/RustSyncManager.swift
+index 201590705e23e..8c02c2967e0d6 100644
+--- a/firefox-ios/Providers/RustSyncManager.swift
++++ b/firefox-ios/Providers/RustSyncManager.swift
+@@ -20,6 +20,8 @@ import struct MozillaAppServices.SyncResult
+ import struct MozillaAppServices.Device
+ import struct MozillaAppServices.ScopedKey
+ import struct MozillaAppServices.AccessTokenInfo
++import class MozillaAppServices.FxAccountManager
++import struct MozillaAppServices.DeviceConfig
+ 
+ // Extends NSObject so we can use timers.
+ // TODO: FXIOS-14225 - RustSyncManager shouldn't be @unchecked Sendable
+@@ -592,9 +594,9 @@ public class RustSyncManager: NSObject, SyncManager, @unchecked Sendable {
+ 
+         logger.log("Syncing \(engines)", level: .info, category: .sync)
+         if let accountManager = RustFirefoxAccounts.shared.accountManager {
+-            guard let device = accountManager.deviceConstellation()?
+-                .state()?
+-                .localDevice else {
++            // Prefer accountState over deviceConstellation for the current
++            // device ID to avoid a possible server round-trip.
++            guard case .success(let deviceId) = accountManager.getCurrentDeviceId() else {
+                 self.logger.log("Device Id could not be retrieved",
+                                 level: .warning,
+                                 category: .sync)
+@@ -629,7 +631,9 @@ public class RustSyncManager: NSObject, SyncManager, @unchecked Sendable {
+                             persistedState:
+                                 self.prefs
+                                     .stringForKey(PrefsKeys.RustSyncManagerPersistedState),
+-                            deviceSettings: self.createDeviceSettings(device: device))
++                            deviceSettings: self.createDeviceSettings(
++                                deviceId: deviceId,
++                                accountManager: accountManager))
+ 
+                         self.doSync(params: params) { syncResult in
+                             deferred.fill(Maybe(success: syncResult))
+@@ -651,11 +655,11 @@ public class RustSyncManager: NSObject, SyncManager, @unchecked Sendable {
+             tokenserverUrl: tokenServerEndpointURL.absoluteString)
+     }
+ 
+-    private func createDeviceSettings(device: Device) -> DeviceSettings {
++    private func createDeviceSettings(deviceId: String, accountManager: FxAccountManager) -> DeviceSettings {
+         return DeviceSettings(
+-            fxaDeviceId: device.id,
+-            name: device.displayName,
+-            kind: device.deviceType)
++            fxaDeviceId: deviceId,
++            name: accountManager.deviceConfig.name,
++            kind: accountManager.deviceConfig.deviceType)
+     }
+ 
+     @discardableResult

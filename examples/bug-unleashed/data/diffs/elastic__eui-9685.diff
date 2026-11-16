@@ -1,0 +1,85 @@
+diff --git a/packages/eui/changelogs/upcoming/9685.md b/packages/eui/changelogs/upcoming/9685.md
+new file mode 100644
+index 000000000000..7abdf724b6c8
+--- /dev/null
++++ b/packages/eui/changelogs/upcoming/9685.md
+@@ -0,0 +1,3 @@
++**Bug fixes**
++
++- Fixed `EuiDatePicker` firing `onChange` with an out-of-bounds date when navigating to a month or year via the dropdowns while `minDate` or `maxDate` is set
+diff --git a/packages/eui/src/components/date_picker/date_picker.test.tsx b/packages/eui/src/components/date_picker/date_picker.test.tsx
+index b46433ca2fc8..46857791bc43 100644
+--- a/packages/eui/src/components/date_picker/date_picker.test.tsx
++++ b/packages/eui/src/components/date_picker/date_picker.test.tsx
+@@ -117,6 +117,55 @@ describe('EuiDatePicker', () => {
+     expect(getPrepend()).not.toBeInTheDocument();
+   });
+ 
++  describe('minDate/maxDate', () => {
++    beforeEach(() => {
++      // JSDOM does not implement scrollIntoView; the year dropdown options use it
++      window.HTMLElement.prototype.scrollIntoView = jest.fn();
++    });
++
++    it('does not fire onChange when month navigation via dropdown produces an out-of-bounds date', () => {
++      const onChange = jest.fn();
++      const selected = moment('2025-05-15');
++      const maxDate = moment('2025-05-31');
++
++      const { getByLabelText, getByText } = render(
++        <EuiDatePicker
++          inline
++          selected={selected}
++          maxDate={maxDate}
++          onChange={onChange}
++        />
++      );
++
++      fireEvent.click(getByLabelText(/Open the month selector/i));
++      // Selecting August gives 2025-08-15, which is beyond maxDate
++      fireEvent.click(getByText('August'));
++
++      expect(onChange).not.toHaveBeenCalled();
++    });
++
++    it('does not fire onChange when year navigation via dropdown produces an out-of-bounds date', () => {
++      const onChange = jest.fn();
++      // minDate is mid-2024; changing from 2025-02-15 to year 2024 gives 2024-02-15 < minDate
++      const selected = moment('2025-02-15');
++      const minDate = moment('2024-06-01');
++
++      const { getByLabelText, getByText } = render(
++        <EuiDatePicker
++          inline
++          selected={selected}
++          minDate={minDate}
++          onChange={onChange}
++        />
++      );
++
++      fireEvent.click(getByLabelText(/Open the year selector/i));
++      fireEvent.click(getByText('2024'));
++
++      expect(onChange).not.toHaveBeenCalled();
++    });
++  });
++
+   // TODO: These tests/snapshots don't really do anything in Jest without
+   // the corresponding popover opening. Should be switched to an E2E test instead
+   describe.skip('popoverPlacement', () => {
+diff --git a/packages/eui/src/components/date_picker/react-datepicker/src/index.js b/packages/eui/src/components/date_picker/react-datepicker/src/index.js
+index 01d78ecd6b56..049a250d40aa 100644
+--- a/packages/eui/src/components/date_picker/react-datepicker/src/index.js
++++ b/packages/eui/src/components/date_picker/react-datepicker/src/index.js
+@@ -477,11 +477,6 @@ export default class DatePicker extends React.Component {
+     let changedDate = date;
+ 
+     if (changedDate !== null && isDayDisabled(changedDate, this.props)) {
+-      if (isOutOfBounds(changedDate, this.props)) {
+-        this.props.onChange(date, event);
+-        this.props.onSelect(changedDate, event);
+-      }
+-
+       return;
+     }
+ 

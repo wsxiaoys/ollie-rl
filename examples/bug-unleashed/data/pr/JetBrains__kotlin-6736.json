@@ -1,0 +1,6 @@
+{
+  "title": "[Build] Use published marks in another place more",
+  "body": "The goal is to stop accessing tasks in other projects, so we use dummy files. Eventually we could use the local folders where the artifacts are published.",
+  "head_sha": "d3833453afe3f0e9ea9d83ff56031782e41db457",
+  "base_sha": "20b8d834a6410bfd03a1c6a7c8c33e1441f6985c"
+}

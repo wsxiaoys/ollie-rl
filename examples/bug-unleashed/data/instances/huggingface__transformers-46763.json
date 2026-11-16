@@ -1,0 +1,16 @@
+{
+  "case_id": "huggingface__transformers-46763",
+  "repo": "huggingface/transformers",
+  "pr": 46763,
+  "title": "Round the ue8m0 FP8 scale before quantizing so dequant matches the stored inverse",
+  "language": "Python",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "huggingface__transformers-46763",
+  "target": null,
+  "siblings": [],
+  "head_sha": "dd9805aa5a29a26c49a20d8317cbaa43f3180fb9",
+  "base_sha": "fc5401d1e8134420e87dffd44e9af390d584b7bf",
+  "snapshot": "repos/huggingface__transformers/dd9805aa5a29a26c49a20d8317cbaa43f3180fb9",
+  "diff": "diffs/huggingface__transformers-46763.diff"
+}

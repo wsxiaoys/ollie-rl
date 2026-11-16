@@ -1,0 +1,25 @@
+{
+  "case_id": "vitest-dev__vitest-10981",
+  "repo": "vitest-dev/vitest",
+  "pr": 10981,
+  "title": "feat(ui): persist trace view selection in URL",
+  "language": "TypeScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "vitest-dev__vitest-10981__g1",
+  "target": {
+    "gid": "vitest-dev__vitest-10981#g1",
+    "summary": "Calling doc.close() on the trace replay iframe puts the document into HTML quirks mode, breaking case-sensitive CSS styling during trace snapshot replay.",
+    "paths": [
+      "packages/ui/client/components/trace/TraceView.vue"
+    ],
+    "notes": [
+      "faulty doc.close() call after rebuilding snapshot, putting the replay document into quirks mode"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "6eb3c1c6ec90a9bc3c6450b9a4d36b8001252b88",
+  "base_sha": "1bbc278c2744639a8ef608e9e5660d0334a5088b",
+  "snapshot": "repos/vitest-dev__vitest/6eb3c1c6ec90a9bc3c6450b9a4d36b8001252b88",
+  "diff": "diffs/vitest-dev__vitest-10981.diff"
+}

@@ -1,0 +1,35 @@
+diff --git a/packages/expo-router/CHANGELOG.md b/packages/expo-router/CHANGELOG.md
+index b6c7948ee05ff6..1d72766ae0bc41 100644
+--- a/packages/expo-router/CHANGELOG.md
++++ b/packages/expo-router/CHANGELOG.md
+@@ -19,6 +19,7 @@
+ - Allow async routes to rehydrate synchronously by carrying through preloaded modules preventing FOUC in production output ([#46539](https://github.com/expo/expo/pull/46539) by [@kitten](https://github.com/kitten))
+ - Fix type inference for `unstable_createStandardRouterNavigator` ([#46737](https://github.com/expo/expo/pull/46737) by [@Ubax](https://github.com/Ubax))
+ - Preserve a system time mocked with `jest.setSystemTime` across `renderRouter` ([#46978](https://github.com/expo/expo/pull/46978) by [@Ubax](https://github.com/Ubax))
++- [ios] Fix white flash behind screens during the interactive swipe-back gesture by forwarding the theme background to the native stack container. ([#47121](https://github.com/expo/expo/pull/47121) by [@kevenleone](https://github.com/kevenleone))
+ 
+ ### 💡 Others
+ 
+diff --git a/packages/expo-router/src/react-navigation/native-stack/views/NativeStackView.native.tsx b/packages/expo-router/src/react-navigation/native-stack/views/NativeStackView.native.tsx
+index 80fe298574e3be..8a9ddd370382f0 100644
+--- a/packages/expo-router/src/react-navigation/native-stack/views/NativeStackView.native.tsx
++++ b/packages/expo-router/src/react-navigation/native-stack/views/NativeStackView.native.tsx
+@@ -457,6 +457,7 @@ type Props = {
+ };
+ 
+ export function NativeStackView({ state, navigation, descriptors, describe }: Props) {
++  const { colors } = useTheme();
+   const { setNextDismissedKey } = useDismissedRouteError(state);
+ 
+   useInvalidPreventRemoveError(descriptors);
+@@ -473,7 +474,9 @@ export function NativeStackView({ state, navigation, descriptors, describe }: Pr
+ 
+   return (
+     <SafeAreaProviderCompat>
+-      <ScreenStack style={styles.container}>
++      <ScreenStack
++        nativeContainerStyle={{ backgroundColor: colors.background }}
++        style={styles.container}>
+         {state.routes.concat(state.preloadedRoutes).map((route, index) => {
+           const descriptor = (descriptors[route.key] ?? preloadedDescriptors[route.key])!;
+           const isFocused = state.index === index;

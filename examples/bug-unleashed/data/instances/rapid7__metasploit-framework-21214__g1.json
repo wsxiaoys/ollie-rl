@@ -1,0 +1,30 @@
+{
+  "case_id": "rapid7__metasploit-framework-21214",
+  "repo": "rapid7/metasploit-framework",
+  "pr": 21214,
+  "title": "Add additional validation to db_import",
+  "language": "Ruby",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rapid7__metasploit-framework-21214__g1",
+  "target": {
+    "gid": "rapid7__metasploit-framework-21214#g1",
+    "summary": "Symbol back-references in `read_class_name` are resolved against an isolated cache of class names rather than Marshal's global symbol table. A crafted payload containing earlier symbols can cause the validator to verify a permitted class while `Marshal.load` resolves the index to a disallowed class and invokes `_load`, leading to unsafe deserialization.",
+    "paths": [
+      "lib/msf/core/db_manager/import/marshal_validator.rb",
+      "lib/msf/core/db_manager/import/metasploit_framework.rb"
+    ],
+    "notes": [
+      "isolated symbol cache for class name back-references rather than the global symbol table",
+      "symbols in the stream are not registered in the symbol cache, desynchronizing symbol table indices",
+      "definition of read_class_name",
+      "call site of read_class_name when validating custom serialization",
+      "call site calling safe_load relying on permitted class validation"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "acefa87790273a984a626c2a7aee0ce568e399de",
+  "base_sha": "79ea88e2f9c909c5505ae95bd7e152c15c686fa3",
+  "snapshot": "repos/rapid7__metasploit-framework/acefa87790273a984a626c2a7aee0ce568e399de",
+  "diff": "diffs/rapid7__metasploit-framework-21214.diff"
+}

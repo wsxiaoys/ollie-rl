@@ -1,0 +1,25 @@
+{
+  "case_id": "bitcoin__bitcoin-35470",
+  "repo": "bitcoin/bitcoin",
+  "pr": 35470,
+  "title": "argsman: Prevent duplicate option registration across categories",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "bitcoin__bitcoin-35470__g1",
+  "target": {
+    "gid": "bitcoin__bitcoin-35470#g1",
+    "summary": "The check for duplicate option names across categories does not exempt OptionsCategory::HIDDEN. Legitimate duplicate registrations involving hidden placeholder options (such as GUI options in bitcoin-qt) trigger this assertion and crash the binary on startup.",
+    "paths": [
+      "src/common/args.cpp"
+    ],
+    "notes": [
+      "faulty loop asserting uniqueness across categories without exempting OptionsCategory::HIDDEN"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "32df86f1d80dc88bdde96e03ff021a196b4b4ea3",
+  "base_sha": "a30ef6b91f73a6669e5aeedf460e0c9be2745a49",
+  "snapshot": "repos/bitcoin__bitcoin/32df86f1d80dc88bdde96e03ff021a196b4b4ea3",
+  "diff": "diffs/bitcoin__bitcoin-35470.diff"
+}

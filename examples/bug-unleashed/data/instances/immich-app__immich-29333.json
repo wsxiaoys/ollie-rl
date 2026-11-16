@@ -1,0 +1,16 @@
+{
+  "case_id": "immich-app__immich-29333",
+  "repo": "immich-app/immich",
+  "pr": 29333,
+  "title": "fix(server): face region coordinates parsing",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "immich-app__immich-29333",
+  "target": null,
+  "siblings": [],
+  "head_sha": "fbaa3afde8ff98b7869c54f160e2a6ca3bcd0f2c",
+  "base_sha": "ac74bca18b61599a632a3d5b47e0826820fcfb88",
+  "snapshot": "repos/immich-app__immich/fbaa3afde8ff98b7869c54f160e2a6ca3bcd0f2c",
+  "diff": "diffs/immich-app__immich-29333.diff"
+}

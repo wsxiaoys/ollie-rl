@@ -1,0 +1,1211 @@
+diff --git a/packages/aws-cdk-lib/aws-lambda-nodejs/lib/bundling.ts b/packages/aws-cdk-lib/aws-lambda-nodejs/lib/bundling.ts
+index 6735988e6ee89..3e746af8a120f 100644
+--- a/packages/aws-cdk-lib/aws-lambda-nodejs/lib/bundling.ts
++++ b/packages/aws-cdk-lib/aws-lambda-nodejs/lib/bundling.ts
+@@ -1,3 +1,4 @@
++import * as fs from 'fs';
+ import * as os from 'os';
+ import * as path from 'path';
+ import type { IConstruct } from 'constructs';
+@@ -5,7 +6,7 @@ import { PackageInstallation } from './package-installation';
+ import { LockFile, PackageManager } from './package-manager';
+ import type { BundlingOptions } from './types';
+ import { OutputFormat, SourceMapMode } from './types';
+-import { exec, extractDependencies, findUp, getTsconfigCompilerOptions, isSdkV2Runtime } from './util';
++import { exec, extractDependencies, findUp, getTsconfigCompilerOptionsArray, isSdkV2Runtime } from './util';
+ import type { Architecture, AssetCode } from '../../aws-lambda';
+ import { Code, Runtime } from '../../aws-lambda';
+ import * as cdk from '../../core';
+@@ -216,24 +217,16 @@ export class Bundling implements cdk.BundlingOptions {
+     }
+   }
+ 
+-  private createBundlingCommand(scope: IConstruct, options: BundlingCommandOptions): string {
+-    const pathJoin = osPathJoin(options.osPlatform);
+-    let relativeEntryPath = pathJoin(options.inputDir, this.relativeEntryPath);
+-    let tscCommand = '';
+-
+-    if (this.props.preCompilation) {
+-      const tsconfig = this.props.tsconfig ?? findUp('tsconfig.json', path.dirname(this.props.entry));
+-      if (!tsconfig) {
+-        throw new ValidationError('CannotFindTsconfigJsonPre', 'Cannot find a `tsconfig.json` but `preCompilation` is set to `true`, please specify it via `tsconfig`', scope);
+-      }
+-      const compilerOptions = getTsconfigCompilerOptions(tsconfig);
+-      tscCommand = `${options.tscRunner} "${relativeEntryPath}" ${compilerOptions}`;
+-      relativeEntryPath = relativeEntryPath.replace(/\.ts(x?)$/, '.js$1');
+-    }
+-
+-    const loaders = Object.entries(this.props.loader ?? {});
+-    const defines = Object.entries(this.props.define ?? {});
+-
++  /**
++   * Builds the raw esbuild CLI arguments as an array of strings.
++   * No shell quoting — callers apply their own formatting.
++   */
++  private buildEsbuildArgs(
++    scope: IConstruct,
++    inputDir: string,
++    outputDir: string,
++    pathJoin: (...parts: string[]) => string,
++  ): string[] {
+     if (this.props.sourceMap === false && this.props.sourceMapMode) {
+       throw new ValidationError('SourceMapModeCannotSource', 'sourceMapMode cannot be used when sourceMap is false', scope);
+     }
+@@ -242,31 +235,54 @@ export class Bundling implements cdk.BundlingOptions {
+     const sourceMapMode = this.props.sourceMapMode ?? SourceMapMode.DEFAULT;
+     const sourceMapValue = sourceMapMode === SourceMapMode.DEFAULT ? '' : `=${this.props.sourceMapMode}`;
+     const sourcesContent = this.props.sourcesContent ?? true;
+-
+     const outFile = this.props.format === OutputFormat.ESM ? 'index.mjs' : 'index.js';
+-    const esbuildCommand: string[] = [
+-      options.esbuildRunner,
+-      '--bundle', `"${relativeEntryPath}"`,
++
++    return [
+       `--target=${this.props.target ?? toTarget(scope, this.props.runtime)}`,
+       '--platform=node',
+       ...this.props.format ? [`--format=${this.props.format}`] : [],
+-      `--outfile="${pathJoin(options.outputDir, outFile)}"`,
++      `--outfile=${pathJoin(outputDir, outFile)}`,
+       ...this.props.minify ? ['--minify'] : [],
+       ...sourceMapEnabled ? [`--sourcemap${sourceMapValue}`] : [],
+       ...sourcesContent ? [] : [`--sources-content=${sourcesContent}`],
+       ...this.externals.map(external => `--external:${external}`),
+-      ...loaders.map(([ext, name]) => `--loader:${ext}=${name}`),
+-      ...defines.map(([key, value]) => `--define:${key}=${JSON.stringify(value)}`),
++      ...Object.entries(this.props.loader ?? {}).map(([ext, name]) => `--loader:${ext}=${name}`),
++      ...Object.entries(this.props.define ?? {}).map(([key, value]) => `--define:${key}=${value}`),
+       ...this.props.logLevel ? [`--log-level=${this.props.logLevel}`] : [],
+       ...this.props.keepNames ? ['--keep-names'] : [],
+-      ...this.relativeTsconfigPath ? [`--tsconfig="${pathJoin(options.inputDir, this.relativeTsconfigPath)}"`] : [],
+-      ...this.props.metafile ? [`--metafile="${pathJoin(options.outputDir, 'index.meta.json')}"`] : [],
+-      ...this.props.banner ? [`--banner:js=${JSON.stringify(this.props.banner)}`] : [],
+-      ...this.props.footer ? [`--footer:js=${JSON.stringify(this.props.footer)}`] : [],
++      ...this.relativeTsconfigPath ? [`--tsconfig=${pathJoin(inputDir, this.relativeTsconfigPath)}`] : [],
++      ...this.props.metafile ? [`--metafile=${pathJoin(outputDir, 'index.meta.json')}`] : [],
++      ...this.props.banner ? [`--banner:js=${this.props.banner}`] : [],
++      ...this.props.footer ? [`--footer:js=${this.props.footer}`] : [],
+       ...this.props.mainFields ? [`--main-fields=${this.props.mainFields.join(',')}`] : [],
+-      ...this.props.inject ? this.props.inject.map(i => `--inject:"${i}"`) : [],
+-      ...this.props.esbuildArgs ? [toCliArgs(this.props.esbuildArgs)] : [],
++      ...this.props.inject ? this.props.inject.map(i => `--inject:${i}`) : [],
+     ];
++  }
++
++  private createBundlingCommand(scope: IConstruct, options: BundlingCommandOptions): string {
++    const pathJoin = osPathJoin(options.osPlatform);
++    let relativeEntryPath = pathJoin(options.inputDir, this.relativeEntryPath);
++    let tscCommand = '';
++
++    if (this.props.preCompilation) {
++      const tsconfig = this.props.tsconfig ?? findUp('tsconfig.json', path.dirname(this.props.entry));
++      if (!tsconfig) {
++        throw new ValidationError('CannotFindTsconfigJsonPre', 'Cannot find a `tsconfig.json` but `preCompilation` is set to `true`, please specify it via `tsconfig`', scope);
++      }
++      const compilerOptionsArray = getTsconfigCompilerOptionsArray(tsconfig);
++      tscCommand = preparePosixShellCommand([options.tscRunner!, relativeEntryPath, ...compilerOptionsArray]);
++      relativeEntryPath = relativeEntryPath.replace(/\.ts(x?)$/, '.js$1');
++    }
++
++    const rawArgs = this.buildEsbuildArgs(scope, options.inputDir, options.outputDir, pathJoin);
++
++    const esbuildArgv: string[] = [
++      options.esbuildRunner,
++      '--bundle', relativeEntryPath,
++      ...rawArgs,
++      ...this.props.esbuildArgs ? toCliArgsArray(this.props.esbuildArgs) : [],
++    ];
++    const esbuildCommand = preparePosixShellCommand(esbuildArgv);
+ 
+     let depsCommand = '';
+     if (this.props.nodeModules) {
+@@ -301,7 +317,7 @@ export class Bundling implements cdk.BundlingOptions {
+     return chain([
+       ...this.props.commandHooks?.beforeBundling(options.inputDir, options.outputDir) ?? [],
+       tscCommand,
+-      esbuildCommand.join(' '),
++      esbuildCommand,
+       ...(this.props.nodeModules && this.props.commandHooks?.beforeInstall(options.inputDir, options.outputDir)) ?? [],
+       depsCommand,
+       ...this.props.commandHooks?.afterBundling(options.inputDir, options.outputDir) ?? [],
+@@ -310,15 +326,10 @@ export class Bundling implements cdk.BundlingOptions {
+ 
+   private getLocalBundlingProvider(scope: IConstruct): cdk.ILocalBundling {
+     const osPlatform = os.platform();
+-    const createLocalCommand = (outputDir: string, esbuild: PackageInstallation, tsc?: PackageInstallation) => this.createBundlingCommand(scope, {
+-      inputDir: this.projectRoot,
+-      outputDir,
+-      esbuildRunner: esbuild.isLocal ? this.packageManager.runBinCommand('esbuild') : 'esbuild',
+-      tscRunner: tsc && (tsc.isLocal ? this.packageManager.runBinCommand('tsc') : 'tsc'),
+-      osPlatform,
+-    });
+     const environment = this.props.environment ?? {};
+     const cwd = this.projectRoot;
++    const createSteps = (outputDir: string, esbuild: PackageInstallation, tsc?: PackageInstallation) =>
++      this.createLocalBundlingSteps(scope, outputDir, esbuild, tsc);
+ 
+     return {
+       tryBundle(outputDir: string) {
+@@ -331,31 +342,162 @@ export class Bundling implements cdk.BundlingOptions {
+           throw new ValidationError('ExpectedEsbuildVersion', `Expected esbuild version ${ESBUILD_MAJOR_VERSION}.x but got ${Bundling.esbuildInstallation.version}`, scope);
+         }
+ 
+-        const localCommand = createLocalCommand(outputDir, Bundling.esbuildInstallation, Bundling.tscInstallation);
+-
+-        exec(
+-          osPlatform === 'win32' ? 'cmd' : 'bash',
+-          [
+-            osPlatform === 'win32' ? '/c' : '-c',
+-            localCommand,
+-          ],
+-          {
+-            env: { ...process.env, ...environment },
+-            stdio: [ // show output
+-              'ignore', // ignore stdio
+-              process.stderr, // redirect stdout to stderr
+-              'inherit', // inherit stderr
+-            ],
+-            cwd,
+-            windowsVerbatimArguments: osPlatform === 'win32',
+-          });
++        const execOptions = {
++          env: { ...process.env, ...environment },
++          stdio: [
++            'ignore', // ignore stdio
++            process.stderr, // redirect stdout to stderr
++            'inherit', // inherit stderr
++          ] as ['ignore', NodeJS.WriteStream, 'inherit'],
++          cwd,
++        };
++
++        const steps = createSteps(outputDir, Bundling.esbuildInstallation, Bundling.tscInstallation);
++        for (const step of steps) {
++          switch (step.type) {
++            case 'shell':
++              for (const cmd of step.commands) {
++                exec(
++                  osPlatform === 'win32' ? (process.env.COMSPEC ?? 'cmd') : 'bash',
++                  [osPlatform === 'win32' ? '/c' : '-c', cmd],
++                  { ...execOptions, windowsVerbatimArguments: osPlatform === 'win32' },
++                );
++              }
++              break;
++            case 'spawn':
++              exec(step.command[0], step.command.slice(1), {
++                ...execOptions,
++                cwd: step.cwd ?? cwd,
++              });
++              break;
++            case 'callback':
++              try {
++                step.operation();
++              } catch (err) {
++                throw new ValidationError('LocalBundlingFileOperationFailed', `Local bundling file operation failed: ${err instanceof Error ? err.message : String(err)}`, scope);
++              }
++              break;
++          }
++        }
+ 
+         return true;
+       },
+     };
+   }
++
++  /**
++   * Creates structured bundling steps for local execution via direct spawn (no shell).
++   */
++  private createLocalBundlingSteps(
++    scope: IConstruct,
++    outputDir: string,
++    esbuild: PackageInstallation,
++    tsc?: PackageInstallation,
++  ): BundlingStep[] {
++    const steps: BundlingStep[] = [];
++
++    let relativeEntryPath = path.join(this.projectRoot, this.relativeEntryPath);
++
++    // Before bundling hooks
++    const beforeBundling = this.props.commandHooks?.beforeBundling(this.projectRoot, outputDir) ?? [];
++    if (beforeBundling.length) {
++      steps.push({ type: 'shell', commands: beforeBundling });
++    }
++
++    // Pre-compilation with tsc
++    if (this.props.preCompilation) {
++      const tsconfig = this.props.tsconfig ?? findUp('tsconfig.json', path.dirname(this.props.entry));
++      if (!tsconfig) {
++        throw new ValidationError('CannotFindTsconfigJsonPre', 'Cannot find a `tsconfig.json` but `preCompilation` is set to `true`, please specify it via `tsconfig`', scope);
++      }
++      const compilerOptionsArray = getTsconfigCompilerOptionsArray(tsconfig);
++      const tscRunner = tsc && (tsc.isLocal ? this.packageManager.runBinCommand('tsc') : ['tsc']);
++      if (tscRunner) {
++        steps.push({ type: 'spawn', command: [...tscRunner, relativeEntryPath, ...compilerOptionsArray] });
++      }
++      relativeEntryPath = relativeEntryPath.replace(/\.ts(x?)$/, '.js$1');
++    }
++
++    // Esbuild
++    const esbuildRunner = esbuild.isLocal ? this.packageManager.runBinCommand('esbuild') : ['esbuild'];
++
++    const esbuildArgs: string[] = [
++      ...this.buildEsbuildArgs(scope, this.projectRoot, outputDir, (...args: string[]) => path.join(...args)),
++      ...this.props.esbuildArgs ? toCliArgsArray(this.props.esbuildArgs) : [],
++    ];
++
++    steps.push({ type: 'spawn', command: [...esbuildRunner, '--bundle', relativeEntryPath, ...esbuildArgs] });
++
++    // Node modules installation
++    if (this.props.nodeModules) {
++      const pkgPath = findUp('package.json', path.dirname(this.props.entry));
++      if (!pkgPath) {
++        throw new ValidationError('CannotFindPackageJsonProject', 'Cannot find a `package.json` in this project. Using `nodeModules` requires a `package.json`.', scope);
++      }
++
++      // Before install hooks
++      const beforeInstall = this.props.commandHooks?.beforeInstall(this.projectRoot, outputDir) ?? [];
++      if (beforeInstall.length) {
++        steps.push({ type: 'shell', commands: beforeInstall });
++      }
++
++      const dependencies = extractDependencies(pkgPath, this.props.nodeModules);
++      const lockFilePath = path.join(this.projectRoot, this.relativeDepsLockFilePath ?? this.packageManager.lockFile);
++      const isPnpm = this.packageManager.lockFile === LockFile.PNPM;
++      const isBun = this.packageManager.lockFile === LockFile.BUN_LOCK || this.packageManager.lockFile === LockFile.BUN;
++
++      steps.push({
++        type: 'callback',
++        operation: () => {
++          if (isPnpm) {
++            fs.writeFileSync(path.join(outputDir, 'pnpm-workspace.yaml'), '');
++          }
++          fs.writeFileSync(path.join(outputDir, 'package.json'), JSON.stringify({ dependencies }));
++          fs.copyFileSync(lockFilePath, path.join(outputDir, this.packageManager.lockFile));
++        },
++      });
++
++      steps.push({ type: 'spawn', command: [...this.packageManager.installCommand], cwd: outputDir });
++
++      if (isPnpm || isBun) {
++        steps.push({
++          type: 'callback',
++          operation: () => {
++            if (isPnpm) {
++              const modulesYaml = path.join(outputDir, 'node_modules', '.modules.yaml');
++              if (fs.existsSync(modulesYaml)) {
++                fs.rmSync(modulesYaml, { force: true });
++              }
++            }
++            if (isBun) {
++              const cacheDir = path.join(outputDir, 'node_modules', '.cache');
++              if (fs.existsSync(cacheDir)) {
++                fs.rmSync(cacheDir, { recursive: true, force: true });
++              }
++            }
++          },
++        });
++      }
++    }
++
++    // After bundling hooks
++    const afterBundling = this.props.commandHooks?.afterBundling(this.projectRoot, outputDir) ?? [];
++    if (afterBundling.length) {
++      steps.push({ type: 'shell', commands: afterBundling });
++    }
++
++    return steps;
++  }
+ }
+ 
++/**
++ * A single step in the local bundling process.
++ */
++type BundlingStep =
++  | { type: 'shell'; commands: string[] }
++  | { type: 'spawn'; command: string[]; cwd?: string }
++  | { type: 'callback'; operation: () => void };
++
+ interface BundlingCommandOptions {
+   readonly inputDir: string;
+   readonly outputDir: string;
+@@ -416,6 +558,24 @@ class OsCommand {
+   }
+ }
+ 
++/**
++ * Converts a clean argv array into a single POSIX shell command string.
++ * Each argument is escaped if it contains characters that have special
++ * meaning in a shell. Safe characters (alphanumeric plus a few punctuation
++ * marks commonly found in CLI flags) are left unquoted for readability.
++ */
++function preparePosixShellCommand(argv: string[]): string {
++  return argv.map(posixShellEscape).join(' ');
++}
++
++/**
++ * Escapes a single argument for safe inclusion in a POSIX shell command.
++ * Every argument is single-quoted unconditionally (like Python's shlex.quote).
++ */
++function posixShellEscape(arg: string): string {
++  return "'" + arg.replace(/'/g, "'\\''") + "'";
++}
++
+ /**
+  * Chain commands
+  */
+@@ -450,21 +610,24 @@ function toTarget(scope: IConstruct, runtime: Runtime): string {
+   return `node${match[1]}`;
+ }
+ 
+-function toCliArgs(esbuildArgs: { [key: string]: string | boolean }): string {
+-  const args = new Array<string>();
++/**
++ * Converts esbuild args to an array of CLI arguments for direct spawn (no shell quoting).
++ */
++function toCliArgsArray(esbuildArgs: { [key: string]: string | boolean }): string[] {
++  const args: string[] = [];
+   const reSpecifiedKeys = ['--alias', '--drop', '--pure', '--log-override', '--out-extension'];
+ 
+   for (const [key, value] of Object.entries(esbuildArgs)) {
+     if (value === true || value === '') {
+       args.push(key);
+     } else if (reSpecifiedKeys.includes(key)) {
+-      args.push(`${key}:"${value}"`);
++      args.push(`${key}:${value}`);
+     } else if (value) {
+-      args.push(`${key}="${value}"`);
++      args.push(`${key}=${value}`);
+     }
+   }
+ 
+-  return args.join(' ');
++  return args;
+ }
+ 
+ /**
+diff --git a/packages/aws-cdk-lib/aws-lambda-nodejs/lib/package-manager.ts b/packages/aws-cdk-lib/aws-lambda-nodejs/lib/package-manager.ts
+index 4e14d5ddc1edc..a69281e564bed 100644
+--- a/packages/aws-cdk-lib/aws-lambda-nodejs/lib/package-manager.ts
++++ b/packages/aws-cdk-lib/aws-lambda-nodejs/lib/package-manager.ts
+@@ -78,13 +78,13 @@ export class PackageManager {
+     this.argsSeparator = props.argsSeparator;
+   }
+ 
+-  public runBinCommand(bin: string): string {
++  public runBinCommand(bin: string): string[] {
+     const [runCommand, ...runArgs] = this.runCommand;
+     return [
+       os.platform() === 'win32' ? `${runCommand}.cmd` : runCommand,
+       ...runArgs,
+       ...(this.argsSeparator ? [this.argsSeparator] : []),
+       bin,
+-    ].join(' ');
++    ];
+   }
+ }
+diff --git a/packages/aws-cdk-lib/aws-lambda-nodejs/lib/util.ts b/packages/aws-cdk-lib/aws-lambda-nodejs/lib/util.ts
+index 8e38054de35c4..a49e57cc44cc7 100644
+--- a/packages/aws-cdk-lib/aws-lambda-nodejs/lib/util.ts
++++ b/packages/aws-cdk-lib/aws-lambda-nodejs/lib/util.ts
+@@ -197,6 +197,54 @@ export function getTsconfigCompilerOptions(tsconfigPath: string): string {
+   return compilerOptionsString.trim();
+ }
+ 
++/**
++ * Returns tsconfig compiler options as an array of CLI arguments for direct spawn.
++ */
++export function getTsconfigCompilerOptionsArray(tsconfigPath: string): string[] {
++  const compilerOptions = extractTsConfig(tsconfigPath);
++  const excludedCompilerOptions = [
++    'composite',
++    'charset',
++    'noEmit',
++    'tsBuildInfoFile',
++  ];
++
++  const options: Record<string, any> = {
++    ...compilerOptions,
++    incremental: false,
++    rootDir: './',
++    outDir: './',
++  };
++
++  const args: string[] = [];
++  Object.keys(options).sort().forEach((key: string) => {
++    if (excludedCompilerOptions.includes(key)) {
++      return;
++    }
++
++    const value = options[key];
++    const option = '--' + key;
++    const type = typeof value;
++
++    if (type === 'boolean') {
++      args.push(option);
++      if (!value) {
++        args.push('false');
++      }
++    } else if (type === 'string') {
++      args.push(option, value);
++    } else if (type === 'object') {
++      if (Array.isArray(value)) {
++        args.push(option, value.join(','));
++      }
++    } else {
++      throw new UnscopedValidationError('UnsupportedCompilerOption', `Missing support for compilerOption: [${key}]: { ${type}, ${value}} \n`);
++    }
++  });
++
++  return args;
++}
++
+ function extractTsConfig(tsconfigPath: string, previousCompilerOptions?: Record<string, any>): Record<string, any> | undefined {
+   // eslint-disable-next-line @typescript-eslint/no-require-imports
+   const { extends: extendedConfig, compilerOptions } = require(tsconfigPath);
+diff --git a/packages/aws-cdk-lib/aws-lambda-nodejs/test/bundling.test.ts b/packages/aws-cdk-lib/aws-lambda-nodejs/test/bundling.test.ts
+index 1cedebd09d7b3..4354ee62e525a 100644
+--- a/packages/aws-cdk-lib/aws-lambda-nodejs/test/bundling.test.ts
++++ b/packages/aws-cdk-lib/aws-lambda-nodejs/test/bundling.test.ts
+@@ -72,7 +72,7 @@ test('esbuild bundling in Docker', () => {
+       },
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:${STANDARD_EXTERNAL} --loader:.png=dataurl`,
++        `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:${STANDARD_EXTERNAL}' '--loader:.png=dataurl'`,
+       ],
+       workingDirectory: '/',
+     }),
+@@ -103,7 +103,7 @@ test('esbuild bundling with handler named index.ts', () => {
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/index.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:${STANDARD_EXTERNAL}`,
++        `'esbuild' '--bundle' '/asset-input/lib/index.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:${STANDARD_EXTERNAL}'`,
+       ],
+     }),
+   });
+@@ -126,7 +126,7 @@ test('esbuild bundling with verbose log level', () => {
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/index.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:${STANDARD_EXTERNAL} --log-level=verbose`,
++        `'esbuild' '--bundle' '/asset-input/lib/index.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:${STANDARD_EXTERNAL}' '--log-level=verbose'`,
+       ],
+     }),
+   });
+@@ -148,7 +148,7 @@ test('esbuild bundling with tsx handler', () => {
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/handler.tsx" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:${STANDARD_EXTERNAL}`,
++        `'esbuild' '--bundle' '/asset-input/lib/handler.tsx' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:${STANDARD_EXTERNAL}'`,
+       ],
+     }),
+   });
+@@ -201,7 +201,7 @@ test('esbuild bundling with externals and dependencies', () => {
+       command: [
+         'bash', '-c',
+         [
+-          `esbuild --bundle "/asset-input/test/bundling.test.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:abc --external:delay`,
++          `'esbuild' '--bundle' '/asset-input/test/bundling.test.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:abc' '--external:delay'`,
+           `echo \'{\"dependencies\":{\"delay\":\"${delayVersion}\"}}\' > "/asset-output/package.json"`,
+           'cp "/asset-input/package-lock.json" "/asset-output/package-lock.json"',
+           'cd "/asset-output"',
+@@ -253,7 +253,7 @@ test('esbuild bundling with esbuild options', () => {
+   });
+ 
+   // Correctly bundles with esbuild
+-  const defineInstructions = '--define:process.env.KEY="\\"VALUE\\"" --define:process.env.BOOL="true" --define:process.env.NUMBER="7777" --define:process.env.STRING="\\"this is a \\\\\\"test\\\\\\"\\""';
++  const defineInstructions = '\'--define:process.env.KEY="VALUE"\' \'--define:process.env.BOOL=true\' \'--define:process.env.NUMBER=7777\' \'--define:process.env.STRING="this is a \\"test\\""\'';
+   expect(Code.fromAsset).toHaveBeenCalledWith(path.dirname(depsLockFilePath), {
+     assetHashType: AssetHashType.OUTPUT,
+     bundling: expect.objectContaining({
+@@ -261,14 +261,14 @@ test('esbuild bundling with esbuild options', () => {
+         'bash',
+         '-c',
+         [
+-          'esbuild --bundle "/asset-input/lib/handler.ts"',
+-          '--target=es2020 --platform=node --format=esm --outfile="/asset-output/index.mjs"',
+-          `--minify --sourcemap --sources-content=false --external:${STANDARD_EXTERNAL} --loader:.png=dataurl`,
++          '\'esbuild\' \'--bundle\' \'/asset-input/lib/handler.ts\'',
++          '\'--target=es2020\' \'--platform=node\' \'--format=esm\' \'--outfile=/asset-output/index.mjs\'',
++          `'--minify' '--sourcemap' '--sources-content=false' '--external:${STANDARD_EXTERNAL}' '--loader:.png=dataurl'`,
+           defineInstructions,
+-          '--log-level=silent --keep-names --tsconfig="/asset-input/lib/custom-tsconfig.ts"',
+-          '--metafile="/asset-output/index.meta.json" --banner:js="/* comments */" --footer:js="/* comments */"',
+-          '--main-fields=module,main --inject:"./my-shim.js" --inject:"./path with space/second-shim.js"',
+-          '--log-limit="0" --resolve-extensions=".ts,.js" --splitting --keep-names --out-extension:".js=.mjs"',
++          '\'--log-level=silent\' \'--keep-names\' \'--tsconfig=/asset-input/lib/custom-tsconfig.ts\'',
++          '\'--metafile=/asset-output/index.meta.json\' \'--banner:js=/* comments */\' \'--footer:js=/* comments */\'',
++          '\'--main-fields=module,main\' \'--inject:./my-shim.js\' \'--inject:./path with space/second-shim.js\'',
++          '\'--log-limit=0\' \'--resolve-extensions=.ts,.js\' \'--splitting\' \'--keep-names\' \'--out-extension:.js=.mjs\'',
+         ].join(' '),
+       ],
+     }),
+@@ -308,8 +308,8 @@ test('esbuild bundling source map default', () => {
+       command: [
+         'bash', '-c',
+         [
+-          `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js"`,
+-          `--sourcemap --external:${STANDARD_EXTERNAL}`,
++          `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js'`,
++          `'--sourcemap' '--external:${STANDARD_EXTERNAL}'`,
+         ].join(' '),
+       ],
+     }),
+@@ -339,7 +339,7 @@ test.each([
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/handler.ts" --target=${target} --platform=node --outfile="/asset-output/index.js" --external:@aws-sdk/* --external:@smithy/*`,
++        `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${target}' '--platform=node' '--outfile=/asset-output/index.js' '--external:@aws-sdk/*' '--external:@smithy/*'`,
+       ],
+     }),
+   });
+@@ -367,7 +367,7 @@ test('esbuild bundling with bundleAwsSdk true with feature flag enabled using No
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js"`,
++        `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js'`,
+       ],
+     }),
+   });
+@@ -394,7 +394,7 @@ test('esbuild bundling with feature flag enabled using Node Latest', () => {
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        'esbuild --bundle "/asset-input/lib/handler.ts" --target=node22 --platform=node --outfile="/asset-output/index.js"',
++        '\'esbuild\' \'--bundle\' \'/asset-input/lib/handler.ts\' \'--target=node22\' \'--platform=node\' \'--outfile=/asset-output/index.js\'',
+       ],
+     }),
+   });
+@@ -421,7 +421,7 @@ test('esbuild bundling with feature flag enabled using Node 16', () => {
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        'esbuild --bundle "/asset-input/lib/handler.ts" --target=node16 --platform=node --outfile="/asset-output/index.js" --external:aws-sdk',
++        '\'esbuild\' \'--bundle\' \'/asset-input/lib/handler.ts\' \'--target=node16\' \'--platform=node\' \'--outfile=/asset-output/index.js\' \'--external:aws-sdk\'',
+       ],
+     }),
+   });
+@@ -442,7 +442,7 @@ test('esbuild bundling without aws-sdk v3 when use greater than or equal Runtime
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:@aws-sdk/*`,
++        `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:@aws-sdk/*'`,
+       ],
+     }),
+   });
+@@ -464,7 +464,7 @@ test('esbuild bundling includes aws-sdk', () => {
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js"`,
++        `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js'`,
+       ],
+     }),
+   });
+@@ -488,8 +488,8 @@ test('esbuild bundling source map inline', () => {
+       command: [
+         'bash', '-c',
+         [
+-          `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js"`,
+-          `--sourcemap=inline --external:${STANDARD_EXTERNAL}`,
++          `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js'`,
++          `'--sourcemap=inline' '--external:${STANDARD_EXTERNAL}'`,
+         ].join(' '),
+       ],
+     }),
+@@ -512,8 +512,8 @@ test('esbuild bundling is correctly done with custom runtime matching predefined
+       command: [
+         'bash', '-c',
+         [
+-          `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js"`,
+-          `--sourcemap=inline --external:${STANDARD_EXTERNAL}`,
++          `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js'`,
++          `'--sourcemap=inline' '--external:${STANDARD_EXTERNAL}'`,
+         ].join(' '),
+       ],
+     }),
+@@ -537,8 +537,8 @@ test('esbuild bundling source map enabled when only source map mode exists', ()
+       command: [
+         'bash', '-c',
+         [
+-          `esbuild --bundle "/asset-input/lib/handler.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js"`,
+-          `--sourcemap=inline --external:${STANDARD_EXTERNAL}`,
++          `'esbuild' '--bundle' '/asset-input/lib/handler.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js'`,
++          `'--sourcemap=inline' '--external:${STANDARD_EXTERNAL}'`,
+         ].join(' '),
+       ],
+     }),
+@@ -698,15 +698,31 @@ test('Local bundling', () => {
+   const tryBundle = bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
+   expect(tryBundle).toBe(true);
+ 
++  // Verify esbuild is called directly via spawn (not through bash -c)
+   expect(spawnSyncMock).toHaveBeenCalledWith(
+-    'bash',
+-    expect.arrayContaining(['-c', expect.stringContaining(entry)]),
++    'yarn',
++    expect.arrayContaining([
++      'run', 'esbuild',
++      '--bundle', entry,
++      `--target=${STANDARD_TARGET}`,
++      '--platform=node',
++      '--outfile=/outdir/index.js',
++      `--external:${STANDARD_EXTERNAL}`,
++      '--log-level=error',
++    ]),
+     expect.objectContaining({
+       env: expect.objectContaining({ KEY: 'value' }),
+       cwd: '/project',
+     }),
+   );
+ 
++  // Verify bash is NOT used for the esbuild step
++  expect(spawnSyncMock).not.toHaveBeenCalledWith(
++    'bash',
++    expect.anything(),
++    expect.anything(),
++  );
++
+   // Docker image is not built
+   expect(DockerImage.fromBuild).not.toHaveBeenCalled();
+ 
+@@ -802,7 +818,7 @@ test('esbuild bundling with projectRoot', () => {
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        `esbuild --bundle "/asset-input/lib/index.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:${STANDARD_EXTERNAL} --tsconfig="/asset-input/lib/custom-tsconfig.ts"`,
++        `'esbuild' '--bundle' '/asset-input/lib/index.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:${STANDARD_EXTERNAL}' '--tsconfig=/asset-input/lib/custom-tsconfig.ts'`,
+       ],
+     }),
+   });
+@@ -829,7 +845,7 @@ test('esbuild bundling with projectRoot and externals and dependencies', () => {
+       command: [
+         'bash', '-c',
+         [
+-          `esbuild --bundle "/asset-input/packages/aws-cdk-lib/aws-lambda-nodejs/test/bundling.test.ts" --target=${STANDARD_TARGET} --platform=node --outfile="/asset-output/index.js" --external:abc --external:delay`,
++          `'esbuild' '--bundle' '/asset-input/packages/aws-cdk-lib/aws-lambda-nodejs/test/bundling.test.ts' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:abc' '--external:delay'`,
+           `echo \'{\"dependencies\":{\"delay\":\"${delayVersion}\"}}\' > "/asset-output/package.json"`,
+           'cp "/asset-input/common/package-lock.json" "/asset-output/package-lock.json"',
+           'cd "/asset-output"',
+@@ -853,7 +869,8 @@ test('esbuild bundling with pre compilations', () => {
+     architecture: Architecture.X86_64,
+   });
+ 
+-  const compilerOptions = util.getTsconfigCompilerOptions(findParentTsConfigPath(__dirname));
++  const compilerOptionsArray = util.getTsconfigCompilerOptionsArray(findParentTsConfigPath(__dirname));
++  const quotedCompilerOptions = compilerOptionsArray.map((a: string) => `'${a}'`).join(' ');
+ 
+   // Correctly bundles with esbuild
+   expect(Code.fromAsset).toHaveBeenCalledWith(path.dirname(packageLock), {
+@@ -862,8 +879,8 @@ test('esbuild bundling with pre compilations', () => {
+       command: [
+         'bash', '-c',
+         [
+-          `tsc \"/asset-input/test/bundling.test.ts\" ${compilerOptions} &&`,
+-          `esbuild --bundle \"/asset-input/test/bundling.test.js\" --target=${STANDARD_TARGET} --platform=node --outfile=\"/asset-output/index.js\" --external:${STANDARD_EXTERNAL}`,
++          `'tsc' '/asset-input/test/bundling.test.ts' ${quotedCompilerOptions} &&`,
++          `'esbuild' '--bundle' '/asset-input/test/bundling.test.js' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:${STANDARD_EXTERNAL}'`,
+         ].join(' '),
+       ],
+     }),
+@@ -1070,7 +1087,7 @@ test('bundling using NODEJS_LATEST doesn\'t externalize anything by default', ()
+     bundling: expect.objectContaining({
+       command: [
+         'bash', '-c',
+-        'esbuild --bundle "/asset-input/lib/handler.ts" --target=node22 --platform=node --outfile="/asset-output/index.js"',
++        '\'esbuild\' \'--bundle\' \'/asset-input/lib/handler.ts\' \'--target=node22\' \'--platform=node\' \'--outfile=/asset-output/index.js\'',
+       ],
+     }),
+   });
+@@ -1171,6 +1188,369 @@ test('Node 16 runtimes warn about sdk v2 upgrades', () => {
+   );
+ });
+ 
++// --- Regression tests for PR review findings ---
++
++test('Docker bundling with preCompilation uses getTsconfigCompilerOptionsArray for proper escaping', () => {
++  const packageLock = path.join(__dirname, '..', 'package-lock.json');
++
++  Bundling.bundle(stack, {
++    entry: __filename.replace('.js', '.ts'),
++    projectRoot: path.dirname(packageLock),
++    depsLockFilePath: packageLock,
++    runtime: STANDARD_RUNTIME,
++    preCompilation: true,
++    forceDockerBundling: true,
++    architecture: Architecture.X86_64,
++  });
++
++  // The Docker tsc command should use getTsconfigCompilerOptionsArray (not naive string splitting)
++  // to properly handle compiler option values that may contain spaces.
++  // Verify the Docker command matches what getTsconfigCompilerOptionsArray produces.
++  const compilerOptionsArray = util.getTsconfigCompilerOptionsArray(findParentTsConfigPath(__dirname));
++  const quotedCompilerOptions = compilerOptionsArray.map((a: string) => `'${a}'`).join(' ');
++
++  expect(Code.fromAsset).toHaveBeenCalledWith(path.dirname(packageLock), {
++    assetHashType: AssetHashType.OUTPUT,
++    bundling: expect.objectContaining({
++      command: [
++        'bash', '-c',
++        [
++          `'tsc' '/asset-input/test/bundling.test.ts' ${quotedCompilerOptions} &&`,
++          `'esbuild' '--bundle' '/asset-input/test/bundling.test.js' '--target=${STANDARD_TARGET}' '--platform=node' '--outfile=/asset-output/index.js' '--external:${STANDARD_EXTERNAL}'`,
++        ].join(' '),
++      ],
++    }),
++  });
++});
++
++test('Local bundling callback failure includes contextual error message', () => {
++  const spawnSyncMock = jest.spyOn(child_process, 'spawnSync').mockReturnValue({
++    status: 0,
++    stderr: Buffer.from('stderr'),
++    stdout: Buffer.from('stdout'),
++    pid: 123,
++    output: ['stdout', 'stderr'],
++    signal: null,
++  });
++  const writeFileSyncMock = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {
++    throw new Error('EACCES: permission denied');
++  });
++  const copyFileSyncMock = jest.spyOn(fs, 'copyFileSync').mockReturnValue();
++
++  const packageLock = path.join(__dirname, '..', 'package-lock.json');
++  const bundler = new Bundling(stack, {
++    entry: __filename,
++    projectRoot: path.dirname(packageLock),
++    depsLockFilePath: packageLock,
++    runtime: STANDARD_RUNTIME,
++    architecture: Architecture.X86_64,
++    externalModules: ['abc'],
++    nodeModules: ['delay'],
++  });
++
++  // The callback step should wrap fs errors with context
++  expect(() => {
++    bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
++  }).toThrow(/Local bundling file operation failed.*EACCES/);
++
++  spawnSyncMock.mockRestore();
++  writeFileSyncMock.mockRestore();
++  copyFileSyncMock.mockRestore();
++});
++
++// --- Local bundling spawn tests ---
++
++const spawnSyncMockReturnValue = {
++  status: 0,
++  stderr: Buffer.from('stderr'),
++  stdout: Buffer.from('stdout'),
++  pid: 123,
++  output: ['stdout', 'stderr'],
++  signal: null,
++};
++
++test('Local bundling with esbuild options via spawn', () => {
++  const spawnSyncMock = jest.spyOn(child_process, 'spawnSync').mockReturnValue(spawnSyncMockReturnValue);
++
++  const bundler = new Bundling(stack, {
++    entry,
++    projectRoot,
++    depsLockFilePath,
++    runtime: STANDARD_RUNTIME,
++    architecture: Architecture.X86_64,
++    minify: true,
++    sourceMap: true,
++    sourcesContent: false,
++    target: 'es2020',
++    loader: { '.png': 'dataurl' },
++    logLevel: LogLevel.SILENT,
++    keepNames: true,
++    tsconfig,
++    metafile: true,
++    banner: '/* comments */',
++    footer: '/* comments */',
++    charset: Charset.UTF8,
++    mainFields: ['module', 'main'],
++    define: {
++      'process.env.KEY': JSON.stringify('VALUE'),
++      'process.env.BOOL': 'true',
++    },
++    format: OutputFormat.ESM,
++    inject: ['./my-shim.js'],
++    esbuildArgs: {
++      '--log-limit': '0',
++      '--resolve-extensions': '.ts,.js',
++      '--splitting': true,
++      '--keep-names': '',
++      '--out-extension': '.js=.mjs',
++    },
++  });
++
++  bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
++
++  const esbuildCall = spawnSyncMock.mock.calls.find(c => c[1]?.includes('--bundle'));
++  expect(esbuildCall).toBeDefined();
++  const args = esbuildCall![1] as string[];
++
++  // Each option is a direct array element — no shell quoting
++  expect(args).toContain('--bundle');
++  expect(args).toContain('--target=es2020');
++  expect(args).toContain('--platform=node');
++  expect(args).toContain('--format=esm');
++  expect(args).toContain('--minify');
++  expect(args).toContain('--sourcemap');
++  expect(args).toContain('--sources-content=false');
++  expect(args).toContain(`--external:${STANDARD_EXTERNAL}`);
++  expect(args).toContain('--loader:.png=dataurl');
++  expect(args).toContain('--define:process.env.KEY="VALUE"');
++  expect(args).toContain('--define:process.env.BOOL=true');
++  expect(args).toContain('--log-level=silent');
++  expect(args).toContain('--keep-names');
++  expect(args).toContain('--banner:js=/* comments */');
++  expect(args).toContain('--footer:js=/* comments */');
++  expect(args).toContain('--main-fields=module,main');
++  expect(args).toContain('--inject:./my-shim.js');
++  expect(args).toContain('--outfile=/outdir/index.mjs');
++  // esbuildArgs — no shell quoting around values
++  expect(args).toContain('--log-limit=0');
++  expect(args).toContain('--resolve-extensions=.ts,.js');
++  expect(args).toContain('--splitting');
++  expect(args).toContain('--out-extension:.js=.mjs');
++  // tsconfig and metafile use real paths, not Docker paths
++  expect(args).toEqual(expect.arrayContaining([
++    expect.stringMatching(/^--tsconfig=/),
++    expect.stringMatching(/^--metafile=\/outdir\/index\.meta\.json$/),
++  ]));
++
++  spawnSyncMock.mockRestore();
++});
++
++test('Local bundling with nodeModules uses fs and spawn', () => {
++  const spawnSyncMock = jest.spyOn(child_process, 'spawnSync').mockReturnValue(spawnSyncMockReturnValue);
++  const writeFileSyncMock = jest.spyOn(fs, 'writeFileSync').mockReturnValue();
++  const copyFileSyncMock = jest.spyOn(fs, 'copyFileSync').mockReturnValue();
++
++  const packageLock = path.join(__dirname, '..', 'package-lock.json');
++  const bundler = new Bundling(stack, {
++    entry: __filename,
++    projectRoot: path.dirname(packageLock),
++    depsLockFilePath: packageLock,
++    runtime: STANDARD_RUNTIME,
++    architecture: Architecture.X86_64,
++    externalModules: ['abc'],
++    nodeModules: ['delay'],
++  });
++
++  bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
++
++  // Verify fs operations for dependency setup
++  expect(writeFileSyncMock).toHaveBeenCalledWith(
++    '/outdir/package.json',
++    expect.stringContaining('"delay"'),
++  );
++  expect(copyFileSyncMock).toHaveBeenCalledWith(
++    packageLock,
++    '/outdir/package-lock.json',
++  );
++
++  // Verify install command is spawned directly (not through shell)
++  expect(spawnSyncMock).toHaveBeenCalledWith(
++    'npm',
++    ['ci'],
++    expect.objectContaining({ cwd: '/outdir' }),
++  );
++
++  spawnSyncMock.mockRestore();
++  writeFileSyncMock.mockRestore();
++  copyFileSyncMock.mockRestore();
++});
++
++test('Local bundling with commandHooks executes hooks via shell', () => {
++  const spawnSyncMock = jest.spyOn(child_process, 'spawnSync').mockReturnValue(spawnSyncMockReturnValue);
++
++  const bundler = new Bundling(stack, {
++    entry,
++    projectRoot,
++    depsLockFilePath,
++    runtime: STANDARD_RUNTIME,
++    architecture: Architecture.X86_64,
++    commandHooks: {
++      beforeBundling(inputDir: string, _outputDir: string): string[] {
++        return [`echo hello > ${inputDir}/a.txt`];
++      },
++      afterBundling(inputDir: string, outputDir: string): string[] {
++        return [`cp ${inputDir}/b.txt ${outputDir}/txt`];
++      },
++      beforeInstall() {
++        return [];
++      },
++    },
++  });
++
++  bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
++
++  // Hooks are executed via bash -c
++  expect(spawnSyncMock).toHaveBeenCalledWith(
++    'bash',
++    ['-c', expect.stringContaining('echo hello')],
++    expect.anything(),
++  );
++  expect(spawnSyncMock).toHaveBeenCalledWith(
++    'bash',
++    ['-c', expect.stringContaining('cp')],
++    expect.anything(),
++  );
++
++  // Esbuild is still called directly (not via bash)
++  const esbuildCall = spawnSyncMock.mock.calls.find(c => c[1]?.includes('--bundle'));
++  expect(esbuildCall).toBeDefined();
++  expect(esbuildCall![0]).not.toBe('bash');
++
++  spawnSyncMock.mockRestore();
++});
++
++test('Local bundling with preCompilation spawns tsc directly', () => {
++  const spawnSyncMock = jest.spyOn(child_process, 'spawnSync').mockReturnValue(spawnSyncMockReturnValue);
++
++  const packageLock = path.join(__dirname, '..', 'package-lock.json');
++  const bundler = new Bundling(stack, {
++    entry: __filename.replace('.js', '.ts'),
++    projectRoot: path.dirname(packageLock),
++    depsLockFilePath: packageLock,
++    runtime: STANDARD_RUNTIME,
++    preCompilation: true,
++    architecture: Architecture.X86_64,
++  });
++
++  bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
++
++  // tsc is spawned directly (not via bash -c)
++  const tscCall = spawnSyncMock.mock.calls.find(c => {
++    const args = c[1] as string[];
++    return args?.some(a => a.endsWith('.ts'));
++  });
++  expect(tscCall).toBeDefined();
++  expect(tscCall![0]).not.toBe('bash');
++  // Verify compiler options are passed as separate args
++  const tscArgs = tscCall![1] as string[];
++  expect(tscArgs).toEqual(expect.arrayContaining([
++    expect.stringMatching(/--outDir/),
++    expect.stringMatching(/--rootDir/),
++  ]));
++
++  // esbuild receives the .js file (post-compilation)
++  const esbuildCall = spawnSyncMock.mock.calls.find(c => c[1]?.includes('--bundle'));
++  expect(esbuildCall).toBeDefined();
++  const esbuildArgs = esbuildCall![1] as string[];
++  expect(esbuildArgs).toEqual(expect.arrayContaining([
++    expect.stringMatching(/\.js$/),
++  ]));
++
++  spawnSyncMock.mockRestore();
++});
++
++test('Local bundling with shell metacharacters in externalModules does not cause injection', () => {
++  const spawnSyncMock = jest.spyOn(child_process, 'spawnSync').mockReturnValue(spawnSyncMockReturnValue);
++
++  const bundler = new Bundling(stack, {
++    entry,
++    projectRoot,
++    depsLockFilePath,
++    runtime: STANDARD_RUNTIME,
++    architecture: Architecture.X86_64,
++    externalModules: ['foo & echo PWNED'],
++  });
++
++  bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
++
++  // The malicious string is passed as a single literal arg to esbuild
++  const esbuildCall = spawnSyncMock.mock.calls.find(c => c[1]?.includes('--bundle'));
++  expect(esbuildCall).toBeDefined();
++  const args = esbuildCall![1] as string[];
++  expect(args).toContain('--external:foo & echo PWNED');
++
++  // bash is never invoked (no shell to interpret metacharacters)
++  expect(spawnSyncMock).not.toHaveBeenCalledWith(
++    'bash',
++    expect.anything(),
++    expect.anything(),
++  );
++
++  spawnSyncMock.mockRestore();
++});
++
++test('Local bundling with pnpm uses fs for workspace yaml and cleanup', () => {
++  const spawnSyncMock = jest.spyOn(child_process, 'spawnSync').mockReturnValue(spawnSyncMockReturnValue);
++  const writeFileSyncMock = jest.spyOn(fs, 'writeFileSync').mockReturnValue();
++  const copyFileSyncMock = jest.spyOn(fs, 'copyFileSync').mockReturnValue();
++  const rmSyncMock = jest.spyOn(fs, 'rmSync').mockReturnValue();
++
++  // Use a real project root with a package.json that contains 'delay'
++  const packageLock = path.join(__dirname, '..', 'package-lock.json');
++  const pnpmProjectRoot = path.dirname(packageLock);
++  const pnpmLock = path.join(pnpmProjectRoot, 'pnpm-lock.yaml');
++
++  const bundler = new Bundling(stack, {
++    entry: __filename,
++    projectRoot: pnpmProjectRoot,
++    depsLockFilePath: pnpmLock,
++    runtime: STANDARD_RUNTIME,
++    architecture: Architecture.X86_64,
++    nodeModules: ['delay'],
++  });
++
++  // Mock existsSync to return true only for cleanup paths
++  const originalExistsSync = fs.existsSync;
++  const existsSyncMock = jest.spyOn(fs, 'existsSync').mockImplementation((p) => {
++    if (typeof p === 'string' && (p.includes('.modules.yaml') || p.includes('.cache'))) {
++      return true;
++    }
++    return originalExistsSync(p);
++  });
++
++  bundler.local?.tryBundle('/outdir', { image: STANDARD_RUNTIME.bundlingDockerImage });
++
++  // pnpm-workspace.yaml is written
++  expect(writeFileSyncMock).toHaveBeenCalledWith('/outdir/pnpm-workspace.yaml', '');
++  // .modules.yaml is cleaned up
++  expect(rmSyncMock).toHaveBeenCalledWith(
++    '/outdir/node_modules/.modules.yaml',
++    expect.objectContaining({ force: true }),
++  );
++  // Install via direct spawn
++  expect(spawnSyncMock).toHaveBeenCalledWith(
++    'pnpm',
++    expect.arrayContaining(['install']),
++    expect.objectContaining({ cwd: '/outdir' }),
++  );
++
++  spawnSyncMock.mockRestore();
++  writeFileSyncMock.mockRestore();
++  copyFileSyncMock.mockRestore();
++  existsSyncMock.mockRestore();
++  rmSyncMock.mockRestore();
++});
++
+ function findParentTsConfigPath(dir: string, depth: number = 1, limit: number = 5): string {
+   const target = path.join(dir, 'tsconfig.json');
+   if (fs.existsSync(target)) {
+diff --git a/packages/aws-cdk-lib/aws-lambda-nodejs/test/package-manager.test.ts b/packages/aws-cdk-lib/aws-lambda-nodejs/test/package-manager.test.ts
+index 90daa8f340852..12c7cf03462f6 100644
+--- a/packages/aws-cdk-lib/aws-lambda-nodejs/test/package-manager.test.ts
++++ b/packages/aws-cdk-lib/aws-lambda-nodejs/test/package-manager.test.ts
+@@ -9,7 +9,7 @@ test('from a package-lock.json', () => {
+   expect(packageManager.installCommand).toEqual(['npm', 'ci']);
+   expect(packageManager.runCommand).toEqual(['npx', '--no-install']);
+ 
+-  expect(packageManager.runBinCommand('my-bin')).toBe('npx --no-install my-bin');
++  expect(packageManager.runBinCommand('my-bin')).toEqual(['npx', '--no-install', 'my-bin']);
+ });
+ 
+ test('from a package-lock.json with LogLevel.ERROR', () => {
+@@ -25,7 +25,7 @@ test('from a yarn.lock', () => {
+   expect(packageManager.installCommand).toEqual(['yarn', 'install', '--no-immutable']);
+   expect(packageManager.runCommand).toEqual(['yarn', 'run']);
+ 
+-  expect(packageManager.runBinCommand('my-bin')).toBe('yarn run my-bin');
++  expect(packageManager.runBinCommand('my-bin')).toEqual(['yarn', 'run', 'my-bin']);
+ });
+ 
+ test('from a yarn.lock with LogLevel.ERROR', () => {
+@@ -40,7 +40,7 @@ test('from a pnpm-lock.yaml', () => {
+   expect(packageManager.installCommand).toEqual(['pnpm', 'install', '--config.node-linker=hoisted', '--config.package-import-method=clone-or-copy', '--no-prefer-frozen-lockfile']);
+   expect(packageManager.runCommand).toEqual(['pnpm', 'exec']);
+ 
+-  expect(packageManager.runBinCommand('my-bin')).toBe('pnpm exec -- my-bin');
++  expect(packageManager.runBinCommand('my-bin')).toEqual(['pnpm', 'exec', '--', 'my-bin']);
+ });
+ 
+ test('from a pnpm-lock.yaml with LogLevel.ERROR', () => {
+@@ -55,7 +55,7 @@ test('from a bun.lockb', () => {
+   expect(packageManager.installCommand).toEqual(['bun', 'install', '--backend', 'copyfile']);
+   expect(packageManager.runCommand).toEqual(['bun', 'run']);
+ 
+-  expect(packageManager.runBinCommand('my-bin')).toBe('bun run my-bin');
++  expect(packageManager.runBinCommand('my-bin')).toEqual(['bun', 'run', 'my-bin']);
+ });
+ 
+ test('from a bun.lock', () => {
+@@ -65,7 +65,7 @@ test('from a bun.lock', () => {
+   expect(packageManager.installCommand).toEqual(['bun', 'install', '--backend', 'copyfile']);
+   expect(packageManager.runCommand).toEqual(['bun', 'run']);
+ 
+-  expect(packageManager.runBinCommand('my-bin')).toBe('bun run my-bin');
++  expect(packageManager.runBinCommand('my-bin')).toEqual(['bun', 'run', 'my-bin']);
+ });
+ 
+ test('from a bun.lockb with LogLevel.ERROR', () => {
+@@ -87,7 +87,7 @@ test('Windows', () => {
+   const osPlatformMock = jest.spyOn(os, 'platform').mockReturnValue('win32');
+ 
+   const packageManager = PackageManager.fromLockFile('/path/to/whatever');
+-  expect(packageManager.runBinCommand('my-bin')).toEqual('npx.cmd --no-install my-bin');
++  expect(packageManager.runBinCommand('my-bin')).toEqual(['npx.cmd', '--no-install', 'my-bin']);
+ 
+   osPlatformMock.mockRestore();
+ });
+diff --git a/packages/aws-cdk-lib/aws-lambda-nodejs/test/util.test.ts b/packages/aws-cdk-lib/aws-lambda-nodejs/test/util.test.ts
+index da744a3c6dd34..adb3f275c28a1 100644
+--- a/packages/aws-cdk-lib/aws-lambda-nodejs/test/util.test.ts
++++ b/packages/aws-cdk-lib/aws-lambda-nodejs/test/util.test.ts
+@@ -2,7 +2,7 @@ import * as child_process from 'child_process';
+ import * as fs from 'fs';
+ import * as path from 'path';
+ import { bockfs } from '@aws-cdk/cdk-build-tools';
+-import { callsites, exec, extractDependencies, findUp, findUpMultiple, getTsconfigCompilerOptions } from '../lib/util';
++import { callsites, exec, extractDependencies, findUp, findUpMultiple, getTsconfigCompilerOptions, getTsconfigCompilerOptionsArray } from '../lib/util';
+ 
+ beforeEach(() => {
+   jest.clearAllMocks();
+@@ -262,3 +262,46 @@ describe('getTsconfigCompilerOptions', () => {
+     ].join(' '));
+   });
+ });
++
++describe('getTsconfigCompilerOptionsArray', () => {
++  test('should produce semantically equivalent output to getTsconfigCompilerOptions', () => {
++    const tsconfig = path.join(__dirname, 'testtsconfig.json');
++    const stringResult = getTsconfigCompilerOptions(tsconfig);
++    const arrayResult = getTsconfigCompilerOptionsArray(tsconfig);
++
++    // The array joined with spaces should equal the string result
++    expect(arrayResult.join(' ')).toEqual(stringResult);
++  });
++
++  test('should produce semantically equivalent output with extended config', () => {
++    const tsconfig = path.join(__dirname, 'testtsconfig-extended.json');
++    const stringResult = getTsconfigCompilerOptions(tsconfig);
++    const arrayResult = getTsconfigCompilerOptionsArray(tsconfig);
++
++    expect(arrayResult.join(' ')).toEqual(stringResult);
++  });
++
++  test('should return array elements for each flag and value', () => {
++    const tsconfig = path.join(__dirname, 'testtsconfig.json');
++    const arrayResult = getTsconfigCompilerOptionsArray(tsconfig);
++
++    // Boolean true flags are single elements
++    expect(arrayResult).toContain('--alwaysStrict');
++    expect(arrayResult).toContain('--declaration');
++
++    // Boolean false flags have the flag and 'false' as separate elements
++    const declMapIdx = arrayResult.indexOf('--declarationMap');
++    expect(declMapIdx).toBeGreaterThanOrEqual(0);
++    expect(arrayResult[declMapIdx + 1]).toBe('false');
++
++    // String values are separate elements
++    const targetIdx = arrayResult.indexOf('--target');
++    expect(targetIdx).toBeGreaterThanOrEqual(0);
++    expect(arrayResult[targetIdx + 1]).toBe('ES2022');
++
++    // Array values are joined with commas as a single element
++    const libIdx = arrayResult.indexOf('--lib');
++    expect(libIdx).toBeGreaterThanOrEqual(0);
++    expect(arrayResult[libIdx + 1]).toBe('es2022,dom');
++  });
++});

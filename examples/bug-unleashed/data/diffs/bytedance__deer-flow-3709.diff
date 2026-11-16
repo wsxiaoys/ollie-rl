@@ -1,0 +1,46 @@
+diff --git a/backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py b/backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py
+index 0d3607faf75..2575043c2ca 100644
+--- a/backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py
++++ b/backend/packages/harness/deerflow/agents/middlewares/token_usage_middleware.py
+@@ -97,7 +97,7 @@ def _build_todo_actions(previous_todos: list[Todo], next_todos: list[Todo]) -> l
+                 previous_index, previous_match = content_matches.pop(0)
+                 matched_previous_indices.add(previous_index)
+ 
+-        if previous_match is None and index < len(previous_todos) and index not in matched_previous_indices:
++        if previous_match is None and content not in previous_by_content and index < len(previous_todos) and index not in matched_previous_indices:
+             previous_match = previous_todos[index]
+             matched_previous_indices.add(index)
+ 
+diff --git a/backend/tests/test_token_usage_middleware.py b/backend/tests/test_token_usage_middleware.py
+index 9686455c095..fcfbe27e609 100644
+--- a/backend/tests/test_token_usage_middleware.py
++++ b/backend/tests/test_token_usage_middleware.py
+@@ -9,6 +9,7 @@
+ from deerflow.agents.middlewares.token_usage_middleware import (
+     TOKEN_USAGE_ATTRIBUTION_KEY,
+     TokenUsageMiddleware,
++    _build_todo_actions,
+ )
+ 
+ 
+@@ -279,3 +280,20 @@ def test_merges_subagent_usage_by_message_position_when_ai_message_ids_are_missi
+             "output_tokens": 12,
+             "total_tokens": 42,
+         }
++
++
++class TestBuildTodoActions:
++    def test_duplicate_content_emits_todo_remove(self):
++        """When next_todos has duplicate content entries that exhaust previous_by_content,
++        the positional fallback must not consume an unrelated previous todo as matched.
++        The unrelated previous entry should still produce a todo_remove action."""
++        previous = [
++            {"content": "A", "status": "pending"},
++            {"content": "B", "status": "pending"},
++        ]
++        next_todos = [
++            {"content": "A", "status": "in_progress"},
++            {"content": "A", "status": "completed"},
++        ]
++        actions = _build_todo_actions(previous, next_todos)
++        assert any(a.get("kind") == "todo_remove" and a.get("content") == "B" for a in actions), f"Expected todo_remove for B but got: {actions}"

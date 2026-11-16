@@ -1,0 +1,6 @@
+{
+  "title": "fix: When `experimental/serverStatus` is not supported by the client, only update the status if the message is different",
+  "body": "Not if other parts of the status, i.e. `health` or `quiescent`, are different, since this is sent as `window/showMessage` which often ends up as a message box, and getting the same message box multiple times is disrupting.\r\n\r\nWe could still do that if the health is more serious (change from `Warning` to `Error`), but I opted not to.\r\n\r\nFixes https://github.com/rust-lang/rust-analyzer/issues/22817.",
+  "head_sha": "2d2b22600d3166406afe70df48615c31deeee6e5",
+  "base_sha": "b0fec0dbee399b2768de3d0f2b15be64d74424ef"
+}

@@ -1,0 +1,26 @@
+{
+  "case_id": "rust-lang__rust-analyzer-21571",
+  "repo": "rust-lang/rust-analyzer",
+  "pr": 21571,
+  "title": "fix: Stale diagnostics with rust-project.json and rustc JSON",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rust-lang__rust-analyzer-21571__g1",
+  "target": {
+    "gid": "rust-lang__rust-analyzer-21571#g1",
+    "summary": "Determining whether diagnostics are associated with a package or the workspace based on self.scope causes stale diagnostics when flycheck is invoked under different scopes, as diagnostics recorded under one scope are not cleared by subsequent runs under another.",
+    "paths": [
+      "crates/rust-analyzer/src/flycheck.rs"
+    ],
+    "notes": [
+      "matching on self.scope to determine whether to associate diagnostics with a package or workspace",
+      "defaulting diagnostic package to flycheck_package from self.scope when package_id is None"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "2cefe47e6d55c186b68687bf677bf0d5eb65a922",
+  "base_sha": "74eca73f3b0a41b80228b8e499c7547cc8b2effa",
+  "snapshot": "repos/rust-lang__rust-analyzer/2cefe47e6d55c186b68687bf677bf0d5eb65a922",
+  "diff": "diffs/rust-lang__rust-analyzer-21571.diff"
+}

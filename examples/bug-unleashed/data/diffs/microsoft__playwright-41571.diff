@@ -1,0 +1,112 @@
+diff --git a/docs/src/test-typescript-js.md b/docs/src/test-typescript-js.md
+index 8000d90f2ee1c..6a83c061173e6 100644
+--- a/docs/src/test-typescript-js.md
++++ b/docs/src/test-typescript-js.md
+@@ -28,7 +28,7 @@ npx tsc -p tsconfig.json --noEmit -w
+ 
+ ## tsconfig.json
+ 
+-Playwright will pick up `tsconfig.json` for each source file it loads. Note that Playwright **only supports** the following tsconfig options: `allowJs`, `baseUrl`, `paths` and `references`.
++Playwright will pick up `tsconfig.json` for each source file it loads. Note that Playwright **only supports** the following tsconfig options: `allowJs`, `baseUrl`, `paths`, `references` and `extends`.
+ 
+ We recommend setting up a separate `tsconfig.json` in the tests directory so that you can change some preferences specifically for the tests. Here is an example directory structure.
+ 
+diff --git a/packages/playwright/src/transform/tsconfig-loader.ts b/packages/playwright/src/transform/tsconfig-loader.ts
+index 7345fe4e0fd66..3dc9d7e89d9fb 100644
+--- a/packages/playwright/src/transform/tsconfig-loader.ts
++++ b/packages/playwright/src/transform/tsconfig-loader.ts
+@@ -61,7 +61,8 @@ export function loadTsConfig(configPath: string): LoadedTsConfig[] {
+   }
+ }
+ 
+-function resolveConfigFile(baseConfigFile: string, referencedConfigFile: string) {
++function resolveConfigFile(baseConfigFile: string, referencedConfigFile: string, kind: 'extends' | 'references') {
++  const originalReferencedConfigFile = referencedConfigFile;
+   if (!referencedConfigFile.endsWith('.json'))
+     referencedConfigFile += '.json';
+   const currentDir = path.dirname(baseConfigFile);
+@@ -69,6 +70,8 @@ function resolveConfigFile(baseConfigFile: string, referencedConfigFile: string)
+   // TODO: I don't see how this makes sense, delete in the next minor release.
+   if (referencedConfigFile.includes('/') && referencedConfigFile.includes('.') && !fs.existsSync(resolvedConfigFile))
+     resolvedConfigFile = path.join(currentDir, 'node_modules', referencedConfigFile);
++  if (!fs.existsSync(resolvedConfigFile))
++    throw new Error(`Failed to resolve "${kind}" path "${originalReferencedConfigFile}" referenced from ${baseConfigFile}`);
+   return resolvedConfigFile;
+ }
+ 
+@@ -95,7 +98,7 @@ function innerLoadTsConfig(
+ 
+   const extendsArray = Array.isArray(parsedConfig.extends) ? parsedConfig.extends : (parsedConfig.extends ? [parsedConfig.extends] : []);
+   for (const extendedConfig of extendsArray) {
+-    const extendedConfigPath = resolveConfigFile(configFilePath, extendedConfig);
++    const extendedConfigPath = resolveConfigFile(configFilePath, extendedConfig, 'extends');
+     const base = innerLoadTsConfig(extendedConfigPath, references, visited);
+     // Retain result instance, so that caching works.
+     Object.assign(result, base, { tsConfigPath: configFilePath });
+@@ -120,7 +123,7 @@ function innerLoadTsConfig(
+   }
+ 
+   for (const ref of parsedConfig.references || [])
+-    references.push(innerLoadTsConfig(resolveConfigFile(configFilePath, ref.path), references, visited));
++    references.push(innerLoadTsConfig(resolveConfigFile(configFilePath, ref.path, 'references'), references, visited));
+ 
+   if (path.basename(configFilePath) === 'jsconfig.json' && result.allowJs === undefined)
+     result.allowJs = true;
+diff --git a/tests/playwright-test/resolver.spec.ts b/tests/playwright-test/resolver.spec.ts
+index 0c4de8a501bae..765897bbe67fd 100644
+--- a/tests/playwright-test/resolver.spec.ts
++++ b/tests/playwright-test/resolver.spec.ts
+@@ -587,6 +587,43 @@ test('should resolve paths relative to the originating config when extending and
+   expect(result.exitCode).toBe(0);
+ });
+ 
++test('should fail loudly when extends path cannot be resolved', async ({ runInlineTest }) => {
++  test.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/41543' });
++
++  const result = await runInlineTest({
++    'tsconfig.json': `{
++      "extends": "./tsconfig.bas.json",
++    }`,
++    'a.test.ts': `
++      import { test, expect } from '@playwright/test';
++      test('test', () => {});
++    `,
++  });
++
++  expect(result.exitCode).toBe(1);
++  expect(result.output).toContain('Failed to resolve "extends" path "./tsconfig.bas.json"');
++});
++
++test('should fail loudly when references path cannot be resolved', async ({ runInlineTest }) => {
++  test.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/41543' });
++
++  const result = await runInlineTest({
++    'tsconfig.json': `{
++      "files": [],
++      "references": [
++        { "path": "./tsconfig.doesnotexist.json" }
++      ]
++    }`,
++    'a.test.ts': `
++      import { test, expect } from '@playwright/test';
++      test('test', () => {});
++    `,
++  });
++
++  expect(result.exitCode).toBe(1);
++  expect(result.output).toContain('Failed to resolve "references" path "./tsconfig.doesnotexist.json"');
++});
++
+ test('should respect tsconfig project references', async ({ runInlineTest }) => {
+   test.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/29256' });
+ 
+@@ -599,6 +636,9 @@ test('should respect tsconfig project references', async ({ runInlineTest }) =>
+         { "path": "./tsconfig.test.json" }
+       ]
+     }`,
++    'tsconfig.app.json': `{
++      "compilerOptions": {},
++    }`,
+     'tsconfig.test.json': `{
+       "compilerOptions": {
+         "baseUrl": ".",

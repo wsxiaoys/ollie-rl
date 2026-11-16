@@ -1,0 +1,26 @@
+{
+  "case_id": "ankidroid__Anki-Android-21603",
+  "repo": "ankidroid/Anki-Android",
+  "pr": 21603,
+  "title": "Fix hasUnsavedChanges() false positive with sticky fields",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ankidroid__Anki-Android-21603__g1",
+  "target": {
+    "gid": "ankidroid__Anki-Android-21603#g1",
+    "summary": "Capturing addNoteFieldBaseline unconditionally after populateEditFields records user-typed text carried over during a note type switch into the baseline. As a result, hasUnsavedChanges() returns false and unsaved input is silently discarded without warning when navigating back.",
+    "paths": [
+      "AnkiDroid/src/main/java/com/ichi2/anki/NoteEditorFragment.kt"
+    ],
+    "notes": [
+      "faulty statement: addNoteFieldBaseline is unconditionally updated here after populateEditFields, capturing user-typed text carried over during a note type switch",
+      "check in hasUnsavedChanges relying on addNoteFieldBaseline"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9fff5fac2ca7cbcc366604cc1aea3a571709be70",
+  "base_sha": "541ca21181e970320182b54f4494be494a7fe633",
+  "snapshot": "repos/ankidroid__Anki-Android/9fff5fac2ca7cbcc366604cc1aea3a571709be70",
+  "diff": "diffs/ankidroid__Anki-Android-21603.diff"
+}

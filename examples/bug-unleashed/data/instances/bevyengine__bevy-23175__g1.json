@@ -1,0 +1,27 @@
+{
+  "case_id": "bevyengine__bevy-23175",
+  "repo": "bevyengine/bevy",
+  "pr": 23175,
+  "title": "BrpRequest: remove jsonrpc field",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "bevyengine__bevy-23175__g1",
+  "target": {
+    "gid": "bevyengine__bevy-23175#g1",
+    "summary": "The manual `Deserialize` implementation treats `id` and `params` as mandatory fields. Deserializing valid JSON-RPC requests that omit `id` or `params` fails with a missing field error.",
+    "paths": [
+      "crates/bevy_remote/src/lib.rs"
+    ],
+    "notes": [
+      "faulty statement requiring id and params to be present",
+      "definition of the Deserialize implementation whose behavior is wrong",
+      "definition of the struct whose deserialization behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "e1afa41b8096fcf34ac2d4b074fbd92b73ff2168",
+  "base_sha": "107cc2539fbb1f8a041b4a86eec307db1e9855e1",
+  "snapshot": "repos/bevyengine__bevy/e1afa41b8096fcf34ac2d4b074fbd92b73ff2168",
+  "diff": "diffs/bevyengine__bevy-23175.diff"
+}

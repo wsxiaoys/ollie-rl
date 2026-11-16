@@ -1,0 +1,25 @@
+{
+  "case_id": "supabase__supabase-js-2014",
+  "repo": "supabase/supabase-js",
+  "pr": 2014,
+  "title": "fix(auth): defer subscriber notification in exchangeCodeForSession to prevent deadlock",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "supabase__supabase-js-2014__g1",
+  "target": {
+    "gid": "supabase__supabase-js-2014#g1",
+    "summary": "Deferring _notifyAllSubscribers with setTimeout causes auth state listeners to run asynchronously on a future event loop tick. In SSR and serverless environments, the request completes and sends its response before the subscriber runs, causing OAuth session cookies not to be set.",
+    "paths": [
+      "packages/core/auth-js/src/GoTrueClient.ts"
+    ],
+    "notes": [
+      "faulty statement deferring subscriber notification via setTimeout"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "79d4198126c7c795fc50efbfb175cdee2620c0b1",
+  "base_sha": "0a8cdd41149e7eaf6a969e4f958bc2872ab0ee68",
+  "snapshot": "repos/supabase__supabase-js/79d4198126c7c795fc50efbfb175cdee2620c0b1",
+  "diff": "diffs/supabase__supabase-js-2014.diff"
+}

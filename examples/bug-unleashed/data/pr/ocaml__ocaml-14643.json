@@ -1,0 +1,6 @@
+{
+  "title": "Test with \"-rectypes\" in expect tests",
+  "body": "Downsides:\r\n- Need to run tests 3 times instead of twice\r\n\r\nUpsides:\r\n- Rectypes will be exercised in more tests\r\n- Differences with rectypes will be apparent in new PRs",
+  "head_sha": "0092c763c797ecb8172918be432741e301765217",
+  "base_sha": "fb4f45126447ef0efbcdd82759bbb7a9f065cb21"
+}

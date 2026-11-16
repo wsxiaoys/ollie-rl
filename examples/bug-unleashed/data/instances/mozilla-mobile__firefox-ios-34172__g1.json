@@ -1,0 +1,26 @@
+{
+  "case_id": "mozilla-mobile__firefox-ios-34172",
+  "repo": "mozilla-mobile/firefox-ios",
+  "pr": 34172,
+  "title": "BugFix FXIOS-15967 Reset settings stack on Deeplink",
+  "language": "Swift",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "mozilla-mobile__firefox-ios-34172__g1",
+  "target": {
+    "gid": "mozilla-mobile__firefox-ios-34172#g1",
+    "summary": "Delegating to settingsViewController?.handle(route: .relayMask) does not present the Relay settings screen because SettingsViewController does not handle this route. As a result, selecting the Relay email mask option in settings has no effect.",
+    "paths": [
+      "firefox-ios/Client/Coordinators/SettingsCoordinator.swift"
+    ],
+    "notes": [
+      "faulty statement delegating relayMask route to settingsViewController",
+      "definition of the method whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "217d19336c24bc5ee63312fdefde00023ad300e2",
+  "base_sha": "7ef081bf0c040a7b1c43aec29a0876747ad33dc6",
+  "snapshot": "repos/mozilla-mobile__firefox-ios/217d19336c24bc5ee63312fdefde00023ad300e2",
+  "diff": "diffs/mozilla-mobile__firefox-ios-34172.diff"
+}

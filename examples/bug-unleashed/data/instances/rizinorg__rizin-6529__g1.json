@@ -1,0 +1,27 @@
+{
+  "case_id": "rizinorg__rizin-6529",
+  "repo": "rizinorg/rizin",
+  "pr": 6529,
+  "title": "Recognize objc_msgSendSuper2 and objc rtti information",
+  "language": "C",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rizinorg__rizin-6529__g1",
+  "target": {
+    "gid": "rizinorg__rizin-6529#g1",
+    "summary": "The superclass pointer is read directly into a host ut64 variable without converting for endianness. On big-endian hosts, the decoded pointer address is byte-swapped, causing Objective-C superclass resolution and RTTI recovery to fail.",
+    "paths": [
+      "librz/arch/objc_rtti.c"
+    ],
+    "notes": [
+      "faulty read of superclass address directly into host variable without endianness conversion",
+      "definition of get_objc_superclass whose behavior is wrong",
+      "call site relying on get_objc_superclass"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "d5c6243543d434f3ccfe05ad4ba251cc15c86f92",
+  "base_sha": "39ab034d28c6e5ef6a610a9097fa8c95cd286f6a",
+  "snapshot": "repos/rizinorg__rizin/d5c6243543d434f3ccfe05ad4ba251cc15c86f92",
+  "diff": "diffs/rizinorg__rizin-6529.diff"
+}

@@ -1,0 +1,28 @@
+{
+  "case_id": "ChromeDevTools__chrome-devtools-mcp-1945",
+  "repo": "ChromeDevTools/chrome-devtools-mcp",
+  "pr": 1945,
+  "title": "feat: support MCP client roots feature",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "ChromeDevTools__chrome-devtools-mcp-1945__g1",
+  "target": {
+    "gid": "ChromeDevTools__chrome-devtools-mcp-1945#g1",
+    "summary": "validatePath checks paths using lexical resolution (path.resolve) without resolving symbolic links. A symlink located within an allowed root that points outside the workspace roots will bypass validation, allowing unauthorized filesystem reads and writes.",
+    "paths": [
+      "src/McpContext.ts",
+      "src/tools/ToolDefinition.ts"
+    ],
+    "notes": [
+      "faulty statement using lexical path resolution without resolving symlinks",
+      "definition of validatePath method whose behavior is wrong",
+      "declaration of validatePath method on Context interface"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "96501f455e26b85abfe5d6ed1aac51fbf0b29cea",
+  "base_sha": "c9c1683b67ac927a5cd5178692d1de7d8e06617b",
+  "snapshot": "repos/ChromeDevTools__chrome-devtools-mcp/96501f455e26b85abfe5d6ed1aac51fbf0b29cea",
+  "diff": "diffs/ChromeDevTools__chrome-devtools-mcp-1945.diff"
+}

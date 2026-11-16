@@ -1,0 +1,29 @@
+{
+  "case_id": "huggingface__transformers-48984",
+  "repo": "huggingface/transformers",
+  "pr": 48984,
+  "title": "Allow registering new processing backends",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "huggingface__transformers-48984__g1",
+  "target": {
+    "gid": "huggingface__transformers-48984#g1",
+    "summary": "Iterating over VIDEO_PROCESSOR_MAPPING instead of VIDEO_PROCESSOR_MAPPING_NAMES resolves all entries in the lazy mapping. This causes all registered video processor modules to be eagerly imported when looking up a video processor, defeating lazy loading.",
+    "paths": [
+      "src/transformers/models/auto/video_processing_auto.py"
+    ],
+    "notes": [
+      "faulty statement iterating over VIDEO_PROCESSOR_MAPPING instead of VIDEO_PROCESSOR_MAPPING_NAMES in video_processor_class_from_name",
+      "copy of faulty pattern iterating over VIDEO_PROCESSOR_MAPPING values in _load_backend_class",
+      "definition of _load_backend_class whose implementation eagerly resolves VIDEO_PROCESSOR_MAPPING",
+      "call site of _load_backend_class in from_pretrained",
+      "definition of video_processor_class_from_name whose implementation eagerly resolves VIDEO_PROCESSOR_MAPPING"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "45665194439b592fd01015904ae7b5a5c949b464",
+  "base_sha": "8073e6dcaea9aa4b42acf2d92ec72148786bbaeb",
+  "snapshot": "repos/huggingface__transformers/45665194439b592fd01015904ae7b5a5c949b464",
+  "diff": "diffs/huggingface__transformers-48984.diff"
+}

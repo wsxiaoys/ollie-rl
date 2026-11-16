@@ -1,0 +1,84 @@
+diff --git a/src/transformers/integrations/finegrained_fp8.py b/src/transformers/integrations/finegrained_fp8.py
+index 8dd8c97bc207..5f5a37c56220 100644
+--- a/src/transformers/integrations/finegrained_fp8.py
++++ b/src/transformers/integrations/finegrained_fp8.py
+@@ -864,18 +864,18 @@ def _quantize_one(self, key: str, value: torch.Tensor) -> dict[str, torch.Tensor
+         # We store inverse scale to match the upstream ``weight_scale_inv`` convention
+         scales = _FP8_MAX / safe_max_abs
+         scales = torch.where(max_abs > 0, scales, torch.ones_like(scales))  # keep zeros stable
++        inv_scales = (1.0 / scales).to(torch.float32)
++        # ue8m0 stores weight_scale_inv as a power of two. Round it before quantizing and derive the
++        # forward scale from it, so dequant multiplies by the exact scale the weight was divided by.
++        if self.hf_quantizer.quantization_config.scale_fmt == "ue8m0":
++            inv_scales = torch.pow(2.0, torch.ceil(torch.log2(inv_scales.clamp(min=torch.finfo(torch.float32).tiny))))
++            inv_scales = inv_scales.to(_get_ue8m0_dtype())
++            scales = 1.0 / inv_scales.to(torch.float32)  # forward scale = exact reciprocal of the stored inverse
+         # Broadcast scales over the block dims and quantize
+         scales_broadcast = scales.unsqueeze(-1).unsqueeze(-3)  # (..., rows_tiles, 1, cols_tiles, 1)
+         scaled = reshaped * scales_broadcast
+         quantized = torch.clamp(scaled, min=_FP8_MIN, max=_FP8_MAX).to(_FP8_DTYPE)
+         quantized = quantized.reshape(original_shape)
+-        inv_scales = (1.0 / scales).to(torch.float32)
+-        # DeepSeek V4-style storage (`scale_fmt="ue8m0"`): round inv_scales to UE8M0-representable
+-        # values (powers of 2) and cast to `float8_e8m0fnu` byte storage so the on-disk dtype
+-        # matches the parameter allocation in `FP8Linear`/`FP8Experts`.
+-        if self.hf_quantizer.quantization_config.scale_fmt == "ue8m0":
+-            inv_scales = torch.pow(2.0, torch.ceil(torch.log2(inv_scales.clamp(min=torch.finfo(torch.float32).tiny))))
+-            inv_scales = inv_scales.to(_get_ue8m0_dtype())
+         scale_key = key.rsplit(".", 1)[0] + ".weight_scale_inv" if key.endswith(".weight") else key + "_scale_inv"
+         return {key: quantized, scale_key: inv_scales}
+ 
+diff --git a/tests/utils/test_core_model_loading.py b/tests/utils/test_core_model_loading.py
+index 9ac9810c9808..65458b5368eb 100644
+--- a/tests/utils/test_core_model_loading.py
++++ b/tests/utils/test_core_model_loading.py
+@@ -531,6 +531,49 @@ def __init__(self, config):
+         )
+         torch.testing.assert_close(dequantized_q, expected_q, rtol=1e-2, atol=1e-2)
+ 
++    def test_fp8_ue8m0_quantize_dequantize_round_trip(self):
++        # ``scale_fmt="ue8m0"`` rounds weight_scale_inv to a power of two; the weight has to be
++        # quantized with that same rounded scale, or ``weight * weight_scale_inv`` at dequant
++        # disagrees with the scale the weight was divided by (a silent per-block error up to an octave).
++        from transformers.integrations.finegrained_fp8 import Fp8Dequantize, Fp8Quantize
++
++        if not hasattr(torch, "float8_e8m0fnu"):
++            self.skipTest("ue8m0 storage requires torch.float8_e8m0fnu")
++
++        quantizer = SimpleNamespace(
++            quantization_config=SimpleNamespace(weight_block_size=(128, 128), scale_fmt="ue8m0")
++        )
++        torch.manual_seed(0)
++        weight = torch.randn(128, 128, dtype=torch.float32)
++
++        quantized = Fp8Quantize(quantizer)._quantize_one("layer.weight", weight)
++        recovered = Fp8Dequantize(quantizer)._dequantize_one(
++            quantized["layer.weight"], quantized["layer.weight_scale_inv"], output_dtype=torch.float32
++        )
++        rel_err = ((recovered - weight).abs().sum() / weight.abs().sum()).item()
++        self.assertLess(rel_err, 5e-2)  # fp8 round-trip is ~2e-2; a scale mismatch inflates it past 0.2
++
++    def test_fp8_float_scale_fmt_quantization_unchanged(self):
++        # The ue8m0 reordering must leave the default scale_fmt="float" path bit-identical to the
++        # original single-division formula (scales = _FP8_MAX / max_abs). Any divergence only shows
++        # on rare fp32-ULP block maxima, so scan many random 128x128 blocks rather than one.
++        from transformers.integrations.finegrained_fp8 import _FP8_DTYPE, _FP8_MAX, _FP8_MIN, Fp8Quantize
++
++        quantizer = Fp8Quantize(
++            SimpleNamespace(quantization_config=SimpleNamespace(weight_block_size=(128, 128), scale_fmt="float"))
++        )
++        for seed in range(100):
++            torch.manual_seed(seed)
++            weight = torch.randn(128, 128, dtype=torch.float32)
++            out = quantizer._quantize_one("layer.weight", weight)
++            scales = _FP8_MAX / weight.abs().amax()
++            ref_q = torch.clamp(weight * scales, min=_FP8_MIN, max=_FP8_MAX).to(_FP8_DTYPE)
++            ref_inv = (1.0 / scales).to(torch.float32).reshape(1, 1)
++            self.assertTrue(torch.equal(out["layer.weight"], ref_q), f"float weight diverged at seed {seed}")
++            self.assertTrue(
++                torch.equal(out["layer.weight_scale_inv"], ref_inv), f"float scale diverged at seed {seed}"
++            )
++
+     def test_scoped_renaming_does_not_leak_to_sibling_or_parent(self):
+         """scope_prefix gates a WeightRenaming to keys under one submodel only —
+         neither the sibling submodel nor the parent's own keys must be affected.

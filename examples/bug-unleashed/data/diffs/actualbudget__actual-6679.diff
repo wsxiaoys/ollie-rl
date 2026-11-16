@@ -1,0 +1,675 @@
+diff --git a/.oxlintrc.json b/.oxlintrc.json
+index 5452d08a8bb..4043e5a85de 100644
+--- a/.oxlintrc.json
++++ b/.oxlintrc.json
+@@ -18,11 +18,6 @@
+     "FS": "readonly"
+   },
+   "rules": {
+-    // TODO fix all these and re-enable
+-    "jsx-a11y/click-events-have-key-events": "off",
+-    "jsx-a11y/prefer-tag-over-role": "off",
+-    "jsx-a11y/tabindex-no-positive": "off",
+-
+     // Import sorting
+     // TODO replace once oxfmt supports this: https://github.com/oxc-project/oxc/issues/17076
+     "perfectionist/sort-imports": [
+diff --git a/packages/component-library/src/Menu.tsx b/packages/component-library/src/Menu.tsx
+index a7f510e673c..be15bf6a623 100644
+--- a/packages/component-library/src/Menu.tsx
++++ b/packages/component-library/src/Menu.tsx
+@@ -152,7 +152,7 @@ export function Menu<const NameType = string>({
+     <View
+       className={className}
+       style={{ outline: 'none', borderRadius: 4, overflow: 'hidden', ...style }}
+-      tabIndex={1}
++      tabIndex={0}
+       onKeyDown={onKeyDown}
+       innerRef={elRef}
+     >
+diff --git a/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-1-chromium-linux.png b/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-1-chromium-linux.png
+index a0c3cbfeabc..fe058ec31c3 100644
+Binary files a/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-1-chromium-linux.png and b/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-1-chromium-linux.png differ
+diff --git a/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-2-chromium-linux.png b/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-2-chromium-linux.png
+index 78de7d7751d..36416eaa86b 100644
+Binary files a/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-2-chromium-linux.png and b/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-2-chromium-linux.png differ
+diff --git a/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-3-chromium-linux.png b/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-3-chromium-linux.png
+index c446d08d871..0a136bc1159 100644
+Binary files a/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-3-chromium-linux.png and b/packages/desktop-client/e2e/budget.test.ts-snapshots/Budget-transfer-funds-to-another-category-3-chromium-linux.png differ
+diff --git a/packages/desktop-client/src/components/Page.tsx b/packages/desktop-client/src/components/Page.tsx
+index 0b92d1f5990..06bffa16c6b 100644
+--- a/packages/desktop-client/src/components/Page.tsx
++++ b/packages/desktop-client/src/components/Page.tsx
+@@ -76,9 +76,7 @@ export function MobilePageHeader({
+       >
+         {leftContent}
+       </View>
+-      <View
+-        role="heading"
+-        aria-level={1}
++      <h1
+         style={{
+           textAlign: 'center',
+           alignItems: 'center',
+@@ -88,10 +86,13 @@ export function MobilePageHeader({
+           fontSize: 17,
+           fontWeight: 500,
+           overflowY: 'auto',
++          display: 'flex',
++          margin: 0,
++          padding: 0,
+         }}
+       >
+         {title}
+-      </View>
++      </h1>
+       <View
+         style={{
+           flexBasis: '25%',
+diff --git a/packages/desktop-client/src/components/autocomplete/AccountAutocomplete.tsx b/packages/desktop-client/src/components/autocomplete/AccountAutocomplete.tsx
+index c543f7f068a..15559b59f4f 100644
+--- a/packages/desktop-client/src/components/autocomplete/AccountAutocomplete.tsx
++++ b/packages/desktop-client/src/components/autocomplete/AccountAutocomplete.tsx
+@@ -250,7 +250,8 @@ function AccountItem({
+     : {};
+ 
+   return (
+-    <div
++    <button
++      type="button"
+       // List each account up to a max
+       // Downshift calls `setTimeout(..., 250)` in the `onMouseMove`
+       // event handler they set on this element. When this code runs
+@@ -267,13 +268,13 @@ function AccountItem({
+       // there's some "fast path" logic that can be triggered in various
+       // ways to force WebKit to bail on the content observation process.
+       // One of those ways is setting `role="button"` (or a number of
+-      // other aria roles) on the element, which is what we're doing here.
++      // other aria roles) on the element. Now we use a semantic button
++      // element instead which provides the same fast path behavior.
+       //
+       // ref:
+       // * https://github.com/WebKit/WebKit/blob/447d90b0c52b2951a69df78f06bb5e6b10262f4b/LayoutTests/fast/events/touch/ios/content-observation/400ms-hover-intent.html
+       // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebCore/page/ios/ContentChangeObserver.cpp
+       // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebKit/WebProcess/WebPage/ios/WebPageIOS.mm#L783
+-      role="button"
+       className={cx(
+         className,
+         css({
+@@ -286,6 +287,9 @@ function AccountItem({
+           padding: 4,
+           paddingLeft: 20,
+           borderRadius: embedded ? 4 : 0,
++          border: 'none',
++          textAlign: 'left',
++          font: 'inherit',
+           ...narrowStyle,
+         }),
+       )}
+@@ -294,7 +298,7 @@ function AccountItem({
+       {...props}
+     >
+       <TextOneLine>{item.name}</TextOneLine>
+-    </div>
++    </button>
+   );
+ }
+ 
+diff --git a/packages/desktop-client/src/components/autocomplete/Autocomplete.tsx b/packages/desktop-client/src/components/autocomplete/Autocomplete.tsx
+index 6653cdc55a8..ccd201902d0 100644
+--- a/packages/desktop-client/src/components/autocomplete/Autocomplete.tsx
++++ b/packages/desktop-client/src/components/autocomplete/Autocomplete.tsx
+@@ -180,6 +180,7 @@ function defaultRenderItems<T extends AutocompleteItem>(
+             // * https://github.com/WebKit/WebKit/blob/447d90b0c52b2951a69df78f06bb5e6b10262f4b/LayoutTests/fast/events/touch/ios/content-observation/400ms-hover-intent.html
+             // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebCore/page/ios/ContentChangeObserver.cpp
+             // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebKit/WebProcess/WebPage/ios/WebPageIOS.mm#L783
++            // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+             role="button"
+             className={css({
+               padding: 5,
+diff --git a/packages/desktop-client/src/components/autocomplete/CategoryAutocomplete.tsx b/packages/desktop-client/src/components/autocomplete/CategoryAutocomplete.tsx
+index 1ac74812b54..1f6412e75bc 100644
+--- a/packages/desktop-client/src/components/autocomplete/CategoryAutocomplete.tsx
++++ b/packages/desktop-client/src/components/autocomplete/CategoryAutocomplete.tsx
+@@ -380,6 +380,7 @@ function SplitTransactionButton({
+       // * https://github.com/WebKit/WebKit/blob/447d90b0c52b2951a69df78f06bb5e6b10262f4b/LayoutTests/fast/events/touch/ios/content-observation/400ms-hover-intent.html
+       // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebCore/page/ios/ContentChangeObserver.cpp
+       // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebKit/WebProcess/WebPage/ios/WebPageIOS.mm#L783
++      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role
+       role="button"
+       style={{
+         backgroundColor: highlighted
+@@ -461,10 +462,10 @@ function CategoryItem({
+   const toBudget = useEnvelopeSheetValue(envelopeBudget.toBudget);
+ 
+   return (
+-    <div
++    <button
++      type="button"
+       style={style}
+       // See comment above.
+-      role="button"
+       className={cx(
+         className,
+         css({
+@@ -477,6 +478,8 @@ function CategoryItem({
+           padding: 4,
+           paddingLeft: 20,
+           borderRadius: embedded ? 4 : 0,
++          border: 'none',
++          font: 'inherit',
+           ...narrowStyle,
+         }),
+       )}
+@@ -519,7 +522,7 @@ function CategoryItem({
+               )}
+         </TextOneLine>
+       </View>
+-    </div>
++    </button>
+   );
+ }
+ 
+diff --git a/packages/desktop-client/src/components/autocomplete/PayeeAutocomplete.tsx b/packages/desktop-client/src/components/autocomplete/PayeeAutocomplete.tsx
+index 27a6242e12e..3efd1008cec 100644
+--- a/packages/desktop-client/src/components/autocomplete/PayeeAutocomplete.tsx
++++ b/packages/desktop-client/src/components/autocomplete/PayeeAutocomplete.tsx
+@@ -642,7 +642,8 @@ function PayeeItem({
+     paddingLeftOverFromIcon -= iconSize + 5;
+   }
+   return (
+-    <div
++    <button
++      type="button"
+       // Downshift calls `setTimeout(..., 250)` in the `onMouseMove`
+       // event handler they set on this element. When this code runs
+       // in WebKit on touch-enabled devices, taps on this element end
+@@ -658,13 +659,13 @@ function PayeeItem({
+       // there's some "fast path" logic that can be triggered in various
+       // ways to force WebKit to bail on the content observation process.
+       // One of those ways is setting `role="button"` (or a number of
+-      // other aria roles) on the element, which is what we're doing here.
++      // other aria roles) on the element. Now we use a semantic button
++      // element instead which provides the same fast path behavior.
+       //
+       // ref:
+       // * https://github.com/WebKit/WebKit/blob/447d90b0c52b2951a69df78f06bb5e6b10262f4b/LayoutTests/fast/events/touch/ios/content-observation/400ms-hover-intent.html
+       // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebCore/page/ios/ContentChangeObserver.cpp
+       // * https://github.com/WebKit/WebKit/blob/58956cf59ba01267644b5e8fe766efa7aa6f0c5c/Source/WebKit/WebProcess/WebPage/ios/WebPageIOS.mm#L783
+-      role="button"
+       className={cx(
+         className,
+         css({
+@@ -677,6 +678,9 @@ function PayeeItem({
+           borderRadius: embedded ? 4 : 0,
+           padding: 4,
+           paddingLeft: paddingLeftOverFromIcon,
++          border: 'none',
++          font: 'inherit',
++          textAlign: 'left',
+           ...narrowStyle,
+         }),
+       )}
+@@ -688,7 +692,7 @@ function PayeeItem({
+         {itemIcon}
+         {item.name}
+       </TextOneLine>
+-    </div>
++    </button>
+   );
+ }
+ 
+diff --git a/packages/desktop-client/src/components/budget/envelope/EnvelopeBudgetComponents.tsx b/packages/desktop-client/src/components/budget/envelope/EnvelopeBudgetComponents.tsx
+index f2395db0118..9a31001ab5f 100644
+--- a/packages/desktop-client/src/components/budget/envelope/EnvelopeBudgetComponents.tsx
++++ b/packages/desktop-client/src/components/budget/envelope/EnvelopeBudgetComponents.tsx
+@@ -469,9 +469,9 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
+         width="flex"
+         style={{ paddingRight: styles.monthRightPadding, textAlign: 'right' }}
+       >
+-        <span
+-          role="button"
+-          onClick={() => {
++        <Button
++          variant="bare"
++          onPress={() => {
+             resetBalancePosition(-6, -4);
+             setBalanceMenuOpen(true);
+           }}
+@@ -484,6 +484,12 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
+               e.clientY - rect.bottom - 8,
+             );
+           }}
++          style={{
++            justifyContent: 'flex-end',
++            background: 'transparent',
++            width: '100%',
++            padding: 0,
++          }}
+         >
+           <BalanceWithCarryover
+             carryover={envelopeBudget.catCarryover(category.id)}
+@@ -493,7 +499,7 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
+             longGoal={envelopeBudget.catLongGoal(category.id)}
+             tooltipDisabled={balanceMenuOpen}
+           />
+-        </span>
++        </Button>
+ 
+         <Popover
+           triggerRef={balanceMenuTriggerRef}
+@@ -584,9 +590,9 @@ export function IncomeCategoryMonth({
+             position: 'relative',
+           }}
+         >
+-          <span
+-            role="button"
+-            onClick={() => {
++          <Button
++            variant="bare"
++            onPress={() => {
+               resetIncomePosition(-6, -4);
+               setIncomeMenuOpen(true);
+             }}
+@@ -599,7 +605,11 @@ export function IncomeCategoryMonth({
+                 e.clientY - rect.bottom - 8,
+               );
+             }}
+-            style={{ paddingRight: styles.monthRightPadding }}
++            style={{
++              background: 'transparent',
++              padding: 0,
++              paddingRight: styles.monthRightPadding,
++            }}
+           >
+             <BalanceWithCarryover
+               carryover={envelopeBudget.catCarryover(category.id)}
+@@ -608,7 +618,7 @@ export function IncomeCategoryMonth({
+               budgeted={envelopeBudget.catBudgeted(category.id)}
+               longGoal={envelopeBudget.catLongGoal(category.id)}
+             />
+-          </span>
++          </Button>
+           <Popover
+             triggerRef={incomeMenuTriggerRef}
+             placement="bottom end"
+diff --git a/packages/desktop-client/src/components/budget/tracking/TrackingBudgetComponents.tsx b/packages/desktop-client/src/components/budget/tracking/TrackingBudgetComponents.tsx
+index 3af78691c30..98dc0a30be8 100644
+--- a/packages/desktop-client/src/components/budget/tracking/TrackingBudgetComponents.tsx
++++ b/packages/desktop-client/src/components/budget/tracking/TrackingBudgetComponents.tsx
+@@ -446,10 +446,16 @@ export const CategoryMonth = memo(function CategoryMonth({
+           width="flex"
+           style={{ paddingRight: styles.monthRightPadding, textAlign: 'right' }}
+         >
+-          <span
+-            role="button"
++          <Button
++            variant="bare"
+             ref={triggerBalanceMenuRef}
+-            onClick={() => !category.is_income && setBalanceMenuOpen(true)}
++            onPress={() => !category.is_income && setBalanceMenuOpen(true)}
++            style={{
++              justifyContent: 'flex-end',
++              background: 'transparent',
++              width: '100%',
++              padding: 0,
++            }}
+           >
+             <BalanceWithCarryover
+               isDisabled={category.is_income}
+@@ -459,7 +465,7 @@ export const CategoryMonth = memo(function CategoryMonth({
+               budgeted={trackingBudget.catBudgeted(category.id)}
+               longGoal={trackingBudget.catLongGoal(category.id)}
+             />
+-          </span>
++          </Button>
+ 
+           <Popover
+             triggerRef={triggerBalanceMenuRef}
+diff --git a/packages/desktop-client/src/components/common/InfiniteScrollWrapper.tsx b/packages/desktop-client/src/components/common/InfiniteScrollWrapper.tsx
+index 3084c8fa69b..ad18f2dbb51 100644
+--- a/packages/desktop-client/src/components/common/InfiniteScrollWrapper.tsx
++++ b/packages/desktop-client/src/components/common/InfiniteScrollWrapper.tsx
+@@ -41,7 +41,7 @@ export function InfiniteScrollWrapper({
+         // Hide the last border of the item in the table
+         marginBottom: -1,
+       }}
+-      tabIndex={1}
++      tabIndex={0}
+       data-testid="table"
+     >
+       <View
+diff --git a/packages/desktop-client/src/components/common/Modal.tsx b/packages/desktop-client/src/components/common/Modal.tsx
+index d1620dc6d8f..9e1f442e007 100644
+--- a/packages/desktop-client/src/components/common/Modal.tsx
++++ b/packages/desktop-client/src/components/common/Modal.tsx
+@@ -313,15 +313,16 @@ export function ModalHeader({
+ }: ModalHeaderProps) {
+   const { t } = useTranslation();
+   return (
+-    <View
+-      role="heading"
+-      aria-level={1}
++    <h1
+       style={{
+         justifyContent: 'center',
+         alignItems: 'center',
+         position: 'relative',
+         height: 60,
+         flex: 'none',
++        display: 'flex',
++        margin: 0,
++        padding: 0,
+       }}
+     >
+       <View
+@@ -369,7 +370,7 @@ export function ModalHeader({
+           {rightContent}
+         </View>
+       )}
+-    </View>
++    </h1>
+   );
+ }
+ 
+diff --git a/packages/desktop-client/src/components/mobile/ActionableGridListItem.tsx b/packages/desktop-client/src/components/mobile/ActionableGridListItem.tsx
+index 5b995670a5d..dc3ae23d829 100644
+--- a/packages/desktop-client/src/components/mobile/ActionableGridListItem.tsx
++++ b/packages/desktop-client/src/components/mobile/ActionableGridListItem.tsx
+@@ -2,6 +2,7 @@ import React, { useRef, useState, type ReactNode } from 'react';
+ import { GridListItem, type GridListItemProps } from 'react-aria-components';
+ import { animated, config, useSpring } from 'react-spring';
+ 
++import { Button } from '@actual-app/components/button';
+ import { styles } from '@actual-app/components/styles';
+ import { theme } from '@actual-app/components/theme';
+ import { useDrag } from '@use-gesture/react';
+@@ -107,20 +108,20 @@ export function ActionableGridListItem<T extends object>({
+         }}
+       >
+         {/* Main content */}
+-        <div
+-          role="button"
++        <Button
++          variant="bare"
+           style={{
+-            display: 'flex',
+-            alignItems: 'center',
+             flex: 1,
+             backgroundColor: theme.tableBackground,
+             minWidth: '100%',
+             padding: 16,
++            textAlign: 'left',
++            borderRadius: 0,
+           }}
+           onClick={handleAction}
+         >
+           {children}
+-        </div>
++        </Button>
+ 
+         {/* Actions that appear when swiped */}
+         {hasActions && (
+diff --git a/packages/desktop-client/src/components/reports/ReportCard.tsx b/packages/desktop-client/src/components/reports/ReportCard.tsx
+index e929d4129ad..1ff7632fba6 100644
+--- a/packages/desktop-client/src/components/reports/ReportCard.tsx
++++ b/packages/desktop-client/src/components/reports/ReportCard.tsx
+@@ -107,19 +107,19 @@ export function ReportCard({
+   if (to) {
+     return (
+       <Layout {...layoutProps}>
+-        <View
+-          role="button"
+-          onClick={isEditing || disableClick ? undefined : () => navigate(to)}
++        <Button
++          variant="bare"
++          onPress={isEditing || disableClick ? undefined : () => navigate(to)}
+           style={{
+             height: '100%',
+             width: '100%',
+-            ':hover': {
+-              cursor: 'pointer',
+-            },
++            background: 'transparent',
++            padding: 0,
++            textAlign: 'left',
+           }}
+         >
+           {content}
+-        </View>
++        </Button>
+       </Layout>
+     );
+   }
+diff --git a/packages/desktop-client/src/components/reports/ReportCardName.tsx b/packages/desktop-client/src/components/reports/ReportCardName.tsx
+index d5b64d29fbd..4853972a987 100644
+--- a/packages/desktop-client/src/components/reports/ReportCardName.tsx
++++ b/packages/desktop-client/src/components/reports/ReportCardName.tsx
+@@ -1,6 +1,5 @@
+ import React from 'react';
+ 
+-import { Block } from '@actual-app/components/block';
+ import { InitialFocus } from '@actual-app/components/initial-focus';
+ import { Input } from '@actual-app/components/input';
+ import { styles } from '@actual-app/components/styles';
+@@ -42,15 +41,16 @@ export const ReportCardName = ({
+   }
+ 
+   return (
+-    <Block
++    <h2
+       style={{
++        display: 'block',
++        margin: 0,
++        padding: 0,
+         ...styles.mediumText,
+         marginBottom: 5,
+       }}
+-      role="heading"
+-      aria-level={2}
+     >
+       {name}
+-    </Block>
++    </h2>
+   );
+ };
+diff --git a/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx b/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx
+index 200817748e8..93e0c438ad6 100644
+--- a/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx
++++ b/packages/desktop-client/src/components/reports/graphs/tableGraph/ReportTable.tsx
+@@ -156,7 +156,7 @@ export function ReportTable({
+           outline: 'none',
+           '& .animated .animated-row': { transition: '.25s transform' },
+         }}
+-        tabIndex={1}
++        tabIndex={0}
+       >
+         <Block
+           innerRef={listScrollRef}
+diff --git a/packages/desktop-client/src/components/sidebar/Item.tsx b/packages/desktop-client/src/components/sidebar/Item.tsx
+index 0aa46b53661..ccd3cba23d5 100644
+--- a/packages/desktop-client/src/components/sidebar/Item.tsx
++++ b/packages/desktop-client/src/components/sidebar/Item.tsx
+@@ -1,8 +1,8 @@
+ // @ts-strict-ignore
+ import React, {
++  type ComponentProps,
+   type ComponentType,
+   type CSSProperties,
+-  type MouseEventHandler,
+   type ReactNode,
+   type SVGProps,
+ } from 'react';
+@@ -23,7 +23,7 @@ type ItemProps = {
+   children?: ReactNode;
+   style?: CSSProperties;
+   indent?: number;
+-  onClick?: MouseEventHandler<HTMLDivElement>;
++  onClick?: ComponentProps<typeof ItemContent>['onClick'];
+   forceHover?: boolean;
+   forceActive?: boolean;
+ };
+diff --git a/packages/desktop-client/src/components/sidebar/ItemContent.tsx b/packages/desktop-client/src/components/sidebar/ItemContent.tsx
+index 56a695b7498..fd1f8003a11 100644
+--- a/packages/desktop-client/src/components/sidebar/ItemContent.tsx
++++ b/packages/desktop-client/src/components/sidebar/ItemContent.tsx
+@@ -1,18 +1,15 @@
+-import React, {
+-  type ComponentProps,
+-  type MouseEventHandler,
+-  type ReactNode,
+-} from 'react';
++import React, { type ComponentProps, type ReactNode } from 'react';
+ 
++import { Button } from '@actual-app/components/button';
+ import { type CSSProperties } from '@actual-app/components/styles';
+-import { View } from '@actual-app/components/view';
++import { type View } from '@actual-app/components/view';
+ 
+ import { Link } from '@desktop-client/components/common/Link';
+ 
+ type ItemContentProps = {
+   style: ComponentProps<typeof View>['style'];
+   to: string;
+-  onClick: MouseEventHandler<HTMLDivElement>;
++  onClick: ComponentProps<typeof Button>['onPress'];
+   activeStyle: CSSProperties;
+   children: ReactNode;
+   forceActive?: boolean;
+@@ -27,21 +24,17 @@ export function ItemContent({
+   children,
+ }: ItemContentProps) {
+   return onClick ? (
+-    <View
+-      role="button"
+-      tabIndex={0}
++    <Button
++      variant="bare"
+       style={{
++        justifyContent: 'flex-start',
+         ...style,
+-        touchAction: 'auto',
+-        userSelect: 'none',
+-        userDrag: 'none',
+-        cursor: 'pointer',
+         ...(forceActive ? activeStyle : {}),
+       }}
+-      onClick={onClick}
++      onPress={onClick}
+     >
+       {children}
+-    </View>
++    </Button>
+   ) : (
+     <Link variant="internal" to={to} style={style} activeStyle={activeStyle}>
+       {children}
+diff --git a/packages/desktop-client/src/components/sidebar/SecondaryItem.tsx b/packages/desktop-client/src/components/sidebar/SecondaryItem.tsx
+index 00a33886144..1069193b18a 100644
+--- a/packages/desktop-client/src/components/sidebar/SecondaryItem.tsx
++++ b/packages/desktop-client/src/components/sidebar/SecondaryItem.tsx
+@@ -1,8 +1,8 @@
+ // @ts-strict-ignore
+ import React, {
++  type ComponentProps,
+   type ComponentType,
+   type CSSProperties,
+-  type MouseEventHandler,
+   type SVGProps,
+ } from 'react';
+ 
+@@ -22,7 +22,7 @@ type SecondaryItemProps = {
+     | ComponentType<SVGProps<SVGElement>>
+     | ComponentType<SVGProps<SVGSVGElement>>;
+   style?: CSSProperties;
+-  onClick?: MouseEventHandler<HTMLDivElement>;
++  onClick?: ComponentProps<typeof ItemContent>['onClick'];
+   bold?: boolean;
+   indent?: number;
+ };
+diff --git a/packages/desktop-client/src/components/table.tsx b/packages/desktop-client/src/components/table.tsx
+index 7e36492391b..09e7123c6ac 100644
+--- a/packages/desktop-client/src/components/table.tsx
++++ b/packages/desktop-client/src/components/table.tsx
+@@ -1158,7 +1158,7 @@ export const Table = forwardRef(
+           outline: 'none',
+           ...style,
+         }}
+-        tabIndex={1}
++        tabIndex={0}
+         {...getNavigatorProps(props)}
+         data-testid="table"
+       >
+diff --git a/packages/desktop-client/src/notes/DesktopLinkedNotes.tsx b/packages/desktop-client/src/notes/DesktopLinkedNotes.tsx
+index e3c79733684..d12a7215988 100644
+--- a/packages/desktop-client/src/notes/DesktopLinkedNotes.tsx
++++ b/packages/desktop-client/src/notes/DesktopLinkedNotes.tsx
+@@ -1,8 +1,7 @@
+-import { type MouseEvent } from 'react';
+ import { useTranslation } from 'react-i18next';
+ 
++import { Button } from '@actual-app/components/button';
+ import { theme } from '@actual-app/components/theme';
+-import { css } from '@emotion/css';
+ 
+ import { isElectron } from 'loot-core/shared/environment';
+ 
+@@ -18,14 +17,12 @@ type DesktopLinkedNotesProps = {
+   isFilePath: boolean;
+ };
+ 
+-const linkStyles = css({
++const linkStyles = {
+   color: theme.pageTextLink,
+   textDecoration: 'underline',
+-  cursor: 'pointer',
+-  '&:hover': {
+-    color: theme.pageTextLinkLight,
+-  },
+-});
++  background: 'transparent',
++  padding: 0,
++};
+ 
+ export function DesktopLinkedNotes({
+   displayText,
+@@ -36,10 +33,7 @@ export function DesktopLinkedNotes({
+   const dispatch = useDispatch();
+   const { t } = useTranslation();
+ 
+-  const handleClick = async (e: MouseEvent) => {
+-    e.stopPropagation();
+-    e.preventDefault();
+-
++  const handleClick = async () => {
+     if (isFilePath) {
+       if (isElectron()) {
+         // Open file in file manager
+@@ -65,14 +59,9 @@ export function DesktopLinkedNotes({
+ 
+   return (
+     <>
+-      <span
+-        role="button"
+-        className={linkStyles}
+-        onMouseDown={e => e.stopPropagation()}
+-        onClick={handleClick}
+-      >
++      <Button variant="bare" style={linkStyles} onPress={handleClick}>
+         {displayText}
+-      </span>
++      </Button>
+       {separator}
+     </>
+   );
+diff --git a/upcoming-release-notes/6679.md b/upcoming-release-notes/6679.md
+new file mode 100644
+index 00000000000..befcc957feb
+--- /dev/null
++++ b/upcoming-release-notes/6679.md
+@@ -0,0 +1,6 @@
++---
++category: Maintenance
++authors: [MatissJanis]
++---
++
++lint: fix various a11y issues

@@ -1,0 +1,26 @@
+{
+  "case_id": "FreeCAD__FreeCAD-29477",
+  "repo": "FreeCAD/FreeCAD",
+  "pr": 29477,
+  "title": "Gui: Sketcher: OVP refactors",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "FreeCAD__FreeCAD-29477__g1",
+  "target": {
+    "gid": "FreeCAD__FreeCAD-29477#g1",
+    "summary": "The event filter only checks for QEvent::KeyPress and drops QEvent::KeyRelease events. Consequently, key release events are not forwarded to the 3D viewer, breaking Sketcher keyboard navigation shortcuts.",
+    "paths": [
+      "src/Mod/Sketcher/Gui/DrawSketchKeyboardManager.cpp"
+    ],
+    "notes": [
+      "faulty statement that only checks for KeyPress and drops KeyRelease events",
+      "definition of the eventFilter method whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "345ffa21687e152ff31f8b488cd3325c67c2ba42",
+  "base_sha": "057be05dae6dabeee254e8fd59b60f49db0245c4",
+  "snapshot": "repos/FreeCAD__FreeCAD/345ffa21687e152ff31f8b488cd3325c67c2ba42",
+  "diff": "diffs/FreeCAD__FreeCAD-29477.diff"
+}

@@ -1,0 +1,25 @@
+{
+  "case_id": "angular__angular-cli-32699",
+  "repo": "angular/angular-cli",
+  "pr": 32699,
+  "title": "fix(@angular/build): allow any `CHROME_BIN` for vitest playwright provider",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "angular__angular-cli-32699__g1",
+  "target": {
+    "gid": "angular__angular-cli-32699#g1",
+    "summary": "Setting launchOptions.executablePath from CHROME_BIN on the shared Playwright provider causes non-Chromium browsers (such as Firefox or WebKit) to launch the Chrome binary and fail when CHROME_BIN is set in the environment.",
+    "paths": [
+      "packages/angular/build/src/builders/unit-test/runners/vitest/browser-provider.ts"
+    ],
+    "notes": [
+      "faulty launchOptions setting CHROME_BIN as executablePath unconditionally for all Playwright instances"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "8892ccfc45050af8867821cddcfd65aaf7783b04",
+  "base_sha": "6034178c5982013a68aa5462460519599c783c33",
+  "snapshot": "repos/angular__angular-cli/8892ccfc45050af8867821cddcfd65aaf7783b04",
+  "diff": "diffs/angular__angular-cli-32699.diff"
+}

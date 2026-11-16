@@ -1,0 +1,96 @@
+diff --git a/AnkiDroid/src/main/java/com/ichi2/anki/AnkiDroidApp.kt b/AnkiDroid/src/main/java/com/ichi2/anki/AnkiDroidApp.kt
+index b6fd88aa4460..a19eaf055ce2 100644
+--- a/AnkiDroid/src/main/java/com/ichi2/anki/AnkiDroidApp.kt
++++ b/AnkiDroid/src/main/java/com/ichi2/anki/AnkiDroidApp.kt
+@@ -182,21 +182,15 @@ open class AnkiDroidApp :
+ 
+         // Forget the last deck that was used in the CardBrowser
+         CardBrowser.clearLastDeckId()
+-        LanguageUtil.setDefaultBackendLanguages()
+-
+-        initializeAnkiDroidDirectory()
+-
+-        // listen for day rollover: time + timezone changes
+-        DayRolloverHandler.listenForRolloverEvents(this)
+-        DayRolloverAlarm.scheduleNext(this)
++        val anki = AnkiContext.apply { setupAnkiBackend() }
++        with(anki) { initializeAnkiDroidDirectory() }
++        with(anki) { setupDayRollover() }
+ 
+         restoreRecurringAlarms(this)
+ 
+         setupLifecycleLogging()
+         activityAgnosticDialogs = ActivityAgnosticDialogs.register(this)
+-        TtsVoices.launchBuildLocalesJob()
+-        // enable {{tts-voices:}} field filter
+-        TtsVoicesFieldFilter.ensureApplied()
++        setupTextToSpeech()
+     }
+ 
+     /**
+@@ -254,6 +248,7 @@ open class AnkiDroidApp :
+      * In most cases the Anki Backend now creates the collection and [initializeAnkiDroidDirectory]
+      *  is called on startup of the activity.
+      */
++    context(_: AnkiContext)
+     private fun initializeAnkiDroidDirectory() =
+         setup("initializeAnkiDroidDirectory") {
+             // #13207: `getCurrentAnkiDroidDirectory` failing is an unconditional be a fatal error
+@@ -352,11 +347,23 @@ open class AnkiDroidApp :
+      * @see opExecuted
+      * @see ChangeManager
+      */
+-    private fun setupBackendChangeManager() {
++    private fun setupBackendChangeManager() =
+         setup("setupBackendChangeManager") {
+             ChangeManager.subscribe(this)
+         }
+-    }
++
++    private fun setupAnkiBackend() =
++        setup("setupAnkiBackend") {
++            LanguageUtil.setDefaultBackendLanguages()
++        }
++
++    /** Listen for day rollover: time + timezone changes and refresh on the day cutoff. */
++    context(_: AnkiContext)
++    private fun setupDayRollover() =
++        setup("setupDayRollover") {
++            DayRolloverHandler.listenForRolloverEvents(this)
++            DayRolloverAlarm.scheduleNext(this)
++        }
+ 
+     private fun setupLifecycleLogging() =
+         setup("setupLifecycleLogging") {
+@@ -408,6 +415,14 @@ open class AnkiDroidApp :
+             )
+         }
+ 
++    private fun setupTextToSpeech() {
++        setup("setupTextToSpeech") {
++            TtsVoices.launchBuildLocalesJob()
++            // enable {{tts-voices:}} field filter
++            TtsVoicesFieldFilter.ensureApplied()
++        }
++    }
++
+     /**
+      * @return the app version, OS version and device model, provided when syncing.
+      */
+@@ -466,6 +481,16 @@ open class AnkiDroidApp :
+         }
+     }
+ 
++    /**
++     * Initialization for the Anki Backend has completed:
++     * - [initAnkiBackend] - platform environment variables/logging
++     * - [makeBackendUsable] - load rsdroid.so
++     * - [setupBackendChangeManager] - change manager is subscribed
++     * - [setupAnkiBackend] - i18n is set up
++     */
++
++    object AnkiContext
++
+     companion object {
+         /**
+          * A [SharedPreferencesProvider] which does not require [onCreate] when run from tests

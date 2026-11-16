@@ -1,0 +1,16 @@
+{
+  "case_id": "ankidroid__Anki-Android-21294",
+  "repo": "ankidroid/Anki-Android",
+  "pr": 21294,
+  "title": "refactor: add more AnkiDroidApp profiling and refactor startup",
+  "language": "Kotlin",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "ankidroid__Anki-Android-21294",
+  "target": null,
+  "siblings": [],
+  "head_sha": "a8316eec2a05c460bdc27385a54300f75679c63f",
+  "base_sha": "711510fffe64007ec66fa15e02be3dca661b9de5",
+  "snapshot": "repos/ankidroid__Anki-Android/a8316eec2a05c460bdc27385a54300f75679c63f",
+  "diff": "diffs/ankidroid__Anki-Android-21294.diff"
+}

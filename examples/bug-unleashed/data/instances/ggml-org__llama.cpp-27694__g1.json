@@ -1,0 +1,28 @@
+{
+  "case_id": "ggml-org__llama.cpp-27694",
+  "repo": "ggml-org/llama.cpp",
+  "pr": 27694,
+  "title": "Make the drafter probabilistic and the target verify by rejection sampling for simple draft and MTP",
+  "language": "C++",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "ggml-org__llama.cpp-27694__g1",
+  "target": {
+    "gid": "ggml-org__llama.cpp-27694#g1",
+    "summary": "When a draft is truncated to `dp.n_max`, `dp.result_q` is resized unconditionally even if the drafter never populated it. For drafters that do not produce candidate distributions (such as n-gram drafters), this turns an empty vector into a list of empty candidate sets at temperature > 0, causing the server verifier to attempt rejection sampling with zero probabilities and reject all truncated draft tokens.",
+    "paths": [
+      "common/speculative.cpp",
+      "tools/server/server-context.cpp"
+    ],
+    "notes": [
+      "faulty statement: resizes result_q even when empty, populating it with empty candidate sets",
+      "verifier relies on slot.spec_draft_q being empty when candidates were not drafted to bypass rejection sampling",
+      "passes slot.spec_draft_q to drafters that may not populate or reset it"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c19c18a7338d3769a11641b5f8ee72af8bdd64f8",
+  "base_sha": "926862e574617d5e5ab9e9c9bae317f98237f583",
+  "snapshot": "repos/ggml-org__llama.cpp/c19c18a7338d3769a11641b5f8ee72af8bdd64f8",
+  "diff": "diffs/ggml-org__llama.cpp-27694.diff"
+}

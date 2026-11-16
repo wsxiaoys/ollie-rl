@@ -1,0 +1,26 @@
+{
+  "case_id": "rapid7__metasploit-framework-21323",
+  "repo": "rapid7/metasploit-framework",
+  "pr": 21323,
+  "title": "HTTP to LDAP Relay Module",
+  "language": "Ruby",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rapid7__metasploit-framework-21323__g1",
+  "target": {
+    "gid": "rapid7__metasploit-framework-21323#g1",
+    "summary": "Calling super in start_service before setting opts['Uri'] causes HttpServer to register URIPATH alongside the separate '/' resource added via add_resource. Requests matching URIPATH are routed to on_request_uri instead of on_relay_request, causing HTTP authentication relaying to fail.",
+    "paths": [
+      "lib/msf/core/exploit/remote/http_server/relay.rb"
+    ],
+    "notes": [
+      "faulty statements registering '/' via add_resource after super instead of passing it via opts['Uri']",
+      "definition of start_service"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "2153daad7be5adb83d84c9804bde987f7670114b",
+  "base_sha": "788aa2abc5ead003ce01297e5f0520f607f5048c",
+  "snapshot": "repos/rapid7__metasploit-framework/2153daad7be5adb83d84c9804bde987f7670114b",
+  "diff": "diffs/rapid7__metasploit-framework-21323.diff"
+}

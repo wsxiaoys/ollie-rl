@@ -1,0 +1,26 @@
+{
+  "case_id": "huggingface__transformers-47488",
+  "repo": "huggingface/transformers",
+  "pr": 47488,
+  "title": "Fix CodeLlama tokenizer dropping leading whitespace on decode",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "huggingface__transformers-47488__g1",
+  "target": {
+    "gid": "huggingface__transformers-47488#g1",
+    "summary": "Replacing the Metaspace pre-tokenizer with Prepend and Replace normalizers breaks encoding for existing checkpoints. The prepend normalizer modifies special tokens marked with normalized=True so they no longer match, and it prepends a metaspace after every special token chunk, altering output token IDs.",
+    "paths": [
+      "src/transformers/models/code_llama/tokenization_code_llama.py"
+    ],
+    "notes": [
+      "faulty normalizer configuration replacing Metaspace pre-tokenizer with Prepend and Replace normalizers",
+      "copy of the same faulty normalizer pattern when resetting tokenizer in set_infilling_processor"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "33a00a22363031e343d99f9fc79b9df39330b2b9",
+  "base_sha": "3d7b75a88d46b339965f919916ea3e3fbe5b9db5",
+  "snapshot": "repos/huggingface__transformers/33a00a22363031e343d99f9fc79b9df39330b2b9",
+  "diff": "diffs/huggingface__transformers-47488.diff"
+}

@@ -1,0 +1,16 @@
+{
+  "case_id": "open-telemetry__opentelemetry-collector-15389",
+  "repo": "open-telemetry/opentelemetry-collector",
+  "pr": 15389,
+  "title": "[exporter/otlp_http] Prevent retries when body parsing fails on successful HTTP exports",
+  "language": "Go",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "open-telemetry__opentelemetry-collector-15389",
+  "target": null,
+  "siblings": [],
+  "head_sha": "25a3b752e72e371f6e6aa18cc04957694e3b77b7",
+  "base_sha": "767b013e0d4c1b5f0013826524e88ef6b2d986ee",
+  "snapshot": "repos/open-telemetry__opentelemetry-collector/25a3b752e72e371f6e6aa18cc04957694e3b77b7",
+  "diff": "diffs/open-telemetry__opentelemetry-collector-15389.diff"
+}

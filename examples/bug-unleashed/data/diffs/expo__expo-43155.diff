@@ -1,0 +1,308 @@
+diff --git a/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebView.kt b/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebView.kt
+index 6e504788e2b585..d3cf233ecc68fd 100644
+--- a/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebView.kt
++++ b/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebView.kt
+@@ -28,7 +28,9 @@ internal class DomWebView(context: Context, appContext: AppContext) : ExpoView(c
+   val webViewId = DomWebViewRegistry.add(this)
+ 
+   private var source: DomWebViewSource? = null
++  private var injectedJS: String? = null
+   private var injectedJSBeforeContentLoaded: String? = null
++  private val rncWebViewBridge = RNCWebViewBridge(this@DomWebView)
+   var webviewDebuggingEnabled = false
+   var nestedScrollEnabled = true
+ 
+@@ -66,6 +68,15 @@ internal class DomWebView(context: Context, appContext: AppContext) : ExpoView(c
+     this.source = source
+   }
+ 
++  fun setInjectedJS(script: String?) {
++    injectedJS = if (!script.isNullOrEmpty()) {
++      "(function() { $script; })();true;"
++    } else {
++      null
++    }
++    needsResetupScripts = true
++  }
++
+   fun setInjectedJSBeforeContentLoaded(script: String?) {
+     injectedJSBeforeContentLoaded = if (!script.isNullOrEmpty()) {
+       "(function() { $script; })();true;"
+@@ -75,6 +86,10 @@ internal class DomWebView(context: Context, appContext: AppContext) : ExpoView(c
+     needsResetupScripts = true
+   }
+ 
++  fun setInjectedJavaScriptObject(source: String) {
++    rncWebViewBridge.injectedObjectJson = source
++  }
++
+   fun injectJavaScript(script: String) {
+     webView.post {
+       webView.evaluateJavascript(script, null)
+@@ -139,7 +154,7 @@ internal class DomWebView(context: Context, appContext: AppContext) : ExpoView(c
+       setBackgroundColor(Color.TRANSPARENT)
+       settings.javaScriptEnabled = true
+       webViewClient = createWebViewClient()
+-      addJavascriptInterface(RNCWebViewBridge(this@DomWebView), "ReactNativeWebView")
++      addJavascriptInterface(rncWebViewBridge, "ReactNativeWebView")
+       addJavascriptInterface(DomWebViewBridge(this@DomWebView), "ExpoDomWebViewBridge")
+       setOnTouchListener(this@DomWebView)
+     }
+@@ -153,6 +168,13 @@ internal class DomWebView(context: Context, appContext: AppContext) : ExpoView(c
+         injectJavaScript(it)
+       }
+     }
++
++    override fun onPageFinished(view: WebView?, url: String?) {
++      super.onPageFinished(view, url)
++      this@DomWebView.injectedJS?.let {
++        injectJavaScript(it)
++      }
++    }
+   }
+ 
+   private suspend fun nativeJsiEvalSync(deferredId: Int, source: String): String {
+diff --git a/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebViewModule.kt b/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebViewModule.kt
+index a1d971f79270ff..fcbabe752462ce 100644
+--- a/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebViewModule.kt
++++ b/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/DomWebViewModule.kt
+@@ -25,10 +25,18 @@ class DomWebViewModule : Module() {
+         view.setSource(source)
+       }
+ 
++      Prop("injectedJavaScript") { view: DomWebView, script: String ->
++        view.setInjectedJS(script)
++      }
++
+       Prop("injectedJavaScriptBeforeContentLoaded") { view: DomWebView, script: String ->
+         view.setInjectedJSBeforeContentLoaded(script)
+       }
+ 
++      Prop("injectedJavaScriptObject") { view: DomWebView, source: String ->
++        view.setInjectedJavaScriptObject(source)
++      }
++
+       Prop("webviewDebuggingEnabled") { view: DomWebView, enabled: Boolean ->
+         view.webviewDebuggingEnabled = enabled
+       }
+diff --git a/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/RNCWebViewBridge.kt b/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/RNCWebViewBridge.kt
+index 32149d2c19034a..f10e3af93c2ab9 100644
+--- a/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/RNCWebViewBridge.kt
++++ b/packages/@expo/dom-webview/android/src/main/java/expo/modules/webview/RNCWebViewBridge.kt
+@@ -5,8 +5,15 @@ package expo.modules.webview
+ import android.webkit.JavascriptInterface
+ 
+ internal class RNCWebViewBridge(private val webView: DomWebView) {
++  var injectedObjectJson: String = "{}"
++
+   @JavascriptInterface
+   fun postMessage(message: String) {
+     webView.dispatchMessageEvent(message)
+   }
++
++  @JavascriptInterface
++  fun injectedObjectJson(): String {
++    return injectedObjectJson
++  }
+ }
+diff --git a/packages/@expo/dom-webview/build/DomWebView.d.ts.map b/packages/@expo/dom-webview/build/DomWebView.d.ts.map
+index 74beb011edfcc9..c55e86e768e031 100644
+--- a/packages/@expo/dom-webview/build/DomWebView.d.ts.map
++++ b/packages/@expo/dom-webview/build/DomWebView.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"DomWebView.d.ts","sourceRoot":"","sources":["../src/DomWebView.tsx"],"names":[],"mappings":"AACA,OAAO,KAAK,KAAK,MAAM,OAAO,CAAC;AAG/B,OAAO,KAAK,EAAE,eAAe,EAAE,aAAa,EAAE,MAAM,oBAAoB,CAAC;AASzE,QAAA,MAAM,OAAO,uFAwBZ,CAAC;AAEF,eAAe,OAAO,CAAC"}
+\ No newline at end of file
++{"version":3,"file":"DomWebView.d.ts","sourceRoot":"","sources":["../src/DomWebView.tsx"],"names":[],"mappings":"AACA,OAAO,KAAK,KAAK,MAAM,OAAO,CAAC;AAG/B,OAAO,KAAK,EAAE,eAAe,EAAE,aAAa,EAAE,MAAM,oBAAoB,CAAC;AAazE,QAAA,MAAM,OAAO,uFA8BZ,CAAC;AAEF,eAAe,OAAO,CAAC"}
+\ No newline at end of file
+diff --git a/packages/@expo/dom-webview/build/DomWebView.types.d.ts b/packages/@expo/dom-webview/build/DomWebView.types.d.ts
+index e589cc5445328c..47f7b40b45403e 100644
+--- a/packages/@expo/dom-webview/build/DomWebView.types.d.ts
++++ b/packages/@expo/dom-webview/build/DomWebView.types.d.ts
+@@ -8,11 +8,20 @@ export interface DomWebViewProps extends ViewProps, AndroidProps, IosScrollViewP
+      * Stylesheet object to set the style of the container view.
+      */
+     containerStyle?: StyleProp<ViewStyle>;
++    /**
++     * Set this to provide JavaScript that will be injected into the web page
++     * when the view loads.
++     */
++    injectedJavaScript?: string;
+     /**
+      * Set this to provide JavaScript that will be injected into the web page
+      * once the webview is initialized but before the view loads any content.
+      */
+     injectedJavaScriptBeforeContentLoaded?: string;
++    /**
++     * Inject a JavaScript object to be accessed as a JSON string via JavaScript in the WebView.
++     */
++    injectedJavaScriptObject?: object;
+     /**
+      * Enables WebView remote debugging using Chrome (Android) or Safari (iOS).
+      */
+diff --git a/packages/@expo/dom-webview/build/DomWebView.types.d.ts.map b/packages/@expo/dom-webview/build/DomWebView.types.d.ts.map
+index 425b86fa9a5c71..7ebf5181e39d0f 100644
+--- a/packages/@expo/dom-webview/build/DomWebView.types.d.ts.map
++++ b/packages/@expo/dom-webview/build/DomWebView.types.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"DomWebView.types.d.ts","sourceRoot":"","sources":["../src/DomWebView.types.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,SAAS,EAAE,SAAS,EAAE,SAAS,EAAE,MAAM,cAAc,CAAC;AAEpE,MAAM,WAAW,eACf,SAAQ,SAAS,EACf,YAAY,EACZ,kBAAkB,EAClB,uBAAuB;IACzB;;OAEG;IACH,MAAM,EAAE,gBAAgB,CAAC;IAEzB;;OAEG;IACH,cAAc,CAAC,EAAE,SAAS,CAAC,SAAS,CAAC,CAAC;IAEtC;;;OAGG;IACH,qCAAqC,CAAC,EAAE,MAAM,CAAC;IAE/C;;OAEG;IACH,uBAAuB,CAAC,EAAE,OAAO,CAAC;IAElC;;;;;;OAMG;IACH,SAAS,CAAC,EAAE,CAAC,KAAK,EAAE;QAAE,WAAW,EAAE,gBAAgB,CAAA;KAAE,KAAK,IAAI,CAAC;IAE/D;;;OAGG;IACH,8BAA8B,CAAC,EAAE,OAAO,CAAC;IAEzC;;;OAGG;IACH,4BAA4B,CAAC,EAAE,OAAO,CAAC;CACxC;AAED,UAAU,kBAAkB;IAC1B;;;;OAIG;IACH,OAAO,CAAC,EAAE,OAAO,CAAC;IAElB;;;;;;;;;;OAUG;IACH,gBAAgB,CAAC,EAAE,QAAQ,GAAG,MAAM,GAAG,MAAM,CAAC;IAE9C;;;;OAIG;IACH,aAAa,CAAC,EAAE,OAAO,CAAC;IAExB;;;;;OAKG;IACH,aAAa,CAAC,EAAE,OAAO,CAAC;IAExB;;;;;OAKG;IACH,yCAAyC,CAAC,EAAE,OAAO,CAAC;IAEpD;;;;OAIG;IACH,YAAY,CAAC,EAAE,gBAAgB,CAAC;IAEhC;;;;OAIG;IACH,8BAA8B,CAAC,EAAE,WAAW,GAAG,gBAAgB,GAAG,OAAO,GAAG,QAAQ,CAAC;IAErF;;;;OAIG;IACH,sBAAsB,CAAC,EAAE,OAAO,CAAC;CAClC;AAED,UAAU,YAAY;IACpB;;;;;;OAMG;IACH,mBAAmB,CAAC,EAAE,OAAO,CAAC;CAC/B;AAED;;GAEG;AACH,UAAU,uBAAuB;IAC/B,eAAe,CAAC,EAAE,MAAM,EAAE,CAAC;IAC3B,eAAe,CAAC,EAAE,OAAO,CAAC;IAC1B,2BAA2B,CAAC,EAAE,OAAO,CAAC;IACtC,6BAA6B,CAAC,EAAE,OAAO,CAAC;IACxC,qBAAqB,CAAC,EAAE,OAAO,CAAC;IAChC,gCAAgC,CAAC,EAAE,OAAO,CAAC;CAC5C;AAED,MAAM,MAAM,aAAa,GAAG;IAC1B;;;;;OAKG;IACH,QAAQ,CAAC,EACP,CAAC,EACD,CAAC,EACD,QAAQ,GACT,EAAE;QACD,CAAC,CAAC,EAAE,MAAM,GAAG,SAAS,CAAC;QACvB,CAAC,CAAC,EAAE,MAAM,GAAG,SAAS,CAAC;QACvB,QAAQ,CAAC,EAAE,OAAO,GAAG,SAAS,CAAC;KAChC,GAAG,IAAI,CAAC;IAET;;OAEG;IACH,gBAAgB,EAAE,CAAC,MAAM,EAAE,MAAM,KAAK,IAAI,CAAC;CAC5C,CAAC;AAEF,MAAM,WAAW,gBAAgB;IAC/B;;OAEG;IACH,GAAG,EAAE,MAAM,CAAC;CACb;AAED,MAAM,WAAW,gBAAgB;IAC/B,GAAG,CAAC,EAAE,MAAM,CAAC;IACb,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,MAAM,CAAC,EAAE,MAAM,CAAC;IAChB,KAAK,CAAC,EAAE,MAAM,CAAC;CAChB;AAED,UAAU,aAAa;IACrB,GAAG,EAAE,MAAM,CAAC;IACZ,KAAK,EAAE,MAAM,CAAC;CACf;AAED,UAAU,gBAAiB,SAAQ,aAAa;IAC9C,IAAI,EAAE,MAAM,CAAC;CACd"}
+\ No newline at end of file
++{"version":3,"file":"DomWebView.types.d.ts","sourceRoot":"","sources":["../src/DomWebView.types.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,SAAS,EAAE,SAAS,EAAE,SAAS,EAAE,MAAM,cAAc,CAAC;AAEpE,MAAM,WAAW,eACf,SAAQ,SAAS,EACf,YAAY,EACZ,kBAAkB,EAClB,uBAAuB;IACzB;;OAEG;IACH,MAAM,EAAE,gBAAgB,CAAC;IAEzB;;OAEG;IACH,cAAc,CAAC,EAAE,SAAS,CAAC,SAAS,CAAC,CAAC;IAEtC;;;OAGG;IACH,kBAAkB,CAAC,EAAE,MAAM,CAAC;IAE5B;;;OAGG;IACH,qCAAqC,CAAC,EAAE,MAAM,CAAC;IAE/C;;OAEG;IACH,wBAAwB,CAAC,EAAE,MAAM,CAAC;IAElC;;OAEG;IACH,uBAAuB,CAAC,EAAE,OAAO,CAAC;IAElC;;;;;;OAMG;IACH,SAAS,CAAC,EAAE,CAAC,KAAK,EAAE;QAAE,WAAW,EAAE,gBAAgB,CAAA;KAAE,KAAK,IAAI,CAAC;IAE/D;;;OAGG;IACH,8BAA8B,CAAC,EAAE,OAAO,CAAC;IAEzC;;;OAGG;IACH,4BAA4B,CAAC,EAAE,OAAO,CAAC;CACxC;AAED,UAAU,kBAAkB;IAC1B;;;;OAIG;IACH,OAAO,CAAC,EAAE,OAAO,CAAC;IAElB;;;;;;;;;;OAUG;IACH,gBAAgB,CAAC,EAAE,QAAQ,GAAG,MAAM,GAAG,MAAM,CAAC;IAE9C;;;;OAIG;IACH,aAAa,CAAC,EAAE,OAAO,CAAC;IAExB;;;;;OAKG;IACH,aAAa,CAAC,EAAE,OAAO,CAAC;IAExB;;;;;OAKG;IACH,yCAAyC,CAAC,EAAE,OAAO,CAAC;IAEpD;;;;OAIG;IACH,YAAY,CAAC,EAAE,gBAAgB,CAAC;IAEhC;;;;OAIG;IACH,8BAA8B,CAAC,EAAE,WAAW,GAAG,gBAAgB,GAAG,OAAO,GAAG,QAAQ,CAAC;IAErF;;;;OAIG;IACH,sBAAsB,CAAC,EAAE,OAAO,CAAC;CAClC;AAED,UAAU,YAAY;IACpB;;;;;;OAMG;IACH,mBAAmB,CAAC,EAAE,OAAO,CAAC;CAC/B;AAED;;GAEG;AACH,UAAU,uBAAuB;IAC/B,eAAe,CAAC,EAAE,MAAM,EAAE,CAAC;IAC3B,eAAe,CAAC,EAAE,OAAO,CAAC;IAC1B,2BAA2B,CAAC,EAAE,OAAO,CAAC;IACtC,6BAA6B,CAAC,EAAE,OAAO,CAAC;IACxC,qBAAqB,CAAC,EAAE,OAAO,CAAC;IAChC,gCAAgC,CAAC,EAAE,OAAO,CAAC;CAC5C;AAED,MAAM,MAAM,aAAa,GAAG;IAC1B;;;;;OAKG;IACH,QAAQ,CAAC,EACP,CAAC,EACD,CAAC,EACD,QAAQ,GACT,EAAE;QACD,CAAC,CAAC,EAAE,MAAM,GAAG,SAAS,CAAC;QACvB,CAAC,CAAC,EAAE,MAAM,GAAG,SAAS,CAAC;QACvB,QAAQ,CAAC,EAAE,OAAO,GAAG,SAAS,CAAC;KAChC,GAAG,IAAI,CAAC;IAET;;OAEG;IACH,gBAAgB,EAAE,CAAC,MAAM,EAAE,MAAM,KAAK,IAAI,CAAC;CAC5C,CAAC;AAEF,MAAM,WAAW,gBAAgB;IAC/B;;OAEG;IACH,GAAG,EAAE,MAAM,CAAC;CACb;AAED,MAAM,WAAW,gBAAgB;IAC/B,GAAG,CAAC,EAAE,MAAM,CAAC;IACb,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,MAAM,CAAC,EAAE,MAAM,CAAC;IAChB,KAAK,CAAC,EAAE,MAAM,CAAC;CAChB;AAED,UAAU,aAAa;IACrB,GAAG,EAAE,MAAM,CAAC;IACZ,KAAK,EAAE,MAAM,CAAC;CACf;AAED,UAAU,gBAAiB,SAAQ,aAAa;IAC9C,IAAI,EAAE,MAAM,CAAC;CACd"}
+\ No newline at end of file
+diff --git a/packages/@expo/dom-webview/ios/DomWebView.swift b/packages/@expo/dom-webview/ios/DomWebView.swift
+index 27ed0444fca82b..171bc5e41333f8 100644
+--- a/packages/@expo/dom-webview/ios/DomWebView.swift
++++ b/packages/@expo/dom-webview/ios/DomWebView.swift
+@@ -11,7 +11,9 @@ internal final class DomWebView: ExpoView, UIScrollViewDelegate, WKUIDelegate, W
+   // swiftlint:enable implicitly_unwrapped_optional
+ 
+   private var source: DomWebViewSource?
++  private var injectedJS: WKUserScript?
+   private var injectedJSBeforeContentLoaded: WKUserScript?
++  private var injectedObjectJsonScript: WKUserScript?
+   var webviewDebuggingEnabled = false
+   var decelerationRate: UIScrollView.DecelerationRate = .normal
+ 
+@@ -89,6 +91,15 @@ internal final class DomWebView: ExpoView, UIScrollViewDelegate, WKUIDelegate, W
+     self.source = source
+   }
+ 
++  func setInjectedJS(_ script: String?) {
++    if let script, !script.isEmpty {
++      injectedJS = WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
++    } else {
++      injectedJS = nil
++    }
++    needsResetupScripts = true
++  }
++
+   func setInjectedJSBeforeContentLoaded(_ script: String?) {
+     if let script, !script.isEmpty {
+       injectedJSBeforeContentLoaded = WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+@@ -98,6 +109,22 @@ internal final class DomWebView: ExpoView, UIScrollViewDelegate, WKUIDelegate, W
+     needsResetupScripts = true
+   }
+ 
++  func setInjectedJavaScriptObject(_ source: String?) {
++    if let source, !source.isEmpty {
++      let script = """
++      window.ReactNativeWebView = window.ReactNativeWebView || {};
++      window.ReactNativeWebView.injectedObjectJson = function () {
++        return `\(source)`;
++      }
++      true;
++      """
++      injectedObjectJsonScript = WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
++    } else {
++      injectedObjectJsonScript = nil
++    }
++    needsResetupScripts = true
++  }
++
+   // MARK: - UIScrollViewDelegate implementations
+ 
+   func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+@@ -165,9 +192,15 @@ internal final class DomWebView: ExpoView, UIScrollViewDelegate, WKUIDelegate, W
+ 
+     userContentController.add(self, name: Self.POST_MESSAGE_HANDLER_NAME)
+ 
++    if let injectedJS {
++      userContentController.addUserScript(injectedJS)
++    }
+     if let injectedJSBeforeContentLoaded {
+       userContentController.addUserScript(injectedJSBeforeContentLoaded)
+     }
++    if let injectedObjectJsonScript {
++      userContentController.addUserScript(injectedObjectJsonScript)
++    }
+ 
+     let addDomWebViewBridgeScript = """
+     window.ExpoDomWebViewBridge = {
+diff --git a/packages/@expo/dom-webview/ios/DomWebViewModule.swift b/packages/@expo/dom-webview/ios/DomWebViewModule.swift
+index 098240213c2516..b4480592f26f8f 100644
+--- a/packages/@expo/dom-webview/ios/DomWebViewModule.swift
++++ b/packages/@expo/dom-webview/ios/DomWebViewModule.swift
+@@ -24,10 +24,18 @@ public final class DomWebViewModule: Module {
+         view.setSource(source)
+       }
+ 
++      Prop("injectedJavaScript") { (view: DomWebView, script: String) in
++        view.setInjectedJS(script)
++      }
++
+       Prop("injectedJavaScriptBeforeContentLoaded") { (view: DomWebView, script: String) in
+         view.setInjectedJSBeforeContentLoaded(script)
+       }
+ 
++      Prop("injectedJavaScriptObject") { (view: DomWebView, source: String) in
++        view.setInjectedJavaScriptObject(source)
++      }
++
+       Prop("webviewDebuggingEnabled") { (view: DomWebView, enabled: Bool) in
+         view.webviewDebuggingEnabled = enabled
+       }
+diff --git a/packages/@expo/dom-webview/src/DomWebView.tsx b/packages/@expo/dom-webview/src/DomWebView.tsx
+index 8c6804fa993ebb..e85365756ef836 100644
+--- a/packages/@expo/dom-webview/src/DomWebView.tsx
++++ b/packages/@expo/dom-webview/src/DomWebView.tsx
+@@ -7,12 +7,16 @@ import { webviewStyles } from './styles';
+ 
+ const { resolveAssetSource } = Image;
+ 
++type NativeWebViewProps = Omit<DomWebViewProps, 'containerStyle' | 'injectedJavaScriptObject'> & {
++  injectedJavaScriptObject: string;
++};
++
+ const NativeWebView: React.ComponentType<
+-  React.PropsWithoutRef<DomWebViewProps> & React.RefAttributes<DomWebViewRef>
++  React.PropsWithoutRef<NativeWebViewProps> & React.RefAttributes<DomWebViewRef>
+ > = requireNativeViewManager('ExpoDomWebViewModule');
+ 
+ const WebView = React.forwardRef<DomWebViewRef, DomWebViewProps>(
+-  ({ containerStyle, style, ...props }, ref) => {
++  ({ containerStyle, style, injectedJavaScriptObject, ...props }, ref) => {
+     const viewRef = React.useRef<DomWebViewRef>(null);
+ 
+     React.useImperativeHandle(
+@@ -31,7 +35,13 @@ const WebView = React.forwardRef<DomWebViewRef, DomWebViewProps>(
+ 
+     return (
+       <View style={webViewContainerStyle}>
+-        <NativeWebView {...props} ref={viewRef} source={resolvedSource} style={webViewStyles} />
++        <NativeWebView
++          {...props}
++          ref={viewRef}
++          source={resolvedSource}
++          style={webViewStyles}
++          injectedJavaScriptObject={JSON.stringify(injectedJavaScriptObject ?? {})}
++        />
+       </View>
+     );
+   }
+diff --git a/packages/@expo/dom-webview/src/DomWebView.types.ts b/packages/@expo/dom-webview/src/DomWebView.types.ts
+index 0438934bf7f24f..5f0247780a0380 100644
+--- a/packages/@expo/dom-webview/src/DomWebView.types.ts
++++ b/packages/@expo/dom-webview/src/DomWebView.types.ts
+@@ -15,12 +15,23 @@ export interface DomWebViewProps
+    */
+   containerStyle?: StyleProp<ViewStyle>;
+ 
++  /**
++   * Set this to provide JavaScript that will be injected into the web page
++   * when the view loads.
++   */
++  injectedJavaScript?: string;
++
+   /**
+    * Set this to provide JavaScript that will be injected into the web page
+    * once the webview is initialized but before the view loads any content.
+    */
+   injectedJavaScriptBeforeContentLoaded?: string;
+ 
++  /**
++   * Inject a JavaScript object to be accessed as a JSON string via JavaScript in the WebView.
++   */
++  injectedJavaScriptObject?: object;
++
+   /**
+    * Enables WebView remote debugging using Chrome (Android) or Safari (iOS).
+    */

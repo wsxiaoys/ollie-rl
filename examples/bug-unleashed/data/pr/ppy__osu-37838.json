@@ -1,0 +1,6 @@
+{
+  "title": "Fix popup dialogs not appearing if pushed when `OverlayActivationMode` is wrong",
+  "body": "This change is a prerequisite for making a migration dialog which runs on startup to let users know that something hs changed.\r\n\r\nA few cases this could happen:\r\n\r\n- During start (intro still playing)\r\n- During gameplay\r\n\r\nBasically making dialogs get poofed without the user ever seeing them.\r\n\r\nArguably, we should also change the way dialogs are still poofed when activation mode becomes not-`All` (deferring for later response rather than dismissing?).",
+  "head_sha": "7bf51f73404832e3be3dc1e2637d0a6c10155154",
+  "base_sha": "cd27c935d6c15c3c6f2f5b561cc3340130f27407"
+}

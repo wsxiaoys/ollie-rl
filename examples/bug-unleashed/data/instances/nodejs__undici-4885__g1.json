@@ -1,0 +1,26 @@
+{
+  "case_id": "nodejs__undici-4885",
+  "repo": "nodejs/undici",
+  "pr": 4885,
+  "title": "fix: __proto__ pollution",
+  "language": "JavaScript",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "nodejs__undici-4885__g1",
+  "target": {
+    "gid": "nodejs__undici-4885#g1",
+    "summary": "Cloning opts with util.deepClone drops function-valued properties, causing connection and TLS options such as certificate validation callbacks to be omitted when upstream pools are created.",
+    "paths": [
+      "lib/dispatcher/balanced-pool.js"
+    ],
+    "notes": [
+      "faulty statement: deep-cloning opts drops function-valued properties like connect and tls options",
+      "call site that passes the faulty cloned options to the upstream pool factory"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ae9b69898a7c61b845f08fe39f8c70c0b25548ed",
+  "base_sha": "74495c63ab23ef39be99983ed6de81df5d203d45",
+  "snapshot": "repos/nodejs__undici/ae9b69898a7c61b845f08fe39f8c70c0b25548ed",
+  "diff": "diffs/nodejs__undici-4885.diff"
+}

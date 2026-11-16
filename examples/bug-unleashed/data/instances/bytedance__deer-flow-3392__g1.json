@@ -1,0 +1,26 @@
+{
+  "case_id": "bytedance__deer-flow-3392",
+  "repo": "bytedance/deer-flow",
+  "pr": 3392,
+  "title": "fix(mcp): close stdio sessions on their owning loop to avoid cross-task cancel-scope error (#3379)",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "bytedance__deer-flow-3392__g1",
+  "target": {
+    "gid": "bytedance__deer-flow-3392#g1",
+    "summary": "get_session() assumes any existing session or in-flight creation on a different event loop is stale and evicts or cancels it. When concurrent synchronous calls run on separate event loops for the same server and scope, they cancel each other's active sessions or in-flight initialization, aborting tool execution with CancelledError.",
+    "paths": [
+      "backend/packages/harness/deerflow/mcp/session_pool.py"
+    ],
+    "notes": [
+      "faulty eviction of established sessions created on other running event loops",
+      "faulty eviction and cancellation of in-flight sessions created on other running event loops"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "d85678648a5e47b77195b52a40063fbe9465e630",
+  "base_sha": "28b1da21725af9205d53df912d7f7d30d6e0d840",
+  "snapshot": "repos/bytedance__deer-flow/d85678648a5e47b77195b52a40063fbe9465e630",
+  "diff": "diffs/bytedance__deer-flow-3392.diff"
+}

@@ -1,0 +1,6 @@
+{
+  "title": "Assembly: Command: Got to linked assembly ",
+  "body": "Fix https://github.com/FreeCAD/FreeCAD/issues/23225\r\n",
+  "head_sha": "500c2be808deec96e4f72373235d44802627b89a",
+  "base_sha": "7912f84136fa7f64facfe3894248741778286fea"
+}

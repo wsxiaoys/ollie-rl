@@ -1,0 +1,30 @@
+{
+  "case_id": "QwenLM__qwen-code-6754",
+  "repo": "QwenLM/qwen-code",
+  "pr": 6754,
+  "title": "fix(core): retry malformed streamed responses",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "QwenLM__qwen-code-6754__g1",
+  "target": {
+    "gid": "QwenLM__qwen-code-6754#g1",
+    "summary": "The stream converter's heuristics for detecting malformed responses misclassify valid streamed tool calls as malformed, causing shouldDropMalformedAttempt and shouldHoldUntrustedParts to clear response parts and suppress finish_reason to undefined. This silently drops tool calls and breaks tool execution across streaming turns.",
+    "paths": [
+      "packages/core/src/core/openaiContentGenerator/converter.ts",
+      "packages/core/src/core/openaiContentGenerator/streamingToolCallParser.ts"
+    ],
+    "notes": [
+      "faulty logic clearing response parts when misclassified as malformed",
+      "implementation of hasNamelessToolCall helper that misclassifies tool calls as nameless",
+      "suppression of finish_reason to undefined when shouldDropMalformedAttempt is set",
+      "skipping tool call emission when shouldDropMalformedAttempt is set",
+      "call site of hasNamelessToolCall and condition determining malformedNamelessToolCall"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "1d7d497f976c8e0f9e39dd2dfaf4dfa4426ff47f",
+  "base_sha": "0579be6ee88b02f70b9bfb5df1ca2282ef15b18c",
+  "snapshot": "repos/QwenLM__qwen-code/1d7d497f976c8e0f9e39dd2dfaf4dfa4426ff47f",
+  "diff": "diffs/QwenLM__qwen-code-6754.diff"
+}

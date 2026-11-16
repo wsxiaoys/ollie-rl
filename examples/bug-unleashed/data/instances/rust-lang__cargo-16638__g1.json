@@ -1,0 +1,25 @@
+{
+  "case_id": "rust-lang__cargo-16638",
+  "repo": "rust-lang/cargo",
+  "pr": 16638,
+  "title": "fix(host-config): `host.runner` should not apply to `cargo run`",
+  "language": "Rust",
+  "split": "val",
+  "kind": "bug",
+  "example_id": "rust-lang__cargo-16638__g1",
+  "target": {
+    "gid": "rust-lang__cargo-16638#g1",
+    "summary": "When cross-compiling with `-Zhost-config`, an explicit host runner is inserted even though the host target was not requested. Calling `target_runner` for the unrequested host target causes Cargo to panic because its target configuration was not initialized in `target_data`.",
+    "paths": [
+      "src/cargo/core/compiler/compilation.rs"
+    ],
+    "notes": [
+      "faulty condition inserting explicit host runner without checking if host target was requested"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c3ac327ec0c189da66a190e90665b946140a5413",
+  "base_sha": "c00a07a8a8f819fe059cc4516a3fbd49e7dbf5c8",
+  "snapshot": "repos/rust-lang__cargo/c3ac327ec0c189da66a190e90665b946140a5413",
+  "diff": "diffs/rust-lang__cargo-16638.diff"
+}

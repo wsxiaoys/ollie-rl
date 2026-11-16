@@ -1,0 +1,30 @@
+{
+  "case_id": "carbon-language__carbon-lang-7595",
+  "repo": "carbon-language/carbon-lang",
+  "pr": 7595,
+  "title": "Add initial support for exporting generic classes",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "carbon-language__carbon-lang-7595__g1",
+  "target": {
+    "gid": "carbon-language__carbon-lang-7595#g1",
+    "summary": "ExportGenericClassToCpp registers the exported class template in clang_decls using the generic class type's instruction ID instead of its declaration ID. Because the duplicate check at the start of the function looks up class_info.first_decl_id(), this key mismatch causes cache misses when the generic class is exported again, resulting in duplicate C++ class template declarations.",
+    "paths": [
+      "toolchain/check/cpp/export.cpp",
+      "toolchain/check/cpp/generate_ast.cpp"
+    ],
+    "notes": [
+      "faulty statement registering the class template with inst_id instead of first_decl_id",
+      "definition of ExportGenericClassToCpp whose caching behavior is wrong",
+      "lookup checking first_decl_id which mismatches the stored inst_id key",
+      "site relying on the faulty inst_id value stored in clang_decls",
+      "call site passing type_inst_id to ExportGenericClassToCpp"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "04de4b79a8d9d24db609509ade0848a6455d0c4a",
+  "base_sha": "700e42a1950aa9b31afa27a90afdea50293d6613",
+  "snapshot": "repos/carbon-language__carbon-lang/04de4b79a8d9d24db609509ade0848a6455d0c4a",
+  "diff": "diffs/carbon-language__carbon-lang-7595.diff"
+}

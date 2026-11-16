@@ -1,0 +1,6 @@
+{
+  "title": "Fix LaTeX regexps",
+  "body": "- match weird escape syntax\r\n- correctly match `$$...$$` when extracting math fragments",
+  "head_sha": "d62be248e65747d0074316465e40ded591d5fe27",
+  "base_sha": "f903fa8d610ab0857b68207fc50a43844a1c7654"
+}

@@ -1,0 +1,115 @@
+diff --git a/server/src/repositories/metadata.repository.ts b/server/src/repositories/metadata.repository.ts
+index 93a91c26d76cdf..1d1e0d7d2922bd 100644
+--- a/server/src/repositories/metadata.repository.ts
++++ b/server/src/repositories/metadata.repository.ts
+@@ -53,10 +53,10 @@ export interface ImmichTags extends Omit<Tags, TagsWithWrongTypes> {
+     RegionList: {
+       Area: {
+         // (X,Y) // center of the rectangle
+-        X: number;
+-        Y: number;
+-        W: number;
+-        H: number;
++        X: number | string;
++        Y: number | string;
++        W: number | string;
++        H: number | string;
+         Unit: string;
+       };
+       Rotation?: number;
+diff --git a/server/src/services/metadata.service.spec.ts b/server/src/services/metadata.service.spec.ts
+index ffb92f3e003e20..8dc8e3a9eb06e8 100644
+--- a/server/src/services/metadata.service.spec.ts
++++ b/server/src/services/metadata.service.spec.ts
+@@ -39,7 +39,10 @@ const forSidecarJob = (
+   };
+ };
+ 
+-const makeFaceTags = (face: Partial<{ Name: string }> = {}, orientation?: ImmichTags['Orientation']) => ({
++const makeFaceTags = (
++  face: Partial<{ Name: string }> = {},
++  orientation?: ImmichTags['Orientation'],
++): Partial<ImmichTags> => ({
+   Orientation: orientation,
+   RegionInfo: {
+     AppliedToDimensions: { W: 1000, H: 100, Unit: 'pixel' },
+@@ -1371,6 +1374,35 @@ describe(MetadataService.name, () => {
+       expect(mocks.person.updateAll).not.toHaveBeenCalled();
+     });
+ 
++    it('should handle string coordinates in face region bounding box calculation by limiting to 16 decimal places', async () => {
++      const asset = AssetFactory.create();
++      const person = PersonFactory.create();
++
++      mocks.assetJob.getForMetadataExtraction.mockResolvedValue(getForMetadataExtraction(asset));
++      mocks.systemMetadata.get.mockResolvedValue({ metadata: { faces: { import: true } } });
++      const faceTags = makeFaceTags({ Name: person.name });
++
++      // Simulating EXIF returning a string with >16 decimal places
++      faceTags.RegionInfo!.RegionList[0].Area.X = '0.48564814814814824';
++      faceTags.RegionInfo!.RegionList[0].Area.W = '0.2';
++
++      mockReadTags(faceTags);
++      mocks.person.getDistinctNames.mockResolvedValue([]);
++      mocks.person.createAll.mockResolvedValue([person.id]);
++      mocks.person.update.mockResolvedValue(person);
++
++      await sut.handleMetadataExtraction({ id: asset.id });
++
++      expect(mocks.person.refreshFaces).toHaveBeenCalledWith(
++        [
++          expect.objectContaining({
++            boundingBoxX1: Math.floor((0.485_648_148_148_148_2 - 0.2 / 2) * 1000),
++          }),
++        ],
++        [],
++      );
++    });
++
+     it('should apply metadata face tags creating new people', async () => {
+       const asset = AssetFactory.create();
+       const person = PersonFactory.create();
+diff --git a/server/src/services/metadata.service.ts b/server/src/services/metadata.service.ts
+index a4639db26266c7..5c47b7eda62677 100644
+--- a/server/src/services/metadata.service.ts
++++ b/server/src/services/metadata.service.ts
+@@ -854,6 +854,13 @@ export class MetadataService extends BaseService {
+     // update area coordinates and dimensions in RegionList assuming "normalized" unit as per MWG guidelines
+     const adjustedRegionList = regionInfo.RegionList.map((region) => {
+       let { X, Y, W, H } = region.Area;
++
++      // EXIF floats with >16 decimals are serialized as strings. Ensure they are numbers.
++      X = Number(X);
++      Y = Number(Y);
++      W = Number(W);
++      H = Number(H);
++
+       switch (orientation) {
+         case ExifOrientation.MirrorHorizontal: {
+           X = 1 - X;
+@@ -926,16 +933,21 @@ export class MetadataService extends BaseService {
+       const loweredName = region.Name.toLowerCase();
+       const personId = existingNameMap.get(loweredName) || this.cryptoRepository.randomUUID();
+ 
++      const X = Number(region.Area.X);
++      const Y = Number(region.Area.Y);
++      const W = Number(region.Area.W);
++      const H = Number(region.Area.H);
++
+       const face = {
+         id: this.cryptoRepository.randomUUID(),
+         personId,
+         assetId: asset.id,
+         imageWidth,
+         imageHeight,
+-        boundingBoxX1: Math.floor((region.Area.X - region.Area.W / 2) * imageWidth),
+-        boundingBoxY1: Math.floor((region.Area.Y - region.Area.H / 2) * imageHeight),
+-        boundingBoxX2: Math.floor((region.Area.X + region.Area.W / 2) * imageWidth),
+-        boundingBoxY2: Math.floor((region.Area.Y + region.Area.H / 2) * imageHeight),
++        boundingBoxX1: Math.floor((X - W / 2) * imageWidth),
++        boundingBoxY1: Math.floor((Y - H / 2) * imageHeight),
++        boundingBoxX2: Math.floor((X + W / 2) * imageWidth),
++        boundingBoxY2: Math.floor((Y + H / 2) * imageHeight),
+         sourceType: SourceType.Exif,
+       };
+ 

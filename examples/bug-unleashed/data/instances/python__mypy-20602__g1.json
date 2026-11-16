@@ -1,0 +1,25 @@
+{
+  "case_id": "python__mypy-20602",
+  "repo": "python/mypy",
+  "pr": 20602,
+  "title": "Narrow types based on collection containment",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "python__mypy-20602__g1",
+  "target": {
+    "gid": "python__mypy-20602#g1",
+    "summary": "Passing `[left_index, right_index]` as `expr_indices` to `narrow_type_by_equality` uses absolute operand indices rather than relative indices into the two-element `operands` slice. In chained comparisons (such as `x == y in z`), `left_index` or `right_index` can be greater than 1, triggering an `IndexError` crash.",
+    "paths": [
+      "mypy/checker.py"
+    ],
+    "notes": [
+      "faulty argument passing absolute operand indices instead of relative indices [0, 1]"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "3e8ded4d961581f34336a68d98c608848c09a02f",
+  "base_sha": "66f83ea328e40058d6f4e7e707672c2aa51fff31",
+  "snapshot": "repos/python__mypy/3e8ded4d961581f34336a68d98c608848c09a02f",
+  "diff": "diffs/python__mypy-20602.diff"
+}

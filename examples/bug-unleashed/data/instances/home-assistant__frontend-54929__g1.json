@@ -1,0 +1,26 @@
+{
+  "case_id": "home-assistant__frontend-54929",
+  "repo": "home-assistant/frontend",
+  "pr": 54929,
+  "title": "Hide divider above the first section row of an entities card",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "home-assistant__frontend-54929__g1",
+  "target": {
+    "gid": "home-assistant__frontend-54929#g1",
+    "summary": "The selector `#states > div:first-child > hui-section-row::part(divider)` matches the first section row even when the card contains a title or header above `#states`. As a result, section rows below a header unconditionally have their divider hidden and will fail to render anything if configured without a label.",
+    "paths": [
+      "src/panels/lovelace/cards/hui-entities-card.ts"
+    ],
+    "notes": [
+      "faulty selector matches the first section row even when preceded by a card header or title",
+      "same faulty selector pattern for the section row label"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "9e25c8f887ee1873ae1030bb7214a08aa2ae0eb2",
+  "base_sha": "736d1f4dec41856791039803159fa5795721aea1",
+  "snapshot": "repos/home-assistant__frontend/9e25c8f887ee1873ae1030bb7214a08aa2ae0eb2",
+  "diff": "diffs/home-assistant__frontend-54929.diff"
+}

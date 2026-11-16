@@ -1,0 +1,27 @@
+{
+  "case_id": "pyca__cryptography-14542",
+  "repo": "pyca/cryptography",
+  "pr": 14542,
+  "title": "Further restrict DNS wildcards in name constraint matching",
+  "language": "Rust",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "pyca__cryptography-14542__g1",
+  "target": {
+    "gid": "pyca__cryptography-14542#g1",
+    "summary": "Evaluating permittedSubtrees using DNSConstraint::matches applies wildcard overlap semantics rather than subtree containment. Consequently, a wildcard SAN like *.example.com is wrongly permitted by a narrower constraint such as bar.example.com even though the wildcard can expand to names outside that permitted subtree.",
+    "paths": [
+      "src/rust/cryptography-x509-verification/src/lib.rs",
+      "src/rust/cryptography-x509-verification/src/types.rs"
+    ],
+    "notes": [
+      "faulty call evaluating name constraints using wildcard overlap matching",
+      "implementation of the method the faulty call relies on, which implements wildcard overlap matching"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "e1ad4499605e1c5ac55eaf18280e9441c1d4bc52",
+  "base_sha": "0447989b1d423200360a4a96a716b2981594f147",
+  "snapshot": "repos/pyca__cryptography/e1ad4499605e1c5ac55eaf18280e9441c1d4bc52",
+  "diff": "diffs/pyca__cryptography-14542.diff"
+}

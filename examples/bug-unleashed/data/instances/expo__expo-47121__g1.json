@@ -1,0 +1,26 @@
+{
+  "case_id": "expo__expo-47121",
+  "repo": "expo/expo",
+  "pr": 47121,
+  "title": "[expo-router][ios] Fix white flash behind screens on interactive swipe-back",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "expo__expo-47121__g1",
+  "target": {
+    "gid": "expo__expo-47121#g1",
+    "summary": "Unconditionally setting nativeContainerStyle to the theme background color paints an opaque background on the container view. This breaks transparent and modal presentations (such as formSheet, transparentModal, or containedTransparentModal) by blocking underlying content.",
+    "paths": [
+      "packages/expo-router/src/react-navigation/native-stack/views/NativeStackView.native.tsx"
+    ],
+    "notes": [
+      "faulty statement unconditionally setting nativeContainerStyle to theme background",
+      "definition of NativeStackView whose behavior is wrong"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "12918780f54fceae824c81eed2f4f50dded69fd4",
+  "base_sha": "46efd5a69e9b05fbd30639b9662e231ed209287f",
+  "snapshot": "repos/expo__expo/12918780f54fceae824c81eed2f4f50dded69fd4",
+  "diff": "diffs/expo__expo-47121.diff"
+}

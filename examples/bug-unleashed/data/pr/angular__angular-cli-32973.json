@@ -1,0 +1,6 @@
+{
+  "title": "feat(@schematics/angular): update ai-config to include Angular MCP server config",
+  "body": "Update the `ai-config` schematic, which is activated during workspace creation, to enable Angular MCP server by default.",
+  "head_sha": "0677e32fd8098d079cb16ec7a0638e9899409ac3",
+  "base_sha": "60481e91aa9aa00f96b43cf6b8a269cae6372604"
+}

@@ -1,0 +1,16 @@
+{
+  "case_id": "supabase__supabase-js-2455",
+  "repo": "supabase/supabase-js",
+  "pr": 2455,
+  "title": "fix(functions): honor a caller's Content-Type override regardless of casing",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "supabase__supabase-js-2455",
+  "target": null,
+  "siblings": [],
+  "head_sha": "8e94d7a257b1f6fdf29ca39f5252e775af35c879",
+  "base_sha": "6d2d95285448c7569533127cbcaafb6c7e16e581",
+  "snapshot": "repos/supabase__supabase-js/8e94d7a257b1f6fdf29ca39f5252e775af35c879",
+  "diff": "diffs/supabase__supabase-js-2455.diff"
+}

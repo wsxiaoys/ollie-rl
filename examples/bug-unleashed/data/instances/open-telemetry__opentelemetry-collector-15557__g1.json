@@ -1,0 +1,27 @@
+{
+  "case_id": "open-telemetry__opentelemetry-collector-15557",
+  "repo": "open-telemetry/opentelemetry-collector",
+  "pr": 15557,
+  "title": "[service] Record status events reported by extensions",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "open-telemetry__opentelemetry-collector-15557__g1",
+  "target": {
+    "gid": "open-telemetry__opentelemetry-collector-15557#g1",
+    "summary": "hostWrapper does not forward optional host capability interfaces (such as hostcapabilities.ModuleInfo, hostcapabilities.ExposeExporters, and hostcapabilities.ComponentFactory), causing type assertions on the host by extensions to fail.",
+    "paths": [
+      "service/extensions/extensions.go"
+    ],
+    "notes": [
+      "interface assertions where hostWrapper is not verified against hostcapabilities interfaces",
+      "definition of the hostWrapper type that omits forwarding methods for hostcapabilities interfaces",
+      "call site where hostWrapper is instantiated and passed to ext.Start"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ccf216a8438fbd4ada135579d2b8cce0f9cefb8d",
+  "base_sha": "ec7c19c36155ff9be1d61ea1650ee006bed47e9c",
+  "snapshot": "repos/open-telemetry__opentelemetry-collector/ccf216a8438fbd4ada135579d2b8cce0f9cefb8d",
+  "diff": "diffs/open-telemetry__opentelemetry-collector-15557.diff"
+}

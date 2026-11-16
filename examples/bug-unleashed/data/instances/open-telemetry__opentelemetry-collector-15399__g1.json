@@ -1,0 +1,30 @@
+{
+  "case_id": "open-telemetry__opentelemetry-collector-15399",
+  "repo": "open-telemetry/opentelemetry-collector",
+  "pr": 15399,
+  "title": "[pkg/service] Add config snapshot watcher",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "open-telemetry__opentelemetry-collector-15399__g1",
+  "target": {
+    "gid": "open-telemetry__opentelemetry-collector-15399#g1",
+    "summary": "applyMask treats any string matching providerReferenceRegexp (${...}) as a reference to preserve without redaction, ignoring fallback defaults. When a sensitive field uses an env provider reference with a literal default (such as ${env:NAME:-default}), the default value is left unmasked, exposing secrets in the unexpanded configuration snapshot.",
+    "paths": [
+      "otelcol/collector.go",
+      "otelcol/redact.go"
+    ],
+    "notes": [
+      "faulty statement: preserves any string matching providerReferenceRegexp without checking for literal defaults",
+      "definition of applyMask whose behavior is wrong",
+      "definition of providerReferenceRegexp which matches provider references with defaults",
+      "definition of redactByMirroring which calls applyMask",
+      "call site calling redactByMirroring to produce unexpandedConf"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "43e69a14234dafbf6d0b1944ebd8436f4ea074ae",
+  "base_sha": "8ae0933981eb1303072886788d1af8543498433d",
+  "snapshot": "repos/open-telemetry__opentelemetry-collector/43e69a14234dafbf6d0b1944ebd8436f4ea074ae",
+  "diff": "diffs/open-telemetry__opentelemetry-collector-15399.diff"
+}

@@ -1,0 +1,27 @@
+{
+  "case_id": "go-gitea__gitea-38324",
+  "repo": "go-gitea/gitea",
+  "pr": 38324,
+  "title": "fix(security): harden access checks and migration validation",
+  "language": "Go",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "go-gitea__gitea-38324__g1",
+  "target": {
+    "gid": "go-gitea__gitea-38324#g1",
+    "summary": "When `ctx.Org.Organization.RepoAdminChangeTeamAccess` is false, `canChangeTeamRepository` only checks if the user is an organization owner via `IsOwnedBy` and fails to check if `ctx.Doer` is a site administrator. Consequently, site administrators who are not organization owners are incorrectly returned HTTP 403 Forbidden when adding or removing repositories for a team.",
+    "paths": [
+      "routers/api/v1/org/team.go"
+    ],
+    "notes": [
+      "faulty permission check in canChangeTeamRepository that omits admin check",
+      "call site in AddTeamRepository relying on the faulty check",
+      "call site in RemoveTeamRepository relying on the faulty check"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "ca3a1b61df0e1f9843c0de1592ed6383235bfd2d",
+  "base_sha": "f452c369acc9f1bd05ec6ef9c2e4399062dd6da1",
+  "snapshot": "repos/go-gitea__gitea/ca3a1b61df0e1f9843c0de1592ed6383235bfd2d",
+  "diff": "diffs/go-gitea__gitea-38324.diff"
+}

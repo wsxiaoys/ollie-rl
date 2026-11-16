@@ -1,0 +1,25 @@
+{
+  "case_id": "expo__expo-46539",
+  "repo": "expo/expo",
+  "pr": 46539,
+  "title": "fix(expo,cli,router): Carry preloaded modules through from `<script>` to `React.lazy` bailout for `asyncRoutes` (FOUC)",
+  "language": "TypeScript",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "expo__expo-46539__g1",
+  "target": {
+    "gid": "expo__expo-46539#g1",
+    "summary": "Calling importAll() synchronously before maybeLoadBundle() causes async route resolution to crash on native platforms. On Android and iOS, requiring an unbundled module triggers a fatal error via ErrorUtils rather than throwing a catchable error, preventing the split bundle from ever being fetched.",
+    "paths": [
+      "packages/expo/src/async-require/asyncRequireModule.ts"
+    ],
+    "notes": [
+      "faulty try-catch attempting synchronous importAll() before loading the split bundle"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "65a269062cfe1adc4176a1d6c7b6640c6da3304d",
+  "base_sha": "c869f35bcff1a359482d7cfe07777db21928155f",
+  "snapshot": "repos/expo__expo/65a269062cfe1adc4176a1d6c7b6640c6da3304d",
+  "diff": "diffs/expo__expo-46539.diff"
+}

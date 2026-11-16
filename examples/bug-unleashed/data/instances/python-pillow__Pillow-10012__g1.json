@@ -1,0 +1,25 @@
+{
+  "case_id": "python-pillow__Pillow-10012",
+  "repo": "python-pillow/Pillow",
+  "pr": 10012,
+  "title": "Offset to next TAR block must be positive",
+  "language": "Python",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "python-pillow__Pillow-10012__g1",
+  "target": {
+    "gid": "python-pillow__Pillow-10012#g1",
+    "summary": "Checking `offset <= 0` raises a `ValueError` when encountering valid zero-length TAR archive members (where `size` is 0), preventing access to subsequent files in the archive.",
+    "paths": [
+      "src/PIL/TarIO.py"
+    ],
+    "notes": [
+      "faulty check that rejects zero-length TAR archive members"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "60904dfd84c4addbf594f3d3dc7a26601bb45865",
+  "base_sha": "80de4be9e38d3a6148dd4d8491eb80cd12b760a4",
+  "snapshot": "repos/python-pillow__Pillow/60904dfd84c4addbf594f3d3dc7a26601bb45865",
+  "diff": "diffs/python-pillow__Pillow-10012.diff"
+}

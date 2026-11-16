@@ -1,0 +1,28 @@
+{
+  "case_id": "godotengine__godot-115070",
+  "repo": "godotengine/godot",
+  "pr": 115070,
+  "title": "Round scaled values inside theme files",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "godotengine__godot-115070__g1",
+  "target": {
+    "gid": "godotengine__godot-115070#g1",
+    "summary": "The `EDSCALE_RND` macro does not wrap `m_value` in parentheses. When invoked with an expression such as addition, operator precedence causes only the last operand to be multiplied by `EDSCALE`, resulting in incorrect theme scaling calculations.",
+    "paths": [
+      "editor/themes/editor_scale.h",
+      "editor/themes/theme_classic.cpp",
+      "editor/themes/theme_modern.cpp"
+    ],
+    "notes": [
+      "faulty macro definition missing parentheses around argument",
+      "call site passing an expression that exposes the macro operator precedence bug"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "c6b7af431d9b4a9a165d84a6faa314aadef9e61a",
+  "base_sha": "db01b4f730819cb39bce1922a7ec377b18239c0f",
+  "snapshot": "repos/godotengine__godot/c6b7af431d9b4a9a165d84a6faa314aadef9e61a",
+  "diff": "diffs/godotengine__godot-115070.diff"
+}

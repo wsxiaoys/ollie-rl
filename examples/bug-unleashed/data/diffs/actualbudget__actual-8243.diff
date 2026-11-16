@@ -1,0 +1,89 @@
+diff --git a/packages/sync-server/src/app-gocardless/banks/easybank_bawaatww.ts b/packages/sync-server/src/app-gocardless/banks/easybank_bawaatww.ts
+index e03b478ef86..8b4e8e76f28 100644
+--- a/packages/sync-server/src/app-gocardless/banks/easybank_bawaatww.ts
++++ b/packages/sync-server/src/app-gocardless/banks/easybank_bawaatww.ts
+@@ -23,8 +23,22 @@ export default {
+   normalizeTransaction(transaction, booked) {
+     const editedTrans = { ...transaction };
+ 
+-    let payeeName = formatPayeeName(transaction);
+-    if (!payeeName) payeeName = extractPayeeName(transaction);
++    let payeeName: string | undefined = formatPayeeName(transaction);
++
++    // sometimes the creditor is not provided
++    // the formatPayeeName then falls back to debtor
++    // but that is not correct in case of a negative booking, as it is just the account holders IBAN.
++    const creditorAccount =
++      typeof transaction.creditorAccount === 'string'
++        ? transaction.creditorAccount
++        : transaction.creditorAccount?.iban;
++    const hasCreditor = Boolean(transaction.creditorName || creditorAccount);
++    const isInvalidFallback =
++      Number(transaction.transactionAmount.amount) < 0 && !hasCreditor;
++
++    if (!payeeName || isInvalidFallback) {
++      payeeName = extractPayeeName(transaction);
++    }
+     editedTrans.payeeName = payeeName;
+ 
+     return Fallback.normalizeTransaction(transaction, booked, editedTrans);
+diff --git a/packages/sync-server/src/app-gocardless/banks/tests/easybank_bawaatww.spec.ts b/packages/sync-server/src/app-gocardless/banks/tests/easybank_bawaatww.spec.ts
+index 31fdb8eb299..2e549a7bc5e 100644
+--- a/packages/sync-server/src/app-gocardless/banks/tests/easybank_bawaatww.spec.ts
++++ b/packages/sync-server/src/app-gocardless/banks/tests/easybank_bawaatww.spec.ts
+@@ -1,14 +1,15 @@
+ import EasybankBawaatww from '#app-gocardless/banks/easybank_bawaatww';
+-import { mockTransactionAmount } from '#app-gocardless/services/tests/fixtures';
+ 
+ describe('easybank', () => {
++  const mockNegativeTransactionAmount = { amount: '-100', currency: 'EUR' };
+   describe('#normalizeTransaction', () => {
+     it('returns the expected payeeName from a transaction with a set creditorName', () => {
+       const transaction = {
+         creditorName: 'Some Payee Name',
+-        transactionAmount: mockTransactionAmount,
++        transactionAmount: mockNegativeTransactionAmount,
+         bookingDate: '2024-01-01',
+         creditorAccount: 'AT611904300234573201',
++        debtorAccount: { iban: 'AT611904300234573202' },
+       };
+ 
+       const normalizedTransaction = EasybankBawaatww.normalizeTransaction(
+@@ -22,10 +23,11 @@ describe('easybank', () => {
+     it('returns the expected payeeName from a transaction with payee name inside structuredInformation', () => {
+       const transaction = {
+         payeeName: '',
+-        transactionAmount: mockTransactionAmount,
++        transactionAmount: mockNegativeTransactionAmount,
+         remittanceInformationStructured:
+           'Bezahlung Karte MC/000001234POS 1234 K001 12.12. 23:59SOME PAYEE NAME\\\\LOCATION\\1',
+         bookingDate: '2023-12-31',
++        debtorAccount: { iban: 'AT611904300234573202' },
+       };
+       const normalizedTransaction = EasybankBawaatww.normalizeTransaction(
+         transaction,
+@@ -37,10 +39,11 @@ describe('easybank', () => {
+     it('returns the full structured information as payeeName from a transaction with no payee name', () => {
+       const transaction = {
+         payeeName: '',
+-        transactionAmount: mockTransactionAmount,
++        transactionAmount: mockNegativeTransactionAmount,
+         remittanceInformationStructured:
+           'Auszahlung Karte MC/000001234AUTOMAT 00012345 K001 31.12. 23:59',
+         bookingDate: '2023-12-31',
++        debtorAccount: { iban: 'AT611904300234573202' },
+       };
+       const normalizedTransaction = EasybankBawaatww.normalizeTransaction(
+         transaction,
+diff --git a/upcoming-release-notes/easybank-payee-fallback.md b/upcoming-release-notes/easybank-payee-fallback.md
+new file mode 100644
+index 00000000000..154e3257449
+--- /dev/null
++++ b/upcoming-release-notes/easybank-payee-fallback.md
+@@ -0,0 +1,6 @@
++---
++category: Bugfixes
++authors: [neuos]
++---
++
++Improve fallback logic for extracting payee names in easybank transactions.

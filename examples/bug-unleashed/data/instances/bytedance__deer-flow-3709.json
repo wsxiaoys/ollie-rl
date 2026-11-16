@@ -1,0 +1,16 @@
+{
+  "case_id": "bytedance__deer-flow-3709",
+  "repo": "bytedance/deer-flow",
+  "pr": 3709,
+  "title": "fix(middleware): fix positional fallback consuming unrelated todo when same-content list is exhausted",
+  "language": "Python",
+  "split": "train",
+  "kind": "clean",
+  "example_id": "bytedance__deer-flow-3709",
+  "target": null,
+  "siblings": [],
+  "head_sha": "14402284e50c3d914f95bd52ee2ca1e83cb6cf45",
+  "base_sha": "90fdda77e898a627eb31c6b5d1591aff551b0ed1",
+  "snapshot": "repos/bytedance__deer-flow/14402284e50c3d914f95bd52ee2ca1e83cb6cf45",
+  "diff": "diffs/bytedance__deer-flow-3709.diff"
+}

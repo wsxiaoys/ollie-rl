@@ -1,0 +1,42 @@
+diff --git a/src/librustdoc/html/span_map.rs b/src/librustdoc/html/span_map.rs
+index 517b538d1bfd1..6b187a63c679c 100644
+--- a/src/librustdoc/html/span_map.rs
++++ b/src/librustdoc/html/span_map.rs
+@@ -144,6 +144,10 @@ impl<'tcx> SpanMapVisitor<'tcx> {
+                 let span = path.segments.last().map_or(path.span, |seg| seg.ident.span);
+                 // In case the path ends with generics, we remove them from the span.
+                 let span = if only_use_last_segment {
++                    if path.span.from_expansion() {
++                        // For now we don't handle span from macro expansions so nothing to do here.
++                        return;
++                    }
+                     span
+                 } else {
+                     // In `use` statements, the included item is not in the path segments. However,
+diff --git a/tests/rustdoc-html/jump-to-def/item-with-derive.rs b/tests/rustdoc-html/jump-to-def/item-with-derive.rs
+new file mode 100644
+index 0000000000000..a3e034f973632
+--- /dev/null
++++ b/tests/rustdoc-html/jump-to-def/item-with-derive.rs
+@@ -0,0 +1,21 @@
++// This test ensures that the item name will link to its item's page even if there
++// is a `#[derive(...)]`.
++// This is a regression test for <https://github.com/rust-lang/rust/issues/158050>.
++
++//@ compile-flags: -Zunstable-options --generate-link-to-definition
++
++#![crate_name = "foo"]
++
++//@ has 'src/foo/item-with-derive.rs.html'
++//@ has - '//a[@href="../../foo/struct.Bar.html"]' 'Bar'
++#[derive(Debug)]
++pub struct Bar {
++    x: u8,
++}
++
++// Same test with an enum just in case...
++//@ has - '//a[@href="../../foo/enum.Blob.html"]' 'Blob'
++#[derive(Debug)]
++pub enum Blob {
++    X,
++}

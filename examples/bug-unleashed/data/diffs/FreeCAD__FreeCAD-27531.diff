@@ -1,0 +1,135 @@
+diff --git a/src/Mod/Assembly/Gui/Commands.cpp b/src/Mod/Assembly/Gui/Commands.cpp
+index 544837fc71ee..6282bccb5766 100644
+--- a/src/Mod/Assembly/Gui/Commands.cpp
++++ b/src/Mod/Assembly/Gui/Commands.cpp
+@@ -28,8 +28,11 @@
+ #include <Gui/Application.h>
+ #include <Gui/CommandT.h>
+ #include <Gui/Document.h>
++#include <Gui/MainWindow.h>
+ #include <Gui/Selection/Selection.h>
++#include <Gui/Tree.h>
+ 
++#include <Mod/Assembly/App/AssemblyLink.h>
+ #include <Mod/Assembly/App/AssemblyObject.h>
+ #include <Mod/Assembly/App/AssemblyUtils.h>
+ 
+@@ -86,6 +89,70 @@ void selectObjectsByName(AssemblyObject* assembly, const std::vector<std::string
+     selectObjects(objectsToSelect);
+ }
+ 
++// ================================================================================
++// Go to Linked Assembly
++// ================================================================================
++
++DEF_STD_CMD_A(CmdAssemblyLinkSelectLinked)
++
++CmdAssemblyLinkSelectLinked::CmdAssemblyLinkSelectLinked()
++    : Command("Assembly_LinkSelectLinked")
++{
++    sGroup = QT_TR_NOOP("Assembly");
++    sMenuText = QT_TR_NOOP("Go to linked Assembly");
++    sToolTipText = QT_TR_NOOP("Selects the linked assembly and switches to its original document");
++    sWhatsThis = "Assembly_LinkSelectLinked";
++    sStatusTip = sToolTipText;
++    eType = AlterSelection;
++    sPixmap = "LinkSelect";
++    sAccel = "S, G";
++}
++
++void CmdAssemblyLinkSelectLinked::activated(int iMsg)
++{
++    Q_UNUSED(iMsg);
++
++    std::vector<Gui::SelectionObject> selection = Gui::Selection().getSelectionEx();
++    if (selection.size() != 1) {
++        return;
++    }
++
++    auto* asmLink = dynamic_cast<Assembly::AssemblyLink*>(selection[0].getObject());
++
++    if (!asmLink) {
++        return;
++    }
++
++    // Get the linked object (usually an AssemblyObject in another doc)
++    App::DocumentObject* linkedObj = asmLink->getLinkedAssembly();
++    if (!linkedObj) {
++        return;
++    }
++
++    Gui::Selection().clearSelection();
++    Gui::Selection().addSelection(linkedObj->getDocument()->getName(), linkedObj->getNameInDocument());
++
++    // Switch view/tab
++    Gui::Document* guiDoc = Gui::Application::Instance->getDocument(linkedObj->getDocument());
++    if (guiDoc) {
++        // Try to activate the view containing the object
++        Gui::ViewProvider* vp = guiDoc->getViewProvider(linkedObj);
++        if (auto vpDoc = dynamic_cast<Gui::ViewProviderDocumentObject*>(vp)) {
++            guiDoc->setActiveView(vpDoc);
++        }
++    }
++}
++
++bool CmdAssemblyLinkSelectLinked::isActive()
++{
++    std::vector<Gui::SelectionObject> selection = Gui::Selection().getSelectionEx();
++    return (
++        selection.size() == 1 && selection[0].getObject()
++        && selection[0].getObject()->isDerivedFrom(Assembly::AssemblyLink::getClassTypeId())
++    );
++}
++
++
+ // ================================================================================
+ // Select Conflicting Constraints
+ // ================================================================================
+@@ -240,6 +307,7 @@ void AssemblyGui::CreateAssemblyCommands()
+ {
+     Gui::CommandManager& rcCmdMgr = Gui::Application::Instance->commandManager();
+ 
++    rcCmdMgr.addCommand(new CmdAssemblyLinkSelectLinked());
+     rcCmdMgr.addCommand(new CmdAssemblySelectConflictingConstraints());
+     rcCmdMgr.addCommand(new CmdAssemblySelectRedundantConstraints());
+     rcCmdMgr.addCommand(new CmdAssemblySelectMalformedConstraints());
+diff --git a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
+index bfcf15de0173..fdd6e8a96068 100644
+--- a/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
++++ b/src/Mod/Assembly/Gui/ViewProviderAssemblyLink.cpp
+@@ -34,6 +34,7 @@
+ #include <App/DocumentObject.h>
+ #include <App/Part.h>
+ 
++#include <Gui/Action.h>
+ #include <Gui/ActionFunction.h>
+ #include <Gui/Application.h>
+ #include <Gui/BitmapFactory.h>
+@@ -147,6 +148,15 @@ void ViewProviderAssemblyLink::setupContextMenu(QMenu* menu, QObject* receiver,
+         Gui::Selection().clearSelection();
+     });
+ 
++    Gui::CommandManager& mgr = Gui::Application::Instance->commandManager();
++    Gui::Command* cmd = mgr.getCommandByName("Assembly_LinkSelectLinked");
++    if (cmd) {
++        QAction* action = cmd->getAction()->action();
++        if (action) {
++            menu->addAction(action);
++        }
++    }
++
+     Q_UNUSED(receiver)
+     Q_UNUSED(member)
+ }
+diff --git a/src/Mod/Assembly/InitGui.py b/src/Mod/Assembly/InitGui.py
+index 62394c1c90b9..acf2e4226aa7 100644
+--- a/src/Mod/Assembly/InitGui.py
++++ b/src/Mod/Assembly/InitGui.py
+@@ -84,6 +84,7 @@ def Initialize(self):
+         ]
+ 
+         cmdListMenuOnly = [
++            "Assembly_LinkSelectLinked",
+             "Assembly_ExportASMT",
+         ]
+ 

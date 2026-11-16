@@ -1,0 +1,2013 @@
+diff --git a/man/systemd-nsresourced.service.xml b/man/systemd-nsresourced.service.xml
+index 120027aab0e5..e3ac1eb0c35b 100644
+--- a/man/systemd-nsresourced.service.xml
++++ b/man/systemd-nsresourced.service.xml
+@@ -40,9 +40,15 @@
+ 
+     <para>Allocations of UIDs/GIDs this way are transient: when a user namespace goes away, its UID/GID range
+     is returned to the pool of available ranges. In order to ensure that clients cannot gain persistency in
+-    their transient UID/GID range a BPF-LSM based policy is enforced that ensures that user namespaces set up
+-    this way can only write to file systems they allocate themselves or that are explicitly allowlisted via
+-    <command>systemd-nsresourced</command>.</para>
++    their transient UID/GID range a BPF-LSM based policy is enforced that refuses to create inodes — or
++    change ownership of them — that would end up owned by a transient UID/GID on a file system outliving the
++    user namespace the range was assigned to. Writes to file systems the user namespace allocated itself are
++    hence permitted, as those are torn down together with it, and so are writes through id-mapped mounts that
++    translate the transient range into something else before it reaches the disk. As a stacking file system
++    such as <literal>overlayfs</literal> writes to a separate upper layer that would not be covered by the
++    checks on the overlay mount itself, mounting a writable <literal>overlayfs</literal> instance is refused
++    for these user namespaces unless its upper layer, too, is torn down together with the user namespace, or
++    is an id-mapped mount that translates the transient range away before it reaches the disk.</para>
+ 
+     <para><command>systemd-nsresourced</command> automatically ensures that any registered UID ranges show up
+     in the system's NSS database via the <ulink url="https://systemd.io/USER_GROUP_API">User/Group Record
+@@ -73,7 +79,7 @@
+     the user namespace. When this option is enabled, the foreign UID range is mapped 1:1 into the user
+     namespace, allowing processes inside to access and manipulate files owned by the foreign UID range.</para>
+ 
+-    <para>The service provides API calls to allowlist mounts (referenced via their mount file descriptors as
++    <para>The service provides API calls to delegate mounts (referenced via their mount file descriptors as
+     per Linux <function>fsmount()</function> API), to pass ownership of a cgroup subtree to the user
+     namespace and to delegate a virtual Ethernet device pair to the user namespace. When used in combination
+     this is sufficient to implement fully unprivileged container environments, as implemented by
+diff --git a/src/bpf/userns-restrict.bpf.c b/src/bpf/userns-restrict.bpf.c
+index 54473d7210ea..35856a53308a 100644
+--- a/src/bpf/userns-restrict.bpf.c
++++ b/src/bpf/userns-restrict.bpf.c
+@@ -30,13 +30,22 @@
+ void* bpf_rdonly_cast(const void *, __u32) __ksym;
+ #endif
+ 
+-/* BPF module that implements an allowlist of mounts (identified by mount ID) for user namespaces (identified
+- * by their inode number in nsfs) that restricts creation of inodes (which would inherit the callers UID/GID)
+- * or changing of ownership (similar).
++/* BPF module that keeps user namespaces provisioned by nsresourced (identified by their inode number in
++ * nsfs) from leaving objects owned by their transient UID/GID range behind on file systems that outlive the
++ * namespace. Transient ranges are recycled, so any such object would later be owned by an unrelated client.
+  *
+  * This hooks into the various path-based LSM entrypoints that control inode creation as well as chown(), and
+- * then looks up the calling process' user namespace in a global map of namespaces, which points us to
+- * another map that is simply a list of allowed mnt_ids. */
++ * for each asks the only two questions that matter:
++ *
++ *   a) Does the file system die together with the user namespace? Superblocks record the user namespace they
++ *      were mounted in, so this is simply whether sb->s_user_ns sits at or below the provisioned namespace.
++ *
++ *   b) Will the transient ID actually reach the disk? An idmapped mount may translate it into something
++ *      else entirely, in which case nothing recyclable is recorded anywhere.
++ *
++ * Both are answered from fields the kernel stamps itself and that a client cannot influence: unlike the
++ * mount namespace a mount happens to sit in, neither a superblock's user namespace nor a mount's idmapping
++ * can be forged with unshare(), and both are preserved when a mount is cloned. */
+ 
+ // FIXME: ACL adjustments are currently not blocked. There's no path-based LSM hook available in the kernel
+ // for setting xattrs or ACLs, hence we cannot easily block them, even though we want that. We can get away
+@@ -45,22 +54,26 @@ void* bpf_rdonly_cast(const void *, __u32) __ksym;
+ // not be reachable through it. It still sucks though that a user can persistently add an ACL entry to a file
+ // with their transient UIDs/GIDs.
+ 
+-/* kernel currently enforces a maximum usernamespace nesting depth of 32, see create_user_ns() in the kernel sources */
+-#define USER_NAMESPACE_DEPTH_MAX 32U
++/* create_user_ns() in the kernel sources refuses to nest below a user namespace whose level is above 32,
++ * hence the deepest reachable level is 33, i.e. a chain of 34 user namespaces including the initial one. */
++#define USER_NAMESPACE_DEPTH_MAX 34U
+ 
+-struct mnt_id_map {
+-        __uint(type, BPF_MAP_TYPE_HASH);
+-        __uint(max_entries, 1);        /* placeholder, configured otherwise by nsresourced */
+-        __type(key, int);
+-        __type(value, int);
+-};
++/* Mirrors UID_GID_MAP_MAX_BASE_EXTENTS/UID_GID_MAP_MAX_EXTENTS, see include/linux/user_namespace.h */
++#define UID_GID_MAP_MAX_BASE_EXTENTS 5U
++#define UID_GID_MAP_MAX_EXTENTS 340U
++
++/* The kernel's INVALID_UID/INVALID_GID, i.e. what an unmapped translation results in */
++#define UID_GID_INVALID ((uid_t) -1)
++
++/* From include/uapi/linux/magic.h, which vmlinux.h does not provide. */
++#define OVERLAYFS_SUPER_MAGIC 0x794c7630
+ 
+ struct {
+-        __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
++        __uint(type, BPF_MAP_TYPE_HASH);
+         __uint(max_entries, 1);        /* placeholder, configured otherwise by nsresourced */
+         __type(key, unsigned);         /* userns inode */
+-        __array(values, struct mnt_id_map);
+-} userns_mnt_id_hash SEC(".maps");
++        __type(value, int);            /* dummy value */
++} userns_managed SEC(".maps");
+ 
+ struct {
+         __uint(type, BPF_MAP_TYPE_HASH);
+@@ -74,10 +87,6 @@ struct {
+         __uint(max_entries, 4096);
+ } userns_ringbuf SEC(".maps");
+ 
+-static inline struct mount *real_mount(struct vfsmount *mnt) {
+-        return container_of(mnt, struct mount, mnt);
+-}
+-
+ static inline bool uid_is_dynamic(uid_t uid) {
+         return DYNAMIC_UID_MIN <= uid && uid <= DYNAMIC_UID_MAX;
+ }
+@@ -90,17 +99,43 @@ static inline bool uid_is_transient(uid_t uid) {
+         return uid_is_dynamic(uid) || uid_is_container(uid);
+ }
+ 
+-static int userns_owns_mount(struct user_namespace *userns, struct vfsmount *v) {
+-        struct user_namespace *mount_userns, *p;
+-        struct mount *m;
++/* Finds the closest user namespace at or above the passed one that nsresourced provisioned. Walking upwards
++ * is what keeps a nested user namespace from shaking off the policy. Returns 1 and stores it in the return
++ * argument if found, 0 if the whole chain was walked without a match, and a negative error if the chain is
++ * longer than the kernel permits (in which case we refuse rather than fail open, as we cannot rule out a
++ * managed ancestor). */
++static int find_managed_userns(struct user_namespace *userns, struct user_namespace **ret) {
++        struct user_namespace *p = userns;
+ 
+-        /* Get user namespace from vfsmount */
+-        m = bpf_rdonly_cast(real_mount(v), bpf_core_type_id_kernel(struct mount));
+-        mount_userns = m->mnt_ns->user_ns;
++        /* All callers pass a valid pointer; the guard just satisfies the pointer-deref checker. */
++        if (!ret)
++                return -EINVAL;
+ 
+-        p = mount_userns;
+         for (unsigned i = 0; i < USER_NAMESPACE_DEPTH_MAX; i++) {
+-                if (p == userns)
++                unsigned inode;
++
++                inode = p->ns.inum;
++                if (bpf_map_lookup_elem(&userns_managed, &inode)) {
++                        *ret = p;
++                        return true;
++                }
++
++                p = p->parent;
++                if (!p) /* Walked the whole chain up to the initial namespace without a match. */
++                        return false;
++        }
++
++        /* Chain longer than the kernel permits: refuse rather than fail open, as we cannot rule out a
++         * managed ancestor. */
++        return -EPERM;
++}
++
++/* Is the second user namespace the first one itself, or nested below it? */
++static int userns_is_below(struct user_namespace *ancestor, struct user_namespace *ns) {
++        struct user_namespace *p = ns;
++
++        for (unsigned i = 0; i < USER_NAMESPACE_DEPTH_MAX; i++) {
++                if (p == ancestor)
+                         return true;
+ 
+                 p = p->parent;
+@@ -108,7 +143,7 @@ static int userns_owns_mount(struct user_namespace *userns, struct vfsmount *v)
+                         break;
+         }
+ 
+-        /* Hmm, something is fishy if there's more than 32 levels of namespaces involved. Let's better be
++        /* Hmm, something is fishy if there's more than 34 levels of namespaces involved. Let's better be
+          * safe than sorry, and refuse. */
+         if (p)
+                 return -EPERM;
+@@ -116,14 +151,133 @@ static int userns_owns_mount(struct user_namespace *userns, struct vfsmount *v)
+         return false;
+ }
+ 
++/* Resolves a uid_gid_map's extent array for the requested direction. Small maps carry their extents inline,
++ * larger ones keep two arrays instead, each sorted by one end (the kernel bisects them, a linear scan
++ * arrives at the same answer). Those two pointers share storage with the inline extent array; the verifier
++ * resolves the overlap to the latter and then refuses an 8 byte load in the middle of it, so we read the
++ * wanted pointer out explicitly. The bpf_core_field_offset() operands have to stay compile time constants,
++ * hence the branch per direction. always_inline so each caller keeps the hand-inlined shape the verifier
++ * already accepts (a register that is a BTF pointer on one branch and a scalar on the other). Returns NULL
++ * for an empty map or on a read failure. */
++static inline __attribute__((always_inline))
++struct uid_gid_extent *uid_gid_map_extents(struct uid_gid_map *map, bool up) {
++        struct uid_gid_extent *array;
++
++        if (map->nr_extents == 0)
++                return NULL;
++
++        if (map->nr_extents <= UID_GID_MAP_MAX_BASE_EXTENTS)
++                return map->extent;
++
++        if (up) {
++                if (bpf_probe_read_kernel(&array, sizeof(array),
++                                          (const void*) map + bpf_core_field_offset(struct uid_gid_map, reverse)) != 0)
++                        return NULL;
++        } else {
++                if (bpf_probe_read_kernel(&array, sizeof(array),
++                                          (const void*) map + bpf_core_field_offset(struct uid_gid_map, forward)) != 0)
++                        return NULL;
++        }
++
++        return array;
++}
++
++/* Mirrors map_id_range_up()/map_id_range_down() from kernel/user_namespace.c: translates the passed ID
++ * through the map, where the up flag selects which end of the extents is searched. Stores UID_GID_INVALID if
++ * the ID is not mapped, and returns negative if the map could not be read, which callers must keep apart: an
++ * unmapped ID records nothing on disk, whereas a map we failed to read tells us nothing at all. */
++static int uid_gid_map_translate(struct uid_gid_map *map, uid_t id, bool up, uid_t *ret) {
++        struct uid_gid_extent *array;
++        unsigned n;
++
++        /* All callers pass a valid pointer; the guard just satisfies the pointer-deref checker. */
++        if (!ret)
++                return -EINVAL;
++
++        n = map->nr_extents;
++        if (n == 0) { /* Empty map: nothing is mapped, and that is an answer, not a failure. */
++                *ret = UID_GID_INVALID;
++                return 0;
++        }
++
++        array = uid_gid_map_extents(map, up);
++        if (!array) /* Non-empty map whose extents we could not resolve. */
++                return -EPERM;
++
++        /* Copy each extent out instead of indexing the array in place: a variable index into a kernel
++         * pointer is something the verifier refuses. */
++        for (unsigned i = 0; i < UID_GID_MAP_MAX_EXTENTS; i++) {
++                struct uid_gid_extent e;
++                uid_t first;
++
++                if (i >= n)
++                        break;
++
++                if (bpf_probe_read_kernel(&e, sizeof(e), array + i) != 0)
++                        return -EPERM;
++
++                first = up ? e.lower_first : e.first;
++                if (id >= first && id - first < e.count) {
++                        *ret = (up ? e.first : e.lower_first) + (id - first);
++                        return 0;
++                }
++        }
++
++        *ret = UID_GID_INVALID;
++        return 0;
++}
++
++/* Mirrors from_vfsuid()/from_vfsgid() from fs/mnt_idmapping.c: the ID that is actually recorded on disk when
++ * the passed ID creates an object on the given mount. The gid flag selects the GID maps over the UID maps.
++ * Stores UID_GID_INVALID if the ID does not map, in which case the kernel refuses the operation with
++ * EOVERFLOW anyway, see fsuidgid_has_mapping(). Returns negative if a map could not be read. */
++static int mount_map_id(struct vfsmount *mnt, struct user_namespace *fs_userns, uid_t id, bool gid, uid_t *ret) {
++        struct mnt_idmap *idmap;
++        struct uid_gid_map *m;
++        int r;
++
++        /* All callers pass a valid pointer; the guard just satisfies the pointer-deref checker. */
++        if (!ret)
++                return -EINVAL;
++
++        idmap = mnt->mnt_idmap;
++        if (!idmap) {
++                *ret = id;
++                return 0;
++        }
++
++        m = gid ? &idmap->gid_map : &idmap->uid_map;
++
++        /* Both nop_mnt_idmap and invalid_mnt_idmap carry empty maps. For the former that is an identity
++         * mapping; for the latter the operation fails later on regardless, so treating it as identity only
++         * ever makes us stricter. */
++        if (m->nr_extents > 0) {
++                r = uid_gid_map_translate(m, id, /* up= */ true, &id);
++                if (r < 0)
++                        return r;
++                if (id == UID_GID_INVALID) {
++                        *ret = UID_GID_INVALID;
++                        return 0;
++                }
++        }
++
++        /* initial_idmapping(): the initial user namespace is the only one without a parent. */
++        if (!fs_userns->parent) {
++                *ret = id;
++                return 0;
++        }
++
++        return uid_gid_map_translate(gid ? &fs_userns->gid_map : &fs_userns->uid_map, id, /* up= */ false, ret);
++}
++
++/* Common tail of the inode creation hooks: would the object the calling task is about to create end up
++ * owned by a transient ID on a file system that outlives the user namespace that ID was handed to? */
+ static int validate_mount(struct vfsmount *v, int ret) {
+-        struct user_namespace *task_userns;
+-        unsigned task_userns_inode;
++        struct user_namespace *managed, *fs_userns;
+         const struct cred *cred;
+         struct task_struct *task;
+-        void *mnt_id_map;
+-        struct mount *m;
+-        int mnt_id, r;
++        uid_t uid, gid;
++        int r;
+ 
+         if (ret != 0) /* propagate earlier error */
+                 return ret;
+@@ -133,38 +287,41 @@ static int validate_mount(struct vfsmount *v, int ret) {
+         cred = task->cred;
+         if (!cred)
+                 return -EPERM;
+-        task_userns = cred->user_ns;
+-
+-        /* fsuid/fsgid are the UID/GID in the initial user namespace, before any idmapped mounts have been
+-         * applied. There is no way (yet) to figure out what the UID/GID that will be written to disk will be
+-         * after idmapped mounts are taken into account, hence we have to rely on an allowlist of mounts
+-         * populated by userspace which tells us if a mount has an appropriate uid mapping in place to
+-         * translate the transient UID range to something else. For other UIDs/GIDs, there's no need to do
+-         * these checks as we don't insist on idmapped mounts or such for UIDs/GIDs outside the transient
+-         * ranges. */
++
++        /* fsuid/fsgid are the UID/GID in the initial user namespace. Anything outside the transient ranges
++         * is never recycled by us, hence there's nothing to protect. */
+         if (!uid_is_transient(cred->fsuid.val) && !uid_is_transient((uid_t) cred->fsgid.val))
+                 return 0;
+ 
+-        r = userns_owns_mount(task_userns, v);
++        r = find_managed_userns(cred->user_ns, &managed);
+         if (r < 0)
+                 return r;
+-        /* Is the file on a mount that belongs to our own user namespace or a child of it? If so, say
+-         * yes immediately. */
+-        if (r > 0)
++        if (r == 0) /* Not provisioned by nsresourced? Then this is none of our business. */
+                 return 0;
+ 
+-        /* This is a mount foreign to our task's user namespace, let's consult our allow list */
+-        task_userns_inode = task_userns->ns.inum;
++        fs_userns = v->mnt_sb->s_user_ns;
+ 
+-        mnt_id_map = bpf_map_lookup_elem(&userns_mnt_id_hash, &task_userns_inode);
+-        if (!mnt_id_map) /* No rules installed for this userns? Then say yes, too! */
++        /* Does the file system die together with the user namespace? Then nothing it carries can outlive
++         * the transient range, and we can allow this. */
++        r = userns_is_below(managed, fs_userns);
++        if (r < 0)
++                return r;
++        if (r > 0)
+                 return 0;
+ 
+-        m = bpf_rdonly_cast(real_mount(v), bpf_core_type_id_kernel(struct mount));
+-        mnt_id = m->mnt_id;
++        /* Refuse if we cannot resolve where the IDs land: an ID we failed to translate is not an ID we know
++         * to be harmless. */
++        r = mount_map_id(v, fs_userns, cred->fsuid.val, /* gid= */ false, &uid);
++        if (r < 0)
++                return r;
++
++        r = mount_map_id(v, fs_userns, (uid_t) cred->fsgid.val, /* gid= */ true, &gid);
++        if (r < 0)
++                return r;
+ 
+-        /* Otherwise, say yes if the mount ID is allowlisted */
+-        if (bpf_map_lookup_elem(mnt_id_map, &mnt_id))
++        /* If the mount's idmapping translates our transient IDs into something else, nothing recyclable is
++         * recorded on disk, and we are fine. */
++        if (!uid_is_transient(uid) && !uid_is_transient(gid))
+                 return 0;
+ 
+         return -EPERM;
+@@ -172,12 +329,9 @@ static int validate_mount(struct vfsmount *v, int ret) {
+ 
+ SEC("lsm/path_chown")
+ int BPF_PROG(userns_restrict_path_chown, struct path *path, unsigned long long uid, unsigned long long gid, int ret) {
+-        struct user_namespace *task_userns;
+-        unsigned task_userns_inode;
++        struct user_namespace *managed;
+         const struct cred *cred;
+         struct task_struct *task;
+-        struct vfsmount *v;
+-        void *mnt_id_map;
+         int r;
+ 
+         if (ret != 0) /* propagate earlier error */
+@@ -188,34 +342,24 @@ int BPF_PROG(userns_restrict_path_chown, struct path *path, unsigned long long u
+         cred = task->cred;
+         if (!cred)
+                 return -EPERM;
+-        task_userns = cred->user_ns;
+-        v = path->mnt;
+ 
+-        r = userns_owns_mount(task_userns, v);
++        /* User namespaces that were not provisioned by nsresourced can still write to the transient ranges
++         * so that we don't break use cases like systemd-nspawn's --private-users=pick switch. */
++        r = find_managed_userns(cred->user_ns, &managed);
+         if (r < 0)
+                 return r;
+-        /* Is the file on a mount that belongs to our own user namespace or a child of it? If so, say
+-         * yes immediately. */
+-        if (r > 0)
++        if (r == 0)
+                 return 0;
+ 
+-        /* This is a mount foreign to our task's user namespace, if the user namespace was provisioned by
+-         * nsresourced, refuse any UIDs/GIDs in the transient ranges. Note that we can only do this check in
+-         * the chown() hook because it receives the UID/GID with idmapped mounts already taken into account,
+-         * unlike the other hooks where we cannot (yet) figure out the UID/GID after idmapped mounts are
+-         * applied. Hence in the other hooks we have to rely on the mount allowlist to ensure the transient
+-         * fsuid/fsgid will be translated to something else when written to disk but in the chown() hook we
+-         * can check the provided UID/GID directly to see if it is transient or not. */
+-
+-        /* User namespaces that were not provisioned by nsresourced can still write to the transient ranges
+-         * so that we don't break use cases like systemd-nspawn's --private-users=pick switch. */
+-
+-        task_userns_inode = task_userns->ns.inum;
+-
+-        mnt_id_map = bpf_map_lookup_elem(&userns_mnt_id_hash, &task_userns_inode);
+-        if (!mnt_id_map) /* No rules installed for this userns? Then say yes, too! */
++        r = userns_is_below(managed, path->mnt->mnt_sb->s_user_ns);
++        if (r < 0)
++                return r;
++        if (r > 0)
+                 return 0;
+ 
++        /* Unlike the creation hooks this one is handed the IDs with the mount's idmapping already applied,
++         * i.e. the ones that end up on disk, hence we can look at them directly. See chown_common() in the
++         * kernel sources. */
+         if (uid_is_transient((uid_t) uid) || uid_is_transient((uid_t) gid))
+                 return -EPERM;
+ 
+@@ -244,6 +388,173 @@ int BPF_PROG(userns_restrict_path_link, struct dentry *old_dentry, const struct
+         return validate_mount(new_dir->mnt, ret);
+ }
+ 
++/* overlayfs' struct ovl_fs and struct ovl_layer are private to the module and hence absent from vmlinux.h
++ * whenever overlayfs is built as a module. We declare the two fields we need as CO-RE "type flavors": libbpf
++ * strips the ___local suffix and relocates these against the kernel's real ovl_fs/ovl_layer. This both
++ * avoids clashing with a vmlinux.h that does carry them (built-in overlayfs) and, combined with
++ * bpf_core_type_exists() below, lets the program still load when overlayfs is entirely unavailable.
++ * systemd-nsresourced.service orders itself after modprobe@overlay.service so the module's BTF is present by
++ * the time this program is loaded. @mnt is documented in the kernel to be the first member of ovl_layer. */
++struct ovl_layer___local {
++        struct vfsmount *mnt;
++} __attribute__((preserve_access_index));
++
++struct ovl_fs___local {
++        struct ovl_layer___local *layers;
++} __attribute__((preserve_access_index));
++
++/* True if the inclusive range [a, b] overlaps either transient id range. */
++static bool range_hits_transient(uint64_t a, uint64_t b) {
++        if (a <= DYNAMIC_UID_MAX && DYNAMIC_UID_MIN <= b)
++                return true;
++        if (a <= CONTAINER_UID_MAX && CONTAINER_UID_MIN <= b)
++                return true;
++        return false;
++}
++
++/* Returns true if the map (a mount idmap's uid_map or gid_map) never records a transient id on disk, so
++ * nothing recyclable can reach the disk through it. Read in the "up" direction (i.e. as a mount idmap) an
++ * extent maps input ids [lower_first, lower_first+count) to on-disk ids [first, first+count); we refuse if
++ * any extent's on-disk range is transient, no matter which input reaches it. Ids no extent covers are left
++ * unmapped, which fails the write with EOVERFLOW, so they are fine too. An empty map is the identity
++ * mapping and hence neutralizes nothing. */
++static bool idmap_map_neutralizes_transient(struct uid_gid_map *map) {
++        struct uid_gid_extent *array;
++        unsigned n;
++
++        n = map->nr_extents;
++
++        array = uid_gid_map_extents(map, /* up= */ true);
++        /* NULL means an empty map (identity mapping, neutralizes nothing) or a read failure; refuse either. */
++        if (!array)
++                return false;
++
++        for (unsigned i = 0; i < UID_GID_MAP_MAX_EXTENTS; i++) {
++                struct uid_gid_extent e;
++
++                if (i >= n)
++                        break;
++                if (bpf_probe_read_kernel(&e, sizeof(e), array + i) != 0)
++                        return false;
++
++                if (e.count == 0)
++                        continue;
++
++                /* The on-disk ids this extent can record are [first, first+count). If any is transient,
++                 * some write through this mount is recyclable, so the map does not neutralize. */
++                if (range_hits_transient(e.first, (uint64_t) e.first + e.count - 1))
++                        return false;
++        }
++
++        return true;
++}
++
++/* True if the mount's idmapping maps the whole transient UID and GID ranges away, so a transient client
++ * writing through it leaves nothing recyclable on disk. A non-idmapped mount maps them through unchanged. */
++static bool mount_neutralizes_transient(struct vfsmount *mnt) {
++        struct mnt_idmap *idmap;
++
++        idmap = mnt->mnt_idmap;
++        if (!idmap)
++                return false;
++
++        return idmap_map_neutralizes_transient(&idmap->uid_map) &&
++               idmap_map_neutralizes_transient(&idmap->gid_map);
++}
++
++/* overlayfs would let a managed user namespace sidestep all of the above: a write to an overlay mount
++ * creates the real inode on the upper layer via vfs_create(), which reaches only the inode-based LSM hooks,
++ * not the path-based ones we attach to. The single path hook that does fire sees the overlay mount itself,
++ * whose superblock belongs to the (managed) mounting namespace and so looks like it dies with it, while the
++ * upper may be a persistent file system on which our transient IDs then persist. So we judge the upper
++ * here, at mount time, the only point we can see it. We permit the overlay if its upper dies with the
++ * managed namespace (e.g. a tmpfs the client set up itself), or if the upper is a persistent file system
++ * whose mount idmapping maps the transient ranges away so nothing recyclable reaches its disk (as
++ * mountfsd-style idmapped mounts do); everything else, and any overlay owned by a namespace we do not
++ * manage, is refused.
++ *
++ * We key on whether a writable upper exists (layers[0].mnt), which is fixed for the superblock's lifetime,
++ * not on the mutable SB_RDONLY flag: an overlay mounted read-only but with an upper can be remounted
++ * read-write later without re-entering this hook, so it is judged now. A genuinely read-only overlay has no
++ * upper (layers[0].mnt is NULL) and cannot record anything, so it is left alone. Refusing the mount cannot
++ * undo the work/index dirs overlayfs already stamped onto the upper during ovl_fill_super(), which runs
++ * before this hook; it stops all further writes, but those mount-time dirs remain a residual leak. Reaching
++ * it takes an upperdir and a workdir that already exist on the same persistent, non-idmapped file system and
++ * that the transient IDs may write to: the client cannot create them itself, since that is what the path
++ * hooks deny.
++ *
++ * We only look at the upper: overlayfs requires the workdir to be under the same mount as the upperdir
++ * (ovl_get_workdir()), and stamps work/index using the upper mount's idmapping (ovl_upper_mnt_idmap() ==
++ * mnt_idmap(layers[0].mnt)), so the upper's superblock and idmapping already govern the workdir too. */
++SEC("lsm/sb_kern_mount")
++int BPF_PROG(userns_restrict_sb_kern_mount, struct super_block *sb, int ret) {
++        struct ovl_layer___local *layers;
++        struct user_namespace *managed, *fs_userns;
++        struct ovl_fs___local *ofs;
++        struct vfsmount *upper;
++        void *upper_addr;
++        int r;
++
++        if (ret != 0) /* propagate earlier error */
++                return ret;
++
++        if (sb->s_magic != OVERLAYFS_SUPER_MAGIC)
++                return 0;
++
++        r = find_managed_userns(sb->s_user_ns, &managed);
++        if (r < 0)
++                return r;
++        if (r == 0)
++                return 0;
++
++        /* If we cannot read overlayfs' private layout (module not loaded, built without overlayfs at all,
++         * or the fields we need went away), we cannot locate the upper, so refuse conservatively. */
++        if (!bpf_core_type_exists(struct ovl_fs___local) ||
++            !bpf_core_field_exists(struct ovl_fs___local, layers) ||
++            !bpf_core_field_exists(struct ovl_layer___local, mnt))
++                return -EPERM;
++
++        /* Walk to the upper one field at a time: a failed read comes back as NULL just like a genuinely
++         * absent upper does, and only the latter may be allowed. A mounted overlay always has both its
++         * private data and its layer array, so NULL there means we failed to read them. */
++        ofs = (struct ovl_fs___local*) BPF_CORE_READ(sb, s_fs_info);
++        if (!ofs)
++                return -EPERM;
++
++        layers = BPF_CORE_READ(ofs, layers);
++        if (!layers)
++                return -EPERM;
++
++        upper_addr = BPF_CORE_READ(layers, mnt); /* layers[0] is the upper; .mnt is its first member */
++        if (!upper_addr) /* no upper: a genuinely read-only overlay, which can record nothing */
++                return 0;
++
++        /* BPF_CORE_READ() lowers to bpf_probe_read_kernel(), so its result is a raw address the verifier
++         * tracks as a scalar. Re-type it as a BTF pointer, as the retire_userns_sysctls kprobe does with
++         * its argument, so we may walk and dereference it directly below. */
++        upper = bpf_rdonly_cast(upper_addr, bpf_core_type_id_kernel(struct vfsmount));
++        fs_userns = upper->mnt_sb->s_user_ns;
++
++        /* Upper dies together with the managed user namespace? Then nothing it carries can outlive the
++         * transient range. */
++        r = userns_is_below(managed, fs_userns);
++        if (r < 0)
++                return r;
++        if (r > 0)
++                return 0;
++
++        /* The upper outlives the namespace. It is still safe if it is a persistent file system in the
++         * initial user namespace whose mount idmapping maps the transient ranges away. We refuse anything
++         * we cannot prove this for, including any non-initial-namespace upper. */
++        if (fs_userns->parent)
++                return -EPERM;
++
++        if (mount_neutralizes_transient(upper))
++                return 0;
++
++        return -EPERM;
++}
++
+ SEC("lsm/task_fix_setgroups")
+ int BPF_PROG(userns_restrict_task_fix_setgroups, struct cred *new_cred, const struct cred *old, int ret) {
+         struct user_namespace *p;
+@@ -253,27 +564,26 @@ int BPF_PROG(userns_restrict_task_fix_setgroups, struct cred *new_cred, const st
+                 return ret;
+ 
+         /* Walk the task's user namespace and its ancestors to find the first one managed by nsresourced
+-         * (i.e. present in either the setgroups deny map or the mount ID hash map). This is necessary
++         * (i.e. present in either the setgroups deny map or the managed userns map). This is necessary
+          * because a task could otherwise trivially bypass the setgroups() restriction by unsharing the user
+          * namespace and mapping the same users and groups. */
+         p = new_cred->user_ns;
+         for (unsigned i = 0; i < USER_NAMESPACE_DEPTH_MAX; i++) {
+-                if (!p)
+-                        break;
+-
+                 inode = p->ns.inum;
+ 
+                 if (bpf_map_lookup_elem(&userns_setgroups_deny, &inode))
+                         return -EPERM;
+ 
+-                if (bpf_map_lookup_elem(&userns_mnt_id_hash, &inode))
++                if (bpf_map_lookup_elem(&userns_managed, &inode))
+                         return 0;
+ 
+                 p = p->parent;
++                if (!p) /* Walked the whole chain up to the initial namespace without a match, allow. */
++                        return 0;
+         }
+ 
+-        /* No nsresourced-managed ancestor found, allow. */
+-        return 0;
++        /* Chain longer than the kernel permits: refuse rather than fail open, like find_managed_userns(). */
++        return -EPERM;
+ }
+ 
+ SEC("kprobe/retire_userns_sysctls")
+@@ -287,7 +597,7 @@ int BPF_KPROBE(userns_restrict_retire_userns_sysctls, struct user_namespace *use
+ 
+         /* Check each map separately to avoid the compiler merging the two lookups into a pointer OR
+          * operation, which the BPF verifier rejects. */
+-        if (bpf_map_lookup_elem(&userns_mnt_id_hash, &inode))
++        if (bpf_map_lookup_elem(&userns_managed, &inode))
+                 goto notify;
+ 
+         if (bpf_map_lookup_elem(&userns_setgroups_deny, &inode))
+diff --git a/src/dissect/dissect.c b/src/dissect/dissect.c
+index 04701429adb3..b7802197db95 100644
+--- a/src/dissect/dissect.c
++++ b/src/dissect/dissect.c
+@@ -1588,7 +1588,7 @@ static int action_list_or_mtree_or_copy_or_make_archive(DissectedImage *m, LoopD
+                         output_fd = STDOUT_FILENO;
+                 }
+ 
+-                r = tar_c(dfd, output_fd, arg_target, /* flags= */ 0);
++                r = tar_c(dfd, output_fd, arg_target, /* hardlink_db_fd= */ -EBADF, /* flags= */ 0);
+                 if (r < 0)
+                         return r;
+ 
+diff --git a/src/import/import-common.c b/src/import/import-common.c
+index ef2b3e26ba2d..0b63828869d7 100644
+--- a/src/import/import-common.c
++++ b/src/import/import-common.c
+@@ -137,6 +137,15 @@ int import_fork_tar_c(int tree_fd, int userns_fd, PidRef *ret_pid) {
+                 if (unshare(CLONE_NEWNET) < 0)
+                         log_debug_errno(errno, "Failed to lock tar into network namespace, ignoring: %m");
+ 
++                /* Allocate the hardlink db before dropping privileges: it lives on a tmpfs superblock of our
++                 * own, which needs CAP_SYS_ADMIN to set up. Doing it later would leave tar_c() to fall back
++                 * to a directory in /var/tmp/, which is refused for the transient UID range we run under
++                 * here, and would leave transient owned inodes behind on a persistent file system if it
++                 * weren't. */
++                _cleanup_close_ int hardlink_db_fd = tar_hardlink_db_new();
++                if (hardlink_db_fd < 0)
++                        log_debug_errno(hardlink_db_fd, "Failed to allocate hardlink db, ignoring: %m");
++
+                 r = capability_bounding_set_drop(retain, true);
+                 if (r < 0)
+                         log_debug_errno(r, "Failed to drop capabilities, ignoring: %m");
+@@ -145,7 +154,7 @@ int import_fork_tar_c(int tree_fd, int userns_fd, PidRef *ret_pid) {
+                 if (r < 0)
+                         log_warning_errno(r, "Failed to enable PR_SET_NO_NEW_PRIVS, ignoring: %m");
+ 
+-                if (tar_c(tree_fd, pipefd[1], /* filename= */ NULL, flags) < 0)
++                if (tar_c(tree_fd, pipefd[1], /* filename= */ NULL, hardlink_db_fd, flags) < 0)
+                         _exit(EXIT_FAILURE);
+ 
+                 _exit(EXIT_SUCCESS);
+diff --git a/src/import/test-tar.c b/src/import/test-tar.c
+index b7cfed9bf3c1..6fca4b89cb4f 100644
+--- a/src/import/test-tar.c
++++ b/src/import/test-tar.c
+@@ -46,7 +46,7 @@ static int run(int argc, char **argv) {
+                 return log_error_errno(fd2, "Cannot open %s: %m", argv[3]);
+ 
+         if (create)
+-                r = tar_c(fd2, fd1, argv[2], /* flags= */ TAR_SELINUX);
++                r = tar_c(fd2, fd1, argv[2], /* hardlink_db_fd= */ -EBADF, /* flags= */ TAR_SELINUX);
+         else
+                 r = tar_x(fd1, fd2, /* flags= */ TAR_SELINUX);
+         if (r < 0)
+diff --git a/src/nsresourced/nsresourced-manager.c b/src/nsresourced/nsresourced-manager.c
+index df12e352b04f..41436e55523e 100644
+--- a/src/nsresourced/nsresourced-manager.c
++++ b/src/nsresourced/nsresourced-manager.c
+@@ -372,6 +372,52 @@ static void manager_release_userns_by_inode(Manager *m, uint64_t inode) {
+         userns_registry_release_by_userns_inode(manager_bpf(m), m->registry_fd, inode);
+ }
+ 
++/* Re-adds a registered, still-alive user namespace to the BPF maps. This is idempotent when the pinned
++ * maps already carry the entry (the common restart case), and load-bearing after an nsresourced upgrade
++ * that had to replace the pinned maps because their schema changed: the new maps come up empty, so
++ * without this the namespaces still alive from before the upgrade would silently lose their write
++ * restriction (and, for "self" allocations, their setgroups() denial). */
++/* Borrows the registry entry if the caller already has it at hand, and loads its own copy otherwise. */
++static void manager_restore_userns_policy(Manager *m, uint64_t inode, UserNamespaceInfo *info) {
++        _cleanup_(userns_info_freep) UserNamespaceInfo *loaded = NULL;
++        struct userns_restrict_bpf *bpf;
++        int r;
++
++        assert(m);
++        assert(inode != 0);
++
++        bpf = manager_bpf(m);
++        if (!bpf) /* BPF disabled at build time or its setup failed — nothing to restore. */
++                return;
++
++        if (!info) {
++                r = userns_registry_load_by_userns_inode(m->registry_fd, inode, &loaded);
++                if (r < 0)
++                        return (void) log_debug_errno(r, "Failed to load registry entry for user namespace %" PRIu64 " while restoring BPF policy, ignoring: %m", inode);
++
++                info = loaded;
++        }
++
++        r = userns_restrict_register_by_inode(bpf, inode);
++        if (r < 0)
++                return (void) log_debug_errno(r, "Failed to restore write restriction for user namespace %" PRIu64 ", ignoring: %m", inode);
++
++        /* Entries written before we recorded this carry no answer, and those are precisely the entries an
++         * upgrade finds. Fall back to what the flag mirrors: a "self" allocation maps the caller's own UID
++         * instead of a transient range, so it is the one whose start UID is its owner and outside the
++         * ranges we hand out. Without that last condition a managed size-1 allocation that happened to be
++         * given its own caller's UID would be mistaken for one, and we would deny setgroups() on a
++         * namespace that never had it denied. */
++        bool deny = info->setgroups_deny >= 0 ? info->setgroups_deny :
++                (info->size == 1 && info->start_uid == info->owner && !uid_is_transient(info->start_uid));
++
++        if (deny) {
++                r = userns_restrict_setgroups_deny_by_inode(bpf, inode);
++                if (r < 0)
++                        log_debug_errno(r, "Failed to restore setgroups() denial for user namespace %" PRIu64 ", ignoring: %m", inode);
++        }
++}
++
+ static int manager_scan_registry(Manager *m, Set **registry_inodes) {
+         _cleanup_free_ DirectoryEntries *de = NULL;
+         int r;
+@@ -602,11 +648,32 @@ static int manager_setup_bpf(Manager *m) {
+ 
+         return 0;
+ }
++
++/* Puts the programs loaded by manager_setup_bpf() in effect. Deliberately separate, so that the maps are
++ * already seeded from the registry by the time the first hook runs. */
++static int manager_attach_bpf(Manager *m) {
++        int r;
++
++        assert(m);
++
++        if (!m->userns_restrict_bpf) /* Setup failed earlier, and we already told the user. */
++                return 0;
++
++        r = userns_restrict_attach(m->userns_restrict_bpf, /* pin= */ true);
++        if (r < 0)
++                return log_error_errno(r, "Failed to attach BPF programs: %m");
++
++        return 0;
++}
+ #else
+ static int manager_setup_bpf(Manager *m) {
+         log_notice("Not setting up BPF subsystem, as functionality has been disabled at compile time.");
+         return 0;
+ }
++
++static int manager_attach_bpf(Manager *m) {
++        return 0;
++}
+ #endif
+ 
+ int manager_startup(Manager *m) {
+@@ -647,33 +714,55 @@ int manager_startup(Manager *m) {
+                 manager_release_userns_by_inode(m, inode);
+         }
+ 
+-        /* Look for registry entries whose user namespace has died without us getting a BPF
+-         * notification — e.g. because the BPF ring buffer overflowed, the kprobe is missing, or
+-         * something else dropped the fd store entry without going through our cleanup path. Each
+-         * registry entry stores the kernel's unique namespace identifier; ask the kernel to open
+-         * the namespace by that identifier and release the entry if the lookup fails. Entries
+-         * written by older versions don't carry the identifier, and old kernels (or running
+-         * outside the initial user namespace) don't support lookup by it — in those cases we leave
+-         * the entry alone. */
+-
++        /* Walk the registry entries for two purposes: reap the dead ones, and re-establish the
++         * BPF-LSM policy for the live ones.
++         *
++         * A namespace may have died without us getting a BPF notification — e.g. because the BPF ring
++         * buffer overflowed, the kprobe is missing, or something else dropped the fd store entry without
++         * going through our cleanup path. Each registry entry stores the kernel's unique namespace
++         * identifier; ask the kernel to open the namespace by that identifier and release the entry if
++         * the lookup fails. Entries written by older versions don't carry the identifier, and old kernels
++         * (or running outside the initial user namespace) don't support lookup by it — in those cases we
++         * leave the entry alone.
++         *
++         * Everything that isn't reaped is (re-)added to the BPF maps. Normally the pinned maps already
++         * carry these entries and the update is a no-op, but after an upgrade that replaced the pinned
++         * maps with an incompatible schema the new maps start empty, and this is what keeps namespaces
++         * that predate the upgrade protected. */
++
++        bool can_probe = true;
+         SET_FOREACH(p, registry_inodes) {
++                _cleanup_(userns_info_freep) UserNamespaceInfo *info = NULL;
+                 uint64_t inode = PTR_TO_UINT32(p);
+ 
+-                r = userns_registry_reap_if_dead(manager_bpf(m), m->registry_fd, inode);
+-                if (r < 0) {
+-                        log_debug_errno(r, "Failed to probe liveness of user namespace %" PRIu64 ", ignoring: %m", inode);
+-                        continue;
+-                }
+-                if (r == USERNS_REAP_UNSUPPORTED) {
+-                        /* Can't look namespaces up by id at all here (old kernel, or not in the
+-                         * initial user namespace) — no entry is probeable, so stop rather than
+-                         * continuing to probe (and log) once per entry. */
+-                        log_debug("Cannot detect stale registry entries, skipping the rest.");
+-                        break;
++                if (can_probe) {
++                        r = userns_registry_reap_if_dead(manager_bpf(m), m->registry_fd, inode, &info);
++                        if (r < 0)
++                                log_debug_errno(r, "Failed to probe liveness of user namespace %" PRIu64 ", assuming alive: %m", inode);
++                        else if (r == USERNS_REAP_RELEASED)
++                                continue; /* Dead and released — nothing to restore. */
++                        else if (r == USERNS_REAP_UNSUPPORTED) {
++                                /* Can't look namespaces up by id at all here (old kernel, or not in the
++                                 * initial user namespace). Stop probing (and logging) once per entry, but
++                                 * still restore the policy for this and the remaining entries below. */
++                                log_debug("Cannot detect stale registry entries, restoring the rest unconditionally.");
++                                can_probe = false;
++                        }
++                        /* USERNS_REAP_ALIVE or _INDETERMINATE fall through to the restore below. */
+                 }
+-                /* USERNS_REAP_RELEASED, _ALIVE, or _INDETERMINATE — nothing more to do for this entry. */
++
++                /* Re-establish the BPF-LSM policy for the still-live namespace. Idempotent when the pinned
++                 * maps already carry it, essential after an upgrade replaced them with empty ones. */
++                manager_restore_userns_policy(m, inode, info);
+         }
+ 
++        /* The maps now describe every namespace we are responsible for, so the policy can go into
++         * effect. Until this point the previous version's programs, if any, were still attached and
++         * enforcing, so no namespace was ever left unguarded. */
++        r = manager_attach_bpf(m);
++        if (r < 0)
++                return r;
++
+         r = manager_make_listen_socket(m);
+         if (r < 0)
+                 return r;
+diff --git a/src/nsresourced/nsresourcework.c b/src/nsresourced/nsresourcework.c
+index b8d68cbb427e..6138f9cd0ffa 100644
+--- a/src/nsresourced/nsresourcework.c
++++ b/src/nsresourced/nsresourcework.c
+@@ -405,7 +405,7 @@ static int registry_range_is_available(
+         if (r < 0)
+                 return r;
+ 
+-        r = userns_registry_reap_if_dead(bpf, registry_dir_fd, owner->userns_inode);
++        r = userns_registry_reap_if_dead(bpf, registry_dir_fd, owner->userns_inode, /* ret_info= */ NULL);
+         if (r < 0)
+                 return r;
+         if (r == USERNS_REAP_RELEASED)
+@@ -465,7 +465,7 @@ static int delegation_range_is_available(
+                 /* Owned by some other namespace. If that namespace is dead, reclaim it (restoring the
+                  * range to its ancestor) and loop to re-evaluate; otherwise the range is genuinely
+                  * taken. */
+-                r = userns_registry_reap_if_dead(bpf, registry_dir_fd, delegation.userns_inode);
++                r = userns_registry_reap_if_dead(bpf, registry_dir_fd, delegation.userns_inode, /* ret_info= */ NULL);
+                 if (r < 0)
+                         return r;
+                 if (r == USERNS_REAP_RELEASED)
+@@ -1457,6 +1457,9 @@ static int vl_method_allocate_user_range(sd_varlink *link, sd_json_variant *para
+         userns_info->size = p.size;
+         userns_info->target_uid = p.target;
+         userns_info->target_gid = (gid_t) p.target;
++        /* For "self" allocations we deny setgroups() via the BPF-LSM (see below). Record it so the manager
++         * can re-establish the denial after a restart that reset the BPF maps. */
++        userns_info->setgroups_deny = p.type == ALLOCATE_USER_RANGE_SELF;
+ 
+         if (p.type == ALLOCATE_USER_RANGE_SELF) {
+                 /* The start UID/GID will be mapped to the parent userns in write_userns(). If a self
+@@ -1515,17 +1518,12 @@ static int vl_method_allocate_user_range(sd_varlink *link, sd_json_variant *para
+         if (r < 0)
+                 return r;
+ 
+-        /* Register the userns in the BPF map with an empty allowlist */
+-        r = userns_restrict_put_by_fd(
+-                        c->bpf,
+-                        userns_fd,
+-                        /* replace= */ true,
+-                        /* mount_fds= */ NULL,
+-                        /* n_mount_fds= */ 0);
++        /* Subject the userns to the BPF-LSM policy that keeps its transient range off persistent file systems */
++        r = userns_restrict_register_by_fd(c->bpf, userns_fd);
+         if (r < 0)
+                 goto fail;
+ 
+-        if (p.type == ALLOCATE_USER_RANGE_SELF) {
++        if (userns_info->setgroups_deny > 0) {
+                 /* For "self" allocations we deny setgroups() via the BPF LSM. We can't use
+                  * /proc/self/setgroups for this as that is transitive and also applies to child user
+                  * namespaces. The BPF LSM hook only applies to the specific user namespace. */
+@@ -1742,13 +1740,8 @@ static int vl_method_register_user_namespace(sd_varlink *link, sd_json_variant *
+         if (r < 0)
+                 return log_debug_errno(r, "Failed to update userns registry: %m");
+ 
+-        /* Register the userns in the BPF map with an empty allowlist */
+-        r = userns_restrict_put_by_fd(
+-                        c->bpf,
+-                        userns_fd,
+-                        /* replace= */ true,
+-                        /* mount_fds= */ NULL,
+-                        /* n_mount_fds= */ 0);
++        /* Subject the userns to the BPF-LSM policy that keeps its transient range off persistent file systems */
++        r = userns_restrict_register_by_fd(c->bpf, userns_fd);
+         if (r < 0)
+                 goto fail;
+ 
+@@ -1887,22 +1880,17 @@ static int vl_method_add_mount_to_user_namespace(sd_varlink *link, sd_json_varia
+         if (r < 0)
+                 return r;
+ 
+-        /* Add this mount to the user namespace's BPF map allowlist entry. */
+-        r = userns_restrict_put_by_fd(
+-                        c->bpf,
+-                        userns_fd,
+-                        /* replace= */ false,
+-                        &mount_fd,
+-                        1);
+-        if (r < 0)
+-                return r;
++        /* There's no mount allowlist anymore: the BPF-LSM policy decides per operation whether the ID that
++         * would be recorded on disk is a transient one, which needs no per-mount knowledge. We keep
++         * accepting and validating the call for the sake of older clients, and keep the mount pinned as
++         * before, but there is nothing left to allowlist. */
+ 
+         if (DEBUG_LOGGING) {
+                 if (userns_info->size > 0)
+-                        log_debug("Granting access to mount %i to user namespace " INO_FMT " ('%s' @ UID " UID_FMT ")",
++                        log_debug("Delegated mount %i to user namespace " INO_FMT " ('%s' @ UID " UID_FMT ")",
+                                   mnt_id, userns_st.st_ino, userns_info->name, userns_info->start_uid);
+                 else
+-                        log_debug("Granting access to mount %i to user namespace " INO_FMT " ('%s')",
++                        log_debug("Delegated mount %i to user namespace " INO_FMT " ('%s')",
+                                   mnt_id, userns_st.st_ino, userns_info->name);
+         }
+ 
+diff --git a/src/nsresourced/test-userns-restrict.c b/src/nsresourced/test-userns-restrict.c
+index 29125a84a8d3..69e70eabaff1 100644
+--- a/src/nsresourced/test-userns-restrict.c
++++ b/src/nsresourced/test-userns-restrict.c
+@@ -11,12 +11,15 @@
+ #include "fd-util.h"
+ #include "fileio.h"
+ #include "namespace-util.h"
++#include "path-util.h"
+ #include "pidref.h"
+ #include "process-util.h"
+ #include "rm-rf.h"
++#include "string-util.h"
+ #include "tests.h"
+ #include "tmpfile-util.h"
+ #include "uid-classification.h"
++#include "user-util.h"
+ #include "userns-restrict.h"
+ 
+ static int make_tmpfs_fsmount(void) {
+@@ -30,6 +33,22 @@ static int make_tmpfs_fsmount(void) {
+         return TAKE_FD(mntfd);
+ }
+ 
++/* A tmpfs on the host, but idmapped through the passed user namespace, i.e. the equivalent of what mountfsd
++ * hands to clients: our transient UID lands on disk as UID 0, so nothing recyclable is recorded. */
++static int make_idmapped_tmpfs_fsmount(int userns_fd) {
++        _cleanup_close_ int mntfd = -EBADF;
++
++        mntfd = ASSERT_OK(make_tmpfs_fsmount());
++
++        ASSERT_OK_ERRNO(mount_setattr(mntfd, "", AT_EMPTY_PATH,
++                                      &(struct mount_attr) {
++                                              .attr_set = MOUNT_ATTR_IDMAP,
++                                              .userns_fd = userns_fd,
++                                      }, sizeof(struct mount_attr)));
++
++        return TAKE_FD(mntfd);
++}
++
+ static struct userns_restrict_bpf *bpf_obj = NULL;
+ STATIC_DESTRUCTOR_REGISTER(bpf_obj, userns_restrict_bpf_freep);
+ 
+@@ -43,11 +62,14 @@ static int intro(void) {
+                 return log_tests_skipped("Lacking privileges");
+         ASSERT_OK(r);
+ 
++        ASSERT_OK(userns_restrict_attach(bpf_obj, /* pin= */ false));
++
+         return 0;
+ }
+ 
+ TEST(userns_restrict) {
+-        _cleanup_close_ int userns_fd = -EBADF, host_fd1 = -EBADF, host_tmpfs = -EBADF, afd = -EBADF, bfd = -EBADF;
++        _cleanup_close_ int userns_fd = -EBADF, host_fd1 = -EBADF, host_tmpfs = -EBADF,
++                             idmapped_tmpfs = -EBADF;
+         _cleanup_(rm_rf_physical_and_freep) char *t = NULL;
+         _cleanup_(pidref_done_sigkill_wait) PidRef pidref = PIDREF_NULL;
+         int r;
+@@ -64,15 +86,9 @@ TEST(userns_restrict) {
+         ASSERT_OK(asprintf(&idmap, "0 "UID_FMT" 1", CONTAINER_UID_MIN));
+         userns_fd = ASSERT_OK(userns_acquire(idmap, idmap, /* setgroups_deny= */ true));
+ 
+-        ASSERT_OK(userns_restrict_put_by_fd(
+-                        bpf_obj,
+-                        userns_fd,
+-                        /* replace= */ true,
+-                        /* mount_fds= */ NULL,
+-                        /* n_mount_fds= */ 0));
++        idmapped_tmpfs = ASSERT_OK(make_idmapped_tmpfs_fsmount(userns_fd));
+ 
+-        afd = ASSERT_OK_ERRNO(eventfd(0, EFD_CLOEXEC));
+-        bfd = ASSERT_OK_ERRNO(eventfd(0, EFD_CLOEXEC));
++        ASSERT_OK(userns_restrict_register_by_fd(bpf_obj, userns_fd));
+ 
+         r = ASSERT_OK(pidref_safe_fork("(test)", FORK_DEATHSIG_SIGKILL, &pidref));
+         if (r == 0) {
+@@ -81,10 +97,10 @@ TEST(userns_restrict) {
+                 ASSERT_OK(namespace_enter(-EBADF, -EBADF, -EBADF, userns_fd, -EBADF));
+                 ASSERT_OK_ERRNO(unshare(CLONE_NEWNS));
+ 
+-                /* Allocate tmpfs locally */
++                /* Allocate tmpfs locally, i.e. a file system that dies together with our user namespace */
+                 private_tmpfs = make_tmpfs_fsmount();
+ 
+-                /* These two host mounts should be inaccessible */
++                /* These two host mounts would record our transient UID on disk, hence are inaccessible */
+                 ASSERT_ERROR_ERRNO(openat(host_fd1, "test", O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
+                 ASSERT_ERROR_ERRNO(openat(host_tmpfs, "xxx", O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
+                 ASSERT_ERROR_ERRNO(mkdirat(host_fd1, "test2", 0666), EPERM);
+@@ -94,59 +110,240 @@ TEST(userns_restrict) {
+                 safe_close(ASSERT_OK_ERRNO(openat(private_tmpfs, "yyy", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+                 ASSERT_OK_ERRNO(mkdirat(private_tmpfs, "yyy2", 0666));
+ 
+-                /* Let's sync with the parent, so that it allowlists more stuff for us */
+-                ASSERT_OK_ERRNO(eventfd_write(afd, 1));
+-                uint64_t x;
+-                ASSERT_OK_ERRNO(eventfd_read(bfd, &x));
++                /* And so should the idmapped host mount: it translates our transient UID to UID 0 before
++                 * anything reaches the disk */
++                safe_close(ASSERT_OK_ERRNO(openat(idmapped_tmpfs, "zzz", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
++                ASSERT_OK_ERRNO(mkdirat(idmapped_tmpfs, "zzz2", 0666));
++
++                /* chown() is subject to the same policy. Unlike the creation hooks it is handed the ID that
++                 * ends up on disk, so it needs no idmap arithmetic of its own. Setting a group the inode
++                 * already has still reaches the hook, before the change is applied. Giving the host
++                 * directory (which outlives us) our transient GID would leave something recyclable behind,
++                 * hence is refused... */
++                ASSERT_ERROR_ERRNO(fchownat(host_fd1, "", GID_INVALID, 0, AT_EMPTY_PATH), EPERM);
++
++                /* ...while the same chown() is fine on the file system that dies with us, and on the
++                 * idmapped mount where our transient GID is translated to 0 before it reaches the disk. */
++                ASSERT_OK_ERRNO(fchownat(private_tmpfs, "yyy", GID_INVALID, 0, 0));
++                ASSERT_OK_ERRNO(fchownat(idmapped_tmpfs, "zzz", GID_INVALID, 0, 0));
++
++                /* Unsharing a mount namespace hands us clones of every mount we can see, owned by our own
++                 * user namespace. That must not buy us anything.
++                 *
++                 * Note that this has to go through a path, not through the directory fd opened above: an
++                 * already open fd pins the original mount, while a path lookup lands on the clone, and it
++                 * is the clone that used to be mistaken for one of ours. */
++                ASSERT_OK_ERRNO(unshare(CLONE_NEWNS));
+ 
+-                /* And now we should also have access to the host tmpfs */
+-                safe_close(ASSERT_OK_ERRNO(openat(host_tmpfs, "zzz", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+-                safe_close(ASSERT_OK_ERRNO(openat(private_tmpfs, "aaa", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+-                ASSERT_OK_ERRNO(mkdirat(host_tmpfs, "zzz2", 0666));
+-                ASSERT_OK_ERRNO(mkdirat(private_tmpfs, "aaa2", 0666));
++                _cleanup_free_ char *p1 = NULL, *p2 = NULL;
++                ASSERT_NOT_NULL(p1 = path_join(t, "newns"));
++                ASSERT_NOT_NULL(p2 = path_join(t, "newns2"));
++
++                ASSERT_ERROR_ERRNO(open(p1, O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
++                ASSERT_ERROR_ERRNO(mkdir(p2, 0666), EPERM);
++                ASSERT_ERROR_ERRNO(openat(host_fd1, "newns3", O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
++                ASSERT_ERROR_ERRNO(openat(host_tmpfs, "newns4", O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
++
++                /* And chown() through the clone must stay refused too, not just inode creation. */
++                ASSERT_ERROR_ERRNO(fchownat(AT_FDCWD, t, GID_INVALID, 0, 0), EPERM);
+ 
+-                /* But this one should still fail */
+-                ASSERT_ERROR_ERRNO(openat(host_fd1, "bbb", O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
+-                ASSERT_ERROR_ERRNO(mkdirat(host_fd1, "bbb2", 0666), EPERM);
++                /* Neither must nesting a user namespace, which is not in the managed map itself */
++                ASSERT_OK_ERRNO(unshare(CLONE_NEWUSER));
+ 
+-                /* Sync again, to get more stuff allowlisted */
+-                ASSERT_OK_ERRNO(eventfd_write(afd, 1));
+-                ASSERT_OK_ERRNO(eventfd_read(bfd, &x));
++                _cleanup_free_ char *p3 = NULL, *p4 = NULL;
++                ASSERT_NOT_NULL(p3 = path_join(t, "newuser"));
++                ASSERT_NOT_NULL(p4 = path_join(t, "newuser2"));
+ 
+-                /* Everything should now be allowed */
+-                safe_close(ASSERT_OK_ERRNO(openat(host_tmpfs, "ccc", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+-                safe_close(ASSERT_OK_ERRNO(openat(host_fd1, "ddd", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+-                safe_close(ASSERT_OK_ERRNO(openat(private_tmpfs, "eee", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+-                ASSERT_OK_ERRNO(mkdirat(host_tmpfs, "ccc2", 0666));
+-                safe_close(ASSERT_OK_ERRNO(openat(host_fd1, "ddd2", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+-                ASSERT_OK_ERRNO(mkdirat(private_tmpfs, "eee2", 0666));
++                ASSERT_ERROR_ERRNO(open(p3, O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
++                ASSERT_ERROR_ERRNO(mkdir(p4, 0666), EPERM);
++                ASSERT_ERROR_ERRNO(openat(host_fd1, "newuser3", O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
++                ASSERT_ERROR_ERRNO(openat(host_tmpfs, "newuser4", O_RDWR|O_CREAT|O_CLOEXEC, 0666), EPERM);
++
++                /* …while what was legitimately writable before stays writable */
++                safe_close(ASSERT_OK_ERRNO(openat(private_tmpfs, "aaa", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
++                safe_close(ASSERT_OK_ERRNO(openat(idmapped_tmpfs, "bbb", O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
+ 
+                 _exit(EXIT_SUCCESS);
+         }
+ 
+-        uint64_t x;
+-        ASSERT_OK_ERRNO(eventfd_read(afd, &x));
++        ASSERT_OK(pidref_wait_for_terminate_and_check("(test)", &pidref, WAIT_LOG));
++}
+ 
+-        ASSERT_OK(userns_restrict_put_by_fd(
+-                        bpf_obj,
+-                        userns_fd,
+-                        /* replace= */ false,
+-                        &host_tmpfs,
+-                        1));
++TEST(userns_restrict_overlayfs) {
++        _cleanup_close_ int userns_fd = -EBADF, idmapped_upper = -EBADF, bad_userns_fd = -EBADF,
++                             bad_upper = -EBADF;
++        _cleanup_(rm_rf_physical_and_freep) char *t = NULL, *th = NULL, *ti = NULL, *tb = NULL;
++        _cleanup_(pidref_done_sigkill_wait) PidRef pidref = PIDREF_NULL;
++        _cleanup_free_ char *idmap = NULL, *bad_idmap = NULL, *hlower = NULL, *hupper = NULL, *hwork = NULL,
++                            *hmerged = NULL;
++        int r;
+ 
+-        ASSERT_OK_ERRNO(eventfd_write(bfd, 1));
+-        ASSERT_OK_ERRNO(eventfd_read(afd, &x));
++        /* overlay writes land on its upper layer via vfs_create(), which the path-based hooks never see, so
++         * a transient-owned inode could persist there. The policy judges the upper at mount time. An upper
++         * is allowed when it dies with the namespace (a tmpfs the client set up) or is idmapped to map the
++         * transient range away; it is refused when it outlives the namespace and records the transient range
++         * on disk (a plain init-owned upper, or one idmapped so the transient range still reaches its disk).
++         * We also check that an overlay mounted read-only but with such an upper is refused, since it could
++         * otherwise be remounted read-write afterwards without re-entering the hook. */
+ 
+-        ASSERT_OK(userns_restrict_put_by_fd(
+-                        bpf_obj,
+-                        userns_fd,
+-                        /* replace= */ false,
+-                        &host_fd1,
+-                        1));
++        ASSERT_OK(mkdtemp_malloc(NULL, &t));
++        ASSERT_OK_ERRNO(chown(t, CONTAINER_UID_MIN, CONTAINER_UID_MIN));
+ 
+-        ASSERT_OK_ERRNO(eventfd_write(bfd, 1));
++        ASSERT_OK(asprintf(&idmap, "0 "UID_FMT" 1", CONTAINER_UID_MIN));
++        userns_fd = ASSERT_OK(userns_acquire(idmap, idmap, /* setgroups_deny= */ true));
+ 
+-        ASSERT_OK(pidref_wait_for_terminate_and_check("(test)", &pidref, WAIT_LOG));
++        ASSERT_OK(userns_restrict_register_by_fd(bpf_obj, userns_fd));
++
++        /* Set up the layer dirs for the refuse case on the init-owned file system backing our temporary dir,
++         * i.e. one that outlives the user namespace. This has to happen here as root: the managed client
++         * cannot create these itself, as the path hooks already block a transient-owned inode on a file
++         * system that outlives it. */
++        ASSERT_OK(mkdtemp_malloc(NULL, &th));
++        ASSERT_OK_ERRNO(chown(th, CONTAINER_UID_MIN, CONTAINER_UID_MIN));
++        ASSERT_NOT_NULL(hlower = path_join(th, "lower"));
++        ASSERT_NOT_NULL(hupper = path_join(th, "upper"));
++        ASSERT_NOT_NULL(hwork = path_join(th, "work"));
++        ASSERT_NOT_NULL(hmerged = path_join(th, "merged"));
++        ASSERT_OK_ERRNO(mkdir(hlower, 0755));
++        ASSERT_OK_ERRNO(mkdir(hupper, 0755));
++        ASSERT_OK_ERRNO(mkdir(hwork, 0755));
++        ASSERT_OK_ERRNO(mkdir(hmerged, 0755));
++        ASSERT_OK_ERRNO(chown(hlower, CONTAINER_UID_MIN, CONTAINER_UID_MIN));
++        ASSERT_OK_ERRNO(chown(hupper, CONTAINER_UID_MIN, CONTAINER_UID_MIN));
++        ASSERT_OK_ERRNO(chown(hwork, CONTAINER_UID_MIN, CONTAINER_UID_MIN));
++        ASSERT_OK_ERRNO(chown(hmerged, CONTAINER_UID_MIN, CONTAINER_UID_MIN));
++
++        /* And an idmapped upper for the third case: a tmpfs created here, i.e. in the initial user namespace
++         * so that it outlives the managed one, but idmapped through it so our transient range lands on its
++         * disk as non-transient ids. Set it up as root and attach it at a path the client can point
++         * upperdir= at. */
++        idmapped_upper = ASSERT_OK(make_idmapped_tmpfs_fsmount(userns_fd));
++        ASSERT_OK(mkdtemp_malloc(NULL, &ti));
++        ASSERT_OK_ERRNO(move_mount(idmapped_upper, "", -EBADF, ti, MOVE_MOUNT_F_EMPTY_PATH));
++
++        /* And a fourth upper, for the refuse path of the idmap check: an init-owned tmpfs idmapped so that
++         * it records our transient range on disk unchanged (identity over it), i.e. one that does NOT
++         * neutralize the range. We create and chown the layer dirs before idmapping it, since afterwards
++         * neither we (uid 0, left unmapped by the narrow idmap) nor the client (whose transient-owned
++         * writes to a persistent file system are refused) could. This overlay must be refused. */
++        ASSERT_OK(asprintf(&bad_idmap, UID_FMT" "UID_FMT" 1", CONTAINER_UID_MIN, CONTAINER_UID_MIN));
++        bad_userns_fd = ASSERT_OK(userns_acquire(bad_idmap, bad_idmap, /* setgroups_deny= */ false));
++        bad_upper = ASSERT_OK(make_tmpfs_fsmount());
++        ASSERT_OK_ERRNO(mkdirat(bad_upper, "upper", 0755));
++        ASSERT_OK_ERRNO(mkdirat(bad_upper, "work", 0755));
++        ASSERT_OK_ERRNO(fchownat(bad_upper, "upper", CONTAINER_UID_MIN, CONTAINER_UID_MIN, 0));
++        ASSERT_OK_ERRNO(fchownat(bad_upper, "work", CONTAINER_UID_MIN, CONTAINER_UID_MIN, 0));
++        ASSERT_OK_ERRNO(mount_setattr(bad_upper, "", AT_EMPTY_PATH,
++                                      &(struct mount_attr) {
++                                              .attr_set = MOUNT_ATTR_IDMAP,
++                                              .userns_fd = bad_userns_fd,
++                                      }, sizeof(struct mount_attr)));
++        ASSERT_OK(mkdtemp_malloc(NULL, &tb));
++        ASSERT_OK_ERRNO(move_mount(bad_upper, "", -EBADF, tb, MOVE_MOUNT_F_EMPTY_PATH));
++
++        r = ASSERT_OK(pidref_safe_fork("(test-ovl)", FORK_DEATHSIG_SIGKILL, &pidref));
++        if (r == 0) {
++                ASSERT_OK(namespace_enter(-EBADF, -EBADF, -EBADF, userns_fd, -EBADF));
++                ASSERT_OK_ERRNO(unshare(CLONE_NEWNS));
++                ASSERT_OK_ERRNO(mount(NULL, "/", NULL, MS_SLAVE|MS_REC, NULL));
++
++                /* Hold the overlay layers on a tmpfs of our own, so nothing touches the host. */
++                ASSERT_OK_ERRNO(mount("tmpfs", t, "tmpfs", 0, NULL));
++
++                _cleanup_free_ char *lower = NULL, *lower2 = NULL, *upper = NULL, *work = NULL,
++                        *merged = NULL;
++                ASSERT_NOT_NULL(lower = path_join(t, "lower"));
++                ASSERT_NOT_NULL(lower2 = path_join(t, "lower2"));
++                ASSERT_NOT_NULL(upper = path_join(t, "upper"));
++                ASSERT_NOT_NULL(work = path_join(t, "work"));
++                ASSERT_NOT_NULL(merged = path_join(t, "merged"));
++                ASSERT_OK_ERRNO(mkdir(lower, 0755));
++                ASSERT_OK_ERRNO(mkdir(lower2, 0755));
++                ASSERT_OK_ERRNO(mkdir(upper, 0755));
++                ASSERT_OK_ERRNO(mkdir(work, 0755));
++                ASSERT_OK_ERRNO(mkdir(merged, 0755));
++
++                /* Control: a read-only overlay (no upper layer) is harmless and must be allowed. The kernel
++                 * rejects a single lowerdir with no upper, so stack two lowers. If even this fails,
++                 * unprivileged overlayfs is unavailable on this kernel — treat as a skip. */
++                _cleanup_free_ char *ro_opts = NULL;
++                ASSERT_NOT_NULL(ro_opts = strjoin("lowerdir=", lower, ":", lower2));
++                if (mount("overlay", merged, "overlay", MS_RDONLY, ro_opts) < 0) {
++                        /* A read-only overlay has no upper and must be allowed. If our hook (rather than the
++                         * kernel) refused it we would see EPERM, which is a bug, not a reason to skip. */
++                        ASSERT_TRUE(errno != EPERM);
++                        log_notice_errno(errno, "Unprivileged overlayfs unavailable, skipping: %m");
++                        _exit(EXIT_SUCCESS);
++                }
++                ASSERT_OK_ERRNO(umount(merged));
++
++                /* The writable overlay's upper is on the tmpfs above, which dies with our user namespace, so
++                 * the BPF-LSM must allow the mount. */
++                _cleanup_free_ char *rw_opts = NULL;
++                ASSERT_NOT_NULL(rw_opts = strjoin("lowerdir=", lower, ",upperdir=", upper,
++                                                  ",workdir=", work));
++                ASSERT_OK_ERRNO(mount("overlay", merged, "overlay", 0, rw_opts));
++
++                /* A write through the overlay really lands on the upper (our tmpfs), which the path hooks
++                 * never see directly. chown() over the merged mount reaches path_chown, which sees the
++                 * overlay superblock (ours, so it dies with us) and allows it, even to a transient gid. */
++                _cleanup_free_ char *f = NULL, *uf = NULL;
++                ASSERT_NOT_NULL(f = path_join(merged, "f"));
++                ASSERT_NOT_NULL(uf = path_join(upper, "f"));
++                safe_close(ASSERT_OK_ERRNO(open(f, O_RDWR|O_CREAT|O_CLOEXEC, 0666)));
++                ASSERT_OK_ERRNO(access(uf, F_OK));
++                ASSERT_OK_ERRNO(fchownat(AT_FDCWD, f, UID_INVALID, 0, 0));
++
++                ASSERT_OK_ERRNO(umount(merged));
++
++                /* The same writable overlay, but with its upper on the init-owned host file system that
++                 * outlives our user namespace: the policy must refuse it. Overlayfs sets the upper up via
++                 * vfs_mkdir()/vfs_create(), reaching only the inode hooks, so nothing blocks it before
++                 * sb_kern_mount runs, and the kernel itself permits the mount (verified without the BPF-LSM
++                 * loaded) — hence the EPERM here is sb_kern_mount refusing it. */
++                _cleanup_free_ char *bad_opts = NULL;
++                ASSERT_NOT_NULL(bad_opts = strjoin("lowerdir=", hlower, ",upperdir=", hupper,
++                                                   ",workdir=", hwork));
++                ASSERT_ERROR_ERRNO(mount("overlay", hmerged, "overlay", 0, bad_opts), EPERM);
++
++                /* The same persistent upper, but mounted read-only, must be refused too: it still has an
++                 * upper, so allowing it on the strength of the (mutable) read-only flag would let the client
++                 * remount it read-write afterwards, which does not re-enter this hook. */
++                ASSERT_ERROR_ERRNO(mount("overlay", hmerged, "overlay", MS_RDONLY, bad_opts), EPERM);
++
++                /* Then the idmapped upper: its superblock outlives us, but its idmapping maps our
++                 * transient range away, so nothing recyclable reaches its disk and the mount is allowed
++                 * again. The layer dirs are created by us, the transient client, which the idmapping permits
++                 * the same way it permits writes through the mount. */
++                _cleanup_free_ char *iupper = NULL, *iwork = NULL, *idmapped_opts = NULL;
++                ASSERT_NOT_NULL(iupper = path_join(ti, "upper"));
++                ASSERT_NOT_NULL(iwork = path_join(ti, "work"));
++                ASSERT_OK_ERRNO(mkdir(iupper, 0755));
++                ASSERT_OK_ERRNO(mkdir(iwork, 0755));
++                ASSERT_NOT_NULL(idmapped_opts = strjoin("lowerdir=", lower, ",upperdir=", iupper,
++                                                        ",workdir=", iwork));
++                ASSERT_OK_ERRNO(mount("overlay", merged, "overlay", 0, idmapped_opts));
++                ASSERT_OK_ERRNO(umount(merged));
++
++                /* Finally the idmapped upper whose idmapping does NOT map our transient range away (it
++                 * records it on disk unchanged): the mount reaches sb_kern_mount, whose idmap check must
++                 * refuse it. */
++                _cleanup_free_ char *bupper = NULL, *bwork = NULL, *bad_idmapped_opts = NULL;
++                ASSERT_NOT_NULL(bupper = path_join(tb, "upper"));
++                ASSERT_NOT_NULL(bwork = path_join(tb, "work"));
++                ASSERT_NOT_NULL(bad_idmapped_opts = strjoin("lowerdir=", lower, ",upperdir=", bupper,
++                                                            ",workdir=", bwork));
++                ASSERT_ERROR_ERRNO(mount("overlay", merged, "overlay", 0, bad_idmapped_opts), EPERM);
++
++                _exit(EXIT_SUCCESS);
++        }
++
++        ASSERT_OK(pidref_wait_for_terminate_and_check("(test-ovl)", &pidref, WAIT_LOG));
++
++        /* Detach the extra uppers we attached in our (initial) mount namespace before the temp dirs are
++         * removed. */
++        (void) umount(ti);
++        (void) umount(tb);
+ }
+ 
+ static void write_child_mappings(PidRef *child, int parent_userns_fd) {
+@@ -184,23 +381,13 @@ TEST(setgroups_deny) {
+          * denial specifically. */
+         deny_userns_fd = ASSERT_OK(userns_acquire(idmap, idmap, /* setgroups_deny= */ false));
+ 
+-        ASSERT_OK(userns_restrict_put_by_fd(
+-                        bpf_obj,
+-                        deny_userns_fd,
+-                        /* replace= */ true,
+-                        /* mount_fds= */ NULL,
+-                        /* n_mount_fds= */ 0));
++        ASSERT_OK(userns_restrict_register_by_fd(bpf_obj, deny_userns_fd));
+         ASSERT_OK(userns_restrict_setgroups_deny_by_fd(bpf_obj, deny_userns_fd));
+ 
+-        /* Create a userns that is managed (in mount ID hash) but does NOT have setgroups() denied */
++        /* Create a userns that is managed but does NOT have setgroups() denied */
+         allow_userns_fd = ASSERT_OK(userns_acquire(idmap, idmap, /* setgroups_deny= */ false));
+ 
+-        ASSERT_OK(userns_restrict_put_by_fd(
+-                        bpf_obj,
+-                        allow_userns_fd,
+-                        /* replace= */ true,
+-                        /* mount_fds= */ NULL,
+-                        /* n_mount_fds= */ 0));
++        ASSERT_OK(userns_restrict_register_by_fd(bpf_obj, allow_userns_fd));
+ 
+         afd = ASSERT_OK_ERRNO(eventfd(0, EFD_CLOEXEC));
+         bfd = ASSERT_OK_ERRNO(eventfd(0, EFD_CLOEXEC));
+@@ -247,7 +434,7 @@ TEST(setgroups_deny) {
+                 ASSERT_OK(pidref_wait_for_terminate_and_check("(test-deny)", &pidref, WAIT_LOG));
+         }
+ 
+-        /* Test 2: setgroups() should be allowed in the managed-only userns (mount ID hash but no setgroups
++        /* Test 2: setgroups() should be allowed in the managed-only userns (managed map but no setgroups
+          * deny entry), including in a child user namespace. */
+         {
+                 _cleanup_(pidref_done_sigkill_wait) PidRef pidref = PIDREF_NULL;
+@@ -258,11 +445,11 @@ TEST(setgroups_deny) {
+                         ASSERT_OK_ERRNO(setresgid(0, 0, 0));
+                         ASSERT_OK_ERRNO(setresuid(0, 0, 0));
+ 
+-                        /* setgroups() should succeed since this userns is only in the mount ID hash */
++                        /* setgroups() should succeed since this userns is only in the managed map */
+                         ASSERT_OK_ERRNO(setgroups(0, NULL));
+ 
+                         /* Also should work in a child userns since the ancestor walk finds the
+-                         * mount ID hash entry (not the setgroups deny entry) */
++                         * managed map entry (not the setgroups deny entry) */
+                         ASSERT_OK_ERRNO(unshare(CLONE_NEWUSER));
+                         ASSERT_OK_ERRNO(eventfd_write(afd, 1));
+                         uint64_t x;
+diff --git a/src/nsresourced/userns-registry.c b/src/nsresourced/userns-registry.c
+index 0da6a6a7c692..26d8c28e57be 100644
+--- a/src/nsresourced/userns-registry.c
++++ b/src/nsresourced/userns-registry.c
+@@ -83,6 +83,7 @@ UserNamespaceInfo* userns_info_new(void) {
+                 .target_uid = UID_INVALID,
+                 .start_gid = GID_INVALID,
+                 .target_gid = GID_INVALID,
++                .setgroups_deny = -1,
+         };
+ 
+         return info;
+@@ -241,18 +242,19 @@ static int dispatch_ancestor_userns_array(const char *name, sd_json_variant *var
+ static int userns_registry_load(int dir_fd, const char *fn, UserNamespaceInfo **ret) {
+ 
+         static const sd_json_dispatch_field dispatch_table[] = {
+-                { "owner",     SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, owner),        SD_JSON_MANDATORY },
+-                { "name",      SD_JSON_VARIANT_STRING,   sd_json_dispatch_string,   offsetof(UserNamespaceInfo, name),         SD_JSON_MANDATORY },
+-                { "userns",    SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uint64,   offsetof(UserNamespaceInfo, userns_inode), SD_JSON_MANDATORY },
+-                { "usernsId",  SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uint64,   offsetof(UserNamespaceInfo, userns_id),    0                 },
+-                { "size",      SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uint32,   offsetof(UserNamespaceInfo, size),         0                 },
+-                { "start",     SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, start_uid),    0                 },
+-                { "target",    SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, target_uid),   0                 },
+-                { "startGid",  SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, start_gid),    0                 },
+-                { "targetGid", SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, target_gid),   0                 },
+-                { "cgroups",   SD_JSON_VARIANT_ARRAY,    dispatch_cgroups_array,    0,                                         0                 },
+-                { "netifs",    SD_JSON_VARIANT_ARRAY,    sd_json_dispatch_strv,     offsetof(UserNamespaceInfo, netifs),       0                 },
+-                { "delegates", SD_JSON_VARIANT_ARRAY,    dispatch_delegates_array,  0,                                         0                 },
++                { "owner",         SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, owner),          SD_JSON_MANDATORY },
++                { "name",          SD_JSON_VARIANT_STRING,   sd_json_dispatch_string,   offsetof(UserNamespaceInfo, name),           SD_JSON_MANDATORY },
++                { "userns",        SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uint64,   offsetof(UserNamespaceInfo, userns_inode),   SD_JSON_MANDATORY },
++                { "usernsId",      SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uint64,   offsetof(UserNamespaceInfo, userns_id),      0                 },
++                { "size",          SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uint32,   offsetof(UserNamespaceInfo, size),           0                 },
++                { "start",         SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, start_uid),      0                 },
++                { "target",        SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, target_uid),     0                 },
++                { "startGid",      SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, start_gid),      0                 },
++                { "targetGid",     SD_JSON_VARIANT_UNSIGNED, sd_json_dispatch_uid_gid,  offsetof(UserNamespaceInfo, target_gid),     0                 },
++                { "setgroupsDeny", SD_JSON_VARIANT_BOOLEAN,  sd_json_dispatch_tristate, offsetof(UserNamespaceInfo, setgroups_deny), 0                 },
++                { "cgroups",       SD_JSON_VARIANT_ARRAY,    dispatch_cgroups_array,    0,                                           0                 },
++                { "netifs",        SD_JSON_VARIANT_ARRAY,    sd_json_dispatch_strv,     offsetof(UserNamespaceInfo, netifs),         0                 },
++                { "delegates",     SD_JSON_VARIANT_ARRAY,    dispatch_delegates_array,  0,                                           0                 },
+                 {}
+         };
+ 
+@@ -539,13 +541,16 @@ void userns_registry_release_by_userns_inode(struct userns_restrict_bpf *bpf, in
+         release_userns_inode_resources(bpf, inode);
+ }
+ 
+-int userns_registry_reap_if_dead(struct userns_restrict_bpf *bpf, int dir_fd, uint64_t inode) {
++int userns_registry_reap_if_dead(struct userns_restrict_bpf *bpf, int dir_fd, uint64_t inode, UserNamespaceInfo **ret_info) {
+         _cleanup_(userns_info_freep) UserNamespaceInfo *info = NULL;
+         int r;
+ 
+         assert(dir_fd >= 0);
+         assert(inode != 0);
+ 
++        if (ret_info)
++                *ret_info = NULL;
++
+         /* This is the shared engine behind both the runtime allocation hot path and the startup
+          * registry sweep: it reclaims ranges blocked by a dead namespace that no BPF death event
+          * cleaned up, without waiting for the manager to restart. */
+@@ -558,19 +563,30 @@ int userns_registry_reap_if_dead(struct userns_restrict_bpf *bpf, int dir_fd, ui
+         if (r < 0)
+                 return r;
+ 
+-        if (info->userns_id == 0)
+-                return USERNS_REAP_INDETERMINATE; /* Entry predates ns id tracking, can't probe authoritatively. */
++        if (info->userns_id == 0) {
++                /* Entry predates ns id tracking, can't probe authoritatively. */
++                if (ret_info)
++                        *ret_info = TAKE_PTR(info);
++                return USERNS_REAP_INDETERMINATE;
++        }
+ 
+         _cleanup_close_ int probe_fd = namespace_open_by_id(info->userns_id);
+-        if (probe_fd >= 0)
+-                return USERNS_REAP_ALIVE; /* Still alive (or the inode was recycled for a live namespace). */
+-        if (ERRNO_IS_NEG_PRIVILEGE(probe_fd) || ERRNO_IS_NEG_NOT_SUPPORTED(probe_fd) || probe_fd == -EINVAL)
++        if (probe_fd >= 0) {
++                /* Still alive (or the inode was recycled for a live namespace). */
++                if (ret_info)
++                        *ret_info = TAKE_PTR(info);
++                return USERNS_REAP_ALIVE;
++        }
++        if (ERRNO_IS_NEG_PRIVILEGE(probe_fd) || ERRNO_IS_NEG_NOT_SUPPORTED(probe_fd) || probe_fd == -EINVAL) {
+                 /* EPERM/EACCES (not in the initial user namespace, missing CAP_SYS_ADMIN), or
+                  * ENOTSUP/ENOSYS/EINVAL (kernel new enough for NS_GET_ID but too old for
+                  * open_by_handle_at() lookup by id on nsfs) — we can't confirm death for this or any
+                  * other entry. The userns_id == 0 case is already handled above, so -EINVAL here means
+                  * the lookup is unsupported rather than a bad id. */
++                if (ret_info)
++                        *ret_info = TAKE_PTR(info);
+                 return USERNS_REAP_UNSUPPORTED;
++        }
+         if (probe_fd != -ESTALE)
+                 return probe_fd; /* Unexpected probe error. */
+ 
+@@ -693,6 +709,7 @@ int userns_registry_store(int dir_fd, UserNamespaceInfo *info) {
+                         SD_JSON_BUILD_PAIR_CONDITION(uid_is_valid(info->target_uid), "target", SD_JSON_BUILD_UNSIGNED(info->target_uid)),
+                         SD_JSON_BUILD_PAIR_CONDITION(gid_is_valid(info->start_gid), "startGid", SD_JSON_BUILD_UNSIGNED(info->start_gid)),
+                         SD_JSON_BUILD_PAIR_CONDITION(gid_is_valid(info->target_gid), "targetGid", SD_JSON_BUILD_UNSIGNED(info->target_gid)),
++                        SD_JSON_BUILD_PAIR_CONDITION(info->setgroups_deny >= 0, "setgroupsDeny", SD_JSON_BUILD_BOOLEAN(info->setgroups_deny > 0)),
+                         SD_JSON_BUILD_PAIR_CONDITION(!!cgroup_array, "cgroups", SD_JSON_BUILD_VARIANT(cgroup_array)),
+                         JSON_BUILD_PAIR_STRV_NON_EMPTY("netifs", info->netifs),
+                         SD_JSON_BUILD_PAIR_CONDITION(!!delegates_array, "delegates", SD_JSON_BUILD_VARIANT(delegates_array)));
+diff --git a/src/nsresourced/userns-registry.h b/src/nsresourced/userns-registry.h
+index 4c88b45cfda6..802307d7eb68 100644
+--- a/src/nsresourced/userns-registry.h
++++ b/src/nsresourced/userns-registry.h
+@@ -37,6 +37,10 @@ typedef struct UserNamespaceInfo {
+         uid_t target_uid;
+         gid_t start_gid;
+         gid_t target_gid;
++        int setgroups_deny; /* Whether setgroups() is denied for this namespace via the BPF-LSM, so the
++                             * denial can be re-established after a restart that reset the BPF maps.
++                             * Negative in entries written before we recorded this, and stays that way
++                             * when such an entry is updated, so the answer is never faked. */
+         uint64_t *cgroups;
+         size_t n_cgroups;
+         char **netifs;
+@@ -93,8 +97,10 @@ typedef enum UserNamespaceReapStatus {
+  * namespace id and, if it is authoritatively dead, releases its registry entry (restoring any ranges
+  * it received via delegation to their ancestors). Returns a non-negative UserNamespaceReapStatus
+  * describing what happened, or a negative errno on genuine failure. The caller must hold the registry
+- * lock (or otherwise be free of concurrent writers). */
+-int userns_registry_reap_if_dead(struct userns_restrict_bpf *bpf, int dir_fd, uint64_t inode);
++ * lock (or otherwise be free of concurrent writers). If ret_info is passed it receives the entry this
++ * had to load anyway, so that callers that go on to work on the entry need not parse it a second time.
++ * It is set to NULL whenever no entry survives the call. */
++int userns_registry_reap_if_dead(struct userns_restrict_bpf *bpf, int dir_fd, uint64_t inode, UserNamespaceInfo **ret_info);
+ 
+ int userns_registry_store(int dir_fd, UserNamespaceInfo *info);
+ int userns_registry_remove(int dir_fd, UserNamespaceInfo *info);
+diff --git a/src/nsresourced/userns-restrict.c b/src/nsresourced/userns-restrict.c
+index 99f522367136..0f6f021e1d47 100644
+--- a/src/nsresourced/userns-restrict.c
++++ b/src/nsresourced/userns-restrict.c
+@@ -8,21 +8,27 @@
+ 
+ #include "bpf-util.h"
+ #include "bpf-link.h"
+-#include "fd-util.h"
+ #include "log.h"
+ #include "lsm-util.h"
+ #include "mkdir.h"
+-#include "mountpoint-util.h"
+ #include "namespace-util.h"
+ #include "path-util.h"
++#include "rm-rf.h"
+ #include "string-util.h"
++#include "strv.h"
+ #include "userns-restrict.h"
+ 
+ #define USERNS_MAX (16U*1024U)
+-#define MOUNTS_MAX 4096U
+ 
+-#define PROGRAM_LINK_PREFIX "/sys/fs/bpf/systemd/userns-restrict/programs"
+-#define MAP_LINK_PREFIX "/sys/fs/bpf/systemd/userns-restrict/maps"
++/* No dots in any of the path components: bpffs reserves those for its own use and fails every lookup that
++ * contains one with EPERM, see bpf_lookup() in the kernel sources. */
++#define LINK_PREFIX "/sys/fs/bpf/systemd/userns-restrict-v2"
++#define PROGRAM_LINK_PREFIX LINK_PREFIX "/programs"
++#define MAP_LINK_PREFIX LINK_PREFIX "/maps"
++
++/* Programs pinned here enforce the mount allowlist policy we used until v261, which is bypassable with a
++ * single unshare(). They'd stay attached next to ours, hence get rid of them. */
++#define OBSOLETE_LINK_PREFIX "/sys/fs/bpf/systemd/userns-restrict"
+ 
+ struct userns_restrict_bpf *userns_restrict_bpf_free(struct userns_restrict_bpf *obj) {
+ #if HAVE_VMLINUX_H
+@@ -32,31 +38,12 @@ struct userns_restrict_bpf *userns_restrict_bpf_free(struct userns_restrict_bpf
+ 
+ }
+ 
+-#if HAVE_VMLINUX_H
+-static int make_inner_hash_map(void) {
+-        int fd;
+-
+-        fd = compat_bpf_map_create(
+-                        BPF_MAP_TYPE_HASH,
+-                        NULL,
+-                        sizeof(int),
+-                        sizeof(uint32_t),
+-                        MOUNTS_MAX,
+-                        NULL);
+-        if (fd < 0)
+-                return log_debug_errno(errno, "Failed to allocate inner BPF map: %m");
+-
+-        return fd;
+-}
+-#endif
+-
+ int userns_restrict_install(
+                 bool pin,
+                 struct userns_restrict_bpf **ret) {
+ 
+ #if HAVE_VMLINUX_H
+         _cleanup_(userns_restrict_bpf_freep) struct userns_restrict_bpf *obj = NULL;
+-        _cleanup_close_ int dummy_mnt_id_hash_fd = -EBADF;
+         int r;
+ 
+         r = lsm_supported("bpf");
+@@ -84,9 +71,13 @@ int userns_restrict_install(
+         if (pin) {
+                 struct bpf_map *map;
+ 
+-                /* libbpf will only create one level of dirs. Let's create the rest */
+-                (void) mkdir_p(MAP_LINK_PREFIX, 0755);
+-                (void) mkdir_p(PROGRAM_LINK_PREFIX, 0755);
++                /* libbpf will only create one level of dirs. Let's create the rest. Failing here means the
++                 * pinning below fails too, so complain rather than run into that without a clue. */
++                FOREACH_STRING(d, MAP_LINK_PREFIX, PROGRAM_LINK_PREFIX) {
++                        r = mkdir_p(d, 0755);
++                        if (r < 0)
++                                log_warning_errno(r, "Failed to create '%s', ignoring: %m", d);
++                }
+ 
+                 map = sym_bpf_object__next_map(obj->obj, NULL);
+                 while (map) {
+@@ -104,9 +95,9 @@ int userns_restrict_install(
+                 }
+         }
+ 
+-        r = sym_bpf_map__set_max_entries(obj->maps.userns_mnt_id_hash, USERNS_MAX);
++        r = sym_bpf_map__set_max_entries(obj->maps.userns_managed, USERNS_MAX);
+         if (r < 0)
+-                return log_error_errno(r, "Failed to size userns/mnt_id hash table: %m");
++                return log_error_errno(r, "Failed to size managed userns hash table: %m");
+ 
+         r = sym_bpf_map__set_max_entries(obj->maps.userns_ringbuf, USERNS_MAX * sizeof(unsigned));
+         if (r < 0)
+@@ -116,19 +107,34 @@ int userns_restrict_install(
+         if (r < 0)
+                 return log_error_errno(r, "Failed to size userns setgroups deny hash table: %m");
+ 
+-        /* Dummy map to satisfy the verifier */
+-        dummy_mnt_id_hash_fd = make_inner_hash_map();
+-        if (dummy_mnt_id_hash_fd < 0)
+-                return dummy_mnt_id_hash_fd;
+-
+-        r = sym_bpf_map__set_inner_map_fd(obj->maps.userns_mnt_id_hash, dummy_mnt_id_hash_fd);
+-        if (r < 0)
+-                return log_error_errno(r, "Failed to set inner BPF map: %m");
+-
+         r = userns_restrict_bpf__load(obj);
+         if (r < 0)
+                 return log_error_errno(r, "Failed to load BPF object: %m");
+ 
++        /* Pin the maps already here: the programs are not attached yet, so nothing enforces anything, but
++         * the caller may now seed the maps before userns_restrict_attach() puts the policy in effect. */
++        if (pin) {
++                r = sym_bpf_object__pin_maps(obj->obj, NULL);
++                if (r < 0)
++                        return log_error_errno(r, "Failed to pin BPF maps: %m");
++        }
++
++        if (ret)
++                *ret = TAKE_PTR(obj);
++
++        return 0;
++#else
++        return log_error_errno(SYNTHETIC_ERRNO(EOPNOTSUPP), "User Namespace Restriction BPF support disabled.");
++#endif
++}
++
++int userns_restrict_attach(struct userns_restrict_bpf *obj, bool pin) {
++
++#if HAVE_VMLINUX_H
++        int r;
++
++        assert(obj);
++
+         for (int i = 0; i < obj->skeleton->prog_cnt; i++) {
+                 _cleanup_(bpf_link_freep) struct bpf_link *link = NULL;
+                 struct bpf_prog_skeleton *ps = obj->skeleton->progs + i;
+@@ -176,14 +182,11 @@ int userns_restrict_install(
+                 *ps->link = TAKE_PTR(link);
+         }
+ 
+-        if (pin) {
+-                r = sym_bpf_object__pin_maps(obj->obj, NULL);
+-                if (r < 0)
+-                        return log_error_errno(r, "Failed to pin BPF maps: %m");
+-        }
+-
+-        if (ret)
+-                *ret = TAKE_PTR(obj);
++        /* Only now that our own programs enforce the policy, drop the ones the previous version left
++         * pinned. Removing their links detaches them, so doing this any earlier would hand the namespaces
++         * that predate an upgrade a stretch with no policy attached at all. */
++        if (pin)
++                (void) rm_rf(OBSOLETE_LINK_PREFIX, REMOVE_PHYSICAL);
+ 
+         return 0;
+ #else
+@@ -191,95 +194,35 @@ int userns_restrict_install(
+ #endif
+ }
+ 
+-int userns_restrict_put_by_inode(
++int userns_restrict_register_by_inode(
+                 struct userns_restrict_bpf *obj,
+-                uint64_t userns_inode,
+-                bool replace,
+-                const int mount_fds[],
+-                size_t n_mount_fds) {
++                uint64_t userns_inode) {
+ 
+ #if HAVE_VMLINUX_H
+-        _cleanup_close_ int inner_map_fd = -EBADF;
+-        _cleanup_free_ int *mnt_ids = NULL;
+-        uint64_t ino = userns_inode;
+-        int r, outer_map_fd;
++        uint32_t dummy_value = 1;
++        int map_fd, r;
++        unsigned ino;
+ 
+         assert(obj);
+         assert(userns_inode != 0);
+-        assert(n_mount_fds == 0 || mount_fds);
+ 
+-        /* The BPF map type BPF_MAP_TYPE_HASH_OF_MAPS only supports 32bit keys, and user namespace inode
+-         * numbers are 32bit too, even though ino_t is 64bit these days. Should we ever run into a 64bit
+-         * inode let's refuse early, we can't support this with the current BPF code for now. */
++        /* The BPF map only supports 32bit keys, and user namespace inode numbers are 32bit too, even though
++         * ino_t is 64bit these days. Should we ever run into a 64bit inode let's refuse early, we can't
++         * support this with the current BPF code for now. */
+         if (userns_inode > UINT32_MAX)
+                 return -EINVAL;
+ 
+-        mnt_ids = new(int, n_mount_fds);
+-        if (!mnt_ids)
+-                return -ENOMEM;
+-
+-        for (size_t i = 0; i < n_mount_fds; i++) {
+-                r = path_get_mnt_id_at(mount_fds[i], "", mnt_ids + i);
+-                if (r < 0)
+-                        return log_debug_errno(r, "Failed to get mount ID: %m");
+-        }
+-
+-        outer_map_fd = sym_bpf_map__fd(obj->maps.userns_mnt_id_hash);
+-        if (outer_map_fd < 0)
+-                return log_debug_errno(outer_map_fd, "Failed to get outer BPF map fd: %m");
+-
+-        if (replace) {
+-                /* Add if missing, replace if already exists */
+-                inner_map_fd = make_inner_hash_map();
+-                if (inner_map_fd < 0)
+-                        return inner_map_fd;
+-
+-                r = sym_bpf_map_update_elem(outer_map_fd, &ino, &inner_map_fd, BPF_ANY);
+-                if (r < 0)
+-                        return log_debug_errno(r, "Failed to replace map in inode hash: %m");
+-        } else {
+-                /* Let's add an entry for this userns inode if missing. If it exists just extend the existing map. We
+-                 * might race against each other, hence we try a couple of times */
+-                for (size_t n_try = 10;; n_try--) {
+-                        uint32_t innermap_id;
+-
+-                        if (n_try == 0)
+-                                return log_debug_errno(SYNTHETIC_ERRNO(EEXIST),
+-                                                       "Still cannot create inode entry in BPF map after 10 tries.");
+-
+-                        r = sym_bpf_map_lookup_elem(outer_map_fd, &ino, &innermap_id);
+-                        if (r >= 0) {
+-                                inner_map_fd = sym_bpf_map_get_fd_by_id(innermap_id);
+-                                if (inner_map_fd < 0)
+-                                        return log_debug_errno(inner_map_fd, "Failed to get file descriptor for inner map: %m");
+-
+-                                break;
+-                        }
+-                        if (errno != ENOENT)
+-                                return log_debug_errno(errno, "Failed to look up inode hash entry: %m");
+-
+-                        /* No entry for this user namespace yet. Let's create one */
+-                        inner_map_fd = make_inner_hash_map();
+-                        if (inner_map_fd < 0)
+-                                return inner_map_fd;
+-
+-                        r = sym_bpf_map_update_elem(outer_map_fd, &ino, &inner_map_fd, BPF_NOEXIST);
+-                        if (r >= 0)
+-                                break;
+-                        if (errno != EEXIST)
+-                                return log_debug_errno(errno, "Failed to add mount ID list to inode hash: %m");
+-                }
+-        }
++        ino = (unsigned) userns_inode;
+ 
+-        FOREACH_ARRAY(mntid, mnt_ids, n_mount_fds) {
+-                uint32_t dummy_value = 1;
++        map_fd = sym_bpf_map__fd(obj->maps.userns_managed);
++        if (map_fd < 0)
++                return log_debug_errno(map_fd, "Failed to get managed userns BPF map fd: %m");
+ 
+-                r = sym_bpf_map_update_elem(inner_map_fd, mntid, &dummy_value, BPF_ANY);
+-                if (r < 0)
+-                        return log_debug_errno(r, "Failed to add mount ID to map: %m");
++        r = sym_bpf_map_update_elem(map_fd, &ino, &dummy_value, BPF_ANY);
++        if (r < 0)
++                return log_debug_errno(r, "Failed to add userns inode to managed map: %m");
+ 
+-                log_debug("Allowing mount %i on userns inode %" PRIu64, *mntid, ino);
+-        }
++        log_debug("Restricting persistent writes for userns inode %" PRIu64, userns_inode);
+ 
+         return 0;
+ #else
+@@ -287,12 +230,9 @@ int userns_restrict_put_by_inode(
+ #endif
+ }
+ 
+-int userns_restrict_put_by_fd(
++int userns_restrict_register_by_fd(
+                 struct userns_restrict_bpf *obj,
+-                int userns_fd,
+-                bool replace,
+-                const int mount_fds[],
+-                size_t n_mount_fds) {
++                int userns_fd) {
+ 
+ #if HAVE_VMLINUX_H
+         struct stat st;
+@@ -300,7 +240,6 @@ int userns_restrict_put_by_fd(
+ 
+         assert(obj);
+         assert(userns_fd >= 0);
+-        assert(n_mount_fds == 0 || mount_fds);
+ 
+         r = fd_is_namespace(userns_fd, NAMESPACE_USER);
+         if (r < 0)
+@@ -311,12 +250,7 @@ int userns_restrict_put_by_fd(
+         if (fstat(userns_fd, &st) < 0)
+                 return log_debug_errno(errno, "Failed to fstat() user namespace: %m");
+ 
+-        return userns_restrict_put_by_inode(
+-                        obj,
+-                        st.st_ino,
+-                        replace,
+-                        mount_fds,
+-                        n_mount_fds);
++        return userns_restrict_register_by_inode(obj, st.st_ino);
+ #else
+         return log_error_errno(SYNTHETIC_ERRNO(EOPNOTSUPP), "User Namespace Restriction BPF support disabled.");
+ #endif
+@@ -325,7 +259,7 @@ int userns_restrict_put_by_fd(
+ int userns_restrict_reset_by_inode(struct userns_restrict_bpf *obj, uint64_t userns_inode) {
+ 
+ #if HAVE_VMLINUX_H
+-        int r, outer_map_fd, setgroups_deny_fd;
++        int r, managed_fd, setgroups_deny_fd;
+         unsigned u;
+ 
+         assert(obj);
+@@ -334,15 +268,17 @@ int userns_restrict_reset_by_inode(struct userns_restrict_bpf *obj, uint64_t use
+         if (userns_inode > UINT32_MAX) /* inodes larger than 32bit are definitely not included in our map, exit early */
+                 return 0;
+ 
+-        outer_map_fd = sym_bpf_map__fd(obj->maps.userns_mnt_id_hash);
+-        if (outer_map_fd < 0)
+-                return log_debug_errno(outer_map_fd, "Failed to get outer BPF map fd: %m");
++        managed_fd = sym_bpf_map__fd(obj->maps.userns_managed);
++        if (managed_fd < 0)
++                return log_debug_errno(managed_fd, "Failed to get managed userns BPF map fd: %m");
+ 
+         u = (uint32_t) userns_inode;
+ 
+-        r = sym_bpf_map_delete_elem(outer_map_fd, &u);
+-        if (r < 0)
+-                return log_debug_errno(r, "Failed to remove entry for inode %" PRIu64 " from outer map: %m", userns_inode);
++        /* A missing entry is an ordinary state here (the maps come up empty after a schema change, and
++         * registration is idempotent), so don't let it cut the setgroups deny cleanup below short. */
++        r = sym_bpf_map_delete_elem(managed_fd, &u);
++        if (r < 0 && r != -ENOENT)
++                return log_debug_errno(r, "Failed to remove entry for inode %" PRIu64 " from managed map: %m", userns_inode);
+ 
+         setgroups_deny_fd = sym_bpf_map__fd(obj->maps.userns_setgroups_deny);
+         if (setgroups_deny_fd < 0)
+diff --git a/src/nsresourced/userns-restrict.h b/src/nsresourced/userns-restrict.h
+index 87457bf3685e..a229bd64bfaf 100644
+--- a/src/nsresourced/userns-restrict.h
++++ b/src/nsresourced/userns-restrict.h
+@@ -5,11 +5,18 @@
+ 
+ struct userns_restrict_bpf;
+ 
++/* Bringing the policy up is split in two so that callers can seed the maps in between: the programs only
++ * start enforcing once userns_restrict_attach() ran, and whatever they find in the maps at that point is
++ * what they enforce from their very first invocation. Attaching first and filling the maps afterwards would
++ * leave a window in which every namespace looks unmanaged and the policy fails open. Callers that only
++ * manipulate the maps of an already running policy (i.e. the workers) stop after the install step. */
+ int userns_restrict_install(bool pin, struct userns_restrict_bpf **ret);
++int userns_restrict_attach(struct userns_restrict_bpf *obj, bool pin);
++
+ struct userns_restrict_bpf *userns_restrict_bpf_free(struct userns_restrict_bpf *obj);
+ 
+-int userns_restrict_put_by_fd(struct userns_restrict_bpf *obj, int userns_fd, bool replace, const int mount_fds[], size_t n_mount_fds);
+-int userns_restrict_put_by_inode(struct userns_restrict_bpf *obj, uint64_t userns_inode, bool replace, const int mount_fds[], size_t n_mount_fds);
++int userns_restrict_register_by_fd(struct userns_restrict_bpf *obj, int userns_fd);
++int userns_restrict_register_by_inode(struct userns_restrict_bpf *obj, uint64_t userns_inode);
+ 
+ int userns_restrict_reset_by_inode(struct userns_restrict_bpf *obj, uint64_t userns_inode);
+ 
+diff --git a/src/shared/tar-util.c b/src/shared/tar-util.c
+index e2603680bda7..c60054b2d164 100644
+--- a/src/shared/tar-util.c
++++ b/src/shared/tar-util.c
+@@ -1083,7 +1083,7 @@ int tar_x(int input_fd, int tree_fd, TarFlags flags) {
+         return 0;
+ }
+ 
+-static int make_tmpfs(void) {
++int tar_hardlink_db_new(void) {
+         /* Creates a tmpfs superblock to store our hardlink db in. We can do this if we run in our own
+          * userns, or if we are privileged. This is preferable, since it means the db is cleaned up
+          * automatically once we are done. Moreover, since this is a new superblock owned by us, we do not
+@@ -1111,6 +1111,7 @@ struct make_archive_data {
+         TarFlags flags;
+ 
+         int hardlink_db_fd;
++        bool hardlink_db_fd_owned; /* Whether we allocated the db ourselves, i.e. whether it is ours to close */
+         char *hardlink_db_path;
+         int have_unique_mount_id;
+ };
+@@ -1199,7 +1200,7 @@ static int hardlink_lookup(
+ 
+                 /* We first try to create our own superblock, which works if we are in a userns, and which
+                  * doesn't require explicit clean-up */
+-                d->hardlink_db_fd = make_tmpfs();
++                d->hardlink_db_fd = tar_hardlink_db_new();
+                 if (d->hardlink_db_fd < 0) {
+                         log_debug_errno(d->hardlink_db_fd, "Failed to allocate tmpfs superblock for hardlink db, falling back to temporary directory: %m");
+ 
+@@ -1216,6 +1217,8 @@ static int hardlink_lookup(
+                         if (d->hardlink_db_fd < 0)
+                                 return log_error_errno(d->hardlink_db_fd, "Failed to make hardlink database directory: %m");
+                 }
++
++                d->hardlink_db_fd_owned = true;
+         } else {
+                 _cleanup_free_ char *p = NULL;
+                 r = readlinkat_malloc(d->hardlink_db_fd, n, &p);
+@@ -1585,13 +1588,17 @@ static int archive_item(
+ static void make_archive_data_done(struct make_archive_data *d) {
+         assert(d);
+ 
+-        if (d->hardlink_db_fd >= 0)
+-                (void) rm_rf_children(d->hardlink_db_fd, REMOVE_PHYSICAL, /* root_dev= */ NULL);
++        /* Only tear down a db we allocated ourselves: rm_rf_children() consumes the fd it is given, and one
++         * handed to us by the caller is theirs to close. */
++        if (d->hardlink_db_fd_owned && d->hardlink_db_fd >= 0)
++                (void) rm_rf_children(TAKE_FD(d->hardlink_db_fd), REMOVE_PHYSICAL, /* root_dev= */ NULL);
+ 
+         unlink_and_free(d->hardlink_db_path);
+ }
+ 
+-int tar_c(int tree_fd, int output_fd, const char *filename, TarFlags flags) {
++/* The hardlink db fd is borrowed, not consumed: tar_c() neither closes it nor empties it again, so whoever
++ * passed it in stays responsible for both. */
++int tar_c(int tree_fd, int output_fd, const char *filename, int hardlink_db_fd, TarFlags flags) {
+         int r;
+ 
+         assert(tree_fd >= 0);
+@@ -1617,7 +1624,7 @@ int tar_c(int tree_fd, int output_fd, const char *filename, TarFlags flags) {
+         _cleanup_(make_archive_data_done) struct make_archive_data data = {
+                 .archive = a,
+                 .flags = flags,
+-                .hardlink_db_fd = -EBADF,
++                .hardlink_db_fd = hardlink_db_fd,
+                 .have_unique_mount_id = -1,
+         };
+ 
+@@ -1648,11 +1655,15 @@ int tar_x(int input_fd, int tree_fd, TarFlags flags) {
+         return log_error_errno(SYNTHETIC_ERRNO(EOPNOTSUPP), "libarchive support not available.");
+ }
+ 
+-int tar_c(int tree_fd, int output_fd, const char *filename, TarFlags flags) {
++int tar_c(int tree_fd, int output_fd, const char *filename, int hardlink_db_fd, TarFlags flags) {
+         assert(tree_fd >= 0);
+         assert(output_fd >= 0);
+ 
+         return log_error_errno(SYNTHETIC_ERRNO(EOPNOTSUPP), "libarchive support not available.");
+ }
+ 
++int tar_hardlink_db_new(void) {
++        return log_debug_errno(SYNTHETIC_ERRNO(EOPNOTSUPP), "libarchive support not available.");
++}
++
+ #endif
+diff --git a/src/shared/tar-util.h b/src/shared/tar-util.h
+index 4ce8c573778d..3e41ef1305f1 100644
+--- a/src/shared/tar-util.h
++++ b/src/shared/tar-util.h
+@@ -7,5 +7,9 @@ typedef enum TarFlags {
+         TAR_OCI_WHITEOUTS         = 1 << 2, /* Turn OCI/aufs whiteout inodes into overlayfs whiteouts */
+ } TarFlags;
+ 
++/* Allocates a tmpfs superblock for tar_c() to keep its hardlink database in. Requires CAP_SYS_ADMIN in the
++ * caller's user namespace, hence callers that drop privileges must do this first and pass the fd along. */
++int tar_hardlink_db_new(void);
++
+ int tar_x(int input_fd, int tree_fd, TarFlags flags);
+-int tar_c(int tree_fd, int output_fd, const char *filename, TarFlags flags);
++int tar_c(int tree_fd, int output_fd, const char *filename, int hardlink_db_fd, TarFlags flags);
+diff --git a/units/systemd-nsresourced.service.in b/units/systemd-nsresourced.service.in
+index 143f9a9a3d29..771fdec531f3 100644
+--- a/units/systemd-nsresourced.service.in
++++ b/units/systemd-nsresourced.service.in
+@@ -13,8 +13,8 @@ Documentation=man:systemd-nsresourced.service(8)
+ Requires=systemd-nsresourced.socket
+ Conflicts=shutdown.target
+ Before=sysinit.target shutdown.target
+-Wants=modprobe@tun.service
+-After=modprobe@tun.service
++Wants=modprobe@tun.service modprobe@overlay.service
++After=modprobe@tun.service modprobe@overlay.service
+ DefaultDependencies=no
+ 
+ [Service]

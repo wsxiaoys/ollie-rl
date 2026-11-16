@@ -1,0 +1,415 @@
+diff --git a/compiler/src/dotty/tools/backend/jvm/BCodeBodyBuilder.scala b/compiler/src/dotty/tools/backend/jvm/BCodeBodyBuilder.scala
+index 8f5d55535f07..91772184355b 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BCodeBodyBuilder.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BCodeBodyBuilder.scala
+@@ -772,10 +772,12 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives, val bTypes: KnownBTypes)
+ 
+           generatedType = bTypeLoader.bTypeFromType(c.typeValue)
+           mkArrayConstructorCall(generatedType.asArrayBType, app, av.elems)
+-        case Apply(t :TypeApply, _) =>
++        case Apply(t @ TypeApply(fun, _), args) =>
+           generatedType =
+             if (t.symbol ne defn.Object_synchronized) genTypeApply(t)
+-            else genSynchronized(app, expectedType)
++            else
++              genLoadQualifier(fun)
++              genSynchronized(app, args, expectedType)
+ 
+         case Apply(fun @ DesugaredSelect(superRef @ Super(superQual, _), _), args) =>
+           // 'super' call: Note: since constructors are supposed to
+@@ -1779,7 +1781,6 @@ trait BCodeBodyBuilder(val primitives: ScalaPrimitives, val bTypes: KnownBTypes)
+     }
+ 
+ 
+-    def genSynchronized(tree: Apply, expectedType: BType)(using Context): BType
+     def genLoadTry(tree: Try)(using Context): BType
+ 
+     def genInvokeDynamicLambda(lambdaTarget: Symbol, environmentSize: Int, functionalInterface: Symbol)(using Context): BType = {
+diff --git a/compiler/src/dotty/tools/backend/jvm/BCodeIdiomatic.scala b/compiler/src/dotty/tools/backend/jvm/BCodeIdiomatic.scala
+index 2511728a4a1e..71450820e5d7 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BCodeIdiomatic.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BCodeIdiomatic.scala
+@@ -277,6 +277,7 @@ trait BCodeIdiomatic(callGraph: Option[CallGraph]) {
+     final def iinc( idx: Int, increment: Int): Unit = jmethod.visitIincInsn(idx, increment) // can-multi-thread
+ 
+     final def aload( tk: BType): Unit = { emitTypeBased(JCodeMethodN.aloadOpcodes,  tk) } // can-multi-thread
++    final def aloadThis(): Unit = { jmethod.visitVarInsn(Opcodes.ALOAD, 0) } // can-multi-thread
+     final def astore(tk: BType): Unit = { emitTypeBased(JCodeMethodN.astoreOpcodes, tk) } // can-multi-thread
+ 
+     final def neg(tk: BType): Unit = { emitPrimitive(JCodeMethodN.negOpcodes, tk) } // can-multi-thread
+diff --git a/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala b/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala
+index a0ef2d6c380a..9cc9ce133d39 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BCodeSkelBuilder.scala
+@@ -903,7 +903,13 @@ trait BCodeSkelBuilder extends BCodeHelpers {
+               ctx.source.atSpan(NoSpan)
+             )
+           else
+-            genLoadTo(trimmedRhs, returnType, LoadDestination.Return)
++            // The JVM doesn't support `synchronized` methods on interfaces so we must implement that ourselves
++            if dd.symbol.is(Synchronized) && dd.symbol.owner.is(Trait) then
++              bc.aloadThis()
++              val generatedType = genSynchronized(trimmedRhs, trimmedRhs :: Nil, returnType)
++              genAdaptAndSendToDest(generatedType, returnType, LoadDestination.Return)
++            else
++              genLoadTo(trimmedRhs, returnType, LoadDestination.Return)
+ 
+           if (emitVars) {
+             // add entries to LocalVariableTable JVM attribute
+@@ -942,6 +948,8 @@ trait BCodeSkelBuilder extends BCodeHelpers {
+       }
+     }
+ 
++    def genSynchronized(tree: Tree, args: List[Tree], expectedType: BType)(using Context): BType
++    def genAdaptAndSendToDest(generatedType: BType | Null, expectedType: BType, dest: LoadDestination)(using Context): Unit
+     def genLoadTo(tree: Tree, expectedType: BType, dest: LoadDestination)(using Context): Unit
+ 
+   } // end of class PlainSkelBuilder
+diff --git a/compiler/src/dotty/tools/backend/jvm/BCodeSyncAndTry.scala b/compiler/src/dotty/tools/backend/jvm/BCodeSyncAndTry.scala
+index ffca7f3bdefe..8f31182663cd 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BCodeSyncAndTry.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BCodeSyncAndTry.scala
+@@ -22,8 +22,8 @@ trait BCodeSyncAndTry extends BCodeBodyBuilder {
+    */
+   class SyncAndTryBuilder extends PlainBodyBuilder {
+ 
+-    def genSynchronized(tree: Apply, expectedType: BType)(using Context): BType = (tree: @unchecked) match {
+-      case Apply(TypeApply(fun, _), args) =>
++    /** Precondition: the target of the 'synchronized' call must already be on the stack. (`tree` is only used for positions) */
++    def genSynchronized(tree: Tree, args: List[Tree], expectedType: BType)(using Context): BType = {
+       val monitor = locals.makeLocal(bTypes.ObjectRef, "monitor", defn.ObjectType, tree.span)
+       val monCleanup = new asm.Label
+ 
+@@ -32,8 +32,9 @@ trait BCodeSyncAndTry extends BCodeBodyBuilder {
+       val hasResult = expectedType != UNIT
+       val monitorResult: Symbol | Null = if (hasResult) locals.makeLocal(tpeTK(args.head), "monitorResult", defn.ObjectType, tree.span) else null
+ 
+-      /* ------ (1) pushing and entering the monitor, also keeping a reference to it in a local var. ------ */
+-      genLoadQualifier(fun)
++      /* ------ (0) the monitor itself has been pushed to stack already, precondition of this method. ------ */
++
++      /* ------ (1) entering the monitor, also keeping a reference to it in a local var. ------ */
+       bc.dup(bTypes.ObjectRef)
+       locals.store(monitor)
+       emit(asm.Opcodes.MONITORENTER)
+diff --git a/compiler/src/dotty/tools/backend/jvm/BCodeUtils.scala b/compiler/src/dotty/tools/backend/jvm/BCodeUtils.scala
+index 6684fdbfb32b..6c2d7796d55d 100644
+--- a/compiler/src/dotty/tools/backend/jvm/BCodeUtils.scala
++++ b/compiler/src/dotty/tools/backend/jvm/BCodeUtils.scala
+@@ -502,7 +502,7 @@ object BCodeUtils {
+         // Primitives are "abstract final" to prohibit instantiation
+         // without having to provide any implementations, but that is an
+         // illegal combination of modifiers at the bytecode level so
+-        // suppress final if abstract if present.
++        // suppress final if abstract is present.
+         && !sym.isOneOf(AbstractOrTrait)
+         // Bridges can be final, but final bridges confuse some frameworks
+         && !sym.is(Bridge), ACC_FINAL)
+@@ -512,7 +512,8 @@ object BCodeUtils {
+       .addFlagIf(sym.isClass && !sym.is(Trait), ACC_SUPER)
+       .addFlagIf(sym.isAllOf(JavaEnum), ACC_ENUM)
+       .addFlagIf(sym.is(JavaVarargs), ACC_VARARGS)
+-      .addFlagIf(sym.is(Synchronized), ACC_SYNCHRONIZED)
++      // The JVM does not support synchronized interface methods, we implement those ourselves
++      .addFlagIf(sym.is(Synchronized) && !sym.owner.is(Trait), ACC_SYNCHRONIZED)
+       .addFlagIf(sym.isDeprecated, ACC_DEPRECATED)
+       .addFlagIf(sym.is(Enum), ACC_ENUM)
+   }
+diff --git a/compiler/src/dotty/tools/dotc/Compiler.scala b/compiler/src/dotty/tools/dotc/Compiler.scala
+index a47cbefee8da..6feb0244b7f1 100644
+--- a/compiler/src/dotty/tools/dotc/Compiler.scala
++++ b/compiler/src/dotty/tools/dotc/Compiler.scala
+@@ -110,7 +110,8 @@ class Compiler {
+          new ParamForwarding,        // Add forwarders for aliases of superclass parameters
+          new TupleOptimizations,     // Optimize generic operations on tuples
+          new LetOverApply,           // Lift blocks from receivers of applications
+-         new ArrayConstructors) ::   // Intercept creation of (non-generic) arrays and intrinsify.
++         new ArrayConstructors,      // Intercept creation of (non-generic) arrays and intrinsify.
++         new SimplifySynchronized) ::// Simplify `synchronized` blocks when they surround a method body
+     List(new Erasure) ::             // Rewrite types to JVM model, erasing all type parameters, abstract types and refinements.
+     List(new ElimErasedValueType,    // Expand erased value types to their underlying implementation types
+          new PureStats,              // Remove pure stats from blocks
+diff --git a/compiler/src/dotty/tools/dotc/core/Flags.scala b/compiler/src/dotty/tools/dotc/core/Flags.scala
+index af7455fa2994..fa14c0333b55 100644
+--- a/compiler/src/dotty/tools/dotc/core/Flags.scala
++++ b/compiler/src/dotty/tools/dotc/core/Flags.scala
+@@ -453,7 +453,7 @@ object Flags {
+ 
+   /** Flags representing source modifiers */
+   private val CommonSourceModifierFlags: FlagSet =
+-    commonFlags(Private, Protected, Final, Case, Implicit, Given, Override, JavaStatic, Transparent, Erased)
++    commonFlags(Private, Protected, Final, Case, Implicit, Given, Override, JavaStatic, Transparent, Erased, Synchronized)
+ 
+   val TypeSourceModifierFlags: FlagSet =
+     CommonSourceModifierFlags.toTypeFlags | Abstract | Sealed | Opaque | Open | Into
+diff --git a/compiler/src/dotty/tools/dotc/transform/SimplifySynchronized.scala b/compiler/src/dotty/tools/dotc/transform/SimplifySynchronized.scala
+new file mode 100644
+index 000000000000..34e7c80451d6
+--- /dev/null
++++ b/compiler/src/dotty/tools/dotc/transform/SimplifySynchronized.scala
+@@ -0,0 +1,47 @@
++package dotty.tools.dotc.transform
++
++import scala.annotation.tailrec
++import dotty.tools.dotc.ast.tpd.*
++import dotty.tools.dotc.core.Contexts.Context
++import dotty.tools.dotc.core.Flags.{Inline, Synchronized}
++import dotty.tools.dotc.core.StdNames.nme
++import dotty.tools.dotc.core.Symbols.*
++import dotty.tools.dotc.transform.MegaPhase.MiniPhase
++
++class SimplifySynchronized extends MiniPhase:
++  override def phaseName: String = SimplifySynchronized.name
++  override def description: String = SimplifySynchronized.description
++
++  // Turn non-inline methods whose body is contained within a `this.synchronized` call into synchronized methods
++  // Besides being more efficient, this also allows tail recursion in such methods.
++  override def transformDefDef(tree: DefDef)(using Context): Tree = {
++    @tailrec
++    def extractSynchronized(rhs: Tree): Option[Tree] = rhs match
++      case Apply(TypeApply(Ident(nme.synchronized_) | Select(This(_), nme.synchronized_), _), synchronizedBody :: Nil) =>
++        Some(synchronizedBody)
++      case Block(Nil, expr) =>
++        extractSynchronized(expr)
++      case _ =>
++        None
++
++    if canBeSynchronized(tree.symbol) then
++      extractSynchronized(tree.rhs) match
++        case Some(newRhs) =>
++          tree.symbol.denot.setFlag(Synchronized)
++          cpy.DefDef(tree)(rhs = newRhs)
++        case None =>
++          tree
++    else
++      tree
++  }
++
++  // However, this is only feasible for methods that are not inline
++  private def canBeSynchronized(sym: Symbol)(using Context) =
++    !sym.is(Inline)
++      && (sym.owner match
++            case cs: ClassSymbol => !cs.parentSyms.contains(defn.AnyValClass)
++            case _ => false)
++
++object SimplifySynchronized:
++  val name: String = "simplifySynchronized"
++  val description: String = "simplify synchronized blocks when they surround a method body"
+\ No newline at end of file
+diff --git a/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala b/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala
+index 1d49d0f35c14..d1ca15df2cfa 100644
+--- a/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala
++++ b/compiler/test/dotty/tools/backend/jvm/DottyBytecodeTests.scala
+@@ -2087,6 +2087,75 @@ class DottyBytecodeTests extends DottyBytecodeTest {
+       assert(bridge.signature == null, "vararg bridges should not have generic signatures")
+     }
+   }
++
++
++  @Test def synchronizedClassMethods = {
++    val source =
++      """|class A {
++         |  def yesBasic: Int = synchronized {
++         |    1
++         |  }
++         |  def yesExplicit: Int =
++         |    this.synchronized {
++         |      1
++         |    }
++         |  def yesExplicitWithBraces: Int = {
++         |    this.synchronized {
++         |      1
++         |    }
++         |  }
++         |  inline def noIsInline: Int = synchronized {
++         |    1
++         |  }
++         |  def noHasOtherCode: Int =
++         |    synchronized {
++         |      ()
++         |    }
++         |    1
++         |}
++         |object A {
++         |  @scala.annotation.static
++         |  def yesStaticOne: Int = synchronized {
++         |    1
++         |  }
++         |  def yesInModule: Int = synchronized {
++         |    1
++         |  }
++         |}
++         |""".stripMargin
++    checkBCode(source) { dir =>
++      val cls = loadClassNode(lookupClass(dir, "A.class"))
++      val clsMod = loadClassNode(lookupClass(dir, "A$.class"))
++      // ignore the forwarder one
++      val meths = cls.methods.asScala.filter(_.name != "yesInModule") ++ clsMod.methods.asScala
++      meths.filter(_.name.startsWith("yes")).foreach(m =>
++        assert((m.access & ACC_SYNCHRONIZED) != 0, s"method ${m.name} is not ACC_SYNCHRONIZED")
++        assertSameCode(m, List(
++          Op(ICONST_1),
++          Op(IRETURN)
++        ))
++      )
++      meths.filter(_.name.startsWith("no")).foreach(m =>
++        assert((m.access & ACC_SYNCHRONIZED) == 0, s"method ${m.name} is ACC_SYNCHRONIZED")
++      )
++    }
++  }
++
++  @Test def synchronizedInterfaceMethod = {
++    val source =
++      """|trait Test:
++         |  def m(x: Int): Int = synchronized { x }
++         |""".stripMargin
++    checkBCode(source) { dir =>
++      val clsIn = lookupClass(dir, "Test.class")
++      val clsNode = loadClassNode(clsIn)
++      val meth = clsNode.methods.asScala.find(_.name == "m").get
++      assert((meth.access & ACC_SYNCHRONIZED) == 0) // illegal!
++      val instrs = instructionsFromMethod(meth)
++      assert(instrs.contains(Op(MONITORENTER)))
++      assert(instrs.contains(Op(MONITOREXIT)))
++    }
++  }
+ }
+ 
+ object invocationReceiversTestCode {
+diff --git a/compiler/test/dotty/tools/dotc/printing/PrintingTest.scala b/compiler/test/dotty/tools/dotc/printing/PrintingTest.scala
+index 0b3a413628b2..39c7d202241b 100644
+--- a/compiler/test/dotty/tools/dotc/printing/PrintingTest.scala
++++ b/compiler/test/dotty/tools/dotc/printing/PrintingTest.scala
+@@ -47,22 +47,17 @@ class PrintingTest {
+     }
+ 
+     val actualLines = byteStream.toString(StandardCharsets.UTF_8.name).linesIterator
+-    FileDiff.checkAndDumpOrUpdate(path.toString, actualLines.toIndexedSeq, checkFilePath)
++    FileDiff.checkAndDumpOrUpdate(path.toString, actualLines.toIndexedSeq, checkFilePath, tolerateMissingCheckFile = false)
+   }
+ 
+   def testIn(testsDir: String, phase: String) =
+     val res = Directory(testsDir).list.toList
+       .filter(_.ext.isSourceExtension)
+       .map(f => compileFile(f.jpath, phase))
+-
+     val failed = res.filter(!_)
+-
+     val msg = s"Pass: ${res.length - failed.length}, Failed: ${failed.length}"
+-
+-    assert(failed.length == 0, msg)
+-
++    assert(failed.isEmpty, msg)
+     println(msg)
+-
+   end testIn
+ 
+   @Test
+diff --git a/compiler/test/dotty/tools/vulpix/FileDiff.scala b/compiler/test/dotty/tools/vulpix/FileDiff.scala
+index 1dd9b055ab30..745686354484 100644
+--- a/compiler/test/dotty/tools/vulpix/FileDiff.scala
++++ b/compiler/test/dotty/tools/vulpix/FileDiff.scala
+@@ -24,7 +24,7 @@ object FileDiff {
+   //at scala.quoted.runtime.impl.QuotesImpl$reflect$ClassDef$.module(QuotesImpl.scala:257)
+   private val frame = """\s+at [^(]+\([^:]+:(\d+)\)""".r
+ 
+-  def check(sourceTitle: String, outputLines: Seq[String], checkFile: String): Option[String] = {
++  def check(sourceTitle: String, outputLines: Seq[String], checkFile: String, tolerateMissing: Boolean = true): Option[String] = {
+     val path = Paths.get(checkFile)
+     if Files.exists(path) then
+       var stacked = false
+@@ -50,7 +50,9 @@ object FileDiff {
+         Some(s"""|Output from '$sourceTitle' did not match check file. Actual output:
+                  |${outputLines.mkString(EOL)}
+                  |""".stripMargin + "\n")
+-    else None
++    else
++      assert(tolerateMissing, "Missing check file: " + path.toString)
++      None
+   }
+ 
+   def matches(actual: String, expect: String): Boolean = {
+@@ -71,9 +73,9 @@ object FileDiff {
+     outFile.writeAll(content.mkString("", EOL, EOL))
+   }
+ 
+-  def checkAndDumpOrUpdate(sourceTitle: String, actualLines: Seq[String], checkFilePath: String): Boolean = {
++  def checkAndDumpOrUpdate(sourceTitle: String, actualLines: Seq[String], checkFilePath: String, tolerateMissingCheckFile: Boolean = true): Boolean = {
+     val outFilePath = checkFilePath + ".out"
+-    FileDiff.check(sourceTitle, actualLines, checkFilePath) match {
++    FileDiff.check(sourceTitle, actualLines, checkFilePath, tolerateMissingCheckFile) match {
+       case Some(msg) if dotty.Properties.testsUpdateCheckfile =>
+         Files.deleteIfExists(Paths.get(outFilePath))
+         if actualLines.isEmpty
+diff --git a/sbt-bridge/test/xsbt/CompileProgressSpecification.scala b/sbt-bridge/test/xsbt/CompileProgressSpecification.scala
+index dc3956ada0db..b0d21af68444 100644
+--- a/sbt-bridge/test/xsbt/CompileProgressSpecification.scala
++++ b/sbt-bridge/test/xsbt/CompileProgressSpecification.scala
+@@ -63,7 +63,7 @@ class CompileProgressSpecification {
+         "staging",
+         "splicing",
+         "pickleQuotes",
+-        "MegaPhase{pruneErasedDefs,...,arrayConstructors}",
++        "MegaPhase{pruneErasedDefs,...,simplifySynchronized}",
+         "erasure",
+         "constructors",
+         "genBCode"
+diff --git a/tests/pos/tailrec-synchronized.scala b/tests/pos/tailrec-synchronized.scala
+new file mode 100644
+index 000000000000..961c285b8cb1
+--- /dev/null
++++ b/tests/pos/tailrec-synchronized.scala
+@@ -0,0 +1,11 @@
++import scala.annotation.tailrec
++
++class TailrecProblem {
++  @tailrec
++  private def create(x: Int): Unit = {
++    this.synchronized {
++      if (x == 0) ()
++      else create(x - 1)
++    }
++  }
++}
+diff --git a/tests/printing/getters/var-should-not-be-update-def-get.check b/tests/printing/getters/var-should-not-be-update-def-get.check
+index 210ae979f65b..2263b2d762ba 100644
+--- a/tests/printing/getters/var-should-not-be-update-def-get.check
++++ b/tests/printing/getters/var-should-not-be-update-def-get.check
+@@ -1,4 +1,4 @@
+-[[syntax trees at end of MegaPhase{pruneErasedDefs, uninitialized, inlinePatterns, vcInlineMethods, seqLiterals, intercepted, getters, specializeFunctions, specializeTuples, collectNullableFields, elimOuterSelect, resolveSuper, functionXXLForwarders, paramForwarding, genericTuples, letOverApply, arrayConstructors}]] // tests/printing/getters/var-should-not-be-update-def-get.scala
++[[syntax trees at end of MegaPhase{pruneErasedDefs, uninitialized, inlinePatterns, vcInlineMethods, seqLiterals, intercepted, getters, specializeFunctions, specializeTuples, collectNullableFields, elimOuterSelect, resolveSuper, functionXXLForwarders, paramForwarding, genericTuples, letOverApply, arrayConstructors, simplifySynchronized}]] // tests/printing/getters/var-should-not-be-update-def-get.scala
+ package <empty> {
+   import scala.language.experimental.captureChecking
+   trait Foo() extends Object, scala.caps.Mutable {
+diff --git a/tests/run/synchronized-interface.check b/tests/run/synchronized-interface.check
+new file mode 100644
+index 000000000000..797a26689b12
+--- /dev/null
++++ b/tests/run/synchronized-interface.check
+@@ -0,0 +1,2 @@
++1
++ex
+diff --git a/tests/run/synchronized-interface.scala b/tests/run/synchronized-interface.scala
+new file mode 100644
+index 000000000000..04c6e9dffdb6
+--- /dev/null
++++ b/tests/run/synchronized-interface.scala
+@@ -0,0 +1,18 @@
++// On the JVM this is implemented manually since interface methods can't be synchronized;
++// testing in a concurrent context would make this a flaky test, but let's at least ensure
++// calling the method works
++trait T {
++  def meth(x: Int): Int = synchronized {
++    if (x < 0) throw new IllegalArgumentException()
++    x
++  }
++}
++
++object O extends T
++
++object Test:
++  def main(args: Array[String]): Unit =
++    println(O.meth(1))
++    try println(O.meth(-1))
++    catch case e: IllegalArgumentException => println("ex")
++

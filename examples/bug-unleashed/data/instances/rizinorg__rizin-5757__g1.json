@@ -1,0 +1,26 @@
+{
+  "case_id": "rizinorg__rizin-5757",
+  "repo": "rizinorg/rizin",
+  "pr": 5757,
+  "title": "Use memcpy in endian read/write function for native endianness",
+  "language": "C",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "rizinorg__rizin-5757__g1",
+  "target": {
+    "gid": "rizinorg__rizin-5757#g1",
+    "summary": "On big-endian hosts (RZ_HOST_IS_BIG_ENDIAN), using memcpy to read or write ut128 values swaps the high and low 64-bit halves because the ut128 struct layout places Low before High in memory. This causes big-endian 128-bit read and write operations to produce incorrect values.",
+    "paths": [
+      "librz/include/rz_endian.h"
+    ],
+    "notes": [
+      "faulty statement using memcpy to read ut128 on big-endian hosts",
+      "faulty statement using memcpy to write ut128 on big-endian hosts"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "de27da2fe268727c22578a73ce89b98eed232811",
+  "base_sha": "381c41cc867c322f98f52550a75e31ef0c525266",
+  "snapshot": "repos/rizinorg__rizin/de27da2fe268727c22578a73ce89b98eed232811",
+  "diff": "diffs/rizinorg__rizin-5757.diff"
+}

@@ -1,0 +1,26 @@
+{
+  "case_id": "envoyproxy__envoy-47863",
+  "repo": "envoyproxy/envoy",
+  "pr": 47863,
+  "title": "http2: log codec errors at error instead of debug",
+  "language": "C++",
+  "split": "train",
+  "kind": "bug",
+  "example_id": "envoyproxy__envoy-47863__g1",
+  "target": {
+    "gid": "envoyproxy__envoy-47863#g1",
+    "summary": "Logging codec dispatch errors at error level allows a malicious client to trigger excessive logging and cause a denial of service via log exhaustion by sending malformed protocol data.",
+    "paths": [
+      "source/common/http/conn_manager_impl.cc"
+    ],
+    "notes": [
+      "faulty statement changing log level to error",
+      "definition of handleCodecErrorImpl"
+    ]
+  },
+  "siblings": [],
+  "head_sha": "3971c451248111b18461c53bd633cb88cee838e9",
+  "base_sha": "f1a52f3f02740e57ab4192b106e5cf82dba4ca81",
+  "snapshot": "repos/envoyproxy__envoy/3971c451248111b18461c53bd633cb88cee838e9",
+  "diff": "diffs/envoyproxy__envoy-47863.diff"
+}

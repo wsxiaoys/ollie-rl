@@ -1,0 +1,210 @@
+diff --git a/src/basic/unit-name.c b/src/basic/unit-name.c
+index 70ea429e2796..0efc66b91b7e 100644
+--- a/src/basic/unit-name.c
++++ b/src/basic/unit-name.c
+@@ -716,7 +716,7 @@ int unit_name_mangle_with_suffix(
+                 char **ret) {
+ 
+         _cleanup_free_ char *s = NULL;
+-        bool mangled, suggest_escape = true, warn = flags & UNIT_NAME_MANGLE_WARN;
++        bool mangled, suggest_escape = true, warn = FLAGS_SET(flags, UNIT_NAME_MANGLE_WARN);
+         int r;
+ 
+         assert(name);
+@@ -730,12 +730,23 @@ int unit_name_mangle_with_suffix(
+                 return -EINVAL;
+ 
+         /* Already a fully valid unit name? If so, no mangling is necessary... */
+-        if (unit_name_is_valid(name, UNIT_NAME_ANY))
++        if (unit_name_is_valid(name, UNIT_NAME_ANY)) {
++                if (FLAGS_SET(flags, UNIT_NAME_MANGLE_STRICT) && !endswith(name, suffix)) {
++                        const char *e = ASSERT_PTR(strrchr(name, '.'));
++
++                        return log_full_errno(warn ? LOG_NOTICE : LOG_DEBUG,
++                                              SYNTHETIC_ERRNO(EINVAL),
++                                              "Unit name \"%s\" has unit type \"%s\", but \"%s\" is expected%s%s.",
++                                              name, e + 1, suffix + 1,
++                                              operation ? " " : "", strempty(operation));
++                }
++
+                 goto good;
++        }
+ 
+         /* Already a fully valid globbing expression? If so, no mangling is necessary either... */
+         if (string_is_glob(name) && in_charset(name, VALID_CHARS_GLOB)) {
+-                if (flags & UNIT_NAME_MANGLE_GLOB)
++                if (FLAGS_SET(flags, UNIT_NAME_MANGLE_GLOB))
+                         goto good;
+                 log_full(warn ? LOG_NOTICE : LOG_DEBUG,
+                          "Glob pattern passed%s%s, but globs are not supported for this.",
+@@ -744,23 +755,41 @@ int unit_name_mangle_with_suffix(
+         }
+ 
+         if (path_is_absolute(name)) {
+-                _cleanup_free_ char *n = NULL;
++                _cleanup_free_ char *n = NULL, *u = NULL;
+ 
+                 r = path_simplify_alloc(name, &n);
+                 if (r < 0)
+                         return r;
+ 
+                 if (is_device_path(n)) {
+-                        r = unit_name_from_path(n, ".device", ret);
+-                        if (r >= 0)
++                        r = unit_name_from_path(n, ".device", &u);
++                        if (r >= 0) {
++                                if (FLAGS_SET(flags, UNIT_NAME_MANGLE_STRICT) && !streq(suffix, ".device"))
++                                        return log_full_errno(warn ? LOG_NOTICE : LOG_DEBUG,
++                                                              SYNTHETIC_ERRNO(EINVAL),
++                                                              "Path \"%s\" resolves to unit type \"device\", but \"%s\" is expected%s%s.",
++                                                              name, suffix + 1,
++                                                              operation ? " " : "", strempty(operation));
++
++                                *ret = TAKE_PTR(u);
+                                 return 1;
++                        }
+                         if (r != -EINVAL)
+                                 return r;
+                 }
+ 
+-                r = unit_name_from_path(n, ".mount", ret);
+-                if (r >= 0)
++                r = unit_name_from_path(n, ".mount", &u);
++                if (r >= 0) {
++                        if (FLAGS_SET(flags, UNIT_NAME_MANGLE_STRICT) && !streq(suffix, ".mount"))
++                                return log_full_errno(warn ? LOG_NOTICE : LOG_DEBUG,
++                                                      SYNTHETIC_ERRNO(EINVAL),
++                                                      "Path \"%s\" resolves to unit type \"mount\", but \"%s\" is expected%s%s.",
++                                                      name, suffix + 1,
++                                                      operation ? " " : "", strempty(operation));
++
++                        *ret = TAKE_PTR(u);
+                         return 1;
++                }
+                 if (r != -EINVAL)
+                         return r;
+         }
+@@ -769,7 +798,7 @@ int unit_name_mangle_with_suffix(
+         if (!s)
+                 return -ENOMEM;
+ 
+-        mangled = do_escape_mangle(name, flags & UNIT_NAME_MANGLE_GLOB, s);
++        mangled = do_escape_mangle(name, FLAGS_SET(flags, UNIT_NAME_MANGLE_GLOB), s);
+         if (mangled)
+                 log_full(warn ? LOG_NOTICE : LOG_DEBUG,
+                          "Invalid unit name \"%s\" escaped as \"%s\"%s.",
+@@ -778,7 +807,7 @@ int unit_name_mangle_with_suffix(
+ 
+         /* Append a suffix if it doesn't have any, but only if this is not a glob, so that we can allow
+          * "foo.*" as a valid glob. */
+-        if ((!(flags & UNIT_NAME_MANGLE_GLOB) || !string_is_glob(s)) && unit_name_to_type(s) < 0)
++        if ((!FLAGS_SET(flags, UNIT_NAME_MANGLE_GLOB) || !string_is_glob(s)) && unit_name_to_type(s) < 0)
+                 strcat(s, suffix);
+ 
+         /* Make sure mangling didn't grow this too large (but don't do this check if globbing is allowed,
+diff --git a/src/basic/unit-name.h b/src/basic/unit-name.h
+index e454d0a86dbb..7484ec6529e3 100644
+--- a/src/basic/unit-name.h
++++ b/src/basic/unit-name.h
+@@ -56,8 +56,9 @@ int unit_name_from_path_instance(const char *prefix, const char *path, const cha
+ int unit_name_to_path(const char *name, char **ret);
+ 
+ typedef enum UnitNameMangle {
+-        UNIT_NAME_MANGLE_GLOB = 1 << 0,
+-        UNIT_NAME_MANGLE_WARN = 1 << 1,
++        UNIT_NAME_MANGLE_GLOB   = 1 << 0,
++        UNIT_NAME_MANGLE_WARN   = 1 << 1,
++        UNIT_NAME_MANGLE_STRICT = 1 << 2, /* Refuse if the resolved unit type doesn't match the requested suffix */
+ } UnitNameMangle;
+ 
+ int unit_name_mangle_with_suffix(const char *name, const char *operation, UnitNameMangle flags, const char *suffix, char **ret);
+diff --git a/src/run/run.c b/src/run/run.c
+index 96bd3af9fdfd..f7dc5b56708a 100644
+--- a/src/run/run.c
++++ b/src/run/run.c
+@@ -2364,7 +2364,7 @@ static int start_transient_service(sd_bus *bus) {
+                 r = unit_name_mangle_with_suffix(
+                                 arg_unit,
+                                 "as unit",
+-                                arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN,
++                                (arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN) | UNIT_NAME_MANGLE_STRICT,
+                                 ".service",
+                                 &c.unit);
+                 if (r < 0)
+@@ -2508,7 +2508,7 @@ static int start_transient_scope(sd_bus *bus) {
+ 
+         if (arg_unit) {
+                 r = unit_name_mangle_with_suffix(arg_unit, "as unit",
+-                                                 arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN,
++                                                 (arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN) | UNIT_NAME_MANGLE_STRICT,
+                                                  ".scope", &scope);
+                 if (r < 0)
+                         return log_error_errno(r, "Failed to mangle scope name: %m");
+@@ -2809,13 +2809,13 @@ static int start_transient_trigger(sd_bus *bus, const char *suffix) {
+ 
+                 default:
+                         r = unit_name_mangle_with_suffix(arg_unit, "as unit",
+-                                                         arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN,
++                                                         (arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN) | UNIT_NAME_MANGLE_STRICT,
+                                                          ".service", &service);
+                         if (r < 0)
+                                 return log_error_errno(r, "Failed to mangle unit name: %m");
+ 
+                         r = unit_name_mangle_with_suffix(arg_unit, "as trigger",
+-                                                         arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN,
++                                                         (arg_quiet ? 0 : UNIT_NAME_MANGLE_WARN) | UNIT_NAME_MANGLE_STRICT,
+                                                          suffix, &trigger);
+                         if (r < 0)
+                                 return log_error_errno(r, "Failed to mangle unit name: %m");
+diff --git a/src/test/test-unit-name.c b/src/test/test-unit-name.c
+index 672162244fd7..7f71f5fdc74e 100644
+--- a/src/test/test-unit-name.c
++++ b/src/test/test-unit-name.c
+@@ -251,6 +251,18 @@ static void test_unit_name_mangle_with_suffix_one(const char *arg, int expected,
+         ASSERT_STREQ(s, expected_name);
+ }
+ 
++static void test_unit_name_mangle_with_suffix_strict_one(
++                const char *arg, const char *suffix, int expected, const char *expected_name) {
++        _cleanup_free_ char *s = NULL;
++        int r;
++
++        r = unit_name_mangle_with_suffix(arg, NULL, UNIT_NAME_MANGLE_WARN | UNIT_NAME_MANGLE_STRICT, suffix, &s);
++        log_debug("%s: %s (suffix=%s) -> %d, %s", __func__, arg, suffix, r, strnull(s));
++
++        assert_se(r == expected);
++        ASSERT_STREQ(s, expected_name);
++}
++
+ TEST(unit_name_mangle_with_suffix) {
+         test_unit_name_mangle_with_suffix_one("", -EINVAL, NULL);
+ 
+@@ -282,6 +294,28 @@ TEST(unit_name_mangle_with_suffix) {
+         test_unit_name_mangle_with_suffix_one("/./.././../proc/", 1, "proc.mount");
+ }
+ 
++TEST(unit_name_mangle_with_suffix_strict) {
++        /* Matching suffix should succeed */
++        test_unit_name_mangle_with_suffix_strict_one("foo.service", ".service", 0, "foo.service");
++        test_unit_name_mangle_with_suffix_strict_one("foo.mount", ".mount", 0, "foo.mount");
++        test_unit_name_mangle_with_suffix_strict_one("/home", ".mount", 1, "home.mount");
++        test_unit_name_mangle_with_suffix_strict_one("/dev/sda", ".device", 1, "dev-sda.device");
++        test_unit_name_mangle_with_suffix_strict_one("foo@bar.service", ".service", 0, "foo@bar.service");
++        test_unit_name_mangle_with_suffix_strict_one("a.timer.service", ".service", 0, "a.timer.service");
++
++        /* Mismatched suffix should fail with -EINVAL */
++        test_unit_name_mangle_with_suffix_strict_one("foo.mount", ".service", -EINVAL, NULL);
++        test_unit_name_mangle_with_suffix_strict_one("foo.service", ".scope", -EINVAL, NULL);
++        test_unit_name_mangle_with_suffix_strict_one("/home", ".service", -EINVAL, NULL);
++        test_unit_name_mangle_with_suffix_strict_one("/dev/sda", ".service", -EINVAL, NULL);
++        test_unit_name_mangle_with_suffix_strict_one("foo.automount", ".mount", -EINVAL, NULL);
++        test_unit_name_mangle_with_suffix_strict_one("foo.mount", ".automount", -EINVAL, NULL);
++        test_unit_name_mangle_with_suffix_strict_one("foo@bar.timer", ".service", -EINVAL, NULL);
++
++        /* Non-path names that need mangling should get the requested suffix and thus pass */
++        test_unit_name_mangle_with_suffix_strict_one("foo", ".service", 1, "foo.service");
++}
++
+ TEST_RET(unit_printf, .sd_booted = true) {
+         _cleanup_free_ char
+                 *architecture, *os_image_version, *boot_id = NULL, *os_build_id,
